@@ -2488,12 +2488,31 @@ fn current_agent_id() -> String {
     resolve_cli_agent_id(
         file_agent_id.as_deref(),
         std::env::var("BRIDGET_AGENT_ID").ok().as_deref(),
+        || {
+            crate::mcp_identity::resolve_current_identity()
+                .ok()
+                .map(|identity| identity.name)
+        },
     )
 }
 
-/// Repli binaire : l'identifiant vient du fichier puis de l'env. Sans les deux, on
-/// n'invente pas d'identité d'équipier — le daemon conserve l'UUID du CLI temporaire.
-fn resolve_cli_agent_id(file_agent_id: Option<&str>, env_agent_id: Option<&str>) -> String {
+/// Identité qui signe un message CLI, par ordre de preuve : fichier puis
+/// variable posés par un lanceur Bridget, puis filiation de processus attestée.
+/// Sans aucune des trois, on n'invente pas d'identité d'équipier — le daemon
+/// conserve l'UUID du CLI temporaire.
+///
+/// Session 115 : un fil T3 n'est pas lancé par un lanceur Bridget et n'a donc
+/// ni le fichier ni la variable. Sa connexion au daemon était pourtant attestée
+/// par filiation (`send_control_to_daemon_at`) ; seul le message signait
+/// « human ». Le daemon voyait alors une connexion attestée prétendre parler au
+/// nom d'un humain, et refusait l'usurpation. Signer par la même preuve que la
+/// connexion rend les deux cohérents. La filiation n'est consultée qu'en
+/// dernier recours : un agent lancé par Bridget garde sa preuve habituelle.
+fn resolve_cli_agent_id(
+    file_agent_id: Option<&str>,
+    env_agent_id: Option<&str>,
+    lineage_agent_id: impl FnOnce() -> Option<String>,
+) -> String {
     if let Some(agent_id) = file_agent_id
         .map(str::trim)
         .filter(|agent_id| validate_agent_id(agent_id).is_ok())
@@ -2505,6 +2524,12 @@ fn resolve_cli_agent_id(file_agent_id: Option<&str>, env_agent_id: Option<&str>)
         .filter(|agent_id| validate_agent_id(agent_id).is_ok())
     {
         return agent_id.to_string();
+    }
+    if let Some(agent_id) = lineage_agent_id()
+        .map(|agent_id| agent_id.trim().to_string())
+        .filter(|agent_id| validate_agent_id(agent_id).is_ok())
+    {
+        return agent_id;
     }
     "human".to_string()
 }
@@ -6132,11 +6157,50 @@ mod hook_tests {
     fn repli_cli_n_accepte_que_l_identifiant_uuid_dans_l_environnement() {
         let first = "550e8400-e29b-41d4-a716-446655440000";
         let second = "550e8400-e29b-41d4-a716-446655440001";
-        assert_eq!(resolve_cli_agent_id(None, Some(first)), first);
-        assert_eq!(resolve_cli_agent_id(Some("  "), Some(second)), second);
-        assert_eq!(resolve_cli_agent_id(Some(first), Some(second)), first);
-        assert_eq!(resolve_cli_agent_id(None, None), "human");
-        assert_eq!(resolve_cli_agent_id(None, Some("legacy-name")), "human");
+        assert_eq!(resolve_cli_agent_id(None, Some(first), || None), first);
+        assert_eq!(
+            resolve_cli_agent_id(Some("  "), Some(second), || None),
+            second
+        );
+        assert_eq!(
+            resolve_cli_agent_id(Some(first), Some(second), || None),
+            first
+        );
+        assert_eq!(resolve_cli_agent_id(None, None, || None), "human");
+        assert_eq!(
+            resolve_cli_agent_id(None, Some("legacy-name"), || None),
+            "human"
+        );
+    }
+
+    /// Session 115 : un fil T3 n'a ni fichier ni variable d'identité, mais sa
+    /// filiation est attestée par le pont. Il signe désormais sous son identité
+    /// au lieu de « human », que sa propre connexion attestée ne peut usurper.
+    #[test]
+    fn spec115_fil_t3_signe_par_sa_filiation_attestee() {
+        let fil = "127bccff-8490-453a-8182-884b749ec41e";
+        let lanceur = "550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(
+            resolve_cli_agent_id(None, None, || Some(fil.to_string())),
+            fil,
+            "la filiation attestée signe le message"
+        );
+        assert_eq!(
+            resolve_cli_agent_id(None, None, || Some(format!("  {fil}\n"))),
+            fil,
+            "le contenu du fichier de nom est normalisé"
+        );
+        assert_eq!(
+            resolve_cli_agent_id(None, None, || Some("nom-libre".to_string())),
+            "human",
+            "une filiation qui ne livre pas un UUID n'invente rien"
+        );
+        // Un agent lancé par Bridget garde sa preuve habituelle, et la
+        // filiation n'est même pas consultée.
+        assert_eq!(
+            resolve_cli_agent_id(None, Some(lanceur), || panic!("filiation consultée")),
+            lanceur
+        );
     }
 
     #[test]
