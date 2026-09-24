@@ -2145,6 +2145,7 @@ impl LinkWorker {
             // faits perdus ni deux notices de fausse déconnexion/reconnexion.
             send_wrapper_message(&self.writer, WrapperToDaemon::ObservationGap { dropped: 0 });
         }
+        self.record_turn_origin(&detail, summary);
         self.project_journal(&detail, summary);
         self.settle_pending(&detail, summary);
         if let Err(e) = self.state.save(&self.state_path) {
@@ -2427,17 +2428,48 @@ impl LinkWorker {
                 .seen_activities
                 .drain(..self.state.seen_activities.len() - 8192);
         }
-        if self.state.turn_origins.len() > SEEN_BOUND {
-            let visible: HashSet<_> = detail
-                .messages
-                .iter()
-                .filter_map(|m| m.turn_id.as_ref())
-                .collect();
+        self.prune_turn_origins(detail, latest);
+        self.journal_dirty = false;
+    }
+
+    /// Session 116 : relève l'origine du dernier tour à chaque lecture, que le
+    /// journal d'observation soit à jour ou non : l'appariement des réponses en
+    /// dépend désormais, pas seulement l'observation.
+    fn record_turn_origin(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
+        let latest = detail.latest_turn.as_ref().or(summary.latest_turn.as_ref());
+        if let Some(turn) = latest
+            && let Some(origin) = observation_origin(detail, turn)
+        {
             self.state
                 .turn_origins
-                .retain(|id, _| visible.contains(id) || latest.is_some_and(|t| t.turn_id == *id));
+                .insert(turn.turn_id.clone(), origin.to_string());
         }
-        self.journal_dirty = false;
+        self.prune_turn_origins(detail, latest);
+    }
+
+    /// Borne la table à SEEN_BOUND. Un tour silencieux n'a aucun message
+    /// visible : son origine est gardée tant qu'une demande l'attend, sinon la
+    /// preuve disparaîtrait avant l'appariement. O(origines + messages).
+    fn prune_turn_origins(&mut self, detail: &ThreadDetail, latest: Option<&contract::LatestTurn>) {
+        if self.state.turn_origins.len() <= SEEN_BOUND {
+            return;
+        }
+        let visible: HashSet<&str> = detail
+            .messages
+            .iter()
+            .filter_map(|m| m.turn_id.as_deref())
+            .collect();
+        let awaited: HashSet<&str> = self
+            .state
+            .pending
+            .iter()
+            .map(|p| p.message_id.as_str())
+            .collect();
+        self.state.turn_origins.retain(|id, origin| {
+            visible.contains(id.as_str())
+                || awaited.contains(origin.as_str())
+                || latest.is_some_and(|t| t.turn_id == *id)
+        });
     }
 
     /// Le flux live est consommé par AttachRelayWorker. Réutiliser le lecteur
@@ -2539,14 +2571,29 @@ impl LinkWorker {
     fn settle_pending(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
         // La collection reste entière pendant chaque remplacement atomique :
         // une panne ne peut pas laisser sur disque un simple préfixe traité.
+        let origins = &self.state.turn_origins;
         for pending in &mut self.state.pending {
             if !pending.needs_correlation() {
                 continue;
             }
-            let verdict = correlate(detail, summary, pending);
+            let verdict = correlate(detail, summary, pending, origins);
             match verdict {
                 Correlation::Answered(text) => {
                     pending.response = Some(text);
+                }
+                // Session 116 : le tour prouvé de la demande est clos et n'a
+                // rien écrit. L'expéditeur l'apprend au lieu d'attendre son
+                // échéance ; le texte est celui de Bridget, jamais un propos
+                // prêté au destinataire. T3 projette ses événements de façon
+                // asynchrone : un tour peut se dire clos juste avant que son
+                // texte n'apparaisse. Le constat n'est donc engagé qu'après
+                // SETTLE_ATTEMPTS lectures ; une lecture intermédiaire qui voit
+                // le texte le relaie normalement.
+                Correlation::Silent => {
+                    pending.attempts = pending.attempts.saturating_add(1);
+                    if pending.attempts >= SETTLE_ATTEMPTS {
+                        pending.response = Some(SILENT_TURN_NOTICE.to_string());
+                    }
                 }
                 Correlation::Waiting => {}
                 Correlation::Ambiguous | Correlation::Missing => {
@@ -2818,10 +2865,60 @@ fn activity_payloads(
         .collect()
 }
 
+/// Session 116 : texte du tour dont l'origine est prouvée.
+///
+/// Les messages de ce tour suivent notre message, présent dans la page : ils y
+/// sont donc tous. Un tour qui n'est plus le dernier est clos, T3 n'en menant
+/// qu'un à la fois par fil. Seuls ses messages comptent : les réveils
+/// d'arrière-plan qui suivent ont leurs propres tours. O(messages de la page).
+fn proven_turn_answer(
+    detail: &ThreadDetail,
+    summary: &ThreadSummary,
+    turn_id: &str,
+) -> Correlation {
+    let parts: Vec<&contract::Message> = detail
+        .messages
+        .iter()
+        .filter(|m| m.role != "user" && m.turn_id.as_deref() == Some(turn_id))
+        .collect();
+    let open = |latest: Option<&contract::LatestTurn>| {
+        latest.is_some_and(|latest| latest.turn_id == turn_id && !turn_is_final(&latest.state))
+    };
+    let active = summary
+        .session
+        .as_ref()
+        .is_some_and(|session| session.active_turn_id.as_deref() == Some(turn_id));
+    if active
+        || parts.iter().any(|m| m.streaming)
+        || open(summary.latest_turn.as_ref())
+        || open(detail.latest_turn.as_ref())
+    {
+        return Correlation::Waiting;
+    }
+    let text = parts
+        .iter()
+        .map(|m| m.text.trim())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.is_empty() {
+        Correlation::Silent
+    } else {
+        Correlation::Answered(text)
+    }
+}
+
+/// Session 116 : réponse relayée quand le tour prouvé d'une demande s'est
+/// terminé sans rien écrire.
+const SILENT_TURN_NOTICE: &str =
+    "(Bridget) Le destinataire a terminé le tour de cette demande sans réponse écrite.";
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Correlation {
     /// Le tour de notre message est clos : voici son texte.
     Answered(String),
+    /// Session 116 : le tour prouvé de notre message est clos sans texte.
+    Silent,
     /// L'appariement n'est pas encore décidable ; le fil travaille encore.
     Waiting,
     /// L'appariement ne sera plus décidable : le fil est au repos et les
@@ -2845,6 +2942,7 @@ pub(crate) fn correlate(
     detail: &ThreadDetail,
     summary: &ThreadSummary,
     pending: &Pending,
+    origins: &BTreeMap<String, String>,
 ) -> Correlation {
     let messages = &detail.messages;
     let start = match pending.anchor_turn_id.as_deref() {
@@ -2871,6 +2969,20 @@ pub(crate) fn correlate(
     let Some(rank) = rank else {
         return Correlation::Missing;
     };
+    // Session 116 : la preuve directe d'abord. Le pont relève quel tour notre
+    // message a déclenché, par égalité stricte entre l'horodatage de demande du
+    // tour et celui du message (`observation_origin`). Le rang ci-dessous ne
+    // vaut que si chaque message a exactement un tour écrit ; un tour qui
+    // n'écrit rien, un réveil d'agent en arrière-plan ou deux messages
+    // partageant un tour le faussent, et la demande était abandonnée. La preuve
+    // directe ne dépend d'aucun décompte : la réponse est le texte de CE tour.
+    // O(k), k ≤ SEEN_BOUND origines retenues.
+    if let Some(turn_id) = origins
+        .iter()
+        .find_map(|(turn, origin)| (origin == &pending.message_id).then_some(turn.as_str()))
+    {
+        return proven_turn_answer(detail, summary, turn_id);
+    }
     let mut turns: Vec<&str> = Vec::new();
     for message in window {
         if let Some(turn_id) = message.turn_id.as_deref()
@@ -3274,6 +3386,64 @@ mod tests {
             w.journal.stop();
             w.relay.shutdown();
         }
+    }
+
+    /// Session 116 : un tour prouvé silencieux n'est annoncé qu'après plusieurs
+    /// lectures concordantes. Si son texte apparaît entre-temps, projection
+    /// T3 en retard, c'est lui qui part, pas l'annonce de silence.
+    #[test]
+    fn spec116_silence_engage_apres_lectures_concordantes_seulement() {
+        let (mut worker, _peer) = worker099();
+        worker.state.pending.push(pending("u1", None));
+        worker
+            .state
+            .turn_origins
+            .insert("t1".to_string(), "u1".to_string());
+        let muet = detail116(
+            vec![message("u1", "user", "demande", None, false)],
+            ("t1", "completed"),
+        );
+        let s = summary(Some(("t1", "completed")));
+        for _ in 1..SETTLE_ATTEMPTS {
+            worker.settle_pending(&muet, &s);
+            assert_eq!(worker.state.pending[0].response, None, "pas encore engagé");
+        }
+        let tardif = detail116(
+            vec![
+                message("u1", "user", "demande", None, false),
+                message(
+                    "a1",
+                    "assistant",
+                    "réponse projetée tard",
+                    Some("t1"),
+                    false,
+                ),
+            ],
+            ("t1", "completed"),
+        );
+        worker.settle_pending(&tardif, &s);
+        assert_eq!(
+            worker.state.pending[0].response.as_deref(),
+            Some("réponse projetée tard"),
+            "le texte arrivé tard l'emporte sur l'annonce de silence"
+        );
+
+        let (mut worker, _peer) = worker099();
+        worker.state.pending.push(pending("u1", None));
+        worker
+            .state
+            .turn_origins
+            .insert("t1".to_string(), "u1".to_string());
+        for _ in 0..SETTLE_ATTEMPTS {
+            worker.settle_pending(&muet, &s);
+        }
+        assert_eq!(
+            worker.state.pending[0].response.as_deref(),
+            Some(SILENT_TURN_NOTICE),
+            "un silence confirmé est annoncé à l'expéditeur"
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
     }
 
     #[test]
@@ -4356,6 +4526,172 @@ mod tests {
         }
     }
 
+    /// Appariement historique, sans preuve directe d'origine.
+    fn correlate_sans_origine(
+        detail: &ThreadDetail,
+        summary: &ThreadSummary,
+        pending: &Pending,
+    ) -> Correlation {
+        correlate(detail, summary, pending, &BTreeMap::new())
+    }
+
+    fn detail116(messages: Vec<Message>, latest: (&str, &str)) -> ThreadDetail {
+        ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
+            messages,
+            latest_turn: Some(LatestTurn {
+                requested_at: None,
+                turn_id: latest.0.to_string(),
+                state: latest.1.to_string(),
+                assistant_message_id: None,
+            }),
+        }
+    }
+
+    fn origins116(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(turn, origin)| (turn.to_string(), origin.to_string()))
+            .collect()
+    }
+
+    /// Session 116, cas réel du 20/09 sur un fil Codex : notre premier message
+    /// a eu un tour qui n'a rien écrit, le suivant a répondu. Par rang, les deux
+    /// demandes étaient abandonnées ; par preuve directe, chacune a son issue.
+    #[test]
+    fn spec116_tour_silencieux_ne_fausse_plus_les_demandes_voisines() {
+        let detail = detail116(
+            vec![
+                message("u1", "user", "question 1", None, false),
+                message("u2", "user", "question 2", None, false),
+                message("a2", "assistant", "réponse 2", Some("t2"), false),
+            ],
+            ("t2", "completed"),
+        );
+        let s = summary(Some(("t2", "completed")));
+        assert_eq!(
+            correlate_sans_origine(&detail, &s, &pending("u2", None)),
+            Correlation::Ambiguous,
+            "le rang seul échoue : deux messages, un seul tour écrit"
+        );
+        let origins = origins116(&[("t1", "u1"), ("t2", "u2")]);
+        assert_eq!(
+            correlate(&detail, &s, &pending("u1", None), &origins),
+            Correlation::Silent,
+            "le tour prouvé de u1 est clos sans texte"
+        );
+        assert_eq!(
+            correlate(&detail, &s, &pending("u2", None), &origins),
+            Correlation::Answered("réponse 2".to_string())
+        );
+    }
+
+    /// Session 116, cas réel d'un fil Claude : après la réponse à notre
+    /// message, l'agent est réveillé par la fin d'un sous-agent et ouvre
+    /// d'autres tours sans message. Ils ne font pas partie de la réponse.
+    #[test]
+    fn spec116_reveils_en_arriere_plan_exclus_de_la_reponse() {
+        let detail = detail116(
+            vec![
+                message("u1", "user", "demande", None, false),
+                message("a1", "assistant", "ma réponse", Some("t1"), false),
+                message("a1b", "assistant", "suite", Some("t1"), false),
+                message(
+                    "r1",
+                    "assistant",
+                    "le sous-agent a fini",
+                    Some("tR1"),
+                    false,
+                ),
+                message("r2", "assistant", "autre réveil", Some("tR2"), false),
+            ],
+            ("tR2", "completed"),
+        );
+        let s = summary(Some(("tR2", "completed")));
+        assert_eq!(
+            correlate_sans_origine(&detail, &s, &pending("u1", None)),
+            Correlation::Ambiguous,
+            "le rang seul échoue : un message, trois tours"
+        );
+        assert_eq!(
+            correlate(
+                &detail,
+                &s,
+                &pending("u1", None),
+                &origins116(&[("t1", "u1")])
+            ),
+            Correlation::Answered("ma réponse\n\nsuite".to_string())
+        );
+    }
+
+    /// Objection de l'ancienne contre-revue, conservée : notre tour s'arrête
+    /// sans écrire, puis l'humain obtient sa réponse. Avec la preuve directe,
+    /// la réponse de l'humain n'est jamais attribuée à Bridget.
+    #[test]
+    fn spec116_preuve_directe_n_attribue_jamais_le_tour_de_l_humain() {
+        let detail = detail116(
+            vec![
+                message("uB", "user", "nous", None, false),
+                message("uH", "user", "humain", None, false),
+                message("aH", "assistant", "réponse à l'humain", Some("tH"), false),
+            ],
+            ("tH", "completed"),
+        );
+        let s = summary(Some(("tH", "completed")));
+        let origins = origins116(&[("tB", "uB"), ("tH", "uH")]);
+        assert_eq!(
+            correlate(&detail, &s, &pending("uB", None), &origins),
+            Correlation::Silent
+        );
+    }
+
+    /// Un tour prouvé encore en cours, ou dont un message s'écrit, attend.
+    #[test]
+    fn spec116_tour_prouve_en_cours_attend() {
+        let origins = origins116(&[("t1", "u1")]);
+        let en_cours = detail116(
+            vec![message("u1", "user", "demande", None, false)],
+            ("t1", "running"),
+        );
+        assert_eq!(
+            correlate(
+                &en_cours,
+                &summary(Some(("t1", "running"))),
+                &pending("u1", None),
+                &origins
+            ),
+            Correlation::Waiting,
+            "un tour ouvert n'est pas silencieux"
+        );
+        let en_ecriture = detail116(
+            vec![
+                message("u1", "user", "demande", None, false),
+                message("a1", "assistant", "part", Some("t1"), true),
+            ],
+            ("t1", "completed"),
+        );
+        assert_eq!(
+            correlate(
+                &en_ecriture,
+                &summary(Some(("t1", "completed"))),
+                &pending("u1", None),
+                &origins
+            ),
+            Correlation::Waiting
+        );
+        // Notre message hors de la page : la preuve seule ne suffit pas.
+        assert_eq!(
+            correlate(
+                &en_ecriture,
+                &summary(Some(("t1", "completed"))),
+                &pending("absent", None),
+                &origins116(&[("t1", "absent")])
+            ),
+            Correlation::Missing
+        );
+    }
+
     #[test]
     fn spec098_correlation_par_rang_fifo_avec_message_humain_intercale() {
         // Ordre observé en sonde : user A (nous), user B (humain), assistant A, assistant B.
@@ -4379,11 +4715,11 @@ mod tests {
         };
         let s = summary(Some(("tB", "completed")));
         assert_eq!(
-            correlate(&detail, &s, &pending("uA", Some("t0"))),
+            correlate_sans_origine(&detail, &s, &pending("uA", Some("t0"))),
             Correlation::Answered("pour nous".to_string())
         );
         assert_eq!(
-            correlate(&detail, &s, &pending("uB", Some("t0"))),
+            correlate_sans_origine(&detail, &s, &pending("uB", Some("t0"))),
             Correlation::Answered("pour l'humain".to_string())
         );
     }
@@ -4406,7 +4742,7 @@ mod tests {
         };
         let s = summary(Some(("tA", "running")));
         assert_eq!(
-            correlate(&detail, &s, &pending("uA", None)),
+            correlate_sans_origine(&detail, &s, &pending("uA", None)),
             Correlation::Waiting
         );
         let done = ThreadDetail {
@@ -4427,7 +4763,8 @@ mod tests {
             correlate(
                 &done,
                 &summary(Some(("tA", "completed"))),
-                &pending("uA", None)
+                &pending("uA", None),
+                &BTreeMap::new(),
             ),
             Correlation::Answered("complet".to_string())
         );
@@ -4450,16 +4787,16 @@ mod tests {
             active_turn_id: Some("tA".to_string()),
         });
         assert_eq!(
-            correlate(&detail, &occupe, &pending("uA", None)),
+            correlate_sans_origine(&detail, &occupe, &pending("uA", None)),
             Correlation::Waiting
         );
         // Fil au repos sans aucun tour : plus rien ne viendra.
         assert_eq!(
-            correlate(&detail, &summary(None), &pending("uA", None)),
+            correlate_sans_origine(&detail, &summary(None), &pending("uA", None)),
             Correlation::Ambiguous
         );
         assert_eq!(
-            correlate(&detail, &summary(None), &pending("uZ", None)),
+            correlate_sans_origine(&detail, &summary(None), &pending("uZ", None)),
             Correlation::Missing
         );
     }
@@ -4486,14 +4823,14 @@ mod tests {
         };
         let s = summary(Some(("tH", "completed")));
         assert_eq!(
-            correlate(&detail, &s, &pending("uB", None)),
+            correlate_sans_origine(&detail, &s, &pending("uB", None)),
             Correlation::Ambiguous,
             "la réponse de l'humain ne doit jamais être attribuée à Bridget"
         );
         // L'humain, lui, garde un appariement faux aussi : deux utilisateurs
         // pour un seul tour, aucun rang n'est prouvé.
         assert_eq!(
-            correlate(&detail, &s, &pending("uH", None)),
+            correlate_sans_origine(&detail, &s, &pending("uH", None)),
             Correlation::Ambiguous
         );
     }
@@ -4520,7 +4857,8 @@ mod tests {
             correlate(
                 &detail,
                 &summary(Some(("tA", "completed"))),
-                &pending("uA", None)
+                &pending("uA", None),
+                &BTreeMap::new(),
             ),
             Correlation::Ambiguous
         );

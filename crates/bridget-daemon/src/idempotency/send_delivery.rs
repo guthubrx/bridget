@@ -508,6 +508,39 @@ impl IdempotencyStore {
         }
     }
 
+    /// Session 116 : une remise encore `dispatching` après l'expiration de sa
+    /// saga ne sera plus jamais accusée — son destinataire a disparu sans que
+    /// sa présence soit purgée. Son sort reste inconnu : `indeterminate` le dit,
+    /// au lieu d'afficher indéfiniment « en vol » dans le journal des échanges.
+    /// Aucune remise vivante n'est touchée : une saga expirée n'est plus rejouée.
+    pub fn settle_expired_dispatching(&self, now: i64) -> Result<usize, IdempotencyError> {
+        self.conn
+            .execute(
+                "UPDATE send_deliveries SET phase = 'indeterminate'
+                 WHERE phase = 'dispatching' AND expires_at <= ?1",
+                params![now],
+            )
+            .map_err(Into::into)
+    }
+
+    /// Session 116 : purge les envois dont la saga a expiré depuis plus de
+    /// `grace` secondes ; leurs remises suivent en cascade.
+    ///
+    /// Seuls les envois sont visés. Un lancement d'équipier géré porte son
+    /// historique dans `spawn_commands`, lui aussi supprimé en cascade avec son
+    /// enregistrement : `purge_expired`, qui ne distingue pas les opérations,
+    /// l'effacerait. La marge protège le contrat d'idempotence : pendant elle, un
+    /// rejeu tardif reçoit encore « expiré » au lieu d'être réexpédié.
+    pub fn purge_expired_sends(&self, now: i64, grace: i64) -> Result<usize, IdempotencyError> {
+        self.conn
+            .execute(
+                "DELETE FROM idempotency_records
+                 WHERE operation_kind = 'send' AND expires_at <= ?1",
+                params![now.saturating_sub(grace)],
+            )
+            .map_err(Into::into)
+    }
+
     /// Après purge d'une présence : les remises encore `dispatching` pour cette
     /// instance deviennent `orphaned` (sort CONNU) et le socle passe en
     /// terminal `orphaned`. Distinct de `indeterminate` (quarantaine d'injection)

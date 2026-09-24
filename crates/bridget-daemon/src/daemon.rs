@@ -4463,6 +4463,29 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Palier 2 (2T/3) : rappel ferme au destinataire
     // Palier 3 (T) : notification d'échec à l'émetteur
     // Après T + 30s : abandon (retiré de la liste)
+    // Session 116 : entretien périodique. Le ramassage lancé plus haut ne
+    // passe qu'au démarrage, soit une fois tous les quelques jours : sagas
+    // d'envoi, état d'identité des processus disparus et journaux
+    // s'accumulaient entre deux relances. Ce fil tient un clone de l'état : il
+    // sort à l'arrêt, sans retarder l'extinction.
+    let st_entretien = state.clone();
+    let racine_entretien = state_root.to_path_buf();
+    if let Err(error) = thread::Builder::new()
+        .name("entretien".into())
+        .spawn(move || {
+            let mut attente = MAINTENANCE_FIRST_DELAY;
+            loop {
+                if sleep_until_shutdown(attente) {
+                    return;
+                }
+                run_maintenance(&st_entretien, &racine_entretien);
+                attente = MAINTENANCE_INTERVAL;
+            }
+        })
+    {
+        warn!("entretien: thread détaché impossible: {error}");
+    }
+
     let st_reminder = state.clone();
     thread::spawn(move || {
         loop {
@@ -6865,6 +6888,76 @@ fn handle_availability_for_instance(
     );
     DaemonToWrapper::Ack {
         id: "availability".to_string(),
+    }
+}
+
+/// Session 116 : cadence de l'entretien périodique du daemon.
+const MAINTENANCE_FIRST_DELAY: Duration = Duration::from_secs(120);
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(3600);
+/// Marge après l'expiration d'une saga d'envoi avant sa purge : pendant elle,
+/// un rejeu tardif reçoit encore « expiré » au lieu d'être réexpédié.
+const SEND_PURGE_GRACE_SECS: i64 = 30 * 24 * 3600;
+/// Âge minimal d'un nom ou d'une preuve d'identité orphelins avant retrait.
+const IDENTITY_FILES_MIN_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// Session 116 : un passage d'entretien. Chaque étape est indépendante : un
+/// échec est journalisé et n'empêche pas les suivantes. Le verrou de l'état
+/// n'est tenu que pour les deux requêtes SQL et la lecture des instances
+/// connectées ; les fichiers sont traités hors verrou.
+fn run_maintenance(state: &Arc<Mutex<DaemonState>>, root: &std::path::Path) {
+    let now = unix_now_secs();
+    let connected: HashSet<String> = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        match st.idempotency.settle_expired_dispatching(now) {
+            Ok(0) => {}
+            Ok(count) => info!(
+                "entretien: {count} remise(s) expirée(s) passée(s) de « en vol » à « sort inconnu »"
+            ),
+            Err(error) => warn!("entretien: remises expirées : {error}"),
+        }
+        match st
+            .idempotency
+            .purge_expired_sends(now, SEND_PURGE_GRACE_SECS)
+        {
+            Ok(0) => {}
+            Ok(count) => {
+                info!("entretien: {count} envoi(s) expiré(s) depuis plus de 30 jours purgé(s)")
+            }
+            Err(error) => warn!("entretien: purge des envois : {error}"),
+        }
+        st.conn_instances.values().cloned().collect()
+    };
+    let identite = crate::mcp_identity::purge_stale_identity_files(
+        root,
+        &connected,
+        IDENTITY_FILES_MIN_AGE,
+        std::time::SystemTime::now(),
+    );
+    if identite != crate::mcp_identity::IdentityPurge::default() {
+        info!(
+            "entretien: état d'identité des disparus retiré : {} marqueur(s), {} nom(s), {} preuve(s)",
+            identite.markers, identite.names, identite.proofs
+        );
+    }
+    let tmp = crate::disk_hygiene::purge_orphan_bridget_tmp(&root.join("tmp"));
+    if !tmp.deleted.is_empty() {
+        info!(
+            "entretien: {} temporaire(s) privé(s) retiré(s)",
+            tmp.deleted.len()
+        );
+    }
+    crate::wrapper::purge_orphan_mcp_configs(root);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    for log in crate::disk_hygiene::service_logs(root, home.as_deref()) {
+        match crate::disk_hygiene::rotate_log_if_large(&log, crate::disk_hygiene::LOG_ROTATE_BYTES)
+        {
+            Ok(true) => info!(
+                "entretien: journal {} tourné (génération précédente en .1)",
+                log.display()
+            ),
+            Ok(false) => {}
+            Err(error) => warn!("entretien: rotation de {} : {error}", log.display()),
+        }
     }
 }
 

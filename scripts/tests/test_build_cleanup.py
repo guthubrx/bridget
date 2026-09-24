@@ -283,3 +283,73 @@ class ProcessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorktreePruneTests(unittest.TestCase):
+    """Session 116 : retrait automatique des worktrees fusionnés (constitution XVI.3)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="bridget-worktree-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name).resolve() / "repo"
+        self.repo.mkdir()
+        self.enterContext(contextlib.redirect_stderr(io.StringIO()))
+        self.old = str(int(time.time()) - 3 * 24 * 3600)
+        self.git("init", "-q", "-b", "main")
+        self.commit(self.repo, "base", self.old)
+
+    def git(self, *arguments, cwd=None, date=None):
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+        if date:
+            env.update(GIT_AUTHOR_DATE=f"{date} +0000", GIT_COMMITTER_DATE=f"{date} +0000")
+        subprocess.run(["git", "-C", str(cwd or self.repo), *arguments], check=True,
+                       capture_output=True, env=env)
+
+    def commit(self, where, name, date):
+        (where / name).write_text(name)
+        self.git("add", name, cwd=where)
+        self.git("commit", "-q", "-m", name, cwd=where, date=date)
+
+    def worktree(self, name, date, merge=True):
+        path = self.repo / ".worktrees" / name
+        self.git("worktree", "add", "-q", str(path), "-b", f"b-{name}", "main")
+        self.commit(path, name, date)
+        if merge:
+            self.git("merge", "-q", "--ff-only", f"b-{name}")
+        return path
+
+    def test_seul_un_worktree_fusionne_propre_ancien_et_inoccupe_est_retire(self):
+        fusionne = self.worktree("fusionne", self.old)
+        sale = self.worktree("sale", self.old)
+        (sale / "non-suivi.txt").write_text("brouillon")
+        recent = self.worktree("recent", str(int(time.time())))
+        non_fusionne = self.worktree("non-fusionne", self.old, merge=False)
+        occupe = self.worktree("occupe", self.old)
+        with patch.object(build, "busy_directories", return_value=[occupe / "sous-dossier"]):
+            retires = build.prune_merged_worktrees(self.repo)
+        self.assertEqual(retires, [fusionne])
+        self.assertFalse(fusionne.exists())
+        for garde in (sale, recent, non_fusionne, occupe):
+            self.assertTrue(garde.exists(), garde.name)
+        branches = subprocess.run(["git", "-C", str(self.repo), "branch", "--list", "b-fusionne"],
+                                  capture_output=True, text=True, check=True).stdout
+        self.assertIn("b-fusionne", branches, "la branche est conservée : rien n'est perdu")
+
+    def test_repertoires_courants_inconnus_ne_retirent_rien(self):
+        fusionne = self.worktree("fusionne", self.old)
+        with patch.object(build, "busy_directories", return_value=None):
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+        self.assertTrue(fusionne.exists())
+
+    def test_simulation_ne_retire_rien(self):
+        fusionne = self.worktree("fusionne", self.old)
+        with patch.object(build, "busy_directories", return_value=[]):
+            self.assertEqual(build.prune_merged_worktrees(self.repo, dry_run=True), [fusionne])
+        self.assertTrue(fusionne.exists())
+
+    def test_lance_depuis_un_worktree_vise_les_worktrees_du_depot_principal(self):
+        fusionne = self.worktree("fusionne", self.old)
+        courant = self.worktree("courant", str(int(time.time())), merge=False)
+        with patch.object(build, "busy_directories", return_value=[]):
+            self.assertEqual(build.prune_merged_worktrees(courant), [fusionne])

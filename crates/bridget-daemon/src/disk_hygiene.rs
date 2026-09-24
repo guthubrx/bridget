@@ -448,6 +448,69 @@ fn process_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+/// Session 116 : plafond d'un journal de service avant rotation.
+pub const LOG_ROTATE_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Session 116 : rotation « copie puis troncature » d'un journal de service.
+///
+/// launchd ouvre ces journaux en mode ajout (drapeau AP relevé par `lsof +fg`) :
+/// après la troncature, l'écriture suivante repart au début, sans fichier troué.
+/// Une seule génération précédente est gardée, en `<nom>.1`. Les lignes écrites
+/// entre la copie et la troncature, quelques millisecondes, peuvent se perdre.
+/// Un lien symbolique ou un fichier absent n'est jamais touché. O(taille copiée).
+pub fn rotate_log_if_large(path: &Path, cap: u64) -> io::Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() || metadata.len() <= cap {
+        return Ok(false);
+    }
+    let mut previous = path.as_os_str().to_owned();
+    previous.push(".1");
+    fs::copy(path, PathBuf::from(previous))?;
+    fs::OpenOptions::new().write(true).open(path)?.set_len(0)?;
+    Ok(true)
+}
+
+/// Session 116 : journaux des services Bridget soumis à rotation. Liste fermée :
+/// ceux de l'état Bridget, et ceux que ses agents launchd écrivent sous
+/// `~/Library/Logs` (`com.bridget.*.log`, dossier `Bridget`). Une génération
+/// déjà tournée (`.1`) n'est jamais reprise. O(entrées des deux dossiers).
+pub fn service_logs(state_root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut logs = vec![
+        state_root.join("daemon-stderr.log"),
+        state_root.join("daemon-stdout.log"),
+    ];
+    let Some(library) = home.map(|home| home.join("Library/Logs")) else {
+        return logs;
+    };
+    logs.extend(files_named(&library, |name| {
+        name.starts_with("com.bridget.") && name.ends_with(".log")
+    }));
+    logs.extend(files_named(&library.join("Bridget"), |name| {
+        name.ends_with(".log") || name.ends_with(".err")
+    }));
+    logs
+}
+
+fn files_named(directory: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+    fs::read_dir(directory)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(&keep)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,5 +712,71 @@ mod tests {
         assert_eq!(report.deleted.len(), 2);
         assert_eq!(report.deferred, 3);
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod spec116_rotation {
+    use super::*;
+
+    #[test]
+    fn spec116_journal_trop_gros_tourne_une_generation_et_repart_a_zero() {
+        let dir = std::env::temp_dir().join(format!("bh116-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("service.log");
+        fs::write(&log, vec![b'x'; 100]).unwrap();
+        assert!(
+            !rotate_log_if_large(&log, 100).unwrap(),
+            "au plafond : rien"
+        );
+        fs::write(&log, vec![b'y'; 101]).unwrap();
+        assert!(rotate_log_if_large(&log, 100).unwrap());
+        assert_eq!(
+            fs::metadata(&log).unwrap().len(),
+            0,
+            "le journal repart à zéro"
+        );
+        assert_eq!(
+            fs::read(dir.join("service.log.1")).unwrap(),
+            vec![b'y'; 101],
+            "la génération précédente est gardée intacte"
+        );
+        assert!(!rotate_log_if_large(&dir.join("absent.log"), 1).unwrap());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn spec116_seuls_les_journaux_bridget_sont_vises() {
+        let home = std::env::temp_dir().join(format!("bh116-home-{}", uuid::Uuid::new_v4()));
+        let library = home.join("Library/Logs");
+        fs::create_dir_all(library.join("Bridget")).unwrap();
+        for name in [
+            "com.bridget.t3.log",
+            "com.autre.log",
+            "com.bridget.t3.log.1",
+        ] {
+            fs::write(library.join(name), b"").unwrap();
+        }
+        for name in [
+            "federation.err",
+            "federation.log",
+            "notes.txt",
+            "federation.err.1",
+        ] {
+            fs::write(library.join("Bridget").join(name), b"").unwrap();
+        }
+        let root = home.join("etat");
+        let mut logs = service_logs(&root, Some(&home));
+        logs.sort();
+        let mut expected = vec![
+            root.join("daemon-stderr.log"),
+            root.join("daemon-stdout.log"),
+            library.join("com.bridget.t3.log"),
+            library.join("Bridget/federation.err"),
+            library.join("Bridget/federation.log"),
+        ];
+        expected.sort();
+        assert_eq!(logs, expected);
+        fs::remove_dir_all(home).unwrap();
     }
 }

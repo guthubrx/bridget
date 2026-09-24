@@ -2163,3 +2163,91 @@ fn spec_068_faits_runtime_delegues_restent_ordonnes_et_accuses() {
         vec![failed.event_id.as_str()]
     );
 }
+
+/// Session 116 : une remise restée « en vol » après l'expiration de sa saga
+/// passe en sort inconnu, et plus aucune remise de l'instance n'attend.
+#[test]
+fn spec116_remise_expiree_encore_en_vol_devient_sort_inconnu() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    assert!(matches!(
+        reserve(&store, b"canon"),
+        Reservation::Prepared { .. }
+    ));
+    let delivery = SendDelivery {
+        delivery_id: "delivery-116".to_string(),
+        recipient_instance_id: "instance-disparue".to_string(),
+        delivery_generation: 1,
+        expires_at: NOW + HORIZON,
+        message_bytes: sample_message_bytes("message-1", "peer-1"),
+    };
+    store.begin_send_delivery(&key(), &delivery).unwrap();
+    let phase = |store: &IdempotencyStore| -> String {
+        store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-116'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        store.settle_expired_dispatching(NOW + HORIZON - 1).unwrap(),
+        0,
+        "une saga encore valide n'est pas touchée"
+    );
+    assert_eq!(phase(&store), "dispatching");
+    assert_eq!(store.settle_expired_dispatching(NOW + HORIZON).unwrap(), 1);
+    assert_eq!(
+        phase(&store),
+        "indeterminate",
+        "plus rien n'est affiché en vol"
+    );
+}
+
+/// Session 116 : la purge vise les seuls envois, après une marge. Le
+/// lancement d'un équipier géré, supprimé en cascade avec son enregistrement,
+/// n'est jamais emporté.
+#[test]
+fn spec116_purge_des_envois_epargne_les_lancements_et_respecte_la_marge() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    assert!(matches!(
+        reserve(&store, b"canon"),
+        Reservation::Prepared { .. }
+    ));
+    let delivery = SendDelivery {
+        delivery_id: "delivery-116-purge".to_string(),
+        recipient_instance_id: "instance-1".to_string(),
+        delivery_generation: 1,
+        expires_at: NOW + HORIZON,
+        message_bytes: sample_message_bytes("message-1", "peer-1"),
+    };
+    store.begin_send_delivery(&key(), &delivery).unwrap();
+    assert!(matches!(
+        store
+            .reserve(&spawn_key(), b"spawn", NOW, HORIZON, NOW, 30)
+            .unwrap(),
+        Reservation::Prepared { .. }
+    ));
+    assert_eq!(store.record_count().unwrap(), 2);
+    let grace = 30 * 24 * 3600;
+    assert_eq!(
+        store
+            .purge_expired_sends(NOW + HORIZON + grace - 1, grace)
+            .unwrap(),
+        0,
+        "pendant la marge, un rejeu tardif reçoit encore « expiré »"
+    );
+    assert_eq!(
+        store
+            .purge_expired_sends(NOW + HORIZON + grace, grace)
+            .unwrap(),
+        1
+    );
+    assert_eq!(store.record_count().unwrap(), 1, "le lancement reste");
+    assert_eq!(
+        store.send_delivery(&key()).unwrap(),
+        None,
+        "la remise suit en cascade"
+    );
+}

@@ -239,6 +239,98 @@ def limits():
     return size * GIB, days * 86400
 
 
+# Session 116 : constitution XVI.3, un worktree fusionné est retiré sous 24 h.
+WORKTREE_MIN_AGE = 24 * 3600
+
+
+def worktree_entries(repo):
+    """(chemin, HEAD) de chaque worktree secondaire, format porcelain de Git."""
+    result = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list", "--porcelain", "-z"],
+        capture_output=True, check=False, timeout=10,
+    )
+    if result.returncode:
+        return []
+    entries, path, head = [], None, None
+    for field in result.stdout.split(b"\0") + [b""]:
+        if field.startswith(b"worktree "):
+            path = Path(os.fsdecode(field[9:]))
+        elif field.startswith(b"HEAD "):
+            head = field[5:].decode()
+        elif not field and path is not None:
+            entries.append((path, head))
+            path, head = None, None
+    return entries  # Le premier est le dépôt principal, jamais retiré.
+
+
+def busy_directories():
+    """Répertoires courants de tous les processus visibles ; None si inconnu.
+
+    Un seul lsof par passage. Échec = on ne sait pas qui travaille où : aucun
+    worktree n'est alors retiré (fail-closed)."""
+    result = subprocess.run(
+        ["lsof", "-n", "-P", "-w", "-a", "-d", "cwd", "-F", "n"],
+        capture_output=True, check=False, timeout=15,
+    )
+    if not result.stdout:
+        return None
+    return [Path(os.fsdecode(line[1:])) for line in result.stdout.split(b"\n")
+            if line.startswith(b"n")]
+
+
+def git_ok(repo, *arguments):
+    return subprocess.run(["git", "-C", str(repo), *arguments], capture_output=True,
+                          check=False, timeout=15)
+
+
+def prune_merged_worktrees(repo, dry_run=False, now=None):
+    """Retire les worktrees de `.worktrees/` dont le travail est fusionné.
+
+    Conditions cumulées : branche fusionnée dans main, aucune modification même
+    non suivie, dernier commit plus vieux que 24 h, aucun processus dont le
+    répertoire courant s'y trouve. `git worktree remove` sans --force refuse de
+    lui-même un worktree sale. La branche est conservée : rien n'est perdu, un
+    `git worktree add` la retrouve. O(worktrees) appels Git, un seul lsof."""
+    now = time.time() if now is None else now
+    entries = worktree_entries(repo)
+    if not entries or git_ok(repo, "rev-parse", "--verify", "--quiet", "main").returncode:
+        return []
+    # Racine du dépôt principal : lancé depuis un worktree, `repo` en est un.
+    base = (entries[0][0] / ".worktrees").resolve()
+    candidates = []
+    for path, head in entries[1:]:
+        resolved = path.resolve()
+        if base not in resolved.parents or not head:
+            continue
+        if git_ok(repo, "merge-base", "--is-ancestor", head, "main").returncode:
+            continue
+        stamp = git_ok(repo, "log", "-1", "--format=%ct", head)
+        if stamp.returncode or now - int(stamp.stdout.strip() or 0) < WORKTREE_MIN_AGE:
+            continue
+        status = git_ok(path, "status", "--porcelain", "--untracked-files=all")
+        if status.returncode or status.stdout.strip():
+            continue
+        candidates.append(resolved)
+    if not candidates:
+        return []
+    busy = busy_directories()
+    if busy is None:
+        log("worktrees fusionnés non retirés : répertoires courants inconnus")
+        return []
+    removed = []
+    for path in candidates:
+        if any(directory == path or path in directory.parents for directory in busy):
+            continue
+        if dry_run:
+            removed.append(path)
+        elif not git_ok(repo, "worktree", "remove", str(path)).returncode:
+            removed.append(path)
+    if removed:
+        verb = "retirables" if dry_run else "retirés"
+        log(f"worktrees fusionnés {verb} : " + ", ".join(p.name for p in removed))
+    return removed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -271,6 +363,7 @@ def main():
             installed(repo, args.target, args.binary, args.dry_run)
         else:
             prune(repo, *limits(), dry_run=getattr(args, "dry_run", False))
+            prune_merged_worktrees(repo, dry_run=getattr(args, "dry_run", False))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         log(str(error))
         # L'entretien ne transforme pas un build réussi en échec de compilation.

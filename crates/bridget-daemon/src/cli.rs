@@ -2692,6 +2692,13 @@ fn cmd_send(args: &[String]) {
             }
             DaemonToWrapper::Nack { id: _, reason } => {
                 eprintln!("REJET: {}", reason);
+                if let Some(hint) = unattested_hint(
+                    &msg.from,
+                    &reason,
+                    crate::mcp_identity::resolve_current_identity().map(|_| ()),
+                ) {
+                    eprintln!("{hint}");
+                }
                 std::process::exit(1);
             }
             _ => {
@@ -2727,6 +2734,26 @@ where
         return Err(invalid());
     }
     Ok(parsed)
+}
+
+/// Session 116 : un refus faute d'identité ne reste plus muet. Il dit d'où la
+/// preuve aurait dû venir et pourquoi la filiation n'a pas abouti — c'est ce
+/// silence qui a rendu la panne du 24/09 si longue à diagnostiquer.
+fn unattested_hint(
+    sender: &str,
+    reason: &str,
+    lineage: Result<(), crate::mcp_identity::IdentityError>,
+) -> Option<String> {
+    if sender != "human" || !reason.contains("attest") {
+        return None;
+    }
+    let cause = match lineage {
+        Ok(()) => "la filiation aboutit maintenant : relancer la commande".to_string(),
+        Err(error) => format!("{} : {}", error.code(), error.remediation()),
+    };
+    Some(format!(
+        "    ↳ Envoyé sans identité d'agent : ni variable d'un lanceur Bridget, ni filiation attestée ({cause})."
+    ))
 }
 
 fn validate_reply_options(
@@ -4551,6 +4578,13 @@ fn cmd_reply(args: &[String]) {
             }
             DaemonToWrapper::Nack { id: _, reason } => {
                 eprintln!("REJET: {}", reason);
+                if let Some(hint) = unattested_hint(
+                    &msg.from,
+                    &reason,
+                    crate::mcp_identity::resolve_current_identity().map(|_| ()),
+                ) {
+                    eprintln!("{hint}");
+                }
                 std::process::exit(1);
             }
             _ => {
@@ -6150,6 +6184,35 @@ mod hook_tests {
                 json: true,
                 domain: Some("revue".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn spec116_refus_sans_identite_dit_pourquoi() {
+        use crate::mcp_identity::IdentityError;
+        let raison =
+            "identité expéditeur non attestée : --from ne permet pas d'emprunter une identité";
+        let indice = unattested_hint("human", raison, Err(IdentityError::IdentityNotFound))
+            .expect("un refus d'identité est expliqué");
+        assert!(indice.contains("identity_not_found"));
+        assert!(indice.contains("agent Bridget enregistré"));
+        assert!(
+            unattested_hint(
+                "human",
+                "agent introuvable: x",
+                Err(IdentityError::IdentityNotFound)
+            )
+            .is_none(),
+            "un autre refus n'est pas maquillé en problème d'identité"
+        );
+        assert!(
+            unattested_hint(
+                "127bccff-8490-453a-8182-884b749ec41e",
+                raison,
+                Err(IdentityError::IdentityNotFound)
+            )
+            .is_none(),
+            "un envoi signé n'a pas besoin de cet indice"
         );
     }
 

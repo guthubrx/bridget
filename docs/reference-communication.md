@@ -155,6 +155,15 @@ un tour par message. Restent toujours seuls dans leur tour : une demande suivie
 sollicitation de fil et une notification, qui portent chacune leur consigne
 propre. Un message seul garde mot pour mot son enveloppe habituelle.
 
+Appariement des réponses (session 116) : le pont relève quel tour chaque message
+a déclenché, par égalité stricte entre l'horodatage de demande du tour et celui du
+message, et relaie le texte de ce tour-là. Les réveils d'un agent en arrière-plan,
+qui ouvrent des tours sans message, n'en font pas partie. Un tour qui se termine
+sans rien écrire est annoncé à l'expéditeur par Bridget, au bout d'une quinzaine de
+secondes, au lieu de le laisser attendre jusqu'à l'échéance. Quand l'origine n'a
+pas pu être relevée, l'ancien appariement par rang s'applique en repli. Voir
+[l'ADR 042](docs/decisions/042-appariement-par-origine-prouvee-et-entretien.md).
+
 Le pont traite les annulations pendant l'attente d'un fil libre : une demande
 annulée avant démarrage ne devient pas un tour ultérieur. L'expiration et les
 rappels automatiques n'ouvrent pas de tour supplémentaire. Une annulation après
@@ -641,6 +650,15 @@ Les tests sont lancés avec HOME/BRIDGET_HOME/TMPDIR isolés, watchdog et nettoy
 des seuls enfants créés. Ne pas exécuter aveuglément les anciens harnais sur
 le HOME réel. Les gates ignorés de compte/SSH ne valent pas des succès CI.
 La [carte de tests](specs/089-communication-core/test-map.md) distingue leurs états.
+
+Entretien automatique (session 116). Le daemon passe toutes les heures, et deux
+minutes après chaque démarrage : il note « sort inconnu » les remises expirées encore
+affichées en vol, purge les envois expirés depuis plus de 30 jours (jamais les
+lancements d'équipiers), retire l'état d'identité des processus disparus, ramasse
+temporaires et configurations MCP orphelins, et tourne au-delà de 20 Mio les
+journaux de ses services en gardant une génération `.1`. Le script de construction
+retire les worktrees fusionnés dans main, propres, inoccupés et dont le dernier commit
+a plus de 24 heures ; leur branche est conservée.
 
 Bridget ne remplace ni un orchestrateur de tâches, ni une revue humaine, ni une
 preuve de travail terminé. L'adaptateur T3 reste séparé du cœur de communication ;

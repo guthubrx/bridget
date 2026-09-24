@@ -262,17 +262,16 @@ pub(crate) fn open_session_files(
             }
             std::thread::sleep(Duration::from_millis(5));
         };
-        if !status.success() {
-            return Err(std::io::Error::other("inventaire lsof incomplet"));
-        }
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| std::io::Error::other("inventaire non UTF8"))?;
         let mut found: std::collections::HashMap<u32, Vec<std::path::PathBuf>> = Default::default();
+        let mut listed = std::collections::HashSet::new();
         let mut current = None;
         for field in text.split('\0') {
             let line = field.trim_start_matches('\n');
             if let Some(pid) = line.strip_prefix('p') {
                 current = pid.parse::<u32>().ok().filter(|pid| pids.contains(pid));
+                listed.extend(current);
             } else if let Some(path) = line.strip_prefix('n')
                 && let Some(pid) = current
                 && Path::new(path).is_absolute()
@@ -284,6 +283,15 @@ pub(crate) fn open_session_files(
                     files.push(path);
                 }
             }
+        }
+        // Session 116 : lsof sort en erreur dès qu'un seul processus demandé a
+        // disparu, alors qu'il a listé tous les autres. Un fournisseur qui
+        // s'arrête pendant la collecte est le cycle de vie normal de T3, pas un
+        // inventaire incomplet : le traiter comme tel révoquait l'identité de
+        // TOUS les fils, une à deux fois par jour. Un processus mort ne porte
+        // aucune identité. Toute autre cause d'échec reste un échec.
+        if !status.success() && !only_vanished(pids, &listed) {
+            return Err(std::io::Error::other("inventaire lsof incomplet"));
         }
         Ok(found)
     })();
@@ -300,6 +308,23 @@ pub(crate) fn open_session_files(
         }
     }
     result
+}
+
+/// Session 116 : vrai si l'échec de lsof s'explique entièrement par des
+/// processus disparus — au moins un processus demandé manque à l'inventaire,
+/// et tous ceux qui manquent sont morts. O(n), n ≤ 256 processus demandés.
+fn only_vanished(requested: &[u32], listed: &std::collections::HashSet<u32>) -> bool {
+    let mut missing = requested
+        .iter()
+        .filter(|pid| !listed.contains(pid))
+        .peekable();
+    missing.peek().is_some() && missing.all(|pid| process_gone(*pid))
+}
+
+/// `kill(pid, 0)` : ESRCH prouve l'absence, EPERM prouve l'existence.
+fn process_gone(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 /// Retient le fichier le plus récemment écrit parmi des candidats.
@@ -320,6 +345,56 @@ fn most_recently_written(candidates: &[std::path::PathBuf]) -> Option<std::path:
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// PID d'un processus terminé et récolté : garanti absent à l'instant.
+    fn pid_disparu() -> u32 {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    /// Session 116 : un processus qui s'arrête pendant la collecte ne rend
+    /// plus l'inventaire des survivants « incomplet ».
+    #[test]
+    fn spec116_processus_disparu_n_invalide_pas_l_inventaire_des_vivants() {
+        let path = fixture("spec116-vivant", "{}\n");
+        let file = std::fs::File::open(&path).unwrap();
+        let vivant = std::process::id();
+        let disparu = pid_disparu();
+        let inventory = open_session_files(&[vivant, disparu], is_codex_rollout)
+            .expect("les survivants sont listés entièrement");
+        let canonique = std::fs::canonicalize(&path).unwrap();
+        assert!(
+            inventory
+                .get(&vivant)
+                .is_some_and(|files| files.contains(&canonique)),
+            "le rollout du survivant est bien inventorié"
+        );
+        assert!(!inventory.contains_key(&disparu));
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec116_seule_une_disparition_prouvee_excuse_l_echec() {
+        let vivant = std::process::id();
+        let disparu = pid_disparu();
+        let listes = |pids: &[u32]| {
+            pids.iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+        };
+        assert!(only_vanished(&[vivant, disparu], &listes(&[vivant])));
+        assert!(
+            !only_vanished(&[vivant], &listes(&[])),
+            "un processus vivant absent de l'inventaire reste un échec"
+        );
+        assert!(
+            !only_vanished(&[vivant], &listes(&[vivant])),
+            "un échec sans disparition garde sa cause inconnue"
+        );
+    }
 
     fn fixture(name: &str, content: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(

@@ -952,3 +952,182 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+/// Session 116 : bilan d'un passage de nettoyage de l'état d'identité.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct IdentityPurge {
+    pub markers: usize,
+    pub names: usize,
+    pub proofs: usize,
+}
+
+/// Session 116 : retire l'état d'identité des processus et instances disparus.
+///
+/// - Un marqueur dont le processus est mort, ou dont le PID a été recyclé
+///   (naissance différente), est retiré : la résolution l'ignorait déjà, il ne
+///   porte plus aucune identité vivante.
+/// - Un fichier de nom (`instance-*`, `t3-identity-*`) ou une preuve
+///   (`proof-*.json`) n'est retiré que s'il a plus de `min_age`, qu'aucun
+///   marqueur restant ne le désigne et, pour une preuve, que son instance n'est
+///   pas connectée. Une instance qui se reconnecte reçoit une preuve neuve à
+///   l'enregistrement : une preuve d'instance déconnectée ne sert plus.
+///
+/// Les fichiers d'un autre format sont laissés intacts, et un marqueur
+/// illisible aussi : ne rien supprimer qu'on ne sache relire.
+/// O(marqueurs + fichiers de noms + instances connectées).
+pub(crate) fn purge_stale_identity_files(
+    root: &Path,
+    connected_instances: &std::collections::HashSet<String>,
+    min_age: std::time::Duration,
+    now: std::time::SystemTime,
+) -> IdentityPurge {
+    let mut report = IdentityPurge::default();
+    let mut kept_names = std::collections::HashSet::new();
+    let mut kept_proofs: std::collections::HashSet<PathBuf> = connected_instances
+        .iter()
+        .map(|instance| credential_path(root, instance))
+        .collect();
+    if let Ok(entries) = fs::read_dir(root.join("agent-pids")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(marker) = read_marker_file(&path, &pid.to_string()) else {
+                continue;
+            };
+            let alive = marker.pid == pid
+                && crate::managed_process::process_birth(pid).ok() == Some(marker.birth);
+            if alive {
+                kept_names.insert(marker.name_file.clone());
+                kept_proofs.insert(credential_path(root, &marker.instance_id));
+            } else if fs::remove_file(&path).is_ok() {
+                report.markers += 1;
+            }
+        }
+    }
+    let old_enough = |path: &Path| {
+        fs::symlink_metadata(path)
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= min_age)
+    };
+    if let Ok(entries) = fs::read_dir(root.join("agent-names")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let proof = name.starts_with("proof-") && name.ends_with(".json");
+            let identity_name = name.starts_with("instance-") || name.starts_with("t3-identity-");
+            if !(proof || identity_name) || !old_enough(&path) {
+                continue;
+            }
+            let referenced = if proof {
+                kept_proofs.contains(&path)
+            } else {
+                kept_names.contains(&path)
+            };
+            if !referenced && fs::remove_file(&path).is_ok() {
+                if proof {
+                    report.proofs += 1;
+                } else {
+                    report.names += 1;
+                }
+            }
+        }
+    }
+    report
+}
+
+#[cfg(test)]
+mod spec116_purge_identite {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn pid_disparu() -> u32 {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    /// Un processus disparu perd son marqueur, puis son nom et sa preuve une
+    /// fois assez anciens. Rien de vivant ni de connecté n'est touché, et un
+    /// fichier d'un format inconnu non plus.
+    #[test]
+    fn spec116_seul_l_etat_des_disparus_est_retire() {
+        let root = std::env::temp_dir().join(format!("bi116-{}", uuid::Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        crate::environment::ensure_private_directory(&root.join("agent-names")).unwrap();
+        let names = root.join("agent-names");
+        let vivant = std::process::id();
+        let naissance = crate::managed_process::process_birth(vivant).unwrap();
+        let disparu = pid_disparu();
+        let nom_vivant = names.join("instance-vivante");
+        let nom_disparu = names.join("instance-disparue");
+        for path in [&nom_vivant, &nom_disparu] {
+            bridget_transport::fsutil::write_private_file_atomic(path, b"agent").unwrap();
+        }
+        let pids = root.join("agent-pids");
+        write_marker(&pids, vivant, naissance, "i-vivante", &nom_vivant).unwrap();
+        write_marker(&pids, disparu, 1, "i-disparue", &nom_disparu).unwrap();
+        for instance in ["i-vivante", "i-disparue", "i-connectee"] {
+            bridget_transport::fsutil::write_private_file_atomic(
+                &credential_path(&root, instance),
+                b"preuve",
+            )
+            .unwrap();
+        }
+        let inconnu = names.join("active-format-inconnu");
+        bridget_transport::fsutil::write_private_file_atomic(&inconnu, b"x").unwrap();
+        let connectees = std::collections::HashSet::from(["i-connectee".to_string()]);
+        let sept_jours = Duration::from_secs(7 * 24 * 3600);
+
+        // Fichiers récents : seul le marqueur du disparu part, sans délai.
+        let frais = purge_stale_identity_files(&root, &connectees, sept_jours, SystemTime::now());
+        assert_eq!(
+            frais,
+            IdentityPurge {
+                markers: 1,
+                names: 0,
+                proofs: 0
+            }
+        );
+        assert!(
+            pids.join(vivant.to_string()).exists(),
+            "le vivant garde son marqueur"
+        );
+
+        // Huit jours plus tard : nom et preuve du disparu partent aussi.
+        let plus_tard = SystemTime::now() + Duration::from_secs(8 * 24 * 3600);
+        let tardif = purge_stale_identity_files(&root, &connectees, sept_jours, plus_tard);
+        assert_eq!(
+            tardif,
+            IdentityPurge {
+                markers: 0,
+                names: 1,
+                proofs: 1
+            }
+        );
+        assert!(nom_vivant.exists());
+        assert!(!nom_disparu.exists());
+        assert!(
+            credential_path(&root, "i-vivante").exists(),
+            "preuve d'un marqueur vivant"
+        );
+        assert!(
+            credential_path(&root, "i-connectee").exists(),
+            "preuve d'une instance connectée sans marqueur, comme un fil T3 au repos"
+        );
+        assert!(!credential_path(&root, "i-disparue").exists());
+        assert!(inconnu.exists(), "un format inconnu n'est jamais supprimé");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
