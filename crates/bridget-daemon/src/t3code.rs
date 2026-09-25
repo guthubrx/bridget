@@ -2193,6 +2193,7 @@ impl LinkWorker {
             let origin_missing = detail.latest_turn.as_ref().is_some_and(|turn| {
                 !self.state.turn_origins.contains_key(&turn.turn_id)
                     && observation_origin(&detail, turn).is_none()
+                    && !spontaneous_turn(&detail, turn)
             });
             if (anchors_missing || !seeded || origin_missing) && limit < DETAIL_PAGE_MAX {
                 limit *= 2;
@@ -2207,6 +2208,7 @@ impl LinkWorker {
         let origin_known = detail.latest_turn.as_ref().is_none_or(|turn| {
             self.state.turn_origins.contains_key(&turn.turn_id)
                 || observation_origin(&detail, turn).is_some()
+                || spontaneous_turn(&detail, turn)
         });
         if origin_known {
             self.observation_schema.push(Kind::TurnEnded);
@@ -2434,7 +2436,9 @@ impl LinkWorker {
                         self.journal_inflight.insert(message.id.clone());
                     }
                     Err(e) => {
-                        warn!("journal du fil {} : {e}", self.thread_id);
+                        // Session 121 : répété à chaque lecture tant que la
+                        // file est pleine ; signalé une fois après le délai.
+                        self.note_journal_block("message refusé par le journal", || e);
                         // Ne pas dépasser un trou : sinon B peut être écrit
                         // avant A lorsque la file se libère pendant ce lot.
                         return;
@@ -2456,7 +2460,7 @@ impl LinkWorker {
                         self.journal_inflight.insert(format!("end:{turn_id}"));
                     }
                     Err(e) => {
-                        warn!("fin de tour non journalisée : {e}");
+                        self.note_journal_block("fin de tour refusée par le journal", || e);
                         return;
                     }
                 }
@@ -2612,12 +2616,16 @@ impl LinkWorker {
     /// dépend désormais, pas seulement l'observation.
     fn record_turn_origin(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
         let latest = detail.latest_turn.as_ref().or(summary.latest_turn.as_ref());
-        if let Some(turn) = latest
-            && let Some(origin) = observation_origin(detail, turn)
-        {
-            self.state
-                .turn_origins
-                .insert(turn.turn_id.clone(), origin.to_string());
+        if let Some(turn) = latest {
+            if let Some(origin) = observation_origin(detail, turn) {
+                self.state
+                    .turn_origins
+                    .insert(turn.turn_id.clone(), origin.to_string());
+            } else if spontaneous_turn(detail, turn) {
+                self.state
+                    .turn_origins
+                    .insert(turn.turn_id.clone(), spontaneous_origin(&turn.turn_id));
+            }
         }
         self.prune_turn_origins(detail, latest);
     }
@@ -2799,6 +2807,11 @@ impl LinkWorker {
                             Some(&pending.request_id),
                             serde_json::json!({"reason": reason}),
                         );
+                        // Session 121 : plutôt que rien, le texte écrit après
+                        // la demande, marqué comme hypothèse.
+                        if matches!(verdict, Correlation::Ambiguous) {
+                            pending.response = uncertain_answer(detail, &pending.message_id);
+                        }
                     }
                 }
             }
@@ -3010,6 +3023,34 @@ fn observation_origin<'a>(
         .filter(|m| m.role == "user" && m.created_at.as_ref() == Some(requested));
     let origin = candidates.next()?;
     candidates.next().is_none().then_some(origin.id.as_str())
+}
+
+/// Session 121 : un tour sans message déclencheur (réveil d'arrière-plan à la
+/// fin d'un sous-agent) est spontané, prouvé quand la page lue couvre sa
+/// demande sans qu'aucun message utilisateur n'en porte l'horodatage. Nos
+/// notifications arrivent toujours comme messages : un tour spontané ne peut
+/// pas en provenir, sa fin est donc observable sans risque de boucle. Avant,
+/// un tel tour rendait tout le fil Claude inobservable. O(n).
+fn spontaneous_turn(detail: &ThreadDetail, turn: &contract::LatestTurn) -> bool {
+    let Some(requested) = turn.requested_at.as_deref() else {
+        return false;
+    };
+    let covered = detail
+        .messages
+        .iter()
+        .filter_map(|m| m.created_at.as_deref())
+        .any(|at| at < requested);
+    covered
+        && !detail
+            .messages
+            .iter()
+            .any(|m| m.role == "user" && m.created_at.as_deref() == Some(requested))
+}
+
+/// Origine d'un tour spontané : jamais l'identifiant d'un message, donc jamais
+/// appariée à une demande.
+fn spontaneous_origin(turn_id: &str) -> String {
+    format!("t3-turn:{turn_id}")
 }
 
 /// O(fichiers), au plus256 chemins. Type fermé ET succès ; aucun parsing shell.
@@ -3227,6 +3268,26 @@ pub(crate) fn correlate(
         };
     }
     Correlation::Answered(text)
+}
+
+const UNCERTAIN_ANSWER_NOTICE: &str = "[Bridget : appariement incertain. Texte écrit par le \
+destinataire après ta demande, jusqu'au message suivant ; il peut appartenir à un autre tour.]";
+
+/// Session 121 : le 25/09, deux réponses sont restées dans leur fil faute
+/// d'appariement certain (tours faussés par une seconde application T3).
+/// Texte non utilisateur qui suit la demande jusqu'au message utilisateur
+/// suivant, préfixé d'un avertissement ; `None` s'il n'y en a pas. O(n).
+fn uncertain_answer(detail: &ThreadDetail, message_id: &str) -> Option<String> {
+    let start = detail.messages.iter().position(|m| m.id == message_id)? + 1;
+    let text = detail.messages[start..]
+        .iter()
+        .take_while(|m| m.role != "user")
+        .filter(|m| !m.streaming)
+        .map(|m| m.text.trim())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.is_empty()).then(|| format!("{UNCERTAIN_ANSWER_NOTICE}\n\n{text}"))
 }
 
 #[cfg(test)]
@@ -5225,6 +5286,108 @@ mod tests {
         );
         worker.journal.stop();
         worker.relay.shutdown();
+    }
+
+    fn dated(id: &str, role: &str, at: &str, turn: Option<&str>) -> Message {
+        let mut m = message(id, role, "texte", turn, false);
+        m.created_at = Some(at.into());
+        m
+    }
+
+    #[test]
+    fn spec121_tour_spontane_prouve_seulement_si_la_page_le_couvre() {
+        let turn = |at: &str| LatestTurn {
+            turn_id: "t1".into(),
+            state: "completed".into(),
+            assistant_message_id: None,
+            requested_at: Some(at.into()),
+        };
+        let detail = ThreadDetail {
+            messages: vec![
+                dated("u", "user", "2026-09-25T01:00:00.000Z", None),
+                dated("a", "assistant", "2026-09-25T01:00:05.000Z", Some("t0")),
+            ],
+            ..Default::default()
+        };
+        assert!(spontaneous_turn(&detail, &turn("2026-09-25T02:00:00.000Z")));
+        assert!(
+            !spontaneous_turn(&detail, &turn("2026-09-25T01:00:00.000Z")),
+            "un message porte l'horodatage : origine ordinaire"
+        );
+        assert!(
+            !spontaneous_turn(&detail, &turn("2026-09-25T00:00:00.000Z")),
+            "page trop courte pour conclure"
+        );
+    }
+
+    #[test]
+    fn spec121_fil_claude_observable_malgre_un_reveil_d_arriere_plan() {
+        use bridget_transport::protocol::ObservationKind as Kind;
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        worker.state.observations_seeded = true;
+        let server = http_once099(&worker, 200, serde_json::json!({"thread":{
+            "messages":[
+                {"id":"u","role":"user","streaming":false,"createdAt":"2026-09-25T01:00:00.000Z"},
+                {"id":"a","role":"assistant","text":"fait","turnId":"t0","streaming":false,"createdAt":"2026-09-25T01:00:05.000Z"}
+            ],
+            "latestTurn":{"turnId":"t1","state":"completed","requestedAt":"2026-09-25T02:00:00.000Z"},
+            "activities":[]
+        }}).to_string());
+        let mut summary = summary(Some(("t1", "completed")));
+        summary.provider_instance_id = Some("claudeAgent".into());
+        worker.refresh(&summary);
+        assert!(server.join().unwrap().starts_with("GET "));
+        assert!(worker.observation_events.contains(&Kind::TurnEnded));
+        assert_eq!(
+            worker.state.turn_origins.get("t1").map(String::as_str),
+            Some("t3-turn:t1")
+        );
+        worker.journal.stop();
+        let journal: String = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        let end = journal
+            .lines()
+            .find(|l| l.contains(r#""event":"turn_end""#) && l.contains(r#""t3_turn_id":"t1""#))
+            .expect("fin du tour spontané journalisée");
+        assert!(
+            end.contains("stop_reason"),
+            "fin observable, pas une lacune : {end}"
+        );
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec121_reponse_incertaine_marquee_et_bornee_au_message_suivant() {
+        let detail = ThreadDetail {
+            messages: vec![
+                message("q", "user", "ta demande", None, false),
+                message("r1", "assistant", "première partie", Some("t"), false),
+                message("r2", "assistant", "seconde partie", Some("t"), false),
+                message("q2", "user", "autre demande", None, false),
+                message("r3", "assistant", "réponse à autrui", Some("t2"), false),
+            ],
+            ..Default::default()
+        };
+        let text = uncertain_answer(&detail, "q").unwrap();
+        assert!(text.starts_with("[Bridget : appariement incertain."));
+        assert!(text.contains("première partie\n\nseconde partie"));
+        assert!(!text.contains("réponse à autrui"));
+        assert_eq!(
+            uncertain_answer(&detail, "q2")
+                .as_deref()
+                .map(|t| t.contains("réponse à autrui")),
+            Some(true)
+        );
+        assert_eq!(uncertain_answer(&detail, "absent"), None);
+        let muet = ThreadDetail {
+            messages: vec![message("q", "user", "ta demande", None, false)],
+            ..Default::default()
+        };
+        assert_eq!(uncertain_answer(&muet, "q"), None);
     }
 
     #[test]
