@@ -955,13 +955,33 @@ fn wait_runtime(paths: &Paths, poll: Duration) -> ServerRuntime {
 /// dépendent que de NOTRE serveur — mais le partage de base doit être dit, et
 /// l'autre application efface ce fichier en se fermant, ce qui empêchera un
 /// prochain démarrage du pont de retrouver le serveur.
-fn report_foreign_runtime(base: &Path, ours: &ServerRuntime, last: &mut Option<u32>) {
+fn report_foreign_runtime(
+    base: &Path,
+    ours: &ServerRuntime,
+    declaration: Option<&str>,
+    last: &mut Option<u32>,
+) {
+    if let Some(declaration) = declaration
+        && restore_declaration(base, declaration, || server_alive(ours))
+    {
+        info!(
+            "fichier d'état T3 restauré pour notre serveur {} (pid {}) : une autre \
+             application l'avait effacé en se fermant",
+            ours.base_url(),
+            ours.pid
+        );
+    }
     let foreign = match contract::read_runtime(base) {
         Ok(other) if other != *ours => Some(other),
         _ => None,
     };
     match foreign {
         Some(other) if *last != Some(other.pid) => {
+            let app = app_bundle(other.pid).unwrap_or_else(|| format!("pid {}", other.pid));
+            notify_user(&format!(
+                "Une deuxième application T3 est ouverte : {app}. Elle partage vos fils \
+                 et casse les tours en cours. Quittez-la (Cmd+Q) et gardez T3 Code (Local)."
+            ));
             warn!(
                 "une autre application T3 (pid {}, {}) s'est déclarée dans {} ; \
                  la nôtre reste {} (pid {}). Les deux partagent state.sqlite : \
@@ -985,6 +1005,77 @@ fn report_foreign_runtime(base: &Path, ours: &ServerRuntime, last: &mut Option<u
     }
 }
 
+/// Session 120 : l'autre application efface `server-runtime.json` en se
+/// fermant ; le 25/09, un agent a dû le réécrire à la main. Rétablit notre
+/// déclaration, telle que lue au démarrage, si le fichier manque ou désigne un
+/// serveur mort, et seulement si notre serveur répond encore.
+fn restore_declaration(base: &Path, declaration: &str, ours_alive: impl FnOnce() -> bool) -> bool {
+    if contract::read_runtime(base).is_ok() || !ours_alive() {
+        return false;
+    }
+    match private_write(&contract::runtime_file(base), declaration) {
+        Ok(()) => true,
+        Err(e) => {
+            warn!("fichier d'état T3 non restauré : {e}");
+            false
+        }
+    }
+}
+
+fn server_alive(ours: &ServerRuntime) -> bool {
+    let alive = unsafe { libc::kill(ours.pid as i32, 0) == 0 };
+    alive
+        && std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], ours.port)),
+            Duration::from_secs(1),
+        )
+        .is_ok()
+}
+
+/// Nom du paquet `.app` d'un processus : les deux applications T3 portent le
+/// même nom de processus, seul le chemin permet de dire laquelle quitter.
+#[cfg(target_os = "macos")]
+fn app_bundle(pid: u32) -> Option<String> {
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let length =
+        unsafe { libc::proc_pidpath(pid as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    if length <= 0 {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    let path = String::from_utf8(buffer).ok()?;
+    Path::new(&path)
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .find(|c| c.ends_with(".app"))
+        .map(str::to_string)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_bundle(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Alerte visible hors des journaux : le dommage (tours marqués en échec)
+/// survient dans les secondes qui suivent l'ouverture du doublon, seul un
+/// humain peut le fermer. Jamais pendant les tests.
+fn notify_user(text: &str) {
+    if cfg!(test) || std::env::var_os("BRIDGET_T3_NO_NOTIFY").is_some() {
+        return;
+    }
+    let script = format!(
+        "display notification \"{}\" with title \"Bridget\" sound name \"Basso\"",
+        text.replace(['\\', '"'], "'")
+    );
+    thread::spawn(move || {
+        let _ = std::process::Command::new("/usr/bin/osascript")
+            .args(["-e", &script])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+}
+
 fn serve(paths: &Paths) -> Result<(), String> {
     paths.ensure()?;
     let Some(token) = read_json::<TokenFile>(&paths.token())? else {
@@ -1005,6 +1096,11 @@ fn serve(paths: &Paths) -> Result<(), String> {
     let mut identities = crate::t3code_identity::IdentityBindings::new(&paths.root);
     let mut identity_error: Option<String> = None;
     let mut foreign_runtime: Option<u32> = None;
+    // Notre déclaration telle que T3 l'a écrite, pour la rétablir si besoin.
+    // Liée au serveur qu'elle décrit : sans effet si T3 redémarre ailleurs.
+    let declaration = std::fs::read_to_string(contract::runtime_file(&t3_base))
+        .ok()
+        .zip(contract::read_runtime(&t3_base).ok());
     loop {
         let snapshot = match session.call(|client| client.snapshot()) {
             Ok(snapshot) => snapshot,
@@ -1146,7 +1242,15 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 }
             }
         }
-        report_foreign_runtime(&t3_base, &runtime, &mut foreign_runtime);
+        report_foreign_runtime(
+            &t3_base,
+            &runtime,
+            declaration
+                .as_ref()
+                .filter(|(_, declared)| *declared == runtime)
+                .map(|(text, _)| text.as_str()),
+            &mut foreign_runtime,
+        );
         publish_status(paths, "running", &session.base_url(), links.len());
         thread::sleep(poll);
     }
@@ -5121,6 +5225,37 @@ mod tests {
         );
         worker.journal.stop();
         worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec120_declaration_retablie_seulement_si_absente_et_serveur_vivant() {
+        let base = std::env::temp_dir().join(format!("t3-spec120-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let file = contract::runtime_file(&base);
+        let ours = format!(
+            r#"{{"version":1,"pid":{},"host":"127.0.0.1","port":3773,"origin":"http://127.0.0.1:3773","startedAt":"2026-09-22T18:07:49.000Z"}}"#,
+            std::process::id()
+        );
+        // Notre serveur arrêté : le fichier absent reste absent.
+        assert!(!restore_declaration(&base, &ours, || false));
+        assert!(!file.exists());
+        // Effacé par l'autre application, notre serveur vivant : rétabli tel quel.
+        assert!(restore_declaration(&base, &ours, || true));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), ours);
+        // Une déclaration valide, même étrangère, n'est jamais écrasée.
+        let foreign = ours.replace("3773", "3774");
+        std::fs::write(&file, &foreign).unwrap();
+        assert!(!restore_declaration(&base, &ours, || true));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), foreign);
+        // Une déclaration d'un serveur mort est remplacée.
+        std::fs::write(
+            &file,
+            ours.replace(&std::process::id().to_string(), "999999"),
+        )
+        .unwrap();
+        assert!(restore_declaration(&base, &ours, || true));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), ours);
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

@@ -330,6 +330,18 @@ clé ne promet pas de rejeu idempotent : pour cet usage, préférer MCP ou fourn
 `--id` + `--issued-at`, sa portée étant dérivée de l'instance courante. Ne pas
 reconstruire soi-même cette dérivation ni convertir une clé d'une autre instance.
 
+## Ne jamais ouvrir une seconde application T3
+
+Une seule application T3 tourne : « T3 Code (Local) ». N'ouvrir, ne lancer ni
+n'inspecter par automatisation d'interface (`getApp`, `open -a`, Finder)
+aucune autre application T3, notamment `/Applications/T3 Code (Alpha).app` :
+elle partage `~/.t3/userdata`, marque en échec les tours en cours de tous les
+fils (« Provider session did not survive a server restart ») et efface
+`server-runtime.json` en se fermant. Pour diagnostiquer T3, lire
+`~/.t3/userdata/state.sqlite` en lecture seule ou utiliser `bridget t3 status`.
+Si une seconde application est ouverte, demander à l'humain de la quitter
+(Cmd+Q) ; le pont rétablit ensuite seul le fichier d'état.
+
 ## Session Codex interactive native
 
 `bridget codex resume <nom-Codex>` reprend aussi une conversation nommée.
