@@ -33,6 +33,10 @@ pub const MATRIX_CYCLES: usize = 50;
 pub const GLOBAL_TIMEOUT: Duration = Duration::from_secs(360);
 pub const READY_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Session 123 : une réponse juste peut dépasser 3 s sur une machine à charge
+/// 60 ; l'échec faux brouillait chaque recette. Un vrai blocage échoue encore,
+/// et GLOBAL_TIMEOUT borne l'ensemble.
+pub const CLIENT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 pub const SCOPE: &str = "abcdefghijklmnopqrstuv";
 pub const RECIPIENT: &str = "96389249-07a4-4e29-83f0-9c46bd775021";
 pub const ACTOR: &str = "da78fd70-41e8-424c-a88d-e29e2c5babcd";
@@ -454,7 +458,7 @@ impl Client {
     pub fn connect(socket: &Path) -> Self {
         let stream = UnixStream::connect(socket).expect("connexion au daemon");
         stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(CLIENT_READ_TIMEOUT))
             .expect("borne lecture client");
         let reader = BufReader::new(stream.try_clone().expect("clone lecture"));
         Self {

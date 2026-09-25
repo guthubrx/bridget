@@ -1723,13 +1723,14 @@ fn spec104_s24_deux_permis_troisieme_busy_et_daemon_reactif() {
         })
         .collect();
     std::thread::sleep(Duration::from_millis(60));
-    // Troisième lecture pendant les deux premières : busy immédiat.
-    let probe_started = Instant::now();
+    // Troisième lecture pendant les deux premières : busy immédiat, c'est-à-dire
+    // sans attendre qu'un permis se libère. Session 123 : constat relatif, un
+    // seuil absolu de 500 ms échouait sous charge sans défaut du daemon.
     let third = search_via(&mut trio.e, request("cible"));
     assert_eq!(error_code(&third), "busy");
     assert!(
-        probe_started.elapsed() < Duration::from_millis(500),
-        "busy doit être immédiat"
+        workers.iter().all(|worker| !worker.is_finished()),
+        "busy doit revenir avant la fin des recherches qui tiennent les permis"
     );
     // Le daemon reste réactif pendant les recherches : l'annuaire répond.
     let mut probe = Client::connect(&socket);
