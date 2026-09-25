@@ -590,7 +590,7 @@ fn which(cmd: &str) -> bool {
 
 fn print_usage() {
     eprintln!(
-        "bridget 0.1.0 — protocole de communication inter-agents\n\n\
+        "bridget {} — protocole de communication inter-agents\n\n\
          Usage: bridget <COMMANDE> [OPTIONS]\n\n\
          Agents CLI (wrappers) :\n  \
            codex [ARGS...]        Lance Codex + connexion daemon\n  \
@@ -653,7 +653,8 @@ fn print_usage() {
            hook claude-statusline Limites de forfait, lit le payload StatusLine\n    \
                                   sur stdin. N'affiche RIEN : à appeler en plus\n    \
                                   de votre statusLine, pas à sa place —\n    \
-                                  printf '%s' \"$input\" | bridget hook claude-statusline &"
+                                  printf '%s' \"$input\" | bridget hook claude-statusline &",
+        env!("CARGO_PKG_VERSION")
     );
 }
 

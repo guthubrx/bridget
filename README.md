@@ -92,10 +92,14 @@ repliés, curseur pour continuer, relecture exacte par fragments avec empreinte 
 partielle par construction : Bridget vous le dit, au lieu de vous laisser croire que vous avez tout vu.
 
 **Observer sans deviner.** Extraits de journal partageables, abonnements aux fins de tour, aux demandes de
-permission et aux écritures concurrentes, artefacts publiés inertes et relus par référence exacte.
+permission et aux écritures concurrentes, artefacts publiés inertes et relus par référence exacte. Les
+abonnements survivent à un redémarrage du daemon, et l'état d'une source n'est annoncé qu'une fois stable :
+chaque avis réveille un agent, Bridget n'en envoie donc pas pour rien.
 
 **S'étendre.** Fédération SSH entre serveurs, adaptateur T3 Code pour les fils de bureau, pilotes natifs
 Claude et Codex sans tmux, protocole public pour les services extérieurs comme le service compagnon.
+Le pont T3 Code relie chaque réponse au tour que la demande a réellement déclenché, suit aussi les tours
+spontanés, et signale une seconde application T3 qui partagerait les mêmes données.
 
 ## Ce que Bridget refuse de faire, et c'est voulu
 
@@ -128,7 +132,7 @@ budgets de travail par appel. Tout est typé : chaque refus a un code et une rai
 
 ## Qualité
 
-1 513 tests automatisés en release, dont des crashs réels rejoués, des bancs de charge et des matrices
+1 556 tests automatisés, dont des crashs réels rejoués, des bancs de charge et des matrices
 CLI/MCP ; `fmt` et `clippy -D warnings` verts ; chaque session a sa spécification, son plan, ses tâches,
 son journal d'implémentation et sa contre-revue par un agent d'un autre fournisseur. Les décisions
 d'architecture sont historisées dans [docs/decisions](docs/decisions) (47 ADR à ce jour).
@@ -140,6 +144,7 @@ d'architecture sont historisées dans [docs/decisions](docs/decisions) (47 ADR �
 - [Installation et pont T3 Code](docs/communication-installation.md)
 - [Fédération SSH entre serveurs](docs/federation-services.md)
 - [Décisions d'architecture](docs/decisions) : 47 ADR datées, contexte, décision, conséquences
+- [Journal des changements](CHANGELOG.md) : ce qui change d'une version à l'autre
 
 ## Licence
 
