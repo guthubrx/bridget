@@ -412,16 +412,21 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
 
     let mut restarted = PrivateDaemon::start(&root);
     let mut owner = Peer::register(&root, OWNER, "owner101");
-    owner.delivered("interrupted");
+    // Session 122 : l'abonnement est repris sans nouvel abonnement.
+    owner.delivered("repris automatiquement");
     let restored = owner.events(Request::List {});
     assert_ne!(restored["daemon_instance"], original_instance);
     assert_eq!(restored["subscriptions"][0]["id"], subscription);
-    assert_eq!(restored["subscriptions"][0]["state"], "interrupted");
+    assert_eq!(restored["subscriptions"][0]["state"], "source_unavailable");
     let mut source = Peer::register(&root, SOURCE, "source101");
     source.send(WrapperToDaemon::ObservationCapabilities {
         events: vec![Kind::TurnEnded],
     });
     source.barrier();
+    assert_eq!(
+        owner.events(Request::List {})["subscriptions"][0]["state"],
+        "active"
+    );
     forward_journal(
         &root,
         SOURCE,
@@ -430,11 +435,7 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         "after-restart",
         json!({"stop_reason":"completed"}),
     );
-    // L'absence de Deliver est prouvée par le prochain reçu sur la même socket.
-    assert_eq!(
-        owner.events(Request::List {})["subscriptions"][0]["state"],
-        "interrupted"
-    );
+    owner.delivered("turn_ended");
     assert_eq!(
         owner.events(Request::Unsub {
             id: subscription.into()

@@ -22,8 +22,10 @@ pub(crate) struct Subscription {
     last_notification: Option<Instant>,
     #[serde(skip)]
     suppressed: u64,
+    /// Repris d'un instantané au démarrage du daemon ; son propriétaire en est
+    /// averti une fois à son retour (session 122).
     #[serde(skip)]
-    interrupted: bool,
+    restored: bool,
     #[serde(skip)]
     available: bool,
     #[serde(skip)]
@@ -93,11 +95,7 @@ impl Observations {
         self.facts_lost = self.facts_lost.saturating_add(dropped);
         self.observation_gaps = self.observation_gaps.saturating_add(1);
         let mut notices = vec![];
-        for sub in self
-            .subscriptions
-            .values_mut()
-            .filter(|s| !s.interrupted && s.expires > now)
-        {
+        for sub in self.subscriptions.values_mut().filter(|s| s.expires > now) {
             if sub.agent.as_ref().is_some_and(|wanted| wanted != agent)
                 || !self
                     .sources
@@ -169,7 +167,13 @@ impl Observations {
                 continue;
             }
             sub.expires = now + Duration::from_secs(sub.expires_at - wall);
-            sub.interrupted = true;
+            // Session 122 : repris sans nouvel abonnement. Aucune source n'est
+            // encore déclarée ; son retour rend l'abonnement actif sans avis,
+            // son absence prolongée est annoncée par `due_source_notices`.
+            sub.restored = true;
+            sub.announced_count = 1;
+            sub.changed_at = Some(now);
+            sub.diverged_since = Some(now);
             state.subscriptions.insert(sub.id.clone(), sub);
         }
         Ok(state)
@@ -219,11 +223,7 @@ impl Observations {
     /// L'état consultable change aussitôt ; l'avis à l'abonné est différé
     /// (`due_source_notices`).
     fn refresh_sources(&mut self, now: Instant) {
-        for sub in self
-            .subscriptions
-            .values_mut()
-            .filter(|s| !s.interrupted && s.expires > now)
-        {
+        for sub in self.subscriptions.values_mut().filter(|s| s.expires > now) {
             let source_count = self
                 .sources
                 .values()
@@ -250,7 +250,7 @@ impl Observations {
     pub fn due_source_notices(&mut self, now: Instant) -> Vec<Notification> {
         self.subscriptions
             .values_mut()
-            .filter(|s| !s.interrupted && s.expires > now)
+            .filter(|s| s.expires > now)
             .filter_map(|sub| {
                 let since = sub.diverged_since?;
                 let stable = sub
@@ -282,10 +282,10 @@ impl Observations {
     }
 
     pub fn owner_returned(&mut self, owner: &str, now: Instant) -> Vec<Notification> {
-        self.subscriptions.values_mut().filter(|s| s.owner == owner && s.interrupted && !s.interruption_announced && s.expires > now)
+        self.subscriptions.values_mut().filter(|s| s.owner == owner && s.restored && !s.interruption_announced && s.expires > now)
             .map(|s| {
                 s.interruption_announced = true;
-                Notification { owner: owner.into(), body: format!("[Bridget observation] {}", json!({"subscription_id":s.id,"state":"interrupted","notice":"daemon redémarré : surveillance interrompue, nouvel abonnement requis ; aucun historique rejoué"})) }
+                Notification { owner: owner.into(), body: format!("[Bridget observation] {}", json!({"subscription_id":s.id,"state":if s.available {"active"} else {"source_unavailable"},"notice":"daemon redémarré : abonnement repris automatiquement ; faits survenus pendant la coupure perdus, non rejoués"})) }
             }).collect()
     }
 
@@ -368,7 +368,7 @@ impl Observations {
                     expires_at: wall.saturating_add(ttl),
                     last_notification: None,
                     suppressed: 0,
-                    interrupted: false,
+                    restored: false,
                     available: true,
                     source_count,
                     announced_count: source_count,
@@ -460,7 +460,7 @@ impl Observations {
         let before = self.subscriptions.len();
         self.subscriptions.retain(|_, sub| {
             if sub.expires <= now { return false; }
-            if sub.interrupted || !sub.available { return true; }
+            if !sub.available { return true; }
             for fact in &facts {
                 if sub.event != fact.event
                     || sub.agent.as_ref().is_some_and(|a| a!=&fact.agent && fact.other_agent.as_ref()!=Some(a))
@@ -492,7 +492,7 @@ fn subscription_json(s: &Subscription) -> Value {
         "sources_compatible":s.source_count,
         "facts_lost_total":s.facts_lost,
         "observation_gaps":s.observation_gaps,
-        "state":if s.interrupted {"interrupted"} else if s.available {"active"} else {"source_unavailable"}})
+        "state":if s.available {"active"} else {"source_unavailable"}})
 }
 
 /// Comparaison lexicale Unix, sans I/O ni résolution des symlinks.
@@ -661,21 +661,40 @@ mod tests {
     }
 
     #[test]
-    fn spec101_restore_is_interrupted_and_absolute_ttl_is_preserved() {
+    fn spec122_restore_resumes_and_absolute_ttl_is_preserved() {
         let now = Instant::now();
         let mut state = Observations::default();
         state.set_source("conn", "a", vec![Kind::TurnEnded], now);
         state.request("owner", sub(Kind::TurnEnded, true), now, 100);
         let bytes = state.snapshot().unwrap();
+        // Source pas encore revenue : indisponible, annoncée seulement si cela dure.
+        let mut absent = Observations::restore(&bytes, now, 110).unwrap();
+        assert_eq!(
+            absent.request("owner", Request::List {}, now, 110)["subscriptions"][0]["state"],
+            "source_unavailable"
+        );
+        let later = now + SOURCE_NOTICE_GRACE;
+        assert!(
+            absent.due_source_notices(later)[0]
+                .body
+                .contains("source indisponible")
+        );
+        // Source revenue : reprise sans nouvel abonnement, un seul avis au propriétaire.
         let mut restored = Observations::restore(&bytes, now, 110).unwrap();
         restored.set_source("conn", "a", vec![Kind::TurnEnded], now);
         assert_eq!(
             restored.request("owner", Request::List {}, now, 110)["subscriptions"][0]["state"],
-            "interrupted"
+            "active"
         );
-        assert_eq!(restored.owner_returned("owner", now).len(), 1);
+        let notices = restored.owner_returned("owner", now);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].body.contains("repris automatiquement"));
         assert!(restored.owner_returned("owner", now).is_empty());
         assert!(
+            restored.due_source_notices(later).is_empty(),
+            "retour à l'état connu"
+        );
+        assert_eq!(
             restored
                 .observe(
                     Fact {
@@ -687,7 +706,9 @@ mod tests {
                     },
                     now
                 )
-                .is_empty()
+                .len(),
+            1,
+            "les faits futurs sont remis"
         );
         assert!(
             Observations::restore(&bytes, now, 161)

@@ -131,7 +131,7 @@ budgets de travail par appel. Tout est typé : chaque refus a un code et une rai
 1 513 tests automatisés en release, dont des crashs réels rejoués, des bancs de charge et des matrices
 CLI/MCP ; `fmt` et `clippy -D warnings` verts ; chaque session a sa spécification, son plan, ses tâches,
 son journal d'implémentation et sa contre-revue par un agent d'un autre fournisseur. Les décisions
-d'architecture sont historisées dans [docs/decisions](docs/decisions) (46 ADR à ce jour).
+d'architecture sont historisées dans [docs/decisions](docs/decisions) (47 ADR à ce jour).
 
 ## Aller plus loin
 
@@ -139,7 +139,7 @@ d'architecture sont historisées dans [docs/decisions](docs/decisions) (46 ADR �
 - [Référence complète de la communication](docs/reference-communication.md) : reçus, observation, sessions natives, construction sans toucher à l'installation
 - [Installation et pont T3 Code](docs/communication-installation.md)
 - [Fédération SSH entre serveurs](docs/federation-services.md)
-- [Décisions d'architecture](docs/decisions) : 46 ADR datées, contexte, décision, conséquences
+- [Décisions d'architecture](docs/decisions) : 47 ADR datées, contexte, décision, conséquences
 
 ## Licence
 

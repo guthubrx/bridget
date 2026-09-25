@@ -605,11 +605,12 @@ courante du daemon, distinctement des notifications perdues à la remise.
 Les abonnements ont une durée par défaut d'une heure, un maximum de sept jours,
 une limite de 16 par agent et 128 au total. La fermeture du client auxiliaire
 les conserve. Leur trace est persistée : après redémarrage du daemon, les
-abonnements non expirés apparaissent dans `events list` en état `interrupted`,
-sans reprendre automatiquement. Un avertissement est prévu au retour du
-propriétaire ; consulter la liste reste nécessaire si cette remise échoue.
-Supprimer l'ancien abonnement puis en créer un nouveau reprend uniquement sur
-les faits futurs, sans rejouer la période manquante.
+abonnements non expirés reprennent automatiquement (session 122). Ils sont
+`source_unavailable` jusqu'au retour de leur source, puis `active` ; le
+propriétaire reçoit à son retour un avertissement « abonnement repris
+automatiquement ». Les faits survenus pendant la coupure sont perdus et ne sont
+pas rejoués ; une source qui ne revient pas est annoncée indisponible après
+30 secondes.
 
 Pendant la vie du daemon, une source perdue fait passer l'abonnement à
 `source_unavailable`. Son retour peut le rendre `active`, avec une notice de

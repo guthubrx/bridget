@@ -10936,7 +10936,7 @@ fn handle_wrapper_message(
             );
             result["daemon_instance"] = serde_json::json!(st.instance_id);
             result["lifetime"] = serde_json::json!(
-                "subscriptions retained interrupted after restart: resubscribe explicitly; no durable delivery, DND respected"
+                "subscriptions resumed automatically after restart: facts during the outage are lost, not replayed; no durable delivery, DND respected"
             );
             result["notifications_lost"] = serde_json::json!(
                 st.observation_lost

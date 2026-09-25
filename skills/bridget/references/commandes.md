@@ -441,16 +441,14 @@ Confirmer l'abonnement seulement si le résultat est `subscribed`. La
 notification annonce la fin d'un **tour**, pas la réussite ni la fin du projet.
 
 Défaut 1 h, max 7 jours, 16 abonnements/agent, 128 total. La trace des abonnements
-non expirés est conservée après redémarrage, mais avec l'état `interrupted`
-et sans reprise automatique. Un avertissement est prévu au retour du
-propriétaire ; vérifier `list`, supprimer l'ancien abonnement avec `unsub`
-puis refaire `sub` pour reprendre sur les seuls faits futurs.
+non expirés reprennent automatiquement après redémarrage du daemon : pas de
+nouveau `sub` à faire. Avertissement « abonnement repris automatiquement » au
+retour du propriétaire ; les faits de la coupure sont perdus, non rejoués.
 Pendant la vie du daemon, une perte de source donne `source_unavailable`, son
 retour peut redonner `active` ; notices de perte/reprise ou changement de
 couverture, sans rejeu des lacunes. La notice attend 30 s de stabilité (un
 aller-retour bref reste silencieux) ; une source qui clignote donne au plus une
-notice `source instable` toutes les 5 min. `list` montre l'état immédiat. Ne pas confondre cette reprise de source
-avec un abonnement `interrupted` après redémarrage, qui exige un nouveau `sub`.
+notice `source instable` toutes les 5 min. `list` montre l'état immédiat.
 
 `once` consomme le déclenchement même si la remise échoue ; absence/DND/saturation
 peuvent perdre des notifications. Consulter `notifications_lost`, `evicted_writes`
@@ -524,7 +522,7 @@ les abonnements restant actifs. Ne pas répéter `sub` aveuglément.
 Si l'ancien est expiré ou consommé, une demande explicite de reconduction crée
 un nouvel abonnement de 10 minutes à partir de maintenant : l'annoncer comme
 tel, sans inventer une continuité. Une simple notification ne vaut pas demande
-de reconduction. Pour `interrupted`, suivre la reprise explicite décrite plus haut.
+de reconduction.
 
 Pour annuler uniquement la surveillance désignée :
 
