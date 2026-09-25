@@ -2260,6 +2260,8 @@ impl LinkWorker {
                         .is_some_and(|latest| latest.turn_id != *id)
                         && !self.state.ended_turns.contains(id)
                         && !self.journal_inflight.contains(&format!("end:{id}"))
+                        // Session 125 : origine relevée, sa fin sera annoncée.
+                        && !self.state.turn_origins.contains_key(id)
                 })
             });
         let gap = activity_gap
@@ -2451,11 +2453,28 @@ impl LinkWorker {
                 && final_turn(turn_id)
                 && latest.is_none_or(|turn| turn.turn_id != turn_id)
             {
-                match self.journal.enqueue(
-                    "turn_end",
-                    Some(&message.id),
-                    serde_json::json!({"t3_turn_id": turn_id}),
-                ) {
+                // Session 125 : un tour suivi de près par un autre n'est jamais vu
+                // clos comme dernier tour ; si son origine a été relevée pendant
+                // qu'il tournait, sa fin est un fait observable, pas une lacune.
+                // L'état exact n'est plus exposé par T3 : « ended ».
+                let origin = self.state.turn_origins.get(turn_id);
+                let notification =
+                    origin.is_some_and(|id| self.state.notification_messages.contains(id));
+                let (id, payload) = match origin {
+                    Some(_) if notification => (
+                        format!("bridget-observation:{turn_id}"),
+                        serde_json::json!({"t3_turn_id": turn_id, "stop_reason": "ended"}),
+                    ),
+                    Some(origin) => (
+                        origin.clone(),
+                        serde_json::json!({"t3_turn_id": turn_id, "stop_reason": "ended"}),
+                    ),
+                    None => (
+                        message.id.clone(),
+                        serde_json::json!({"t3_turn_id": turn_id}),
+                    ),
+                };
+                match self.journal.enqueue("turn_end", Some(&id), payload) {
                     Ok(()) => {
                         self.journal_inflight.insert(format!("end:{turn_id}"));
                     }
@@ -5388,6 +5407,75 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(uncertain_answer(&muet, "q"), None);
+    }
+
+    /// Le 25/09 à 07:49 : tour t1 clos, t2 lancé 0,6 s plus tard par un message,
+    /// entre deux lectures du pont. Rend (lacune signalée, ligne de fin de t1).
+    fn fin_de_tour_rapide(origin: Option<&str>, notification: bool) -> (bool, String) {
+        let (mut worker, peer) = worker099();
+        worker.state.seeded = true;
+        worker.state.observations_seeded = true;
+        if let Some(origin) = origin {
+            worker.state.turn_origins.insert("t1".into(), origin.into());
+        }
+        if notification {
+            worker.state.notification_messages.push("u1".into());
+        }
+        let server = http_once099(&worker, 200, serde_json::json!({"thread":{
+            "messages":[
+                {"id":"u1","role":"user","streaming":false,"createdAt":"2026-09-25T07:35:49.841Z"},
+                {"id":"a1","role":"assistant","text":"fait","turnId":"t1","streaming":false,"createdAt":"2026-09-25T07:49:05.882Z"},
+                {"id":"u2","role":"user","streaming":false,"createdAt":"2026-09-25T07:49:06.441Z"}
+            ],
+            "latestTurn":{"turnId":"t2","state":"running","requestedAt":"2026-09-25T07:49:06.441Z"},
+            "activities":[]
+        }}).to_string());
+        worker.refresh(&summary(Some(("t2", "running"))));
+        assert!(server.join().unwrap().starts_with("GET "));
+        worker.journal.stop();
+        peer.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut gap = false;
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
+            gap |= matches!(
+                decode::<WrapperToDaemon>(line.trim()),
+                Ok(WrapperToDaemon::ObservationGap { .. })
+            );
+            line.clear();
+        }
+        let journal: String = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        let end = journal
+            .lines()
+            .find(|l| l.contains(r#""event":"turn_end""#) && l.contains(r#""t3_turn_id":"t1""#))
+            .expect("fin de t1 journalisée")
+            .to_string();
+        worker.relay.shutdown();
+        (gap, end)
+    }
+
+    #[test]
+    fn spec125_tour_suivi_de_pres_fin_observable_si_origine_connue() {
+        let (gap, end) = fin_de_tour_rapide(Some("u1"), false);
+        assert!(!gap, "origine connue : pas de lacune");
+        assert!(end.contains(r#""stop_reason":"ended""#), "{end}");
+        assert!(end.contains(r#""message_id":"u1""#), "{end}");
+        // Origine inconnue : la prudence d'avant reste la règle.
+        let (gap, end) = fin_de_tour_rapide(None, false);
+        assert!(gap, "origine inconnue : lacune signalée");
+        assert!(!end.contains("stop_reason"), "{end}");
+        // Tour provoqué par une notification : aucun fait observable.
+        let (gap, end) = fin_de_tour_rapide(Some("u1"), true);
+        assert!(!gap);
+        assert!(
+            end.contains(r#""message_id":"bridget-observation:t1""#),
+            "{end}"
+        );
     }
 
     #[test]

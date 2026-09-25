@@ -5,6 +5,14 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [Non publié]
+
+### Corrigé
+
+- Pont T3 Code : un tour aussitôt suivi d'un autre, entre deux lectures du pont, était signalé
+  comme une lacune d'observation ; sa fin est désormais annoncée normalement quand l'origine du
+  tour a été relevée pendant qu'il tournait.
+
 ## [0.1.1] - 2026-09-25
 
 ### Modifié

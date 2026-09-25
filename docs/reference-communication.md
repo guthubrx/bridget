@@ -564,7 +564,9 @@ donc le déclencher. Ce n'est pas une synchronisation des horloges des agents.
 Les fins de tour corrélées viennent des pilotes gérés ACP, Claude stream-json,
 Codex app-server et de l'adaptateur T3. Pour T3, seules les fins explicites
 `completed`, `error` et `interrupted` sont prises en compte, même sans texte
-assistant, si l'origine du tour est attestée. Un état idle ou une déconnexion
+assistant, si l'origine du tour est attestée. Un tour relayé par le suivant
+avant d'avoir été vu clos compte aussi, avec l'état `ended`, si son origine a
+été relevée pendant qu'il tournait ; sinon une lacune est signalée. Un état idle ou une déconnexion
 ne constitue jamais une fin de tour. Les
 permissions sont signalées lorsque le pilote les journalise, éventuellement
 après leur traitement automatique : `permission_required` signifie « demande

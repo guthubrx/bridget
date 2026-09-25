@@ -426,7 +426,8 @@ pas. Une permission observée peut avoir déjà été traitée ; ne pas affirmer
 que l'agent attend encore une décision. Collision = deux auteurs/même
 hôte/chemin absolu dans 30 s, jamais un verrou.
 
-Dans T3 : fins explicites `completed|error|interrupted` et origine attestée,
+Dans T3 : fins explicites `completed|error|interrupted` et origine attestée
+(`ended` pour un tour aussitôt suivi d'un autre, origine relevée en cours),
 permissions `approval.requested`, écritures Codex confirmées uniquement.
 **Aucune capacité d'écriture pour Claude dans T3** : chemin perdu dans la
 projection et fin d'outil parfois synthétique sans résultat confirmé. Les
