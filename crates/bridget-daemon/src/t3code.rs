@@ -254,10 +254,30 @@ impl ThreadState {
 
     fn remember(&mut self, message_id: &str) {
         self.seen.push(message_id.to_string());
-        if self.seen.len() > SEEN_BOUND {
-            let excess = self.seen.len() - SEEN_BOUND;
-            self.seen.drain(..excess);
+    }
+
+    /// Au-delà de SEEN_BOUND, oublie seulement ce que T3 ne montre plus : cela
+    /// seul ne peut pas revenir. Session 118 : une éviction des plus anciens,
+    /// sur un fil de 1 363 messages, les faisait recopier à chaque lecture
+    /// (jusqu'à 131 fois chacun). O(S + M + A).
+    fn forget_invisible(&mut self, detail: &ThreadDetail) {
+        if self.seen.len() <= SEEN_BOUND {
+            return;
         }
+        let visible: HashSet<&str> = detail
+            .messages
+            .iter()
+            .map(|m| m.id.as_str())
+            .chain(detail.activities.iter().map(|a| a.id.as_str()))
+            .collect();
+        self.seen.retain(|id| {
+            visible.contains(id.as_str())
+                || id
+                    .strip_prefix("t3-activity:")
+                    .or_else(|| id.strip_prefix("bridget-observation:"))
+                    .and_then(|rest| rest.rsplit_once(':'))
+                    .is_some_and(|(activity, _)| visible.contains(activity))
+        });
     }
 }
 
@@ -2145,8 +2165,11 @@ impl LinkWorker {
                     .activities
                     .iter()
                     .any(|a| seen_activities.contains(a.id.as_str())));
-        self.set_observation_ready(!self.journal_failed.load(Ordering::SeqCst));
         if gap {
+            // Le daemon ignore la lacune d'une source non déclarée. Hors lacune,
+            // ne rien annoncer avant le journal : sinon un journal en retard
+            // faisait alterner prête/indisponible à chaque lecture (118).
+            self.set_observation_ready(!self.journal_failed.load(Ordering::SeqCst));
             // Lacune connue, quantité inconnue : ne pas inventer un nombre de
             // faits perdus ni deux notices de fausse déconnexion/reconnexion.
             send_wrapper_message(&self.writer, WrapperToDaemon::ObservationGap { dropped: 0 });
@@ -2187,6 +2210,7 @@ impl LinkWorker {
     /// mémorisé sans être rejoué. Ensuite, chaque message nouveau est projeté.
     fn project_journal(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
         self.confirm_journal();
+        self.state.forget_invisible(detail);
         self.journal_dirty = true;
         if !self.journal_caught_up {
             return;
@@ -2270,13 +2294,13 @@ impl LinkWorker {
                 .as_ref()
                 .is_none_or(|latest| latest.turn_id != turn_id || turn_is_final(&latest.state))
         };
+        // O(S + M) : sans index, O(S × M) à chaque lecture d'un grand fil.
+        let seen: HashSet<&str> = self.state.seen.iter().map(String::as_str).collect();
         for message in &detail.messages {
             if message.streaming {
                 continue;
             }
-            if !self.state.seen.contains(&message.id)
-                && !self.journal_inflight.contains(&message.id)
-            {
+            if !seen.contains(message.id.as_str()) && !self.journal_inflight.contains(&message.id) {
                 let (mut event, mut payload) = if message.role == "user" {
                     let from = self
                         .state
@@ -5043,12 +5067,130 @@ mod tests {
         state.pending.push(pending("x", Some("t0")));
         state.save(&path).expect("save");
         let reloaded = ThreadState::load(&path);
-        assert_eq!(reloaded.seen.len(), SEEN_BOUND);
+        assert_eq!(reloaded.seen, state.seen);
         assert_eq!(reloaded.pending, state.pending);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn spec118_journal_en_retard_une_seule_annonce_sans_alternance() {
+        use bridget_transport::protocol::ObservationKind as Kind;
+        let (mut worker, peer) = worker099();
+        worker.state.seeded = true;
+        worker.state.observations_seeded = true;
+        worker.observation_events = vec![Kind::TurnEnded];
+        // Journal plus long que les tranches lues par ces lectures : jamais
+        // rattrapé ici. Une seule ligne sans fin : rien à analyser.
+        std::fs::write(
+            worker.journal_dir.join("0000-00-00.jsonl"),
+            "x".repeat(64 * 1024 * 1024),
+        )
+        .unwrap();
+        let body = serde_json::json!({"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+            "latestTurn":{"turnId":"t","state":"running","requestedAt":"date"},
+            "activities":[]
+        }})
+        .to_string();
+        for _ in 0..2 {
+            let server = http_once099(&worker, 200, body.clone());
+            worker.refresh(&summary(Some(("t", "running"))));
+            assert!(server.join().unwrap().starts_with("GET "));
+        }
+        peer.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut announced = Vec::new();
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
+            if let Ok(WrapperToDaemon::ObservationCapabilities { events }) =
+                decode::<WrapperToDaemon>(line.trim())
+            {
+                announced.push(events);
+            }
+            line.clear();
+        }
+        assert_eq!(
+            announced,
+            vec![Vec::<Kind>::new()],
+            "une annonce, pas d'alternance"
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec118_oubli_limite_a_ce_que_t3_ne_montre_plus() {
+        let mut state = ThreadState::default();
+        for i in 0..(SEEN_BOUND + 10) {
+            state.remember(&format!("m{i}"));
+        }
+        state.remember("t3-activity:a1:0");
+        state.remember("bridget-observation:a1:1");
+        state.remember("t3-activity:disparue:0");
+        let detail = ThreadDetail {
+            messages: vec![message("m0", "user", "le plus ancien", None, false)],
+            activities: vec![contract::Activity {
+                id: "a1".into(),
+                kind: "tool.completed".into(),
+                turn_id: None,
+                payload: serde_json::Value::Null,
+            }],
+            ..Default::default()
+        };
+        state.forget_invisible(&detail);
+        assert_eq!(
+            state.seen,
+            ["m0", "t3-activity:a1:0", "bridget-observation:a1:1"],
+            "le plus ancien reste s'il est encore montré ; ce qui a disparu est oublié"
+        );
+        // Sous la borne, rien n'est oublié, même invisible.
+        let mut small = ThreadState::default();
+        small.remember("absent");
+        small.forget_invisible(&ThreadDetail::default());
+        assert_eq!(small.seen, ["absent"]);
+    }
+
+    #[test]
+    fn spec118_un_grand_fil_n_est_recopie_qu_une_fois() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        let count = SEEN_BOUND + 50;
+        let detail = ThreadDetail {
+            messages: (0..count)
+                .map(|i| message(&format!("m{i}"), "assistant", "texte", Some("t"), false))
+                .collect(),
+            ..Default::default()
+        };
+        // Plusieurs lectures successives, chacune après confirmation complète.
+        for _ in 0..4 {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                worker.project_journal(&detail, &summary(None));
+                if worker.journal_inflight.is_empty() && worker.state.seen.len() >= count {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "journal jamais confirmé");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        let copies: usize = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| {
+                std::fs::read_to_string(e.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .filter(|line| line.contains(r#""event":"update""#))
+                    .count()
+            })
+            .sum();
+        assert_eq!(copies, count, "chaque message écrit une seule fois");
+        worker.journal.stop();
+        worker.relay.shutdown();
     }
 }
