@@ -1,7 +1,7 @@
 # Spécification 118 — Un grand fil T3 n'est recopié qu'une fois
 
 ## Fiche synthèse
-Spec: 118-memoire-des-messages | Statut: Implemented | Priorité: P0 | Date: 2026-09-25
+Spec: 118-memoire-des-messages | Statut: Implemented (livré 2026-09-25) | Priorité: P0 | Date: 2026-09-25
 Branche: session-118-memoire-des-messages | Correctif, suite de la 117.
 
 ## Problème observé
