@@ -1,0 +1,6 @@
+{"type":"RoleHandshake","role":"service"}
+{"type":"RoleAccepted","role":"service"}
+{"type":"ServiceHello","version":1,"service":"guichet","issuer_scope":"016_service_abcdef0123456789abcdef0123456789","capabilities":["guichet_v1","coordination_events_v1"]}
+{"type":"ServiceWelcome","version":1,"horizon_secs":604800,"issued_at_tolerance_secs":60,"capabilities":["guichet_v1","coordination_events_v1"]}
+{"type":"coordination_event","v":1,"event_id":"evt-reminder-1","request_id":"request-1","kind":"reminder_sent","reminder_message_id":"message-reminder-1","recipient":"codex-1","generation":1,"observed_at":1787500003}
+{"type":"ServiceRejected","reason":{"kind":"invalid_envelope"}}

@@ -1,0 +1,26 @@
+{
+  "idempotency_key": "fixture-chart-external-v1",
+  "kind": "chart",
+  "title": "Prévalence du tabagisme et prix du paquet",
+  "payload": {
+    "series": [
+      { "name": "Prix du paquet", "unit": "EUR", "points": [[2020, 9.1], [2024, 12.5]] },
+      { "name": "Fumeurs quotidiens", "unit": "%", "points": [[2020, 25.5], [2024, 18.2]] }
+    ]
+  },
+  "sources": [
+    {
+      "source_kind": "remote",
+      "locator": "https://example.org/donnees/serie-a",
+      "fetched_at": 1788163200,
+      "content_digest": "5d2f0f4cbb590a29c8047131a998117718247a5bf7213be64d29d3672a6dbfb1",
+      "citation": "Santé publique France - tabagisme quotidien",
+      "units": "%",
+      "transformations": ["alignement annuel"],
+      "access_status": "available"
+    }
+  ],
+  "quality_notices": [],
+  "parent_artifact_ref": null,
+  "publication_reason": "initial"
+}

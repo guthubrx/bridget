@@ -1,0 +1,16 @@
+/target
+/.worktrees/
+
+# État local du daemon : jamais publié
+*.db
+*.db-*
+*.sock
+*.pid
+*.log
+.env
+
+# Artefacts d'outillage
+*.bak
+*.bak-*
+__pycache__/
+.DS_Store

@@ -1,0 +1,8 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"premier"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","content":{"type":"text","text":"ne-pas-concatener"}}}}
+{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}]}}
+{"jsonrpc":"2.0","id":9,"result":{"stopReason":"end_turn"}}
+{"jsonrpc":"2.0","id":"string-9","result":{"ok":true}}
+{"jsonrpc":"2.0","id":10,"error":{"code":-32000,"message":"refus"}}
+{"jsonrpc":"2.0","id":"unknown-1","method":"server/inconnu","params":{}}
+ligne invalide

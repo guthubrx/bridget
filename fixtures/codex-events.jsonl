@@ -1,0 +1,5 @@
+{"v":1,"seq":1,"ts":"2026-09-06T07:48:45Z","event":"update","payload":{"detail":"item/started","kind":"command","text":"cargo check"}}
+{"v":1,"seq":2,"ts":"2026-09-06T07:48:46Z","event":"update","payload":{"detail":"item/completed","kind":"command","text":"cargo check","state":"completed","status":"completed","exit_code":0,"output_tail":"Finished dev profile"}}
+{"v":1,"seq":3,"ts":"2026-09-06T07:49:17Z","event":"update","payload":{"detail":"item/fileChange/requestApproval","kind":"approval","text":"item/fileChange/requestApproval"}}
+{"v":1,"seq":4,"ts":"2026-09-06T07:49:17Z","event":"permission","payload":{"decision":"decline","method":"item/fileChange/requestApproval","permissions":"deny"}}
+{"v":1,"seq":5,"ts":"2026-09-06T07:49:18Z","event":"reasoning","payload":{"available":false}}

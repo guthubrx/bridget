@@ -1,0 +1,26 @@
+{
+  "idempotency_key": "fixture-file-v1",
+  "kind": "file",
+  "title": "Rapport source CSV",
+  "payload": {
+    "blob_digest": "7c0a77701e7b2582ec1c79b1e68435837cad82e4fcbdfabdf9050fe3369e5ee3",
+    "media_type": "text/csv",
+    "filename": "rapport.csv",
+    "byte_length": 42
+  },
+  "sources": [
+    {
+      "source_kind": "local_project",
+      "locator": "project-file:reports/rapport.csv",
+      "fetched_at": null,
+      "content_digest": "7c0a77701e7b2582ec1c79b1e68435837cad82e4fcbdfabdf9050fe3369e5ee3",
+      "citation": "Rapport CSV fourni par le projet",
+      "units": null,
+      "transformations": [],
+      "access_status": "available"
+    }
+  ],
+  "quality_notices": [],
+  "parent_artifact_ref": null,
+  "publication_reason": "initial"
+}

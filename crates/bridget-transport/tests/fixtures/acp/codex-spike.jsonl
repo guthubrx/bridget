@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"spike-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"SPIKE_"}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"spike-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ACP_OK"}}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}

@@ -1,0 +1,23 @@
+{
+  "idempotency_key": "fixture-chart-partial-v1",
+  "kind": "chart",
+  "title": "Série partielle avec rupture méthodologique",
+  "payload": {
+    "series": [{ "name": "Mesure", "unit": "unités", "points": [[2021, 4], [2022, 9]] }]
+  },
+  "sources": [
+    {
+      "source_kind": "remote",
+      "locator": "https://data.example.test/series",
+      "fetched_at": 1788163200,
+      "content_digest": "cb413a3fc1bd671be4e2d2886dc7f7d231a6d82f3d4cdd0fd42efc22f3dc8a9e",
+      "citation": "Série de démonstration incomplète",
+      "units": "unités",
+      "transformations": [],
+      "access_status": "expired"
+    }
+  ],
+  "quality_notices": ["Périmètre 2023-2024 indisponible à la publication."],
+  "parent_artifact_ref": null,
+  "publication_reason": "initial"
+}
