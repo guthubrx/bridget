@@ -3077,8 +3077,7 @@ impl DaemonState {
     fn revoke_identity_authorizations(&mut self, owner: &str) {
         let had_credential = self.identity_credentials.remove(owner).is_some();
         self.observation_sequences.remove(owner);
-        let notices = self.observations.remove_source(owner, Instant::now());
-        queue_observation_notifications(self, notices);
+        self.observations.remove_source(owner, Instant::now());
         if !had_credential {
             return;
         }
@@ -4511,6 +4510,12 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 controls
             };
             let _ = execute_controls(wake_controls);
+            // Session 119 : avis d'état de source, émis une fois stables.
+            {
+                let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                let notices = st.observations.due_source_notices(now);
+                queue_observation_notifications(&st, notices);
+            }
 
             // Exécuter les actions hors lock
             for action in actions {
@@ -4970,8 +4975,7 @@ fn handle_connection(
         st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
         st.observation_sequences.remove(&conn_id);
-        let notices = st.observations.remove_source(&conn_id, Instant::now());
-        queue_observation_notifications(&st, notices);
+        st.observations.remove_source(&conn_id, Instant::now());
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
@@ -10776,10 +10780,8 @@ fn handle_wrapper_message(
                     reason: "invalid_primary_capabilities".into(),
                 });
             }
-            let notices = st
-                .observations
+            st.observations
                 .set_source(conn_id, &agent, events, Instant::now());
-            queue_observation_notifications(&st, notices);
             None
         }
         WrapperToDaemon::ThreadNoticeCapability { versions } => {
@@ -13308,8 +13310,7 @@ fn handle_wrapper_message(
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
                 st.observation_sequences.remove(conn_id);
-                let notices = st.observations.remove_source(conn_id, Instant::now());
-                queue_observation_notifications(&st, notices);
+                st.observations.remove_source(conn_id, Instant::now());
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
                 st.service_negotiations.remove(conn_id);

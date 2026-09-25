@@ -447,7 +447,9 @@ propriétaire ; vérifier `list`, supprimer l'ancien abonnement avec `unsub`
 puis refaire `sub` pour reprendre sur les seuls faits futurs.
 Pendant la vie du daemon, une perte de source donne `source_unavailable`, son
 retour peut redonner `active` ; notices de perte/reprise ou changement de
-couverture, sans rejeu des lacunes. Ne pas confondre cette reprise de source
+couverture, sans rejeu des lacunes. La notice attend 30 s de stabilité (un
+aller-retour bref reste silencieux) ; une source qui clignote donne au plus une
+notice `source instable` toutes les 5 min. `list` montre l'état immédiat. Ne pas confondre cette reprise de source
 avec un abonnement `interrupted` après redémarrage, qui exige un nouveau `sub`.
 
 `once` consomme le déclenchement même si la remise échoue ; absence/DND/saturation

@@ -614,8 +614,12 @@ les faits futurs, sans rejouer la période manquante.
 Pendant la vie du daemon, une source perdue fait passer l'abonnement à
 `source_unavailable`. Son retour peut le rendre `active`, avec une notice de
 reprise ; les changements de couverture sont signalés, sans rattrapage des
-lacunes. Ces états sont consultables dans `events list` et les notices suivent
-les mêmes limites de remise que les autres notifications.
+lacunes. Ces états sont consultables aussitôt dans `events list` ; la notice,
+elle, n'est remise qu'après 30 secondes de stabilité, et un aller-retour bref
+n'en produit aucune. Une source qui ne se stabilise pas donne au plus une notice
+`source instable` (avec le nombre de bascules) toutes les 5 minutes (session
+119). Les notices suivent les mêmes limites de remise que les autres
+notifications.
 
 `once` consomme le déclenchement même si
 sa remise échoue. Agent absent, mode ne-pas-déranger, saturation : pas de

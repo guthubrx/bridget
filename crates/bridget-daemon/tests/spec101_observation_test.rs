@@ -379,7 +379,8 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         }
     }
     source.barrier();
-    owner.delivered("source_unavailable");
+    // Session 119 : l'état change aussitôt ; l'avis attend 30 s de stabilité
+    // et un aller-retour bref n'en produit aucun.
     assert_eq!(
         owner.events(Request::List {})["subscriptions"][0]["state"],
         "source_unavailable"
@@ -388,7 +389,10 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         events: vec![Kind::TurnEnded, Kind::FileWritten],
     });
     source.barrier();
-    owner.delivered("active");
+    assert_eq!(
+        owner.events(Request::List {})["subscriptions"][0]["state"],
+        "active"
+    );
     // Une fin provoquée par une notification ne produit aucun fait observable.
     forward_journal(
         &root,

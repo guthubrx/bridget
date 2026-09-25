@@ -36,7 +36,23 @@ pub(crate) struct Subscription {
     last_gap_notice: Option<Instant>,
     #[serde(skip)]
     observation_gaps: u64,
+    /// Couverture dont l'abonné a été averti ; un écart n'est annoncé qu'une
+    /// fois stable (session 119).
+    #[serde(skip)]
+    announced_count: usize,
+    #[serde(skip)]
+    changed_at: Option<Instant>,
+    #[serde(skip)]
+    diverged_since: Option<Instant>,
+    #[serde(skip)]
+    flips: u32,
 }
+
+/// Stabilité exigée avant d'annoncer un changement d'état de source.
+const SOURCE_NOTICE_GRACE: Duration = Duration::from_secs(30);
+/// Borne d'attente : une source qui clignote reste annoncée, au plus une fois
+/// par période.
+const SOURCE_NOTICE_MAX_DELAY: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug)]
 pub(crate) struct Fact {
@@ -189,25 +205,20 @@ impl Observations {
         json!(sources)
     }
 
-    pub fn set_source(
-        &mut self,
-        connection: &str,
-        agent: &str,
-        events: Vec<Kind>,
-        now: Instant,
-    ) -> Vec<Notification> {
+    pub fn set_source(&mut self, connection: &str, agent: &str, events: Vec<Kind>, now: Instant) {
         self.sources
             .insert(connection.into(), (agent.into(), events));
-        self.refresh_sources(now)
+        self.refresh_sources(now);
     }
 
-    pub fn remove_source(&mut self, connection: &str, now: Instant) -> Vec<Notification> {
+    pub fn remove_source(&mut self, connection: &str, now: Instant) {
         self.sources.remove(connection);
-        self.refresh_sources(now)
+        self.refresh_sources(now);
     }
 
-    fn refresh_sources(&mut self, now: Instant) -> Vec<Notification> {
-        let mut notices = vec![];
+    /// L'état consultable change aussitôt ; l'avis à l'abonné est différé
+    /// (`due_source_notices`).
+    fn refresh_sources(&mut self, now: Instant) {
         for sub in self
             .subscriptions
             .values_mut()
@@ -221,18 +232,53 @@ impl Observations {
                         && Self::compatible(events, sub.event)
                 })
                 .count();
-            let available = source_count > 0;
             if source_count != sub.source_count {
-                sub.available = available;
+                sub.available = source_count > 0;
                 sub.source_count = source_count;
-                notices.push(Notification { owner: sub.owner.clone(), body: format!("[Bridget observation] {}", json!({
-                    "subscription_id":sub.id,"state":if available {"active"} else {"source_unavailable"},
-                    "sources_compatible":source_count,
-                    "notice":if available {"couverture modifiée ; seules les sources déclarées sont observées, lacunes non rejouées"} else {"surveillance interrompue : source indisponible"}
-                })) });
+                sub.changed_at = Some(now);
+                sub.diverged_since.get_or_insert(now);
+                sub.flips = sub.flips.saturating_add(1);
             }
         }
-        notices
+    }
+
+    /// Annonce un changement d'état de source resté stable SOURCE_NOTICE_GRACE ;
+    /// un aller-retour bref suivi de calme n'est jamais annoncé ; une source
+    /// qui ne se stabilise pas est signalée instable au plus une fois par
+    /// SOURCE_NOTICE_MAX_DELAY. Session 119 : une source qui clignotait a
+    /// réveillé son abonné environ 200 fois en trois heures. O(S), S <= 128.
+    pub fn due_source_notices(&mut self, now: Instant) -> Vec<Notification> {
+        self.subscriptions
+            .values_mut()
+            .filter(|s| !s.interrupted && s.expires > now)
+            .filter_map(|sub| {
+                let since = sub.diverged_since?;
+                let stable = sub
+                    .changed_at
+                    .is_some_and(|at| now.saturating_duration_since(at) >= SOURCE_NOTICE_GRACE);
+                let unstable = !stable && now.saturating_duration_since(since) >= SOURCE_NOTICE_MAX_DELAY;
+                if !stable && !unstable {
+                    return None;
+                }
+                let flips = std::mem::take(&mut sub.flips);
+                sub.diverged_since = None;
+                if stable && sub.source_count == sub.announced_count {
+                    return None;
+                }
+                sub.announced_count = sub.source_count;
+                let notice = if unstable {
+                    "source instable : disponibilité changeante, faits possiblement manqués"
+                } else if sub.available {
+                    "couverture modifiée ; seules les sources déclarées sont observées, lacunes non rejouées"
+                } else {
+                    "surveillance interrompue : source indisponible"
+                };
+                Some(Notification { owner: sub.owner.clone(), body: format!("[Bridget observation] {}", json!({
+                    "subscription_id":sub.id,"state":if sub.available {"active"} else {"source_unavailable"},
+                    "sources_compatible":sub.source_count,"changes":flips,"notice":notice
+                })) })
+            })
+            .collect()
     }
 
     pub fn owner_returned(&mut self, owner: &str, now: Instant) -> Vec<Notification> {
@@ -325,6 +371,10 @@ impl Observations {
                     interrupted: false,
                     available: true,
                     source_count,
+                    announced_count: source_count,
+                    changed_at: None,
+                    diverged_since: None,
+                    flips: 0,
                     interruption_announced: false,
                     facts_lost: 0,
                     last_gap_notice: None,
@@ -527,11 +577,8 @@ mod tests {
             state.request("owner", sub(Kind::TurnEnded, false), now, 100)["reason"],
             "no_compatible_source"
         );
-        assert!(
-            state
-                .set_source("conn", "a", vec![Kind::TurnEnded], now)
-                .is_empty()
-        );
+        state.set_source("conn", "a", vec![Kind::TurnEnded], now);
+        assert!(state.due_source_notices(now).is_empty());
         let catalogue = state.request("owner", Request::Types {}, now, 100);
         assert_eq!(catalogue["events"][0]["available"], true);
         assert_eq!(catalogue["events"][0]["sources"], json!(["a"]));
@@ -540,22 +587,77 @@ mod tests {
             state.request("owner", sub(Kind::FileWritten, false), now, 100)["reason"],
             "no_compatible_source"
         );
-        state.request("owner", sub(Kind::TurnEnded, false), now, 100);
-        assert_eq!(state.remove_source("conn", now).len(), 1);
+        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        state.remove_source("conn", now);
         assert_eq!(
             state.request("owner", Request::List {}, now, 100)["subscriptions"][0]["state"],
             "source_unavailable"
         );
+        let later = now + SOURCE_NOTICE_GRACE;
+        assert_eq!(state.due_source_notices(later).len(), 1);
+        state.set_source("new", "a", vec![Kind::TurnEnded], later);
         assert_eq!(
-            state
-                .set_source("new", "a", vec![Kind::TurnEnded], now)
-                .len(),
-            1
-        );
-        assert_eq!(
-            state.request("owner", Request::List {}, now, 100)["subscriptions"][0]["state"],
+            state.request("owner", Request::List {}, later, 100)["subscriptions"][0]["state"],
             "active"
         );
+        assert_eq!(
+            state.due_source_notices(later + SOURCE_NOTICE_GRACE).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn spec119_aller_retour_bref_de_source_sans_avis() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source("conn", "a", vec![Kind::TurnEnded], now);
+        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        state.remove_source("conn", now);
+        state.set_source(
+            "conn2",
+            "a",
+            vec![Kind::TurnEnded],
+            now + Duration::from_secs(3),
+        );
+        assert!(
+            state
+                .due_source_notices(now + SOURCE_NOTICE_MAX_DELAY * 2)
+                .is_empty(),
+            "revenu à l'état annoncé : rien à dire"
+        );
+        // Une interruption qui dure est annoncée, une seule fois.
+        state.remove_source("conn2", now);
+        let bodies: Vec<_> = (0..120)
+            .flat_map(|s| state.due_source_notices(now + Duration::from_secs(s)))
+            .map(|n| n.body)
+            .collect();
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].contains("source_unavailable"));
+    }
+
+    #[test]
+    fn spec119_source_qui_clignote_avis_borne_par_periode() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source("conn", "a", vec![Kind::TurnEnded], now);
+        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        // Le cas du 25/09 : indisponible puis disponible toutes les 3 s, 10 min.
+        let mut notices = Vec::new();
+        for tick in 0..600u64 {
+            let at = now + Duration::from_secs(tick);
+            match tick % 6 {
+                0 => state.remove_source("conn", at),
+                3 => state.set_source("conn", "a", vec![Kind::TurnEnded], at),
+                _ => {}
+            }
+            notices.extend(state.due_source_notices(at).into_iter().map(|n| n.body));
+        }
+        assert_eq!(
+            notices.len(),
+            1,
+            "un avis par période de 5 min, pas un par bascule"
+        );
+        assert!(notices[0].contains("source instable"));
     }
 
     #[test]
@@ -595,6 +697,16 @@ mod tests {
         );
         assert!(Observations::restore(b"invalid", now, 110).is_err());
     }
+    fn long_sub(event: Kind) -> Request {
+        Request::Sub {
+            event,
+            agent: None,
+            file: None,
+            once: false,
+            ttl_secs: Some(3600),
+        }
+    }
+
     fn sub(event: Kind, once: bool) -> Request {
         Request::Sub {
             event,
