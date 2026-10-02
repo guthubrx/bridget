@@ -2982,7 +2982,7 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
             ));
         }
         rendered.push_str(
-            "\nAucune réponse inter-agent attendue pour ces messages. N'envoie pas d'accusé de réception, même pour dire que tu ne répondras pas. Le pont ne relaie pas ta réponse finale pour ce tour.",
+            "\nPas d'accusé de réception pour ces messages : n'envoie aucun « bien reçu ». Ce n'est pas une absence de tâche : si un message demande une action, fais-la. Le pont ne relaie pas ta réponse finale pour ce tour ; pour transmettre un résultat à un expéditeur, fais un nouvel envoi Bridget.",
         );
         return rendered;
     };
@@ -3009,14 +3009,17 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     }
     if message.id.starts_with("bridget-observation:") {
         return format!(
-            "🔔 Notification Bridget (id {}) :\n\n{}\n\nAucune réponse inter-agent requise ; informe l'utilisateur si utile.",
+            "🔔 Notification Bridget (id {}) :\n\n{}\n\nPas d'accusé de réception à envoyer. Agis seulement si ce fait change ce que tu dois faire ; informe l'utilisateur si utile.",
             message.id, message.body
         );
     }
     if !message.reply {
         return format!(
-            "💬 Message Bridget de {} (id {}, reply=no) :\n\n{}\n\nAucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour dire que tu ne répondras pas. Le pont ne relaie pas ta réponse finale pour ce message.",
-            message.from, message.id, message.body
+            "💬 Message Bridget de {} (id {}, reply=no) :\n\n{}\n\n{}",
+            message.from,
+            message.id,
+            message.body,
+            bridget_core::envelope::NO_REPLY_NOTICE
         );
     }
     format!(
@@ -3445,7 +3448,7 @@ mod tests {
             let mut msg = bridget_core::BridgetMessage::new("alice", "bob", "Bien reçu");
             msg.in_reply_to = parent.map(str::to_string);
             assert!(!envelope(&msg).contains("transmettra ta réponse"));
-            assert!(envelope(&msg).contains("Aucune réponse"));
+            assert!(envelope(&msg).contains("Pas d'accusé de réception"));
             msg.reply = true;
             assert!(envelope(&msg).contains("transmettra ta réponse"));
         }
@@ -3790,7 +3793,7 @@ mod tests {
         msg.origin = Some(bridget_core::MessageOrigin::System);
         let text = envelope(&msg);
         assert!(!text.contains("transmettra ta réponse"));
-        assert!(text.contains("Aucune réponse"));
+        assert!(text.contains("Pas d'accusé de réception"));
     }
 
     #[test]

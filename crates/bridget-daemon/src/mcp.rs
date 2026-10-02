@@ -647,7 +647,28 @@ fn execute_send(
             "issued_at",
         ],
     )?;
-    let to = required_non_empty_string(arguments, "to")?;
+    let mut to = required_non_empty_string(arguments, "to")?;
+    let uuid_prefix =
+        (6..36).contains(&to.len()) && to.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    if uuid_prefix && bridget_core::router::validate_agent_id(&to).is_err() {
+        // Session 127 : début d'UUID unique, résolu par l'annuaire ; un nom
+        // reste transmis tel quel au daemon, comme avant.
+        let mut directory = DaemonConnection::connect(socket)?;
+        let DaemonToWrapper::AgentList { agents } =
+            directory.exchange(&WrapperToDaemon::ListAgents)?
+        else {
+            return Err(ToolError::InvalidParams(
+                "annuaire indisponible : donner l'UUID".to_string(),
+            ));
+        };
+        to = crate::cli::resolve_name_in_directory(
+            &to,
+            agents
+                .iter()
+                .map(|agent| (agent.display_name.as_str(), agent.agent_id.as_str())),
+        )
+        .map_err(ToolError::InvalidParams)?;
+    }
     let body = required_non_empty_string(arguments, "body")?;
     let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
     let reply_timeout = optional_positive_u64(arguments, "reply_timeout")?;

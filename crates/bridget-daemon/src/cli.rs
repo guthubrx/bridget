@@ -913,12 +913,19 @@ fn resolve_thread_name(name: &str) -> Result<String, String> {
     )
 }
 
-fn resolve_name_in_directory<'a>(
+/// Nom d'affichage exact, ou début d'UUID d'au moins 6 caractères (session
+/// 127 : les préfixes étaient refusés). Une seule correspondance est exigée ;
+/// une ambiguïté est refusée, jamais tranchée. O(n), n agents de l'annuaire.
+pub(crate) fn resolve_name_in_directory<'a>(
     name: &str,
     directory: impl Iterator<Item = (&'a str, &'a str)>,
 ) -> Result<String, String> {
+    let prefix =
+        (6..36).contains(&name.len()) && name.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
     let mut matches: Vec<&str> = directory
-        .filter(|(display_name, _)| *display_name == name)
+        .filter(|(display_name, agent_id)| {
+            *display_name == name || (prefix && agent_id.starts_with(name))
+        })
         .map(|(_, agent_id)| agent_id)
         .collect();
     matches.sort_unstable();
@@ -1195,6 +1202,30 @@ mod spec102_cli_thread_tests {
         assert!(thread_notice_marker("10200000-0000-4000-8000-00000000000a\tmsg-1").is_none());
         assert!(thread_notice_marker("10200000-0000-4000-8000-00000000000a").is_none());
         assert!(thread_notice_marker(r#"{"kind":"autre","thread_id":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn spec127_debut_d_uuid_unique_accepte_ambigu_ou_court_refuse() {
+        let directory = [
+            ("alpha", "3b09f990-eec1-4038-8a9b-29d1065d00b3"),
+            ("beta", "3b09f991-0000-4000-8000-000000000001"),
+            ("gamma", "c8c1bbac-72e7-4bc8-8e42-66e84e9f9150"),
+        ];
+        let resolve = |name: &str| resolve_name_in_directory(name, directory.iter().copied());
+        assert_eq!(
+            resolve("c8c1bb").unwrap(),
+            "c8c1bbac-72e7-4bc8-8e42-66e84e9f9150"
+        );
+        assert_eq!(
+            resolve("alpha").unwrap(),
+            "3b09f990-eec1-4038-8a9b-29d1065d00b3"
+        );
+        assert!(resolve("3b09f99").unwrap_err().contains("ambigu"));
+        assert!(
+            resolve("c8c1b").unwrap_err().contains("inconnu"),
+            "5 caractères : trop court"
+        );
+        assert!(resolve("ffffff").unwrap_err().contains("inconnu"));
     }
 
     #[test]
@@ -2623,12 +2654,22 @@ fn cmd_send(args: &[String]) {
         }
     };
 
-    // Le transport ne connaît que les principaux opaques : aucun alias
-    // historique ne peut être accepté par la CLI.
-    if let Err(e) = validate_agent_id(&to) {
-        eprintln!("erreur: {}", e);
-        std::process::exit(2);
-    }
+    // Le transport ne connaît que les principaux opaques : un nom exact ou un
+    // début d'UUID unique est résolu ici par l'annuaire, jamais deviné.
+    let to = if validate_agent_id(&to).is_ok() {
+        to
+    } else {
+        match resolve_thread_name(&to) {
+            Ok(agent_id) => {
+                eprintln!("destinataire « {to} » résolu en {agent_id}");
+                agent_id
+            }
+            Err(error) => {
+                eprintln!("erreur: {error}");
+                std::process::exit(2);
+            }
+        }
+    };
 
     let body = body_parts.join(" ");
     if body.is_empty() {

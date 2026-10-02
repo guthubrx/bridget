@@ -5,6 +5,18 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [Non publié]
+
+### Modifié
+
+- La consigne des messages sans réponse attendue sépare l'accusé de réception de l'action :
+  « Pas d'accusé de réception… Ce n'est pas une absence de tâche ». L'ancienne formule était lue
+  comme « rien à faire ».
+- `send` accepte un début d'UUID d'au moins 6 caractères (CLI et MCP) ou un nom d'affichage exact
+  (CLI) quand il ne désigne qu'un seul agent.
+- Un lancement d'équipier d'un type absent du registre est refusé « type d'agent inconnu », avec
+  la liste des types connus, au lieu d'une capacité manquante.
+
 ## [0.1.2] - 2026-10-02
 
 ### Documentation

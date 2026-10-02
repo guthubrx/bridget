@@ -22,7 +22,7 @@ pub fn wrap_envelope(msg: &BridgetMessage) -> String {
     } else {
         // reply=no : notification simple, pas de réponse attendue.
         format!(
-            "💬 {from} → {to} (reply=no, id={id})\n{body}\n\nAucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour annoncer ton silence.",
+            "💬 {from} → {to} (reply=no, id={id})\n{body}\n\n{NO_REPLY_NOTICE}",
             from = msg.from,
             to = msg.to,
             body = msg.body,
@@ -30,6 +30,12 @@ pub fn wrap_envelope(msg: &BridgetMessage) -> String {
         )
     }
 }
+
+/// Consigne d'un message sans réponse attendue (reply=no), commune à tous
+/// les pilotes. Session 127 : l'ancienne formule « Aucune réponse inter-agent
+/// attendue » a été lue comme « rien à faire », et un défaut signalé est resté
+/// sans traitement. Elle sépare désormais l'accusé de réception de l'action.
+pub const NO_REPLY_NOTICE: &str = "Pas d'accusé de réception : n'envoie aucun « bien reçu », même pour annoncer ton silence. Ce n'est pas une absence de tâche : si ce message demande une action, fais-la. Ta réponse finale ne sera pas relayée ; pour transmettre un résultat à l'expéditeur, fais un nouvel envoi Bridget.";
 
 /// Gardien de quarantaine pour les IDs de messages déjà relayés.
 /// Empêche un message d'être retransmis (misroute, doublon réseau, etc.).
@@ -94,7 +100,7 @@ mod tests {
         assert!(env.contains("reply=no"));
         assert!(env.contains("id=mcp-38210-6a8a7fc7-1"));
         assert!(env.contains("💬"));
-        assert!(env.contains("Aucune réponse inter-agent attendue"));
+        assert!(env.contains("Pas d'accusé de réception"));
         assert!(env.contains("accusé"));
         assert!(!env.contains("Tu DOIS répondre"));
     }

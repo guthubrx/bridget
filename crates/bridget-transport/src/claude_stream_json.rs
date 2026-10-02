@@ -1564,10 +1564,7 @@ mod tests {
             assert!(prompt.contains("alice"));
             assert!(prompt.contains("parent"));
             assert!(prompt.ends_with(&message.body));
-            assert_eq!(
-                prompt.contains("Aucune réponse inter-agent attendue"),
-                !requested
-            );
+            assert_eq!(prompt.contains("Pas d'accusé de réception"), !requested);
             assert_eq!(prompt.contains("relaie automatiquement"), requested);
         }
     }

@@ -24,7 +24,13 @@ attestée. Ne pas basculer silencieusement au shell ni doubler un même envoi pa
 outil ET CLI. Ni tmux ni GUI ni le service compagnon ne sont nécessaires.
 
 Lire l'annuaire et viser l'`agent_id` UUID attesté, pas un nom déduit du fournisseur.
-Les noms affichés peuvent changer, les adresses restent stables.
+Les noms affichés peuvent changer, les adresses restent stables. Un début d'UUID
+d'au moins 6 caractères est accepté par `send` (CLI et MCP), et un nom d'affichage
+exact par la CLI, s'il ne désigne qu'un seul agent ; sinon le refus le dit.
+
+**Message reçu avec « Pas d'accusé de réception ».** Ne réponds pas « bien reçu »,
+mais traite la demande si le message en contient une : un défaut signalé reste à
+corriger. Pour rendre un résultat, fais un nouvel envoi à l'expéditeur.
 
 Si les outils sont différés, chercher `mcp__bridget__*` dans le catalogue
 `ALL_TOOLS` disponible via `functions.exec` avant de conclure qu'ils sont absents.
@@ -231,8 +237,9 @@ sortie : s'il est refusé dans l'outil shell, donner la commande à l'utilisateu
 ne pas fabriquer de pseudo-terminal. Ne pas changer la posture globale pour un seul
 lancement. `relaunch` conserve la définition figée, donc n'élargit pas les droits.
 
-**Lire un refus littéralement.** `capacité manquante posture_decouverte` ou un type
-inconnu signifie que ce type n'est pas déclaré dans le registre du daemon
+**Lire un refus littéralement.** `type d'agent inconnu` (avec la liste des types
+connus) ou `capacité manquante posture_decouverte` signifie que ce type, ou sa
+variante lecture seule, n'est pas déclaré dans le registre du daemon
 (`~/.cache/bridget-core/agents.json`) : le dire tel quel à l'utilisateur, ne pas
 l'attribuer à la règle du terminal. Les fils T3 d'un fournisseur (par exemple GLM)
 n'impliquent pas que Bridget sache lancer ce type.
