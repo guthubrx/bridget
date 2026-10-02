@@ -22,6 +22,9 @@ format AAAA-MM-JJ.
 
 ### Modifié
 
+- Pont T3 Code : une demande avec réponse attendue invite l'agent à ouvrir sa réponse par
+  « ↪ Réponse à <expéditeur> (relayée par Bridget) : ». Relayée à l'expéditeur, elle reste aussi
+  affichée dans le fil de l'utilisateur, qui la prenait pour lui.
 - La consigne des messages sans réponse attendue sépare l'accusé de réception de l'action :
   « Pas d'accusé de réception… Ce n'est pas une absence de tâche ». L'ancienne formule était lue
   comme « rien à faire ».

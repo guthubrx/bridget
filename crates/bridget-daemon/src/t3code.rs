@@ -3082,8 +3082,8 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
         );
     }
     format!(
-        "💬 Message Bridget de {} (id {}) :\n\n{}\n\n— Réponds normalement dans ce tour : Bridget transmettra ta réponse à {}.",
-        message.from, message.id, message.body, message.from
+        "💬 Message Bridget de {} (id {}) :\n\n{}\n\n— Réponds dans ce tour : Bridget transmettra ta réponse finale à {}. Elle reste aussi affichée à l'utilisateur dans ce fil : commence-la par « ↪ Réponse à {} (relayée par Bridget) : » pour qu'il sache qu'elle ne lui est pas adressée.",
+        message.from, message.id, message.body, message.from, message.from
     )
 }
 
@@ -3436,6 +3436,18 @@ mod tests {
 
     /// Un message qui porte sa consigne propre, ou dont la réponse est
     /// attendue, ne peut pas partager le tour d'un autre.
+    #[test]
+    fn spec131_reponse_relayee_signalee_a_l_utilisateur_du_fil() {
+        let mut msg = bridget_core::BridgetMessage::new("agent-a", "coordinateur", "Tu valides ?");
+        msg.reply = true;
+        let text = envelope(&msg);
+        assert!(text.contains("transmettra ta réponse finale à agent-a"));
+        assert!(
+            text.contains("« ↪ Réponse à agent-a (relayée par Bridget) : »"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn spec130_notifications_successives_partagent_un_tour_sans_messages() {
         let (mut worker, _peer) = worker099();
