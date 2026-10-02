@@ -94,6 +94,10 @@ du système plutôt que dans un fichier :
 }
 ```
 
+Le dossier `claude_config_dir` doit être en 0700, sinon le lancement est refusé
+« profil Claude invalide ». Un fournisseur lent à démarrer se lance avec
+`--timeout <secondes>` : la commande attend alors cette durée.
+
 Un second compte Codex se déclare de la même façon avec le protocole
 `codex_app_server` et un lanceur qui fixe `CODEX_HOME`. Le modèle de `args` doit
 figurer dans `capabilities.models`. Vérifier ensuite par un vrai lancement :

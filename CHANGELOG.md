@@ -9,6 +9,8 @@ format AAAA-MM-JJ.
 
 ### Corrigé
 
+- `bridget spawn` attend la durée demandée par `--timeout` (plus une marge) avant de conclure ;
+  un fournisseur lent à démarrer était lancé mais annoncé « outcome_unknown » au bout de 10 s.
 - Pont T3 Code : les notifications d'observation qui se suivent partagent un seul tour au lieu de
   réveiller l'abonné une fois chacune ; elles ne sont jamais mêlées aux messages.
 - Pont T3 Code : un message sans réponse attendue destiné à un fil Claude ou Cursor occupé est remis

@@ -1205,6 +1205,37 @@ mod spec102_cli_thread_tests {
     }
 
     #[test]
+    fn spec132_le_client_attend_le_delai_de_lancement_demande() {
+        let order = |issued_at: i64, deadline_at: i64| WrapperToDaemon::SpawnOrder {
+            agent_type: "codex".into(),
+            project: None,
+            ownership: None,
+            agent_id: None,
+            cwd: "/tmp".into(),
+            persistent: false,
+            command_id: "c".into(),
+            issued_at,
+            deadline_at,
+            posture: None,
+        };
+        let base = crate::communication::client::DAEMON_BUDGET;
+        assert_eq!(
+            spawn_wait_budget(&order(100, 190)),
+            std::time::Duration::from_secs(95)
+        );
+        assert_eq!(
+            spawn_wait_budget(&order(100, 102)),
+            base,
+            "jamais moins que le budget usuel"
+        );
+        assert_eq!(
+            spawn_wait_budget(&order(100, 90)),
+            base,
+            "échéance incohérente : budget usuel"
+        );
+    }
+
+    #[test]
     fn spec127_debut_d_uuid_unique_accepte_ambigu_ou_court_refuse() {
         let directory = [
             ("alpha", "3b09f990-eec1-4038-8a9b-29d1065d00b3"),
@@ -1724,6 +1755,10 @@ fn cmd_spawn(args: &[String]) {
     if development && !require_interactive_terminal("spawn --posture development") {
         std::process::exit(1);
     }
+    // Session 132 : attendre le délai de lancement demandé, plus une marge.
+    // Avec le budget fixe de 10 s, un fournisseur lent à démarrer (serveurs
+    // MCP de son profil) était lancé mais annoncé « outcome_unknown ».
+    let budget = spawn_wait_budget(&order);
     println!("command_id: {command_id}");
     let response = if matches!(
         order,
@@ -1732,9 +1767,9 @@ fn cmd_spawn(args: &[String]) {
             ..
         }
     ) {
-        send_control_request(order)
+        send_control_request_within(order, budget)
     } else {
-        send_control_to_daemon(order)
+        send_control_to_daemon_within(&socket_path(), budget, order)
     };
     match response {
         Ok(DaemonToWrapper::SpawnAccepted { .. }) => {
@@ -3460,6 +3495,20 @@ fn read_control_message(reader: &mut BufReader<UnixStream>) -> Result<DaemonToWr
     decode(line.trim_end()).map_err(|error| error.to_string())
 }
 
+fn spawn_wait_budget(order: &WrapperToDaemon) -> std::time::Duration {
+    let requested = match order {
+        WrapperToDaemon::SpawnOrder {
+            issued_at,
+            deadline_at,
+            ..
+        } => deadline_at.saturating_sub(*issued_at),
+        _ => 0,
+    };
+    crate::communication::client::DAEMON_BUDGET.max(std::time::Duration::from_secs(
+        u64::try_from(requested).unwrap_or(0).saturating_add(5),
+    ))
+}
+
 fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
     send_control_to_daemon_at(&socket_path(), command)
 }
@@ -3493,7 +3542,17 @@ fn send_control_to_daemon_at(
     socket: &std::path::Path,
     command: WrapperToDaemon,
 ) -> Result<DaemonToWrapper, String> {
-    let mut connection = DaemonConnection::connect(socket).map_err(|e| e.to_string())?;
+    send_control_to_daemon_within(socket, crate::communication::client::DAEMON_BUDGET, command)
+}
+
+fn send_control_to_daemon_within(
+    socket: &std::path::Path,
+    budget: std::time::Duration,
+    command: WrapperToDaemon,
+) -> Result<DaemonToWrapper, String> {
+    let mut connection =
+        DaemonConnection::connect_until(socket, std::time::Instant::now() + budget)
+            .map_err(|e| e.to_string())?;
     let reg = match crate::mcp_identity::resolve_current_identity() {
         Ok(identity) => crate::mcp_identity::auxiliary_registration(
             &identity.name,
@@ -4751,7 +4810,16 @@ fn cmd_agents(args: &[String]) {
 // ---------------------------------------------------------------------------
 
 fn send_control_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
-    let mut connection = DaemonConnection::connect(&socket_path()).map_err(|e| e.to_string())?;
+    send_control_request_within(request, crate::communication::client::DAEMON_BUDGET)
+}
+
+fn send_control_request_within(
+    request: WrapperToDaemon,
+    budget: std::time::Duration,
+) -> Result<DaemonToWrapper, String> {
+    let mut connection =
+        DaemonConnection::connect_until(&socket_path(), std::time::Instant::now() + budget)
+            .map_err(|e| e.to_string())?;
     match connection
         .exchange(&WrapperToDaemon::RoleHandshake {
             role: ConnectionRole::Client,
