@@ -5,7 +5,7 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
-## [Non publié]
+## [0.1.3] - 2026-10-02
 
 ### Corrigé
 
