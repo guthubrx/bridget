@@ -9,6 +9,8 @@ format AAAA-MM-JJ.
 
 ### Corrigé
 
+- Pont T3 Code : les notifications d'observation qui se suivent partagent un seul tour au lieu de
+  réveiller l'abonné une fois chacune ; elles ne sont jamais mêlées aux messages.
 - Pont T3 Code : un message sans réponse attendue destiné à un fil Claude ou Cursor occupé est remis
   aussitôt au tour en cours, au lieu d'attendre sa fin (jusqu'à 8 h 45 observées). Codex, les
   demandes suivies et les notifications attendent toujours la fin du tour.

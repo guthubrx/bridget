@@ -1904,7 +1904,9 @@ impl LinkWorker {
         if busy
             && !deliverable_while_busy(
                 thread_provider(&summary).as_deref(),
-                self.batchable_prefix() > 0,
+                self.queue
+                    .front()
+                    .is_some_and(|(frame, _)| groupable(delivery_message(frame))),
             )
         {
             return;
@@ -2011,9 +2013,14 @@ impl LinkWorker {
         let now = unix_now();
         let mut bytes = 0;
         let mut length = 0;
+        let family = self
+            .queue
+            .front()
+            .and_then(|(frame, _)| batch_family(delivery_message(frame)));
         for (frame, received) in &self.queue {
             let message = delivery_message(frame);
-            if !groupable(message)
+            if family.is_none()
+                || batch_family(message) != family
                 || length >= BATCH_BOUND
                 || bytes + message.body.len() > BATCH_BODY_BOUND
             {
@@ -2975,6 +2982,23 @@ pub(crate) fn reply_id(request_id: &str) -> String {
 pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> String {
     let [message] = messages else {
         let total = messages.len();
+        if messages
+            .iter()
+            .all(|m| batch_family(m) == Some(BatchFamily::Notification))
+        {
+            let mut rendered =
+                format!("🔔 {total} notifications Bridget groupées dans ce tour :\n");
+            for (index, message) in messages.iter().enumerate() {
+                rendered.push_str(&format!(
+                    "\n── {}/{total} (id {}) ──\n{}\n",
+                    index + 1,
+                    message.id,
+                    message.body
+                ));
+            }
+            rendered.push_str("\nPas d'accusé de réception à envoyer. Agis seulement si ces faits changent ce que tu dois faire ; informe l'utilisateur si utile.");
+            return rendered;
+        }
         let mut rendered =
             format!("📥 {total} messages Bridget groupés dans ce tour (reply=no) :\n");
         for (index, message) in messages.iter().enumerate() {
@@ -3005,13 +3029,32 @@ fn deliverable_while_busy(provider: Option<&str>, groupable_front: bool) -> bool
     groupable_front && matches!(provider, Some("claude" | "cursor"))
 }
 
-/// Session 114 : message qui peut partager un tour avec ses voisins. Une
-/// sollicitation de fil et une notification portent chacune leur consigne
-/// propre ; une demande suivie attend LA réponse du tour, qui ne se partage pas.
+/// Famille de regroupement : seuls des membres d'une même famille partagent un
+/// tour, chacune ayant sa consigne. Une demande suivie attend LA réponse du
+/// tour et une sollicitation de fil sa propre lecture : jamais groupées.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchFamily {
+    /// Session 114 : messages sans réponse attendue.
+    Message,
+    /// Session 130 : notifications d'observation. Une rafale de fins de tour
+    /// réveillait l'abonné une fois par notification (471 en dix jours).
+    Notification,
+}
+
+fn batch_family(message: &bridget_core::BridgetMessage) -> Option<BatchFamily> {
+    if message.reply || message.thread_notice.is_some() {
+        return None;
+    }
+    Some(if message.id.starts_with("bridget-observation:") {
+        BatchFamily::Notification
+    } else {
+        BatchFamily::Message
+    })
+}
+
+/// Message sans réponse attendue, seul autorisé à piloter un tour en cours (129).
 fn groupable(message: &bridget_core::BridgetMessage) -> bool {
-    !message.reply
-        && message.thread_notice.is_none()
-        && !message.id.starts_with("bridget-observation:")
+    batch_family(message) == Some(BatchFamily::Message)
 }
 
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
@@ -3393,6 +3436,48 @@ mod tests {
 
     /// Un message qui porte sa consigne propre, ou dont la réponse est
     /// attendue, ne peut pas partager le tour d'un autre.
+    #[test]
+    fn spec130_notifications_successives_partagent_un_tour_sans_messages() {
+        let (mut worker, _peer) = worker099();
+        for id in ["bridget-observation:1", "bridget-observation:2"] {
+            worker.handle_frame(DaemonToWrapper::Deliver(plain114(id)));
+        }
+        worker.handle_frame(DaemonToWrapper::Deliver(plain114("message")));
+        assert_eq!(
+            worker.batchable_prefix(),
+            2,
+            "les deux notifications, pas le message"
+        );
+        let notifications: Vec<_> = ["bridget-observation:1", "bridget-observation:2"]
+            .into_iter()
+            .map(plain114)
+            .collect();
+        let text = batch_envelope(&notifications);
+        assert!(
+            text.starts_with("🔔 2 notifications Bridget groupées"),
+            "{text}"
+        );
+        assert!(text.contains("Pas d'accusé de réception"));
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec130_seul_un_message_sans_reponse_pilote_un_tour_en_cours() {
+        let mut question = plain114("question");
+        question.reply = true;
+        let observation = plain114("bridget-observation:1");
+        assert!(groupable(&plain114("compte-rendu")));
+        assert!(
+            !groupable(&question),
+            "demande suivie : attente de la fin du tour"
+        );
+        assert!(
+            !groupable(&observation),
+            "notification : attente de la fin du tour"
+        );
+    }
+
     #[test]
     fn spec114_message_a_consigne_propre_n_est_jamais_groupe() {
         let mut question = plain114("question");

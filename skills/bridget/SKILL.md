@@ -32,6 +32,12 @@ exact par la CLI, s'il ne désigne qu'un seul agent ; sinon le refus le dit.
 mais traite la demande si le message en contient une : un défaut signalé reste à
 corriger. Pour rendre un résultat, fais un nouvel envoi à l'expéditeur.
 
+**Économiser le contexte du destinataire.** Chaque message entre dans son
+contexte, et un lot de messages sans réponse attendue partage un seul tour.
+Écrire des relances courtes, sans recopier les règles déjà transmises. Au-delà
+de quelques kilo-octets, publier le contenu (`bridget_publish_artifact`) ou citer
+un chemin de fichier, et envoyer seulement la référence et ce qui est attendu.
+
 Si les outils sont différés, chercher `mcp__bridget__*` dans le catalogue
 `ALL_TOOLS` disponible via `functions.exec` avant de conclure qu'ils sont absents.
 Un `Operation not permitted` obtenu par un **shell** restreint ne prouve ni une
