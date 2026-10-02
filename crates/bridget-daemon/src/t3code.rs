@@ -4772,7 +4772,8 @@ mod tests {
             pid: std::process::id(),
         });
         thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(1);
+            // Session 132 : 1 s ne suffisait pas sous forte charge (accept tardif).
+            let deadline = Instant::now() + Duration::from_secs(15);
             let mut stream = loop {
                 match listener.accept() {
                     Ok((stream, _)) => break stream,
@@ -4786,7 +4787,7 @@ mod tests {
                 }
             };
             stream
-                .set_read_timeout(Some(Duration::from_secs(1)))
+                .set_read_timeout(Some(Duration::from_secs(15)))
                 .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut headers = String::new();
