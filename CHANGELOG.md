@@ -7,6 +7,17 @@ format AAAA-MM-JJ.
 
 ## [Non publié]
 
+### Corrigé
+
+- Pont T3 Code : un message sans réponse attendue destiné à un fil Claude ou Cursor occupé est remis
+  aussitôt au tour en cours, au lieu d'attendre sa fin (jusqu'à 8 h 45 observées). Codex, les
+  demandes suivies et les notifications attendent toujours la fin du tour.
+
+### Documentation
+
+- Guide d'installation : déclarer un fournisseur compatible Claude (exemple GLM) ou un second
+  compte Codex dans le registre, avec sa variante lecture seule automatique.
+
 ### Modifié
 
 - La consigne des messages sans réponse attendue sépare l'accusé de réception de l'action :
