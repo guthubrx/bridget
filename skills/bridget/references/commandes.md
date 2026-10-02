@@ -34,8 +34,8 @@ de couverture.
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
 | `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par rang FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
-| `spawn` | CLI humain | Aucun outil MCP de supervision | Crée un équipier géré avec persistance, répertoire et posture explicites ; l'autorité propriétaire n'est pas déléguée au modèle. |
-| `stop` | CLI humain | Aucun outil MCP de supervision | Arrête un équipier géré désigné ; effet de cycle de vie réservé à l'humain. |
+| `spawn` | CLI (humain ou agent) | Aucun outil MCP de supervision | Crée un équipier géré avec persistance et répertoire explicites. Un agent peut lancer en lecture seule (posture globale `discovery`, sans terminal) ; `--posture development` exige un terminal humain. |
+| `stop` | CLI (humain ou agent) | Aucun outil MCP de supervision | Arrête un équipier géré désigné ; un agent n'arrête que les équipiers qu'il a lancés lui-même. |
 | `relaunch` | CLI humain | Aucun outil MCP de supervision | Relance un équipier arrêté avec sa définition figée ; ne change pas sa posture ni ses droits. |
 | `decommission` | CLI humain | Aucun outil MCP de supervision | Retire un équipier de la flotte visible en conservant l'historique ; décision propriétaire. |
 | `adopt-stopped` | CLI humain | Aucun outil MCP de supervision | Importe explicitement des agents arrêtés dont l'historique géré est prouvé ; décision de flotte. |

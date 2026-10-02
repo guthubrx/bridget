@@ -7,6 +7,12 @@ format AAAA-MM-JJ.
 
 ## [Non publié]
 
+### Documentation
+
+- Skill : lancer des équipiers en lecture seule est autorisé d'office pour une tâche de lecture,
+  sans terminal ; seul le droit d'écrire (`--posture development`, Codex) exige un terminal
+  humain ; un refus « posture_decouverte » signale un type non déclaré dans le registre.
+
 ### Corrigé
 
 - Pont T3 Code : un tour aussitôt suivi d'un autre, entre deux lectures du pont, était signalé

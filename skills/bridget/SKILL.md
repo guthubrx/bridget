@@ -1,6 +1,6 @@
 ---
 name: bridget
-description: Communiquer et demander une relecture entre agents avec Bridget, tenir un fil de discussion partagé avec sollicitations ciblées, transmettre un dossier de passation, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
+description: Communiquer et demander une relecture entre agents avec Bridget, tenir un fil de discussion partagé avec sollicitations ciblées, transmettre un dossier de passation, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier sur demande, ou d'office en lecture seule pour une tâche de lecture. MCP ou CLI attesté, sans orchestrateur métier.
 ---
 
 # Communication entre agents
@@ -212,20 +212,30 @@ dans [la référence des commandes](references/commandes.md#recherche-dans-les-�
 
 ## Lancer → mission → observer → arrêter
 
-Uniquement quand l'utilisateur demande de lancer un agent : choisir explicitement
-sa persistance, son répertoire et ses capacités, puis lire le reçu et l'annuaire.
-Un agent `connected` peut être limité à la découverte/lecture seule : vérifier le
-profil effectif avant de lui promettre qu'il peut modifier des fichiers. Ne pas
-changer la posture globale pour débloquer un seul lancement.
+**Quand lancer.** Sur demande de l'utilisateur ; et **d'office, sans demander**,
+pour une tâche de lecture ou d'analyse (lire, résumer, relire, chercher, extraire)
+qui gagne à être répartie : ce lancement est en lecture seule et ne demande
+aucun terminal. Pour un gros volume de lecture, préférer des équipiers Bridget du
+type le moins coûteux disponible à des sous-agents de son propre fournisseur.
+Choisir explicitement persistance et répertoire, puis lire le reçu et l'annuaire.
 
-`spawn --posture development` autorise Codex à écrire dans son répertoire de
-travail pour cet ordre seulement (réseau du shell et extensions de droits refusés,
-outils MCP déclarés distincts du shell).
-Cette attribution exige un terminal humain en entrée ET sortie : si elle est
-refusée dans l'outil shell, donner la commande à l'utilisateur, ne pas fabriquer
-de pseudo-terminal pour contourner la garde. `--posture discovery` reste en
-lecture seule. Sans option, la politique globale s'applique. `relaunch` conserve
-la définition figée, donc n'élargit pas les droits d'un ancien agent découverte.
+**Ce que chaque lancement autorise.** Sans option `--posture`, la posture globale
+s'applique ; elle vaut `discovery` par défaut : l'équipier lit mais n'écrit rien
+(Codex en bac à sable lecture seule, Claude en mode plan), type affiché
+`project-discovery-<type>`. Il rend donc son travail dans sa réponse, pas dans des
+fichiers. Ce lancement fonctionne depuis une session d'agent (vérifié 2026-10-02).
+Seul `spawn --posture development` donne le droit d'écrire dans le répertoire de
+travail, pour cet ordre seulement, et **seulement à Codex** (réseau du shell et
+extensions de droits refusés). Lui seul exige un terminal humain en entrée ET
+sortie : s'il est refusé dans l'outil shell, donner la commande à l'utilisateur,
+ne pas fabriquer de pseudo-terminal. Ne pas changer la posture globale pour un seul
+lancement. `relaunch` conserve la définition figée, donc n'élargit pas les droits.
+
+**Lire un refus littéralement.** `capacité manquante posture_decouverte` ou un type
+inconnu signifie que ce type n'est pas déclaré dans le registre du daemon
+(`~/.cache/bridget-core/agents.json`) : le dire tel quel à l'utilisateur, ne pas
+l'attribuer à la règle du terminal. Les fils T3 d'un fournisseur (par exemple GLM)
+n'impliquent pas que Bridget sache lancer ce type.
 
 ```sh
 bridget control status
