@@ -1297,7 +1297,7 @@ fn private_prompt(instructions: Option<&str>, body: &str) -> String {
 
 fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
     let response = if !message.reply {
-        "Aucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour annoncer ton silence. Ta réponse finale ne sera pas relayée."
+        bridget_core::envelope::NO_REPLY_NOTICE
     } else if interactive {
         "Si reply=true, réponds une seule fois par l'outil bridget_send avec to=from et in_reply_to=id ci-dessus. La réponse finale à l'écran n'est pas envoyée à cet agent."
     } else {
@@ -7223,7 +7223,7 @@ for line in sys.stdin:
             message.reply = false;
             message.in_reply_to = Some("question".into());
             let prompt = communication_prompt(&message, interactive);
-            assert!(prompt.contains("Aucune réponse inter-agent attendue"));
+            assert!(prompt.contains("Pas d'accusé de réception"));
             assert!(!prompt.contains("réponds une seule fois"));
             assert!(!prompt.contains("relaie automatiquement"));
             assert!(prompt.contains(&message.body));

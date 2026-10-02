@@ -1897,10 +1897,17 @@ impl LinkWorker {
         else {
             return;
         };
-        if summary
+        let busy = summary
             .session
             .as_ref()
-            .is_some_and(|s| s.active_turn_id.is_some())
+            .is_some_and(|s| s.active_turn_id.is_some());
+        if busy
+            && !deliverable_while_busy(
+                thread_provider(&summary).as_deref(),
+                self.queue
+                    .front()
+                    .is_some_and(|(frame, _)| groupable(delivery_message(frame))),
+            )
         {
             return;
         }
@@ -2006,9 +2013,14 @@ impl LinkWorker {
         let now = unix_now();
         let mut bytes = 0;
         let mut length = 0;
+        let family = self
+            .queue
+            .front()
+            .and_then(|(frame, _)| batch_family(delivery_message(frame)));
         for (frame, received) in &self.queue {
             let message = delivery_message(frame);
-            if !groupable(message)
+            if family.is_none()
+                || batch_family(message) != family
                 || length >= BATCH_BOUND
                 || bytes + message.body.len() > BATCH_BODY_BOUND
             {
@@ -2970,6 +2982,23 @@ pub(crate) fn reply_id(request_id: &str) -> String {
 pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> String {
     let [message] = messages else {
         let total = messages.len();
+        if messages
+            .iter()
+            .all(|m| batch_family(m) == Some(BatchFamily::Notification))
+        {
+            let mut rendered =
+                format!("🔔 {total} notifications Bridget groupées dans ce tour :\n");
+            for (index, message) in messages.iter().enumerate() {
+                rendered.push_str(&format!(
+                    "\n── {}/{total} (id {}) ──\n{}\n",
+                    index + 1,
+                    message.id,
+                    message.body
+                ));
+            }
+            rendered.push_str("\nPas d'accusé de réception à envoyer. Agis seulement si ces faits changent ce que tu dois faire ; informe l'utilisateur si utile.");
+            return rendered;
+        }
         let mut rendered =
             format!("📥 {total} messages Bridget groupés dans ce tour (reply=no) :\n");
         for (index, message) in messages.iter().enumerate() {
@@ -2982,20 +3011,50 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
             ));
         }
         rendered.push_str(
-            "\nAucune réponse inter-agent attendue pour ces messages. N'envoie pas d'accusé de réception, même pour dire que tu ne répondras pas. Le pont ne relaie pas ta réponse finale pour ce tour.",
+            "\nPas d'accusé de réception pour ces messages : n'envoie aucun « bien reçu ». Ce n'est pas une absence de tâche : si un message demande une action, fais-la. Le pont ne relaie pas ta réponse finale pour ce tour ; pour transmettre un résultat à un expéditeur, fais un nouvel envoi Bridget.",
         );
         return rendered;
     };
     envelope(message)
 }
 
-/// Session 114 : message qui peut partager un tour avec ses voisins. Une
-/// sollicitation de fil et une notification portent chacune leur consigne
-/// propre ; une demande suivie attend LA réponse du tour, qui ne se partage pas.
+/// Session 129 : le 01/10, un coordinateur resté 8 h 45 dans un seul tour a
+/// reçu d'un coup treize messages qui attendaient sa fin. L'attente du repos
+/// sert à relier une réponse à sa demande ; un message sans réponse attendue
+/// n'a rien à relier. Chez les fournisseurs dont T3 pilote le tour en cours
+/// (Claude, donc GLM, et Cursor), il est remis aussitôt et lu à la prochaine
+/// étape de l'agent. Codex, les demandes suivies, les sollicitations de fil et
+/// les notifications attendent toujours la fin du tour.
+fn deliverable_while_busy(provider: Option<&str>, groupable_front: bool) -> bool {
+    groupable_front && matches!(provider, Some("claude" | "cursor"))
+}
+
+/// Famille de regroupement : seuls des membres d'une même famille partagent un
+/// tour, chacune ayant sa consigne. Une demande suivie attend LA réponse du
+/// tour et une sollicitation de fil sa propre lecture : jamais groupées.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BatchFamily {
+    /// Session 114 : messages sans réponse attendue.
+    Message,
+    /// Session 130 : notifications d'observation. Une rafale de fins de tour
+    /// réveillait l'abonné une fois par notification (471 en dix jours).
+    Notification,
+}
+
+fn batch_family(message: &bridget_core::BridgetMessage) -> Option<BatchFamily> {
+    if message.reply || message.thread_notice.is_some() {
+        return None;
+    }
+    Some(if message.id.starts_with("bridget-observation:") {
+        BatchFamily::Notification
+    } else {
+        BatchFamily::Message
+    })
+}
+
+/// Message sans réponse attendue, seul autorisé à piloter un tour en cours (129).
 fn groupable(message: &bridget_core::BridgetMessage) -> bool {
-    !message.reply
-        && message.thread_notice.is_none()
-        && !message.id.starts_with("bridget-observation:")
+    batch_family(message) == Some(BatchFamily::Message)
 }
 
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
@@ -3009,19 +3068,22 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     }
     if message.id.starts_with("bridget-observation:") {
         return format!(
-            "🔔 Notification Bridget (id {}) :\n\n{}\n\nAucune réponse inter-agent requise ; informe l'utilisateur si utile.",
+            "🔔 Notification Bridget (id {}) :\n\n{}\n\nPas d'accusé de réception à envoyer. Agis seulement si ce fait change ce que tu dois faire ; informe l'utilisateur si utile.",
             message.id, message.body
         );
     }
     if !message.reply {
         return format!(
-            "💬 Message Bridget de {} (id {}, reply=no) :\n\n{}\n\nAucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour dire que tu ne répondras pas. Le pont ne relaie pas ta réponse finale pour ce message.",
-            message.from, message.id, message.body
+            "💬 Message Bridget de {} (id {}, reply=no) :\n\n{}\n\n{}",
+            message.from,
+            message.id,
+            message.body,
+            bridget_core::envelope::NO_REPLY_NOTICE
         );
     }
     format!(
-        "💬 Message Bridget de {} (id {}) :\n\n{}\n\n— Réponds normalement dans ce tour : Bridget transmettra ta réponse à {}.",
-        message.from, message.id, message.body, message.from
+        "💬 Message Bridget de {} (id {}) :\n\n{}\n\n— Réponds dans ce tour : Bridget transmettra ta réponse finale à {}. Elle reste aussi affichée à l'utilisateur dans ce fil : commence-la par « ↪ Réponse à {} (relayée par Bridget) : » pour qu'il sache qu'elle ne lui est pas adressée.",
+        message.from, message.id, message.body, message.from, message.from
     )
 }
 
@@ -3375,6 +3437,60 @@ mod tests {
     /// Un message qui porte sa consigne propre, ou dont la réponse est
     /// attendue, ne peut pas partager le tour d'un autre.
     #[test]
+    fn spec131_reponse_relayee_signalee_a_l_utilisateur_du_fil() {
+        let mut msg = bridget_core::BridgetMessage::new("agent-a", "coordinateur", "Tu valides ?");
+        msg.reply = true;
+        let text = envelope(&msg);
+        assert!(text.contains("transmettra ta réponse finale à agent-a"));
+        assert!(
+            text.contains("« ↪ Réponse à agent-a (relayée par Bridget) : »"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn spec130_notifications_successives_partagent_un_tour_sans_messages() {
+        let (mut worker, _peer) = worker099();
+        for id in ["bridget-observation:1", "bridget-observation:2"] {
+            worker.handle_frame(DaemonToWrapper::Deliver(plain114(id)));
+        }
+        worker.handle_frame(DaemonToWrapper::Deliver(plain114("message")));
+        assert_eq!(
+            worker.batchable_prefix(),
+            2,
+            "les deux notifications, pas le message"
+        );
+        let notifications: Vec<_> = ["bridget-observation:1", "bridget-observation:2"]
+            .into_iter()
+            .map(plain114)
+            .collect();
+        let text = batch_envelope(&notifications);
+        assert!(
+            text.starts_with("🔔 2 notifications Bridget groupées"),
+            "{text}"
+        );
+        assert!(text.contains("Pas d'accusé de réception"));
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec130_seul_un_message_sans_reponse_pilote_un_tour_en_cours() {
+        let mut question = plain114("question");
+        question.reply = true;
+        let observation = plain114("bridget-observation:1");
+        assert!(groupable(&plain114("compte-rendu")));
+        assert!(
+            !groupable(&question),
+            "demande suivie : attente de la fin du tour"
+        );
+        assert!(
+            !groupable(&observation),
+            "notification : attente de la fin du tour"
+        );
+    }
+
+    #[test]
     fn spec114_message_a_consigne_propre_n_est_jamais_groupe() {
         let mut question = plain114("question");
         question.reply = true;
@@ -3445,7 +3561,7 @@ mod tests {
             let mut msg = bridget_core::BridgetMessage::new("alice", "bob", "Bien reçu");
             msg.in_reply_to = parent.map(str::to_string);
             assert!(!envelope(&msg).contains("transmettra ta réponse"));
-            assert!(envelope(&msg).contains("Aucune réponse"));
+            assert!(envelope(&msg).contains("Pas d'accusé de réception"));
             msg.reply = true;
             assert!(envelope(&msg).contains("transmettra ta réponse"));
         }
@@ -3790,7 +3906,7 @@ mod tests {
         msg.origin = Some(bridget_core::MessageOrigin::System);
         let text = envelope(&msg);
         assert!(!text.contains("transmettra ta réponse"));
-        assert!(text.contains("Aucune réponse"));
+        assert!(text.contains("Pas d'accusé de réception"));
     }
 
     #[test]
@@ -4656,7 +4772,8 @@ mod tests {
             pid: std::process::id(),
         });
         thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(1);
+            // Session 132 : 1 s ne suffisait pas sous forte charge (accept tardif).
+            let deadline = Instant::now() + Duration::from_secs(5);
             let mut stream = loop {
                 match listener.accept() {
                     Ok((stream, _)) => break stream,
@@ -4670,7 +4787,7 @@ mod tests {
                 }
             };
             stream
-                .set_read_timeout(Some(Duration::from_secs(1)))
+                .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut headers = String::new();
@@ -5476,6 +5593,23 @@ mod tests {
             end.contains(r#""message_id":"bridget-observation:t1""#),
             "{end}"
         );
+    }
+
+    #[test]
+    fn spec129_remise_pendant_un_tour_seulement_si_pilotable_et_sans_reponse() {
+        assert!(deliverable_while_busy(Some("claude"), true));
+        assert!(deliverable_while_busy(Some("cursor"), true));
+        assert!(
+            !deliverable_while_busy(Some("codex"), true),
+            "Codex attend la fin du tour"
+        );
+        assert!(!deliverable_while_busy(None, true));
+        assert!(
+            !deliverable_while_busy(Some("claude"), false),
+            "demande suivie, sollicitation ou notification en tête : attente"
+        );
+        // Un fil GLM est servi par le pilote Claude de T3.
+        assert_eq!(agent_type_for("claudeAgent"), "claude");
     }
 
     #[test]

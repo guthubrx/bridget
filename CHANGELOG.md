@@ -5,6 +5,36 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.1.3] - 2026-10-02
+
+### Corrigé
+
+- `bridget spawn` attend la durée demandée par `--timeout` (plus une marge) avant de conclure ;
+  un fournisseur lent à démarrer était lancé mais annoncé « outcome_unknown » au bout de 10 s.
+- Pont T3 Code : les notifications d'observation qui se suivent partagent un seul tour au lieu de
+  réveiller l'abonné une fois chacune ; elles ne sont jamais mêlées aux messages.
+- Pont T3 Code : un message sans réponse attendue destiné à un fil Claude ou Cursor occupé est remis
+  aussitôt au tour en cours, au lieu d'attendre sa fin (jusqu'à 8 h 45 observées). Codex, les
+  demandes suivies et les notifications attendent toujours la fin du tour.
+
+### Documentation
+
+- Guide d'installation : déclarer un fournisseur compatible Claude (exemple GLM) ou un second
+  compte Codex dans le registre, avec sa variante lecture seule automatique.
+
+### Modifié
+
+- Pont T3 Code : une demande avec réponse attendue invite l'agent à ouvrir sa réponse par
+  « ↪ Réponse à <expéditeur> (relayée par Bridget) : ». Relayée à l'expéditeur, elle reste aussi
+  affichée dans le fil de l'utilisateur, qui la prenait pour lui.
+- La consigne des messages sans réponse attendue sépare l'accusé de réception de l'action :
+  « Pas d'accusé de réception… Ce n'est pas une absence de tâche ». L'ancienne formule était lue
+  comme « rien à faire ».
+- `send` accepte un début d'UUID d'au moins 6 caractères (CLI et MCP) ou un nom d'affichage exact
+  (CLI) quand il ne désigne qu'un seul agent.
+- Un lancement d'équipier d'un type absent du registre est refusé « type d'agent inconnu », avec
+  la liste des types connus, au lieu d'une capacité manquante.
+
 ## [0.1.2] - 2026-10-02
 
 ### Documentation

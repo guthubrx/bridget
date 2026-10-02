@@ -7008,6 +7008,16 @@ fn resolve_spawn_agent_type_for_posture(
     st: &DaemonState,
     agent_type: &str,
 ) -> Result<String, SpawnRefusal> {
+    // Session 127 : un type absent du registre est dit tel quel. Le refus
+    // « posture_decouverte » qui le masquait a été pris deux fois par des agents
+    // pour la garde du terminal humain.
+    if st.registry.get(agent_type).is_err() {
+        return Err(SpawnRefusal::UnknownType {
+            requested_type: agent_type.to_string(),
+            known_types: st.registry.known_types(),
+            registry: st.registry.source().display().to_string(),
+        });
+    }
     match crate::referent_control::read(st.store.connection()) {
         Ok(control)
             if control.agent_posture
@@ -23246,6 +23256,13 @@ mod presence_tests {
             resolve_spawn_agent_type_for_posture(&state, "claude"),
             Err(SpawnRefusal::UnsupportedCapability { ref capability, ref agent_type, .. })
                 if capability == "posture_decouverte" && agent_type == "claude"
+        ));
+        // Session 127 : un type absent du registre est annoncé inconnu, avec la
+        // liste des types connus, et non comme une capacité manquante.
+        assert!(matches!(
+            resolve_spawn_agent_type_for_posture(&state, "gclaude"),
+            Err(SpawnRefusal::UnknownType { ref requested_type, ref known_types, .. })
+                if requested_type == "gclaude" && known_types.iter().any(|t| t == "codex")
         ));
         // Posture complète ⇒ le type demandé, tel quel.
         crate::referent_control::set(

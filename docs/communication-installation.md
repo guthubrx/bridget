@@ -68,6 +68,42 @@ runtime de projet, pas les droits ni les contrôles de facturation. Un refus est
 La skill fournie reste un fichier à installer volontairement dans le profil
 choisi, pas une écriture automatique dans tous les profils.
 
+### Déclarer un fournisseur compatible Claude ou un second compte Codex
+
+Les types par défaut sont `codex`, `claude`, `cursor` et `gemini`. Un autre
+fournisseur se déclare dans `$BRIDGET_HOME/agents.json` (fichier 0600, sans lien
+symbolique), lu au démarrage du daemon. Chaque type déclaré reçoit
+automatiquement sa variante lecture seule `project-discovery-<type>`, utilisée
+sous la posture `discovery`. Exemple pour GLM servi par Claude Code, avec un
+lanceur qui fixe l'environnement du fournisseur et lit sa clé dans le trousseau
+du système plutôt que dans un fichier :
+
+```json
+{
+  "agents": {
+    "glm": {
+      "command": "/chemin/absolu/lanceur-glm",
+      "args": ["--model", "glm-5.3", "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions"],
+      "protocol": "claude_stream_json",
+      "forbidden_env": ["ANTHROPIC_API_KEY"],
+      "claude_config_dir": "/chemin/absolu/profil-claude-glm",
+      "mcp": {"interactive": "claude", "acp_session": false},
+      "capabilities": {"execution_paths": ["claude_stream_json"], "models": {"glm-5.3": {}}}
+    }
+  }
+}
+```
+
+Le dossier `claude_config_dir` doit être en 0700, sinon le lancement est refusé
+« profil Claude invalide ». Un fournisseur lent à démarrer se lance avec
+`--timeout <secondes>` : la commande attend alors cette durée.
+
+Un second compte Codex se déclare de la même façon avec le protocole
+`codex_app_server` et un lanceur qui fixe `CODEX_HOME`. Le modèle de `args` doit
+figurer dans `capabilities.models`. Vérifier ensuite par un vrai lancement :
+`bridget spawn glm --no-persistent --agent-id <UUID> --cwd <chemin>`, puis
+`bridget stop <UUID>`.
+
 ## Codex interactif (090)
 
 Les sources de cette évolution se trouvent dans

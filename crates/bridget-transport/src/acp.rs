@@ -2073,7 +2073,7 @@ fn prompt_for_with_private_instructions(
     let response = if message.reply {
         "Le wrapper relaie automatiquement ta réponse finale à l'expéditeur avec in_reply_to=id. Réponds avec le résultat utile ; ne double pas cette réponse par un envoi d'outil."
     } else {
-        "Aucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour annoncer ton silence. Ta réponse finale ne sera pas relayée."
+        bridget_core::envelope::NO_REPLY_NOTICE
     };
     let prompt = format!(
         "[message Bridget de {} — réponse attendue : {}]\n[Métadonnées : {}]\n{response}\n\n{}",
@@ -2268,10 +2268,7 @@ mod tests {
             assert!(prompt.contains(&msg.id));
             assert!(prompt.contains("parent"));
             assert!(prompt.ends_with(&msg.body));
-            assert_eq!(
-                prompt.contains("Aucune réponse inter-agent attendue"),
-                !requested
-            );
+            assert_eq!(prompt.contains("Pas d'accusé de réception"), !requested);
             assert_eq!(prompt.contains("relaie automatiquement"), requested);
         }
     }
