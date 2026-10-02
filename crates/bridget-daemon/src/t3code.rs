@@ -1897,10 +1897,15 @@ impl LinkWorker {
         else {
             return;
         };
-        if summary
+        let busy = summary
             .session
             .as_ref()
-            .is_some_and(|s| s.active_turn_id.is_some())
+            .is_some_and(|s| s.active_turn_id.is_some());
+        if busy
+            && !deliverable_while_busy(
+                thread_provider(&summary).as_deref(),
+                self.batchable_prefix() > 0,
+            )
         {
             return;
         }
@@ -2987,6 +2992,17 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
         return rendered;
     };
     envelope(message)
+}
+
+/// Session 129 : le 01/10, un coordinateur resté 8 h 45 dans un seul tour a
+/// reçu d'un coup treize messages qui attendaient sa fin. L'attente du repos
+/// sert à relier une réponse à sa demande ; un message sans réponse attendue
+/// n'a rien à relier. Chez les fournisseurs dont T3 pilote le tour en cours
+/// (Claude, donc GLM, et Cursor), il est remis aussitôt et lu à la prochaine
+/// étape de l'agent. Codex, les demandes suivies, les sollicitations de fil et
+/// les notifications attendent toujours la fin du tour.
+fn deliverable_while_busy(provider: Option<&str>, groupable_front: bool) -> bool {
+    groupable_front && matches!(provider, Some("claude" | "cursor"))
 }
 
 /// Session 114 : message qui peut partager un tour avec ses voisins. Une
@@ -5479,6 +5495,23 @@ mod tests {
             end.contains(r#""message_id":"bridget-observation:t1""#),
             "{end}"
         );
+    }
+
+    #[test]
+    fn spec129_remise_pendant_un_tour_seulement_si_pilotable_et_sans_reponse() {
+        assert!(deliverable_while_busy(Some("claude"), true));
+        assert!(deliverable_while_busy(Some("cursor"), true));
+        assert!(
+            !deliverable_while_busy(Some("codex"), true),
+            "Codex attend la fin du tour"
+        );
+        assert!(!deliverable_while_busy(None, true));
+        assert!(
+            !deliverable_while_busy(Some("claude"), false),
+            "demande suivie, sollicitation ou notification en tête : attente"
+        );
+        // Un fil GLM est servi par le pilote Claude de T3.
+        assert_eq!(agent_type_for("claudeAgent"), "claude");
     }
 
     #[test]
