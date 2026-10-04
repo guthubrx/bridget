@@ -22,6 +22,7 @@ const MAX_MARKER_BYTES: u64 = 64 * 1024;
 pub enum IdentityError {
     LegacyMarker,
     IdentityNotFound,
+    DelegatedMcpOnly,
 }
 
 impl IdentityError {
@@ -30,6 +31,7 @@ impl IdentityError {
         match self {
             Self::LegacyMarker => "legacy_marker",
             Self::IdentityNotFound => "identity_not_found",
+            Self::DelegatedMcpOnly => "delegated_mcp_only",
         }
     }
 
@@ -42,6 +44,9 @@ impl IdentityError {
             }
             Self::IdentityNotFound => {
                 "un sous-agent interne rend son résultat à son parent Bridget ; sinon lancez l'appel depuis un agent Bridget enregistré"
+            }
+            Self::DelegatedMcpOnly => {
+                "un sous-agent interne utilise uniquement les outils MCP Bridget bridget_who et bridget_send"
             }
         }
     }
@@ -56,10 +61,25 @@ pub struct AgentPidMarker {
     pub name_file: PathBuf,
 }
 
+/// Preuve locale et éphémère d'un fournisseur interne rattaché à son parent.
+/// Elle ne contient ni credential, ni identifiant de session fournisseur brut.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedPidMarker {
+    pub pid: u32,
+    pub birth: u64,
+    pub parent_instance_id: String,
+    pub parent_name_file: PathBuf,
+    pub provider: String,
+    pub child_ref: String,
+    pub owner: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedIdentity {
     pub name: String,
     pub instance_id: String,
+    pub delegated_origin: Option<bridget_core::DelegatedOrigin>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -237,13 +257,36 @@ pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
         .filter(|value| !value.is_empty());
     let namespace = crate::environment::Namespace::from_environment()
         .map_err(|_| IdentityError::IdentityNotFound)?;
-    resolve_identity_scoped(
+    resolve_identity_with_delegation_scoped(
         name_file.as_deref(),
         &namespace.root.join("agent-pids"),
+        &namespace.root.join("delegated-pids"),
         expected_instance_id.as_deref(),
         std::process::id(),
         &SystemProcessTree,
         Some(&namespace.root),
+        false,
+    )
+}
+
+/// Résolution réservée à la façade MCP. Elle accepte la preuve enfant, sans la
+/// transformer en identité principale utilisable par la CLI.
+pub(crate) fn resolve_current_mcp_identity() -> Result<ResolvedIdentity, IdentityError> {
+    let name_file = std::env::var_os("BRIDGET_AGENT_ID_FILE").map(PathBuf::from);
+    let expected_instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let namespace = crate::environment::Namespace::from_environment()
+        .map_err(|_| IdentityError::IdentityNotFound)?;
+    resolve_identity_with_delegation_scoped(
+        name_file.as_deref(),
+        &namespace.root.join("agent-pids"),
+        &namespace.root.join("delegated-pids"),
+        expected_instance_id.as_deref(),
+        std::process::id(),
+        &SystemProcessTree,
+        Some(&namespace.root),
+        true,
     )
 }
 
@@ -354,6 +397,7 @@ fn resolve_identity_scoped(
         return Ok(ResolvedIdentity {
             name,
             instance_id: instance_id.to_string(),
+            delegated_origin: None,
         });
     }
     let mut current = Some(pid);
@@ -378,6 +422,7 @@ fn resolve_identity_scoped(
                 return Ok(ResolvedIdentity {
                     name,
                     instance_id: marker.instance_id,
+                    delegated_origin: None,
                 });
             }
         }
@@ -386,6 +431,124 @@ fn resolve_identity_scoped(
             .filter(|parent| *parent > 1 && *parent != candidate);
     }
     Err(IdentityError::IdentityNotFound)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+fn resolve_identity_with_delegation(
+    name_file: Option<&Path>,
+    marker_directory: &Path,
+    delegated_marker_directory: &Path,
+    expected_instance_id: Option<&str>,
+    pid: u32,
+    processes: &impl ProcessTree,
+    allow_delegated: bool,
+) -> Result<ResolvedIdentity, IdentityError> {
+    resolve_identity_with_delegation_scoped(
+        name_file,
+        marker_directory,
+        delegated_marker_directory,
+        expected_instance_id,
+        pid,
+        processes,
+        None,
+        allow_delegated,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_identity_with_delegation_scoped(
+    name_file: Option<&Path>,
+    marker_directory: &Path,
+    delegated_marker_directory: &Path,
+    expected_instance_id: Option<&str>,
+    pid: u32,
+    processes: &impl ProcessTree,
+    namespace: Option<&Path>,
+    allow_delegated: bool,
+) -> Result<ResolvedIdentity, IdentityError> {
+    let permitted = |path: &Path| {
+        namespace.is_none_or(|root| {
+            path.starts_with(root) && crate::environment::validate_state_file(path, false).is_ok()
+        })
+    };
+    let mut current = Some(pid);
+    for _ in 0..MAX_ANCESTORS {
+        let Some(candidate) = current else { break };
+        let path = delegated_marker_directory.join(candidate.to_string());
+        // `exists()` suit les liens et ignore un lien cassé. La présence de
+        // toute entrée enfant, même cassée, doit fermer le repli principal.
+        if fs::symlink_metadata(&path).is_ok() {
+            if !permitted(&path) {
+                return Err(IdentityError::IdentityNotFound);
+            }
+            let marker =
+                read_delegated_marker_file(&path).map_err(|_| IdentityError::IdentityNotFound)?;
+            let valid = marker.pid == candidate
+                && marker.birth > 0
+                && marker.parent_instance_id.len() <= 256
+                && !marker.parent_instance_id.is_empty()
+                && expected_instance_id
+                    .is_none_or(|expected| expected == marker.parent_instance_id)
+                && processes.birth(candidate) == Some(marker.birth)
+                && matches!(marker.provider.as_str(), "codex" | "claude" | "cursor")
+                && marker.child_ref.len() == 16
+                && marker
+                    .child_ref
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                && !marker.owner.is_empty()
+                && marker.owner.len() <= 128
+                && permitted(&marker.parent_name_file);
+            if !valid {
+                return Err(IdentityError::IdentityNotFound);
+            }
+            let name =
+                read_name(&marker.parent_name_file).ok_or(IdentityError::IdentityNotFound)?;
+            if !allow_delegated {
+                return Err(IdentityError::DelegatedMcpOnly);
+            }
+            return Ok(ResolvedIdentity {
+                name,
+                instance_id: marker.parent_instance_id,
+                delegated_origin: Some(bridget_core::DelegatedOrigin {
+                    provider: marker.provider,
+                    child_ref: marker.child_ref,
+                }),
+            });
+        }
+        current = processes
+            .parent(candidate)
+            .filter(|parent| *parent > 1 && *parent != candidate);
+    }
+    resolve_identity_scoped(
+        name_file,
+        marker_directory,
+        expected_instance_id,
+        pid,
+        processes,
+        namespace,
+    )
+}
+
+fn read_delegated_marker_file(path: &Path) -> Result<DelegatedPidMarker, ()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| ())?;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if !metadata.is_file() || metadata.len() > MAX_MARKER_BYTES {
+        return Err(());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_MARKER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > MAX_MARKER_BYTES {
+        return Err(());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| ())
 }
 
 pub fn write_marker(
@@ -418,6 +581,20 @@ pub(crate) fn write_marker_if_absent(
     crate::environment::ensure_private_directory(marker_directory)
         .map_err(std::io::Error::other)?;
     let temporary = marker_directory.join(format!(".t3-{}.tmp", uuid::Uuid::new_v4()));
+    let path = marker_directory.join(marker.pid.to_string());
+    bridget_transport::fsutil::write_private_file_atomic(&temporary, &serde_json::to_vec(marker)?)?;
+    let result = fs::hard_link(&temporary, &path);
+    let _ = fs::remove_file(temporary);
+    result
+}
+
+pub(crate) fn write_delegated_marker_if_absent(
+    marker_directory: &Path,
+    marker: &DelegatedPidMarker,
+) -> std::io::Result<()> {
+    crate::environment::ensure_private_directory(marker_directory)
+        .map_err(std::io::Error::other)?;
+    let temporary = marker_directory.join(format!(".t3-child-{}.tmp", uuid::Uuid::new_v4()));
     let path = marker_directory.join(marker.pid.to_string());
     bridget_transport::fsutil::write_private_file_atomic(&temporary, &serde_json::to_vec(marker)?)?;
     let result = fs::hard_link(&temporary, &path);
@@ -801,9 +978,159 @@ mod tests {
             Ok(ResolvedIdentity {
                 name: AGENT_A.into(),
                 instance_id: "instance-marquee".into(),
+                delegated_origin: None,
             })
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec133_mcp_resout_la_preuve_enfant_sans_promouvoir_la_cli() {
+        let root = root("delegated");
+        let parent_name = marker(&root, 10, 100, "instance-parent", AGENT_A);
+        private_dir(&root.join("delegated-pids"));
+        let delegated = DelegatedPidMarker {
+            pid: 20,
+            birth: 200,
+            parent_instance_id: "instance-parent".into(),
+            parent_name_file: parent_name,
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+            owner: "30-300-11111111-1111-4111-8111-111111111111".into(),
+        };
+        private_write(
+            root.join("delegated-pids/20"),
+            serde_json::to_vec(&delegated).unwrap(),
+        );
+        let tree = Fixture(BTreeMap::from([
+            (42, (420, 20)),
+            (20, (200, 10)),
+            (10, (100, 1)),
+        ]));
+
+        let resolved = resolve_identity_with_delegation(
+            None,
+            &root.join("agent-pids"),
+            &root.join("delegated-pids"),
+            None,
+            42,
+            &tree,
+            true,
+        )
+        .unwrap();
+        assert_eq!(resolved.name, AGENT_A);
+        assert_eq!(resolved.instance_id, "instance-parent");
+        assert_eq!(
+            resolved.delegated_origin,
+            Some(bridget_core::DelegatedOrigin {
+                provider: "codex".into(),
+                child_ref: "0123456789abcdef".into(),
+            })
+        );
+        assert_eq!(
+            resolve_identity_with_delegation(
+                None,
+                &root.join("agent-pids"),
+                &root.join("delegated-pids"),
+                None,
+                42,
+                &tree,
+                false,
+            ),
+            Err(IdentityError::DelegatedMcpOnly)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec133_preuve_enfant_invalide_interdit_le_repli_principal() {
+        let root = root("delegated-invalid");
+        let parent_name = marker(&root, 10, 100, "instance-parent", AGENT_A);
+        private_dir(&root.join("delegated-pids"));
+        let delegated = DelegatedPidMarker {
+            pid: 20,
+            birth: 199,
+            parent_instance_id: "instance-parent".into(),
+            parent_name_file: parent_name,
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+            owner: "30-300-11111111-1111-4111-8111-111111111111".into(),
+        };
+        private_write(
+            root.join("delegated-pids/20"),
+            serde_json::to_vec(&delegated).unwrap(),
+        );
+        let tree = Fixture(BTreeMap::from([
+            (42, (420, 20)),
+            (20, (200, 10)),
+            (10, (100, 1)),
+        ]));
+
+        for allow_delegated in [false, true] {
+            assert_eq!(
+                resolve_identity_with_delegation_scoped(
+                    None,
+                    &root.join("agent-pids"),
+                    &root.join("delegated-pids"),
+                    None,
+                    42,
+                    &tree,
+                    Some(&root),
+                    allow_delegated,
+                ),
+                Err(IdentityError::IdentityNotFound)
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec133_preuve_enfant_symlink_ou_trop_grande_est_refusee_sans_repli() {
+        use std::os::unix::fs::symlink;
+
+        let root = root("delegated-bounded");
+        let _ = marker(&root, 10, 100, "instance-parent", AGENT_A);
+        private_dir(&root.join("delegated-pids"));
+        let tree = Fixture(BTreeMap::from([
+            (42, (420, 20)),
+            (20, (200, 10)),
+            (10, (100, 1)),
+        ]));
+        let outside = root.join("outside");
+        private_write(&outside, b"{}");
+        symlink(&outside, root.join("delegated-pids/20")).unwrap();
+        assert_eq!(
+            resolve_identity_with_delegation_scoped(
+                None,
+                &root.join("agent-pids"),
+                &root.join("delegated-pids"),
+                None,
+                42,
+                &tree,
+                Some(&root),
+                true,
+            ),
+            Err(IdentityError::IdentityNotFound)
+        );
+        fs::remove_file(root.join("delegated-pids/20")).unwrap();
+        private_write(
+            root.join("delegated-pids/20"),
+            vec![b'x'; MAX_MARKER_BYTES as usize + 1],
+        );
+        assert_eq!(
+            resolve_identity_with_delegation_scoped(
+                None,
+                &root.join("agent-pids"),
+                &root.join("delegated-pids"),
+                None,
+                42,
+                &tree,
+                Some(&root),
+                true,
+            ),
+            Err(IdentityError::IdentityNotFound)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

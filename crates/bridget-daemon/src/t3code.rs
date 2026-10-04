@@ -3058,6 +3058,7 @@ fn groupable(message: &bridget_core::BridgetMessage) -> bool {
 }
 
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
+    let sender = message.sender_label();
     if let Some(notice) = &message.thread_notice {
         // Session 102 : sollicitation de fil. Aucun relais de la réponse finale,
         // aucun accusé : le destinataire lit et publie par bridget_thread.
@@ -3075,7 +3076,7 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     if !message.reply {
         return format!(
             "💬 Message Bridget de {} (id {}, reply=no) :\n\n{}\n\n{}",
-            message.from,
+            sender,
             message.id,
             message.body,
             bridget_core::envelope::NO_REPLY_NOTICE
@@ -3083,7 +3084,7 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     }
     format!(
         "💬 Message Bridget de {} (id {}) :\n\n{}\n\n— Réponds dans ce tour : Bridget transmettra ta réponse finale à {}. Elle reste aussi affichée à l'utilisateur dans ce fil : commence-la par « ↪ Réponse à {} (relayée par Bridget) : » pour qu'il sache qu'elle ne lui est pas adressée.",
-        message.from, message.id, message.body, message.from, message.from
+        sender, message.id, message.body, message.from, message.from
     )
 }
 
@@ -3446,6 +3447,18 @@ mod tests {
             text.contains("« ↪ Réponse à agent-a (relayée par Bridget) : »"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn spec133_enveloppe_affiche_le_parent_et_la_reference_opaque() {
+        let mut msg = bridget_core::BridgetMessage::new("parent", "destinataire", "mission");
+        msg.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+        });
+        let text = envelope(&msg);
+        assert!(text.contains("parent (via sous-agent codex 0123456789abcdef)"));
+        assert!(!text.contains("session-native-secrete"));
     }
 
     #[test]

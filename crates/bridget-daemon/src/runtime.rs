@@ -200,7 +200,6 @@ pub(crate) fn open_session_files(
     pids: &[u32],
     accept: impl Fn(&Path) -> bool,
 ) -> std::io::Result<std::collections::HashMap<u32, Vec<std::path::PathBuf>>> {
-    use std::os::fd::AsRawFd;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     const MAX_OUTPUT: usize = 2 * 1024 * 1024;
@@ -221,35 +220,20 @@ pub(crate) fn open_session_files(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let result = (|| {
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| std::io::Error::other("sortie absente"))?;
-        let fd = stdout.as_raw_fd();
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let deadline = Instant::now() + Duration::from_secs(2);
+    // Le lecteur doit vider le tube pendant que lsof écrit. Un polling
+    // séquentiel du descripteur peut laisser lsof bloqué dans write(2) sous
+    // forte activité T3, puis faire expirer tout l'inventaire d'identité.
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("sortie absente"))?;
+    let mut reader = Some(std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        let mut buffer = [0_u8; 8192];
-        loop {
-            match stdout.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) if bytes.len() + n <= MAX_OUTPUT => bytes.extend_from_slice(&buffer[..n]),
-                Ok(_) => return Err(std::io::Error::other("inventaire fichiers tronqué")),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => return Err(error),
-            }
-            if Instant::now() >= deadline {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "inventaire fichiers expiré",
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        stdout.take(MAX_OUTPUT as u64 + 1).read_to_end(&mut bytes)?;
+        Ok::<_, std::io::Error>(bytes)
+    }));
+    let result = (|| {
+        let deadline = Instant::now() + Duration::from_secs(2);
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -262,6 +246,14 @@ pub(crate) fn open_session_files(
             }
             std::thread::sleep(Duration::from_millis(5));
         };
+        let bytes = reader
+            .take()
+            .expect("lecteur présent")
+            .join()
+            .map_err(|_| std::io::Error::other("lecteur lsof interrompu"))??;
+        if bytes.len() > MAX_OUTPUT {
+            return Err(std::io::Error::other("inventaire fichiers tronqué"));
+        }
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| std::io::Error::other("inventaire non UTF8"))?;
         let mut found: std::collections::HashMap<u32, Vec<std::path::PathBuf>> = Default::default();
@@ -302,8 +294,12 @@ pub(crate) fn open_session_files(
             unsafe {
                 libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
             }
+            let reader = reader.take();
             std::thread::spawn(move || {
                 let _ = child.wait();
+                if let Some(reader) = reader {
+                    let _ = reader.join();
+                }
             });
         }
     }
@@ -394,6 +390,32 @@ mod tests {
             !only_vanished(&[vivant], &listes(&[vivant])),
             "un échec sans disparition garde sa cause inconnue"
         );
+    }
+
+    #[test]
+    fn spec133_inventaire_lsof_vide_le_tube_sans_bloquer_l_identite() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-runtime-many-open-files-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut open = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..192 {
+            let path = root.join(format!(
+                "rollout-{index:03}-nom-volontairement-long-pour-depasser-le-tube.jsonl"
+            ));
+            open.push(std::fs::File::create(&path).unwrap());
+            expected.push(path.canonicalize().unwrap());
+        }
+        let started = std::time::Instant::now();
+        let inventory = open_session_files(&[std::process::id()], is_codex_rollout).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        for path in expected {
+            assert!(inventory[&std::process::id()].contains(&path));
+        }
+        drop(open);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn fixture(name: &str, content: &str) -> std::path::PathBuf {

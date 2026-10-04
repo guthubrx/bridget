@@ -1303,9 +1303,14 @@ fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
     } else {
         "Si reply=true, le wrapper relaie automatiquement ta réponse finale à from avec in_reply_to=id ci-dessus. Utilise cette réponse finale pour terminer la demande ; pour un avancement distinct, utilise bridget_send avec to=from et reply=false, sans in_reply_to."
     };
+    let mut metadata = json!({"from": message.from, "to": message.to, "id": message.id,
+        "reply": message.reply, "in_reply_to": message.in_reply_to});
+    if let Some(origin) = &message.delegated_origin {
+        metadata["delegated_origin"] = json!(origin);
+        metadata["sender_label"] = json!(message.sender_label());
+    }
     format!(
-        "[Message Bridget : {}]\n{}\n\n[Réponse Bridget]\n{response}\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affichés, cherche-les dans le catalogue d'outils disponible. L'accès à la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.",
-        json!({"from": message.from, "to": message.to, "id": message.id, "reply": message.reply, "in_reply_to": message.in_reply_to}),
+        "[Message Bridget : {metadata}]\n{}\n\n[Réponse Bridget]\n{response}\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affichés, cherche-les dans le catalogue d'outils disponible. L'accès à la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.",
         message.body
     )
 }
@@ -7214,6 +7219,19 @@ for line in sys.stdin:
             );
             assert!(prompt.contains("un refus du shell ne prouve pas une panne MCP"));
         }
+    }
+
+    #[test]
+    fn spec133_codex_affiche_la_delegation_sans_session_native() {
+        let mut message = message("delegated-codex");
+        message.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "cursor".into(),
+            child_ref: "0123456789abcdef".into(),
+        });
+        let prompt = communication_prompt(&message, false);
+        assert!(prompt.contains("via sous-agent cursor 0123456789abcdef"));
+        assert!(prompt.contains("\"delegated_origin\""));
+        assert!(!prompt.contains("session-native-secrete"));
     }
 
     #[test]

@@ -2075,12 +2075,17 @@ fn prompt_for_with_private_instructions(
     } else {
         bridget_core::envelope::NO_REPLY_NOTICE
     };
+    let mut metadata = json!({"id": message.id, "from": message.from, "to": message.to,
+        "reply": message.reply, "in_reply_to": message.in_reply_to});
+    if let Some(origin) = &message.delegated_origin {
+        metadata["delegated_origin"] = json!(origin);
+        metadata["sender_label"] = json!(message.sender_label());
+    }
     let prompt = format!(
         "[message Bridget de {} — réponse attendue : {}]\n[Métadonnées : {}]\n{response}\n\n{}",
-        message.from,
+        message.sender_label(),
         if message.reply { "oui" } else { "non" },
-        json!({"id": message.id, "from": message.from, "to": message.to,
-            "reply": message.reply, "in_reply_to": message.in_reply_to}),
+        metadata,
         message.body
     );
     let Some(instructions) = instructions
@@ -4024,5 +4029,18 @@ exit 0
         assert!(prompt.ends_with(&message.body));
         assert!(prompt_for(&message).ends_with(&message.body));
         assert!(prompt_for(&message).contains(&message.id));
+    }
+
+    #[test]
+    fn spec133_acp_affiche_la_delegation_sans_session_native() {
+        let mut message = message("delegated-acp");
+        message.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "claude".into(),
+            child_ref: "0123456789abcdef".into(),
+        });
+        let prompt = prompt_for(&message);
+        assert!(prompt.contains("via sous-agent claude 0123456789abcdef"));
+        assert!(prompt.contains("\"delegated_origin\""));
+        assert!(!prompt.contains("session-native-secrete"));
     }
 }
