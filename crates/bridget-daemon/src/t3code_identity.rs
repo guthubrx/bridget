@@ -47,14 +47,34 @@ impl IdentityBindings {
     }
 
     /// `live` vient de l'intersection snapshot HTTP actif / liens enregistrés vivants.
-    /// Une collecte incomplète révoque les marqueurs : aucune identité devinée.
+    /// Un échec `lsof` transitoire est retenté une fois sans trou de publication.
+    /// Deux échecs consécutifs révoquent les marqueurs : aucune identité devinée.
     pub(crate) fn refresh(
         &mut self,
         base: &Path,
         runtime: &ServerRuntime,
         live: &[Binding],
     ) -> Result<usize, String> {
-        let result = self.refresh_inner(base, runtime, live);
+        self.refresh_with_retry(Duration::from_millis(50), |state| {
+            state.refresh_inner(base, runtime, live)
+        })
+    }
+
+    fn refresh_with_retry(
+        &mut self,
+        pause: Duration,
+        mut attempt: impl FnMut(&mut Self) -> Result<usize, String>,
+    ) -> Result<usize, String> {
+        let first_error = match attempt(self) {
+            Ok(count) => return Ok(count),
+            Err(error) => error,
+        };
+        if first_error != "inventaire des sessions ouvertes incomplet" {
+            self.clear();
+            return Err(first_error);
+        }
+        std::thread::sleep(pause);
+        let result = attempt(self);
         if result.is_err() {
             self.clear();
         }
@@ -571,6 +591,9 @@ fn collect_processes(server: u32) -> Result<Vec<ProcessEvidence>, String> {
             return Err("trop de processus fournisseur T3".into());
         }
     }
+    // Un fournisseur peut lancer un autre `app-server` pour un outil interne.
+    // Seul le fournisseur le plus proche du serveur T3 porte l'identité du fil.
+    let candidates = primary_provider_processes(candidates);
     // Les fournisseurs qui révèlent leur session par un fichier ouvert.
     let file_backed: Vec<_> = candidates
         .iter()
@@ -580,6 +603,20 @@ fn collect_processes(server: u32) -> Result<Vec<ProcessEvidence>, String> {
     let files = crate::runtime::open_session_files(&file_backed, is_session_file)
         .map_err(|_| "inventaire des sessions ouvertes incomplet".to_string())?;
     complete_session_inventory(candidates, &files)
+}
+
+fn primary_provider_processes(candidates: Vec<ProcessEvidence>) -> Vec<ProcessEvidence> {
+    let provider_pids: HashSet<u32> = candidates.iter().map(|process| process.pid).collect();
+    candidates
+        .into_iter()
+        .filter(|process| {
+            !process
+                .lineage
+                .iter()
+                .skip(1)
+                .any(|(pid, _)| provider_pids.contains(pid))
+        })
+        .collect()
 }
 
 /// Fournisseurs dont l'identifiant de session se lit dans un fichier ouvert.
@@ -778,6 +815,21 @@ mod spec101_identity {
             provider: "codex".into(),
             sessions: sessions.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn fournisseur_interne_n_est_pas_un_agent_t3_principal() {
+        let mut principal = process(10, &["native-principal"]);
+        principal.lineage = vec![(10, 10), (1, 20)];
+        let mut interne = process(20, &["native-interne"]);
+        interne.lineage = vec![(20, 30), (30, 40), (10, 10), (1, 20)];
+        let mut voisin = process(40, &["native-voisin"]);
+        voisin.lineage = vec![(40, 50), (1, 20)];
+
+        let principaux = primary_provider_processes(vec![interne, voisin, principal]);
+        let pids: HashSet<u32> = principaux.into_iter().map(|process| process.pid).collect();
+
+        assert_eq!(pids, HashSet::from([10, 40]));
     }
 
     #[test]
@@ -1025,6 +1077,59 @@ mod spec101_identity {
         owner.clear();
         assert_eq!(read_marker(&path).unwrap().instance_id, "instance-b");
         other.clear();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inventaire_ouvert_transitoire_est_retente_avant_retrait() {
+        let root = std::env::temp_dir().join(format!("bi-hotfix-{}", uuid::Uuid::new_v4()));
+        let mut owner = IdentityBindings::new(&root);
+        owner
+            .publish(&process(42, &["native"]), &binding("a"))
+            .unwrap();
+        let marker = root.join("agent-pids/42");
+        let mut attempts = 0;
+
+        let result = owner.refresh_with_retry(Duration::ZERO, |state| {
+            attempts += 1;
+            if attempts == 1 {
+                Err("inventaire des sessions ouvertes incomplet".into())
+            } else {
+                Ok(state.owned.len())
+            }
+        });
+
+        assert_eq!(result, Ok(1));
+        assert_eq!(attempts, 2);
+        assert!(marker.exists(), "le marqueur reste publié pendant le retry");
+        owner.clear();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn double_echec_inventaire_ouvert_revoque_le_marqueur() {
+        let root = std::env::temp_dir().join(format!("bi-hotfix-{}", uuid::Uuid::new_v4()));
+        let mut owner = IdentityBindings::new(&root);
+        owner
+            .publish(&process(42, &["native"]), &binding("a"))
+            .unwrap();
+        let marker = root.join("agent-pids/42");
+        let mut attempts = 0;
+
+        let result = owner.refresh_with_retry(Duration::ZERO, |_| {
+            attempts += 1;
+            Err("inventaire des sessions ouvertes incomplet".into())
+        });
+
+        assert_eq!(
+            result.unwrap_err(),
+            "inventaire des sessions ouvertes incomplet"
+        );
+        assert_eq!(attempts, 2);
+        assert!(
+            !marker.exists(),
+            "deux échecs consécutifs ferment l'identité"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
