@@ -40,7 +40,9 @@ impl IdentityError {
             Self::LegacyMarker => {
                 "relancez l'agent avec une version Bridget qui réécrit le marqueur agent-pids typé"
             }
-            Self::IdentityNotFound => "lancez l'appel depuis un agent Bridget enregistré",
+            Self::IdentityNotFound => {
+                "un sous-agent interne rend son résultat à son parent Bridget ; sinon lancez l'appel depuis un agent Bridget enregistré"
+            }
         }
     }
 }

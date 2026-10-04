@@ -131,6 +131,26 @@ impl IdentityBindings {
             return Err("naissance du pont non attestée".into());
         }
         let marker_path = self.root.join("agent-pids").join(process.pid.to_string());
+        if let Some(previous) = self.owned.get(&process.pid).cloned() {
+            if previous.pid == process.pid
+                && previous.birth == process.birth
+                && previous.instance_id == binding.2
+                && read_marker(&marker_path).as_ref() == Some(&previous)
+                && crate::mcp_identity::read_name(&previous.name_file).as_deref()
+                    == Some(binding.1.as_str())
+            {
+                return Ok(());
+            }
+            if read_marker(&marker_path).as_ref() != Some(&previous) {
+                self.owned.remove(&process.pid);
+                return Ok(());
+            }
+            return self.replace_owned(process, binding, previous);
+        }
+        // Un autre wrapper/pont reste propriétaire de son marqueur, même périmé.
+        if fs::symlink_metadata(&marker_path).is_ok() {
+            return Ok(());
+        }
         let name_file = self
             .root
             .join("agent-names")
@@ -141,20 +161,6 @@ impl IdentityBindings {
             instance_id: binding.2.clone(),
             name_file,
         };
-        if let Some(previous) = self.owned.get(&process.pid) {
-            if previous == &marker
-                && read_marker(&marker_path).as_ref() == Some(&marker)
-                && crate::mcp_identity::read_name(&marker.name_file).as_deref()
-                    == Some(binding.1.as_str())
-            {
-                return Ok(());
-            }
-            self.remove(process.pid);
-        }
-        // Un autre wrapper/pont reste propriétaire de son marqueur, même périmé.
-        if fs::symlink_metadata(&marker_path).is_ok() {
-            return Ok(());
-        }
         crate::environment::ensure_private_directory(&self.root)?;
         crate::environment::ensure_private_directory(&self.root.join("agent-names"))?;
         crate::environment::validate_state_file(&marker.name_file, false)?;
@@ -173,6 +179,53 @@ impl IdentityBindings {
             return Err(error.to_string());
         }
         self.owned.insert(process.pid, marker);
+        Ok(())
+    }
+
+    fn replace_owned(
+        &mut self,
+        process: &ProcessEvidence,
+        binding: &Binding,
+        previous: AgentPidMarker,
+    ) -> Result<(), String> {
+        let (owner_pid, suffix) = self
+            .owner
+            .split_once('-')
+            .ok_or("propriétaire du marqueur T3 invalide")?;
+        let (owner_birth, _) = suffix
+            .split_once('-')
+            .ok_or("propriétaire du marqueur T3 invalide")?;
+        let name_file = self.root.join("agent-names").join(format!(
+            "t3-identity-{owner_pid}-{owner_birth}-{}-{}",
+            uuid::Uuid::new_v4(),
+            process.pid
+        ));
+        let marker = AgentPidMarker {
+            pid: process.pid,
+            birth: process.birth,
+            instance_id: binding.2.clone(),
+            name_file,
+        };
+        crate::environment::ensure_private_directory(&self.root)?;
+        crate::environment::ensure_private_directory(&self.root.join("agent-names"))?;
+        crate::environment::validate_state_file(&marker.name_file, false)?;
+        bridget_transport::fsutil::write_private_file_atomic(
+            &marker.name_file,
+            binding.1.as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        if let Err(error) = crate::mcp_identity::write_marker(
+            &self.root.join("agent-pids"),
+            marker.pid,
+            marker.birth,
+            &marker.instance_id,
+            &marker.name_file,
+        ) {
+            let _ = fs::remove_file(&marker.name_file);
+            return Err(error.to_string());
+        }
+        self.owned.insert(process.pid, marker);
+        let _ = fs::remove_file(previous.name_file);
         Ok(())
     }
 
@@ -972,6 +1025,32 @@ mod spec101_identity {
         owner.clear();
         assert_eq!(read_marker(&path).unwrap().instance_id, "instance-b");
         other.clear();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remplacement_possede_prepare_la_nouvelle_identite_avant_la_bascule() {
+        let root = std::env::temp_dir().join(format!("bi117-{}", uuid::Uuid::new_v4()));
+        let mut owner = IdentityBindings::new(&root);
+        let evidence = process(42, &["native"]);
+        owner.publish(&evidence, &binding("a")).unwrap();
+        let marker_path = root.join("agent-pids/42");
+        let previous = read_marker(&marker_path).unwrap();
+
+        owner.publish(&evidence, &binding("b")).unwrap();
+
+        let current = read_marker(&marker_path).unwrap();
+        assert_ne!(
+            current.name_file, previous.name_file,
+            "le nouveau nom doit être préparé dans un fichier distinct avant la bascule atomique"
+        );
+        assert!(!previous.name_file.exists());
+        assert_eq!(
+            crate::mcp_identity::read_name(&current.name_file),
+            Some(binding("b").1)
+        );
+        assert_eq!(current.instance_id, "instance-b");
+        owner.clear();
         fs::remove_dir_all(root).unwrap();
     }
 
