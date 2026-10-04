@@ -6305,6 +6305,7 @@ mod hook_tests {
         let indice = unattested_hint("human", raison, Err(IdentityError::IdentityNotFound))
             .expect("un refus d'identité est expliqué");
         assert!(indice.contains("identity_not_found"));
+        assert!(indice.contains("rend son résultat à son parent Bridget"));
         assert!(indice.contains("agent Bridget enregistré"));
         assert!(
             unattested_hint(
