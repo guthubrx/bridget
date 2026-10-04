@@ -7,8 +7,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
+
 use crate::managed_process::process_birth;
-use crate::mcp_identity::{AgentPidMarker, process_parent};
+use crate::mcp_identity::{AgentPidMarker, DelegatedPidMarker, process_parent};
 use crate::t3code_contract::ServerRuntime;
 
 const MAX_ROWS: usize = 512;
@@ -17,6 +19,7 @@ const MAX_BYTES: usize = 64 * 1024;
 type Binding = (String, String, String);
 type Session = (String, String, String);
 
+#[derive(Clone)]
 struct ProcessEvidence {
     pid: u32,
     birth: u64,
@@ -32,6 +35,7 @@ pub(crate) struct IdentityBindings {
     owner: String,
     owner_birth: u64,
     owned: HashMap<u32, AgentPidMarker>,
+    delegated: HashMap<u32, DelegatedPidMarker>,
 }
 
 impl IdentityBindings {
@@ -43,6 +47,7 @@ impl IdentityBindings {
             owner: format!("{pid}-{owner_birth}-{}", uuid::Uuid::new_v4()),
             owner_birth,
             owned: HashMap::new(),
+            delegated: HashMap::new(),
         }
     }
 
@@ -109,8 +114,11 @@ impl IdentityBindings {
         if process_birth(runtime.pid).ok() != Some(birth_before) {
             return Err("serveur T3 remplacé pendant la collecte d'identité".into());
         }
-        let selected = select_bindings(&rows, &processes, live);
+        let principals = primary_provider_processes(processes.clone());
+        let selected = select_bindings(&rows, &principals, live);
+        let delegated = select_delegated_bindings(&processes, &selected);
         let keep: HashSet<u32> = selected.iter().map(|(process, _)| process.pid).collect();
+        let keep_delegated: HashSet<u32> = delegated.iter().map(|item| item.0).collect();
         let stale: Vec<u32> = self
             .owned
             .keys()
@@ -120,7 +128,16 @@ impl IdentityBindings {
         for pid in stale {
             self.remove(pid);
         }
-        for (process, binding) in selected {
+        let stale_delegated: Vec<u32> = self
+            .delegated
+            .keys()
+            .copied()
+            .filter(|pid| !keep_delegated.contains(pid))
+            .collect();
+        for pid in stale_delegated {
+            self.remove_delegated(pid);
+        }
+        for (process, binding) in &selected {
             if !lineage_valid(process, |pid| process_birth(pid).ok())
                 || process
                     .lineage
@@ -143,7 +160,23 @@ impl IdentityBindings {
             }
             self.publish(process, binding)?;
         }
-        Ok(self.owned.len())
+        for (pid, parent, origin, parent_pid) in delegated {
+            let Some(process) = processes.iter().find(|process| process.pid == pid) else {
+                continue;
+            };
+            if !lineage_valid(process, |candidate| process_birth(candidate).ok())
+                || process
+                    .lineage
+                    .windows(2)
+                    .any(|pair| process_parent(pair[0].0).ok() != Some(pair[1].0))
+                || !self.owned.contains_key(&parent_pid)
+            {
+                self.remove_delegated(pid);
+                continue;
+            }
+            self.publish_delegated(process, parent_pid, &parent, &origin)?;
+        }
+        Ok(self.owned.len() + self.delegated.len())
     }
 
     fn publish(&mut self, process: &ProcessEvidence, binding: &Binding) -> Result<(), String> {
@@ -249,6 +282,57 @@ impl IdentityBindings {
         Ok(())
     }
 
+    fn publish_delegated(
+        &mut self,
+        process: &ProcessEvidence,
+        parent_pid: u32,
+        parent: &Binding,
+        origin: &bridget_core::DelegatedOrigin,
+    ) -> Result<(), String> {
+        if self.owner_birth == 0 {
+            return Err("naissance du pont non attestée".into());
+        }
+        let directory = self.root.join("delegated-pids");
+        let path = directory.join(process.pid.to_string());
+        let parent_marker = self
+            .owned
+            .get(&parent_pid)
+            .filter(|marker| marker.instance_id == parent.2)
+            .ok_or("marqueur principal du parent absent")?;
+        let marker = DelegatedPidMarker {
+            pid: process.pid,
+            birth: process.birth,
+            parent_instance_id: parent.2.clone(),
+            parent_name_file: parent_marker.name_file.clone(),
+            provider: origin.provider.clone(),
+            child_ref: origin.child_ref.clone(),
+            owner: self.owner.clone(),
+        };
+        if let Some(previous) = self.delegated.get(&process.pid).cloned() {
+            if previous == marker && read_delegated_marker(&path).as_ref() == Some(&previous) {
+                return Ok(());
+            }
+            if read_delegated_marker(&path).as_ref() != Some(&previous) {
+                self.delegated.remove(&process.pid);
+                return Ok(());
+            }
+            bridget_transport::fsutil::write_private_file_atomic(
+                &path,
+                &serde_json::to_vec(&marker).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            self.delegated.insert(process.pid, marker);
+            return Ok(());
+        }
+        if fs::symlink_metadata(&path).is_ok() {
+            return Ok(());
+        }
+        crate::mcp_identity::write_delegated_marker_if_absent(&directory, &marker)
+            .map_err(|error| error.to_string())?;
+        self.delegated.insert(process.pid, marker);
+        Ok(())
+    }
+
     fn remove(&mut self, pid: u32) {
         if let Some(marker) = self.owned.remove(&pid) {
             let path = self.root.join("agent-pids").join(pid.to_string());
@@ -259,7 +343,19 @@ impl IdentityBindings {
         }
     }
 
+    fn remove_delegated(&mut self, pid: u32) {
+        if let Some(marker) = self.delegated.remove(&pid) {
+            let path = self.root.join("delegated-pids").join(pid.to_string());
+            if read_delegated_marker(&path).as_ref() == Some(&marker) {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
     pub(crate) fn clear(&mut self) {
+        for pid in self.delegated.keys().copied().collect::<Vec<_>>() {
+            self.remove_delegated(pid);
+        }
         for pid in self.owned.keys().copied().collect::<Vec<_>>() {
             self.remove(pid);
         }
@@ -273,6 +369,7 @@ impl IdentityBindings {
             &self.root,
             &self.root.join("agent-names"),
             &self.root.join("agent-pids"),
+            &self.root.join("delegated-pids"),
         ] {
             crate::environment::validate_private_directory_if_present(directory)?;
         }
@@ -312,6 +409,41 @@ impl IdentityBindings {
                 let _ = fs::remove_file(marker.name_file);
             }
         }
+        let delegated_directory = self.root.join("delegated-pids");
+        let delegated_entries = match fs::read_dir(&delegated_directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err("inventaire des marqueurs enfant indisponible".into()),
+        };
+        let delegated_entries: Vec<_> = delegated_entries
+            .take(MAX_PROCESSES + 1)
+            .collect::<Result<_, _>>()
+            .map_err(|_| "inventaire marqueurs enfant incomplet")?;
+        if delegated_entries.len() > MAX_PROCESSES {
+            return Err("trop de marqueurs enfant pour une reprise sûre".into());
+        }
+        for entry in delegated_entries {
+            let Some(marker) = read_delegated_marker(&entry.path()) else {
+                continue;
+            };
+            if entry.file_name().to_str() != Some(marker.pid.to_string().as_str()) {
+                continue;
+            }
+            let Some((owner_pid, owner_birth)) = delegated_owner(&marker.owner) else {
+                continue;
+            };
+            let dead = match process_birth(owner_pid) {
+                Ok(actual) => actual != owner_birth,
+                Err(error) => {
+                    error.kind() == std::io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(libc::ESRCH)
+                }
+            };
+            if dead && read_delegated_marker(&entry.path()).as_ref() == Some(&marker) {
+                fs::remove_file(entry.path())
+                    .map_err(|_| "retrait du marqueur enfant orphelin impossible")?;
+            }
+        }
         Ok(())
     }
 }
@@ -337,6 +469,21 @@ fn marker_owner(root: &Path, marker: &AgentPidMarker) -> Option<(u32, u64)> {
     Some((owner_pid, owner_birth))
 }
 
+fn delegated_owner(owner: &str) -> Option<(u32, u64)> {
+    let (owner_pid, suffix) = owner.split_once('-')?;
+    let (owner_birth, nonce) = suffix.split_once('-')?;
+    let owner_pid: u32 = owner_pid.parse().ok()?;
+    let owner_birth: u64 = owner_birth.parse().ok()?;
+    if owner_pid <= 1
+        || owner_pid > i32::MAX as u32
+        || owner_birth == 0
+        || uuid::Uuid::parse_str(nonce).ok()?.to_string() != nonce
+    {
+        return None;
+    }
+    Some((owner_pid, owner_birth))
+}
+
 impl Drop for IdentityBindings {
     fn drop(&mut self) {
         self.clear();
@@ -344,6 +491,25 @@ impl Drop for IdentityBindings {
 }
 
 fn read_marker(path: &Path) -> Option<AgentPidMarker> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn read_delegated_marker(path: &Path) -> Option<DelegatedPidMarker> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
@@ -475,6 +641,54 @@ fn select_bindings<'a>(
     selected
 }
 
+fn select_delegated_bindings(
+    processes: &[ProcessEvidence],
+    selected: &[(&ProcessEvidence, &Binding)],
+) -> Vec<(u32, Binding, bridget_core::DelegatedOrigin, u32)> {
+    let selected_by_pid: HashMap<u32, &Binding> = selected
+        .iter()
+        .map(|(process, binding)| (process.pid, *binding))
+        .collect();
+    let provider_pids: HashSet<u32> = processes.iter().map(|process| process.pid).collect();
+    let mut delegated = Vec::new();
+    for process in processes {
+        if selected_by_pid.contains_key(&process.pid) || process.sessions.len() != 1 {
+            continue;
+        }
+        let nested = process
+            .lineage
+            .iter()
+            .skip(1)
+            .any(|(pid, _)| provider_pids.contains(pid));
+        if !nested {
+            continue;
+        }
+        let Some((parent_pid, parent)) = process
+            .lineage
+            .iter()
+            .skip(1)
+            .find_map(|(pid, _)| selected_by_pid.get(pid).map(|binding| (*pid, *binding)))
+        else {
+            continue;
+        };
+        let mut digest = Sha256::new();
+        digest.update(process.provider.as_bytes());
+        digest.update([0]);
+        digest.update(process.sessions[0].as_bytes());
+        let child_ref = format!("{:x}", digest.finalize())[..16].to_string();
+        delegated.push((
+            process.pid,
+            (*parent).clone(),
+            bridget_core::DelegatedOrigin {
+                provider: process.provider.clone(),
+                child_ref,
+            },
+            parent_pid,
+        ));
+    }
+    delegated
+}
+
 fn lineage_valid(process: &ProcessEvidence, birth: impl Fn(u32) -> Option<u64>) -> bool {
     !process.lineage.is_empty()
         && process
@@ -591,10 +805,8 @@ fn collect_processes(server: u32) -> Result<Vec<ProcessEvidence>, String> {
             return Err("trop de processus fournisseur T3".into());
         }
     }
-    // Un fournisseur peut lancer un autre `app-server` pour un outil interne.
-    // Seul le fournisseur le plus proche du serveur T3 porte l'identité du fil.
-    let candidates = primary_provider_processes(candidates);
-    // Les fournisseurs qui révèlent leur session par un fichier ouvert.
+    // Lire aussi les sessions des fournisseurs imbriqués. Ils ne deviendront
+    // pas des principaux, mais leur empreinte atteste la provenance déléguée.
     let file_backed: Vec<_> = candidates
         .iter()
         .filter(|p| session_file_backed(&p.provider))
@@ -830,6 +1042,28 @@ mod spec101_identity {
         let pids: HashSet<u32> = principaux.into_iter().map(|process| process.pid).collect();
 
         assert_eq!(pids, HashSet::from([10, 40]));
+    }
+
+    #[test]
+    fn spec133_fournisseur_interne_recoit_le_parent_unique_et_une_reference_opaque() {
+        let mut principal = process(10, &["native-principal"]);
+        principal.lineage = vec![(10, 10), (1, 20)];
+        let mut interne = process(20, &["native-interne"]);
+        interne.lineage = vec![(20, 30), (30, 40), (10, 10), (1, 20)];
+        let processes = vec![principal, interne];
+        let principals = primary_provider_processes(processes.clone());
+        let live = [binding("parent")];
+        let rows = [("parent".into(), "codex".into(), "native-principal".into())];
+        let selected = select_bindings(&rows, &principals, &live);
+
+        let delegated = select_delegated_bindings(&processes, &selected);
+
+        assert_eq!(delegated.len(), 1);
+        assert_eq!(delegated[0].0, 20);
+        assert_eq!(delegated[0].1, live[0]);
+        assert_eq!(delegated[0].2.provider, "codex");
+        assert_eq!(delegated[0].2.child_ref.len(), 16);
+        assert!(!delegated[0].2.child_ref.contains("native-interne"));
     }
 
     #[test]
@@ -1077,6 +1311,59 @@ mod spec101_identity {
         owner.clear();
         assert_eq!(read_marker(&path).unwrap().instance_id, "instance-b");
         other.clear();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec133_clear_retire_seulement_le_marqueur_enfant_possede() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("bi133-{}", uuid::Uuid::new_v4()));
+        let mut owner = IdentityBindings::new(&root);
+        let parent = process(42, &["native-parent"]);
+        let parent_binding = binding("parent");
+        owner.publish(&parent, &parent_binding).unwrap();
+        let mut child = process(43, &["native-child"]);
+        child.lineage = vec![(43, 10), (42, 10), (1, 20)];
+        let origin = bridget_core::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+        };
+        owner
+            .publish_delegated(&child, 42, &parent_binding, &origin)
+            .unwrap();
+        let owned_path = root.join("delegated-pids/43");
+        assert_eq!(
+            fs::metadata(&owned_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let third_name = root.join("agent-names/third-child-parent");
+        bridget_transport::fsutil::write_private_file_atomic(
+            &third_name,
+            binding("third").1.as_bytes(),
+        )
+        .unwrap();
+        let third = DelegatedPidMarker {
+            pid: 44,
+            birth: 10,
+            parent_instance_id: "instance-third".into(),
+            parent_name_file: third_name,
+            provider: "codex".into(),
+            child_ref: "fedcba9876543210".into(),
+            owner: format!(
+                "{}-{}-{}",
+                std::process::id(),
+                process_birth(std::process::id()).unwrap(),
+                uuid::Uuid::new_v4()
+            ),
+        };
+        crate::mcp_identity::write_delegated_marker_if_absent(&root.join("delegated-pids"), &third)
+            .unwrap();
+
+        owner.clear();
+        assert!(!owned_path.exists());
+        assert!(root.join("delegated-pids/44").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,12 +1,11 @@
 <!-- SPECKIT START -->
-Plan actif : specs/104-recherche-echanges/plan.md (socle : sessions 089, 094, 099 et 100).
-Périmètre de ce tour : spécification documentaire uniquement, sans implémentation.
-Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
-explicite d'un home/socket isolé pour les tests. L'adoption de la session 100
-sur l'installation existante est autorisée par l'utilisateur le 2026-09-16,
-après validation, sauvegarde et vérification des processus concernés.
-Sélection SpecKit : SPECIFY_FEATURE=104-recherche-echanges lorsque le script
-exige un préfixe numérique ; branche session-104-recherche-echanges.
+Plan actif : specs/133-relais-sous-agents/plan.md.
+Périmètre de ce tour : relais MCP borné des sous-agents internes sous l'autorité
+de leur parent Bridget. L'utilisateur a autorisé le commit, la fusion, le
+déploiement des services installés et le nettoyage le 2026-10-04.
+Tous les essais utilisent un BRIDGET_HOME et une socket isolés.
+Sélection SpecKit : SPECIFY_FEATURE=133-relais-sous-agents ; branche
+session-133-relais-sous-agents.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

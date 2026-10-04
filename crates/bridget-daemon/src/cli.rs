@@ -106,6 +106,43 @@ fn validate_communication_entry(command: &str, args: &[String]) -> Result<(), St
     Ok(())
 }
 
+/// Un sous-agent interne accède à Bridget par la façade MCP bornée. Toute
+/// commande CLI qui agit au nom d'un agent doit donc s'arrêter avant effet.
+fn command_requires_principal(command: &str) -> bool {
+    !matches!(
+        command,
+        "daemon"
+            | "federate"
+            | "t3"
+            | "managed-bootstrap"
+            | "managed-wrapper"
+            | "mcp"
+            | "discover"
+            | "status"
+            | "version"
+            | "--version"
+            | "-v"
+            | "help"
+            | "--help"
+            | "-h"
+    )
+}
+
+fn delegated_cli_guard(
+    command: &str,
+    resolved: Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError>,
+) -> Result<(), crate::mcp_identity::IdentityError> {
+    if !command_requires_principal(command) {
+        return Ok(());
+    }
+    match resolved {
+        Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly) => {
+            Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly)
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -135,6 +172,11 @@ pub fn run() {
     ) && let Err(error) = crate::environment::initialize_process()
     {
         exit_argument_error(&error);
+    }
+
+    if let Err(error) = delegated_cli_guard(cmd, crate::mcp_identity::resolve_current_identity()) {
+        eprintln!("bridget {cmd} : {} : {}", error.code(), error.remediation());
+        std::process::exit(1);
     }
 
     // Les lanceurs historiques restent interactifs ; leur type et leur
@@ -6328,6 +6370,32 @@ mod hook_tests {
     }
 
     #[test]
+    fn spec133_cli_sensible_refuse_le_contexte_enfant_avant_dispatch() {
+        use crate::mcp_identity::IdentityError;
+
+        for command in [
+            "send", "reply", "who", "journal", "events", "thread", "handoff", "artifact", "cancel",
+            "rename", "runtime", "domain", "control", "dnd", "guichet", "ledger", "spawn", "stop",
+            "relaunch",
+        ] {
+            assert!(command_requires_principal(command), "{command}");
+            assert_eq!(
+                delegated_cli_guard(command, Err(IdentityError::DelegatedMcpOnly)),
+                Err(IdentityError::DelegatedMcpOnly),
+                "{command} doit être refusé avant son handler"
+            );
+        }
+        for command in ["mcp", "status", "version", "help"] {
+            assert!(!command_requires_principal(command), "{command}");
+            assert_eq!(
+                delegated_cli_guard(command, Err(IdentityError::DelegatedMcpOnly)),
+                Ok(()),
+                "{command} ne porte pas l'autorité d'un agent"
+            );
+        }
+    }
+
+    #[test]
     fn repli_cli_n_accepte_que_l_identifiant_uuid_dans_l_environnement() {
         let first = "550e8400-e29b-41d4-a716-446655440000";
         let second = "550e8400-e29b-41d4-a716-446655440001";
@@ -7532,6 +7600,7 @@ mod idempotency_projection_tests {
         crate::mcp_identity::ResolvedIdentity {
             name: "89000000-0000-4000-8000-000000000200".into(),
             instance_id: "test-cli-instance".into(),
+            delegated_origin: None,
         }
     }
 

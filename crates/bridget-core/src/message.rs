@@ -59,6 +59,17 @@ pub enum MessageIntent {
     ControlOnly,
 }
 
+/// Provenance bornée d'un message émis par un sous-agent interne.
+///
+/// Le parent reste l'expéditeur routable. `child_ref` est une empreinte opaque,
+/// jamais l'identifiant de session natif du fournisseur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedOrigin {
+    pub provider: String,
+    pub child_ref: String,
+}
+
 /// Message normalisé qui circule entre agents via le daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgetMessage {
@@ -108,6 +119,10 @@ pub struct BridgetMessage {
     /// Références durables optionnelles de mission ou délégation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
+    /// Provenance informative posée par la façade MCP déléguée. Elle ne change
+    /// ni l'identité routable, ni la portée d'idempotence du parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_origin: Option<DelegatedOrigin>,
     /// Session 102 : alerte typée d'un fil inter-agents, construite par le seul
     /// chemin interne du daemon. Absente des messages directs et omise à la
     /// sérialisation ; un client ne peut pas la forger par `send`.
@@ -154,6 +169,7 @@ impl BridgetMessage {
             origin: None,
             intent: None,
             references: Vec::new(),
+            delegated_origin: None,
             thread_notice: None,
         }
     }
@@ -177,10 +193,53 @@ impl BridgetMessage {
         self.in_reply_to.hash(&mut hasher);
         format!("{:016x}", hasher.finish())
     }
+
+    /// Libellé de présentation. L'identité routable reste toujours `from`.
+    pub fn sender_label(&self) -> String {
+        match &self.delegated_origin {
+            Some(origin) => format!(
+                "{} (via sous-agent {} {})",
+                self.from, origin.provider, origin.child_ref
+            ),
+            None => self.from.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec133_provenance_deleguee_est_fermee_et_retrocompatible() {
+        let old: super::BridgetMessage =
+            serde_json::from_str(r#"{"id":"m","from":"a","to":"b","body":"x"}"#).unwrap();
+        assert!(old.delegated_origin.is_none());
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("delegated_origin")
+                .is_none()
+        );
+
+        let mut message = super::BridgetMessage::new("a", "b", "x");
+        message.delegated_origin = Some(super::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+        });
+        let encoded = serde_json::to_string(&message).unwrap();
+        let decoded: super::BridgetMessage = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.delegated_origin, message.delegated_origin);
+        assert_eq!(
+            decoded.sender_label(),
+            "a (via sous-agent codex 0123456789abcdef)"
+        );
+        assert!(
+            serde_json::from_str::<super::BridgetMessage>(
+                r#"{"id":"m","from":"a","to":"b","body":"x","delegated_origin":{"provider":"codex","child_ref":"0123456789abcdef","session":"secrete"}}"#
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn spec102_thread_notice_absente_par_defaut_et_omise() {
         let message = super::BridgetMessage::new("a", "b", "corps");

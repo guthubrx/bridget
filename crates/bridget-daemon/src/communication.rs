@@ -190,6 +190,22 @@ mod tests {
     }
 
     #[test]
+    fn spec133_provenance_ne_change_pas_le_rejeu_parental() {
+        let mut message = bridget_core::BridgetMessage::new("parent", "cible", "texte");
+        message.id = "message-enfant".into();
+        let reference = canonical_send("scope-parent", "message-enfant", &message, 123_000);
+        message.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+        });
+        assert_eq!(
+            canonical_send("scope-parent", "message-enfant", &message, 123_000),
+            reference,
+            "la provenance visible ne change pas le contrat de rejeu du parent"
+        );
+    }
+
+    #[test]
     fn les_facades_ne_sont_plus_une_dependance_du_noyau() {
         // Oracle d'architecture : remettre un appel via MCP recrée le cycle.
         for source in [

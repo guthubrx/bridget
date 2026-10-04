@@ -103,7 +103,7 @@ pub fn serve<R: BufRead, W: Write + Send>(mut input: R, output: W) -> io::Result
     serve_with(
         &mut input,
         output,
-        &crate::mcp_identity::resolve_current_identity,
+        &crate::mcp_identity::resolve_current_mcp_identity,
         &execute_tool,
     )
 }
@@ -362,6 +362,19 @@ fn dispatch_with_executor(
                     return id.map(|id| identity_error_result(id, &identity_error));
                 }
             };
+            if identity.delegated_origin.is_some()
+                && !matches!(name, "bridget_send" | "bridget_who")
+            {
+                return id.map(|id| {
+                    result(
+                        id,
+                        technical_result(
+                            "delegated_tool_forbidden",
+                            "un sous-agent interne peut uniquement utiliser bridget_who et bridget_send",
+                        ),
+                    )
+                });
+            }
             let arguments = params
                 .get("arguments")
                 .cloned()
@@ -415,13 +428,7 @@ fn execute_tool(
         .as_object()
         .ok_or_else(|| ToolError::InvalidParams("arguments d'outil invalides".to_string()))?;
     let socket = crate::daemon::DaemonConfig::default().socket_path;
-    execute_tool_at_with_scope(
-        &identity.name,
-        &identity.instance_id,
-        name,
-        arguments,
-        &socket,
-    )
+    execute_tool_at_with_identity(identity, name, arguments, &socket)
 }
 
 #[cfg(test)]
@@ -442,13 +449,33 @@ fn execute_tool_at_with_scope(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
+    execute_tool_at_with_identity(
+        &crate::mcp_identity::ResolvedIdentity {
+            name: identity.to_string(),
+            instance_id: instance_id.to_string(),
+            delegated_origin: None,
+        },
+        name,
+        arguments,
+        socket,
+    )
+}
+
+fn execute_tool_at_with_identity(
+    identity: &crate::mcp_identity::ResolvedIdentity,
+    name: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    let principal = identity.name.as_str();
+    let instance_id = identity.instance_id.as_str();
     match name {
-        "bridget_send" => execute_send(identity, instance_id, arguments, socket),
+        "bridget_send" => execute_send(identity, arguments, socket),
         "bridget_events" => {
             let request = serde_json::from_value(Value::Object(arguments.clone()))
                 .map_err(|error| ToolError::InvalidParams(format!("events : {error}")))?;
             crate::communication::client::observation_request(
-                identity,
+                principal,
                 instance_id,
                 socket,
                 request,
@@ -459,7 +486,7 @@ fn execute_tool_at_with_scope(
                 serde_json::from_value(Value::Object(arguments.clone()))
                     .map_err(|error| ToolError::InvalidParams(format!("thread : {error}")))?;
             let result = crate::communication::client::thread_request(
-                identity,
+                principal,
                 instance_id,
                 socket,
                 bridget_transport::protocol::ThreadRequest {
@@ -490,7 +517,7 @@ fn execute_tool_at_with_scope(
                         send.insert("id".into(), Value::from(id));
                         send.insert("issued_at".into(), Value::from(issued_at));
                     }
-                    let receipt = execute_send(identity, instance_id, &send, socket)?;
+                    let receipt = execute_send(identity, &send, socket)?;
                     Ok(crate::handoff::decorate_send_result(
                         receipt,
                         &request.rendered,
@@ -506,20 +533,15 @@ fn execute_tool_at_with_scope(
             if let Some(to) = request.to {
                 let body = excerpt.shared_body();
                 let send = json!({"to":to,"body":body,"reply":request.reply});
-                let receipt = execute_send(
-                    identity,
-                    instance_id,
-                    send.as_object().expect("objet"),
-                    socket,
-                )?;
+                let receipt = execute_send(identity, send.as_object().expect("objet"), socket)?;
                 Ok(json!({"excerpt":excerpt,"send":receipt}))
             } else {
                 Ok(json!(excerpt))
             }
         }
-        "bridget_cancel" => execute_cancel(identity, instance_id, arguments, socket),
+        "bridget_cancel" => execute_cancel(principal, instance_id, arguments, socket),
         "bridget_publish_artifact" => {
-            execute_publish_artifact(identity, instance_id, arguments, socket)
+            execute_publish_artifact(principal, instance_id, arguments, socket)
         }
         "bridget_read_artifact" => {
             let request =
@@ -527,7 +549,7 @@ fn execute_tool_at_with_scope(
                     ToolError::InvalidParams(format!("contrat de lecture invalide : {error}"))
                 })?;
             let response = crate::communication::client::read_artifact(
-                identity,
+                principal,
                 instance_id,
                 socket,
                 request,
@@ -537,22 +559,22 @@ fn execute_tool_at_with_scope(
                 message: error.to_string(),
             })
         }
-        "bridget_who" => execute_who(identity, instance_id, arguments, socket),
-        "bridget_ledger" => execute_ledger(identity, instance_id, arguments, socket),
-        "bridget_rename" => execute_rename(identity, instance_id, arguments, socket),
-        "bridget_dnd" => execute_dnd(identity, instance_id, arguments, socket),
-        "bridget_domain" => execute_domain(identity, instance_id, arguments, socket),
-        "bridget_runtime" => execute_runtime(identity, instance_id, arguments, socket),
+        "bridget_who" => execute_who(principal, instance_id, arguments, socket),
+        "bridget_ledger" => execute_ledger(principal, instance_id, arguments, socket),
+        "bridget_rename" => execute_rename(principal, instance_id, arguments, socket),
+        "bridget_dnd" => execute_dnd(principal, instance_id, arguments, socket),
+        "bridget_domain" => execute_domain(principal, instance_id, arguments, socket),
+        "bridget_runtime" => execute_runtime(principal, instance_id, arguments, socket),
         "bridget_status" => execute_status(arguments, socket),
         "bridget_control_status" => {
-            execute_control_status(identity, instance_id, arguments, socket)
+            execute_control_status(principal, instance_id, arguments, socket)
         }
-        "guichet_delegate" => execute_guichet_delegate(identity, instance_id, arguments, socket),
+        "guichet_delegate" => execute_guichet_delegate(principal, instance_id, arguments, socket),
         "guichet_registre_add" => {
-            execute_guichet_registre_add(identity, instance_id, arguments, socket)
+            execute_guichet_registre_add(principal, instance_id, arguments, socket)
         }
         "guichet_objective_close" => {
-            execute_guichet_objective_close(identity, instance_id, arguments, socket)
+            execute_guichet_objective_close(principal, instance_id, arguments, socket)
         }
         "guichet_request_status" => execute_guichet_request_status(instance_id, arguments, socket),
         _ => Err(ToolError::InvalidParams("outil inconnu".to_string())),
@@ -630,11 +652,12 @@ fn execute_publish_artifact(
 }
 
 fn execute_send(
-    identity: &str,
-    instance_id: &str,
+    identity: &crate::mcp_identity::ResolvedIdentity,
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
+    let principal = identity.name.as_str();
+    let instance_id = identity.instance_id.as_str();
     reject_unknown_arguments(
         arguments,
         &[
@@ -701,11 +724,12 @@ fn execute_send(
         })?,
         None => now_secs(),
     };
-    let mut message = BridgetMessage::new(identity, to, body);
+    let mut message = BridgetMessage::new(principal, to, body);
     message.id = id.clone();
     message.reply = reply;
     message.reply_timeout = reply_timeout;
     message.in_reply_to = in_reply_to;
+    message.delegated_origin = identity.delegated_origin.clone();
     let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -717,7 +741,7 @@ fn execute_send(
     }
     crate::communication::client::authenticate_auxiliary(
         &mut connection,
-        identity,
+        principal,
         instance_id,
         socket,
     )?;
@@ -2170,6 +2194,7 @@ mod tests {
             Ok(crate::mcp_identity::ResolvedIdentity {
                 name: "fixture-agent".to_string(),
                 instance_id: "fixture-instance".to_string(),
+                delegated_origin: None,
             })
         };
         let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
@@ -2804,6 +2829,7 @@ mod tests {
             Ok(crate::mcp_identity::ResolvedIdentity {
                 name: "agent".to_string(),
                 instance_id: "instance".to_string(),
+                delegated_origin: None,
             })
         };
         for id in [3, 4] {
@@ -2815,6 +2841,56 @@ mod tests {
             assert_eq!(response["id"], id);
         }
         assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn spec133_identite_deleguee_limite_les_outils_avant_execution() {
+        let delegated = || {
+            Ok(crate::mcp_identity::ResolvedIdentity {
+                name: "parent".into(),
+                instance_id: "instance-parent".into(),
+                delegated_origin: Some(bridget_core::DelegatedOrigin {
+                    provider: "codex".into(),
+                    child_ref: "0123456789abcdef".into(),
+                }),
+            })
+        };
+        let calls = Cell::new(0);
+        let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+            calls.set(calls.get() + 1);
+            Ok(json!({"agents": []}))
+        };
+        let mut session = Session {
+            initialize_seen: true,
+            initialized: true,
+        };
+        let mut allowed_calls = 0;
+        for (index, tool) in tools().into_iter().enumerate() {
+            let name = tool["name"].as_str().unwrap();
+            let request = json!({
+                "jsonrpc":"2.0", "id":index + 1, "method":"tools/call",
+                "params":{"name":name,"arguments":{}}
+            });
+            let before = calls.get();
+            let response =
+                dispatch_with_executor(&request, &mut session, &delegated, &execute).unwrap();
+            if matches!(name, "bridget_send" | "bridget_who") {
+                allowed_calls += 1;
+                assert_eq!(
+                    response["result"]["structuredContent"],
+                    json!({"agents": []}),
+                    "{name} doit atteindre le handler"
+                );
+                assert_eq!(calls.get(), before + 1);
+            } else {
+                assert_eq!(
+                    response["result"]["code"], "delegated_tool_forbidden",
+                    "{name} doit être refusé"
+                );
+                assert_eq!(calls.get(), before, "{name} ne doit produire aucun effet");
+            }
+        }
+        assert_eq!(allowed_calls, 2, "la liste blanche reste exactement bornée");
     }
 
     fn test_socket(label: &str) -> PathBuf {
@@ -3469,6 +3545,90 @@ mod tests {
     }
 
     #[test]
+    fn spec133_send_signe_par_le_parent_et_transporte_la_provenance() {
+        let socket = test_socket("send-delegated");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "parent", "instance-parent");
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::ClientHello { .. }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+            match read_command(&mut reader) {
+                WrapperToDaemon::SendIdempotent { message, .. } => {
+                    assert_eq!(message.from, "parent");
+                    assert_eq!(
+                        message.delegated_origin,
+                        Some(bridget_core::DelegatedOrigin {
+                            provider: "codex".into(),
+                            child_ref: "0123456789abcdef".into(),
+                        })
+                    );
+                }
+                other => panic!("commande inattendue: {other:?}"),
+            }
+            write_command(
+                &mut writer,
+                DaemonToWrapper::IdempotencyResult {
+                    operation_kind: "send".into(),
+                    idempotency_key: "delegated-message".into(),
+                    issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                },
+            );
+        });
+        let identity = crate::mcp_identity::ResolvedIdentity {
+            name: "parent".into(),
+            instance_id: "instance-parent".into(),
+            delegated_origin: Some(bridget_core::DelegatedOrigin {
+                provider: "codex".into(),
+                child_ref: "0123456789abcdef".into(),
+            }),
+        };
+        let result = execute_tool_at_with_identity(
+            &identity,
+            "bridget_send",
+            json!({
+                "to": "destinataire",
+                "body": "résultat",
+                "id": "delegated-message",
+                "issued_at": 1_700_000_000
+            })
+            .as_object()
+            .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "accepted");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
     fn send_transmet_in_reply_to_dans_l_enveloppe_idempotente() {
         let socket = test_socket("send-reply");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -3541,6 +3701,7 @@ mod tests {
             Ok(crate::mcp_identity::ResolvedIdentity {
                 name: "codex-1".to_string(),
                 instance_id: "test-instance".to_string(),
+                delegated_origin: None,
             })
         };
         let execute =
@@ -4273,6 +4434,7 @@ mod tests {
                 Ok(crate::mcp_identity::ResolvedIdentity {
                     name: "agent".to_string(),
                     instance_id: "instance".to_string(),
+                    delegated_origin: None,
                 })
             };
             let execute = move |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
