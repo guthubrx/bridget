@@ -23,5 +23,16 @@
     "external_review": "APPROVE_WITH_CHANGES_RESOLVED",
     "final_audit": "pass"
   },
+  "delivery": {
+    "local_main": "pass",
+    "remote_main": "pass",
+    "force_push": false,
+    "binary_sha256": "8e7fddc4f48458ec4104f2332ef858b57c0d214cbf7548abc8e12c9ec2910301",
+    "daemon_build_id": "e057c41f9f54",
+    "daemon_service": "running",
+    "t3_service": "running",
+    "production_roundtrip": "pass",
+    "production_request_id": "mcp-97667-6ac34040-5"
+  },
   "open_findings": []
 }

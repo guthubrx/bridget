@@ -6,7 +6,7 @@
 - **Branche** : session-134-noms-humains-messages
 - **Démarré** : 2026-10-05
 - **Terminé** : 2026-10-05
-- **Statut** : Implemented, prêt à livrer
+- **Statut** : Livré en production
 
 ## Revue du plan
 
@@ -120,9 +120,33 @@
   l’autorité qui enrichit le message au moment de la remise.
 - Vérifications réalisées : tests rouges puis verts, régressions ciblées,
   espace de travail, formatage, Clippy, release et contre-revue externe.
-- Non vérifié avant T007 : le redémarrage des deux services installés et le
-  rendu d’un message réel avec le nouveau binaire.
+- Vérification de livraison : les deux services installés ont redémarré et un
+  message réel a été reçu avec le nouveau binaire.
 - Code supprimé ou évité : aucun format parallèle, aucun annuaire, aucune table,
   aucune migration globale et aucune dépendance.
 - Complexité ajoutée : O(1) par libellé. La réparation reste O(n) pour n
   identifiants enregistrés.
+
+### T007 — Livraison
+
+- **Fusion locale** : branche fusionnée en avance rapide dans `main`.
+- **Historique distant** : l’historique GitHub séparé a été rattaché par une
+  fusion sans perte et sans `force push`. Le contenu local validé reste la
+  version de référence.
+- **Construction de production** : binaire release verrouillé construit depuis
+  `main` dans un répertoire isolé. SHA-256 :
+  `8e7fddc4f48458ec4104f2332ef858b57c0d214cbf7548abc8e12c9ec2910301`.
+- **Sauvegarde** : le binaire précédent est conservé dans
+  `/Users/moi/.cache/bridget-deploy-backups/bridget-before-spec134-20261005-081337`.
+- **Déploiement** : remplacement atomique du binaire actif. Seuls
+  `com.bridget.daemon` et `com.bridget.t3` ont été redémarrés.
+- **Santé** : les deux services sont `running`. Le daemon publie le build-id
+  `e057c41f9f54`.
+- **Recette réelle** : la demande `mcp-97667-6ac34040-5` a reçu `SPEC134 OK`
+  de l’agent nommé `3D-collision`, identité
+  `fdef03b0-c651-4f5b-8f2e-3f14ec8218c1`.
+- **Publication** : `main` a été poussé vers
+  `https://github.com/guthubrx/bridget.git` sans réécriture d’historique.
+- **Contre-revue finale** : la demande de second passage a expiré. Aucun verdict
+  favorable n’est inventé. Les trois conditions de la contre-revue précédente
+  sont corrigées, testées et consignées ci-dessus.
