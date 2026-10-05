@@ -186,6 +186,25 @@ impl Peer {
         message
     }
 
+    fn assert_no_notification(&mut self) {
+        self.writer
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let mut line = String::new();
+        let error = self
+            .reader
+            .read_line(&mut line)
+            .expect_err("aucun réveil attendu");
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        assert!(line.is_empty());
+        self.writer
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+    }
+
     fn barrier(&mut self) {
         self.send(WrapperToDaemon::ListAgents);
         assert!(matches!(self.read(), DaemonToWrapper::AgentList { .. }));
@@ -371,6 +390,10 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
 
     let persistent = owner.events(sub(Kind::TurnEnded, Some(SOURCE), false));
     let subscription = persistent["subscription"]["id"].as_str().unwrap();
+    assert_eq!(
+        persistent["subscription"]["notification_mode"],
+        "journal_only"
+    );
     // CLI ferme sa vue : absorber son Unsubscribe avant la barrière suivante.
     source.send(WrapperToDaemon::ObservationCapabilities { events: vec![] });
     loop {
@@ -393,6 +416,23 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         owner.events(Request::List {})["subscriptions"][0]["state"],
         "active"
     );
+    // SPEC-135 : vrais journaux flushés et faits transmis, sans aucun réveil.
+    // Le Unsubscribe de la lecture précédente est déjà absorbé ci-dessus.
+    for index in 0..11 {
+        forward_journal(
+            &root,
+            SOURCE,
+            &mut source,
+            "turn_end",
+            &format!("silent-turn-{index}"),
+            json!({"stop_reason":"completed"}),
+        );
+        owner.assert_no_notification();
+    }
+    assert_eq!(
+        owner.events(Request::List {})["subscriptions"][0]["suppressed_total"],
+        11
+    );
     // Une fin provoquée par une notification ne produit aucun fait observable.
     forward_journal(
         &root,
@@ -412,12 +452,20 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
 
     let mut restarted = PrivateDaemon::start(&root);
     let mut owner = Peer::register(&root, OWNER, "owner101");
-    // Session 122 : l'abonnement est repris sans nouvel abonnement.
-    owner.delivered("repris automatiquement");
+    // Sessions 122/135 : repris sans réabonnement, aucun réveil de reprise.
+    owner.assert_no_notification();
     let restored = owner.events(Request::List {});
     assert_ne!(restored["daemon_instance"], original_instance);
     assert_eq!(restored["subscriptions"][0]["id"], subscription);
     assert_eq!(restored["subscriptions"][0]["state"], "source_unavailable");
+    assert_eq!(
+        restored["subscriptions"][0]["notification_mode"],
+        "journal_only"
+    );
+    assert_eq!(
+        restored["subscriptions"][0]["expires_at"],
+        persistent["subscription"]["expires_at"]
+    );
     let mut source = Peer::register(&root, SOURCE, "source101");
     source.send(WrapperToDaemon::ObservationCapabilities {
         events: vec![Kind::TurnEnded],
@@ -435,7 +483,22 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         "after-restart",
         json!({"stop_reason":"completed"}),
     );
-    owner.delivered("turn_ended");
+    owner.assert_no_notification();
+    assert_eq!(
+        owner.events(Request::List {})["subscriptions"][0]["suppressed_total"],
+        1
+    );
+    let journal_path = std::fs::read_dir(root.join("journals").join(SOURCE))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .unwrap();
+    let journal = std::fs::read_to_string(journal_path).unwrap();
+    assert!(journal.contains("silent-turn-10") && journal.contains("after-restart"));
     assert_eq!(
         owner.events(Request::Unsub {
             id: subscription.into()

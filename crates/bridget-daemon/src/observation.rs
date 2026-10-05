@@ -50,6 +50,14 @@ pub(crate) struct Subscription {
     flips: u32,
 }
 
+impl Subscription {
+    /// O(1). Une activité répétée n'est pas une demande d'action. La règle
+    /// calculée couvre aussi les instantanés anciens, sans réécriture.
+    fn journal_only(&self) -> bool {
+        self.event == Kind::TurnEnded && !self.once
+    }
+}
+
 /// Stabilité exigée avant d'annoncer un changement d'état de source.
 const SOURCE_NOTICE_GRACE: Duration = Duration::from_secs(30);
 /// Borne d'attente : une source qui clignote reste annoncée, au plus une fois
@@ -106,6 +114,9 @@ impl Observations {
             }
             sub.facts_lost = sub.facts_lost.saturating_add(dropped);
             sub.observation_gaps = sub.observation_gaps.saturating_add(1);
+            if sub.journal_only() {
+                continue;
+            }
             if sub.last_gap_notice.is_some_and(|last| {
                 now.saturating_duration_since(last) < Duration::from_millis(200)
             }) {
@@ -266,6 +277,9 @@ impl Observations {
                     return None;
                 }
                 sub.announced_count = sub.source_count;
+                if sub.journal_only() {
+                    return None;
+                }
                 let notice = if unstable {
                     "source instable : disponibilité changeante, faits possiblement manqués"
                 } else if sub.available {
@@ -282,7 +296,7 @@ impl Observations {
     }
 
     pub fn owner_returned(&mut self, owner: &str, now: Instant) -> Vec<Notification> {
-        self.subscriptions.values_mut().filter(|s| s.owner == owner && s.restored && !s.interruption_announced && s.expires > now)
+        self.subscriptions.values_mut().filter(|s| s.owner == owner && s.restored && !s.interruption_announced && s.expires > now && !s.journal_only())
             .map(|s| {
                 s.interruption_announced = true;
                 Notification { owner: owner.into(), body: format!("[Bridget observation] {}", json!({"subscription_id":s.id,"state":if s.available {"active"} else {"source_unavailable"},"notice":"daemon redémarré : abonnement repris automatiquement ; faits survenus pendant la coupure perdus, non rejoués"})) }
@@ -299,7 +313,7 @@ impl Observations {
         match request {
             Request::Types {} => {
                 let events: Vec<_> = [
-                    (Kind::TurnEnded, "fin d'un tour, pas succès ou fin de mission"),
+                    (Kind::TurnEnded, "fin d'un tour, pas succès ou fin de mission ; répétitions silencieuses, notification ponctuelle avec once=true"),
                     (Kind::PermissionRequired, "demande de permission observée, éventuellement déjà traitée"),
                     (Kind::FileWritten, "écriture structurée confirmée par une intégration"),
                     (Kind::FileCollision, "risque : deux auteurs, même hôte/chemin, 30 secondes"),
@@ -465,6 +479,10 @@ impl Observations {
                 if sub.event != fact.event
                     || sub.agent.as_ref().is_some_and(|a| a!=&fact.agent && fact.other_agent.as_ref()!=Some(a))
                     || sub.file.as_ref().is_some_and(|pattern| !fact.file.as_ref().is_some_and(|path| path_matches(pattern,path))) { continue; }
+                if sub.journal_only() {
+                    sub.suppressed = sub.suppressed.saturating_add(1);
+                    continue;
+                }
                 if sub.last_notification.is_some_and(|last| now.saturating_duration_since(last)<Duration::from_millis(200)) {
                     sub.suppressed = sub.suppressed.saturating_add(1);
                     continue;
@@ -489,6 +507,7 @@ impl Observations {
 fn subscription_json(s: &Subscription) -> Value {
     json!({"id":s.id,"event":s.event,"agent":s.agent,"file":s.file,
         "once":s.once,"expires_at":s.expires_at,"suppressed_total":s.suppressed,
+        "notification_mode":if s.journal_only() {"journal_only"} else {"notify"},
         "sources_compatible":s.source_count,
         "facts_lost_total":s.facts_lost,
         "observation_gaps":s.observation_gaps,
@@ -540,6 +559,137 @@ fn path_matches(pattern: &str, path: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn spec135_repeated_turn_ends_never_wake_the_owner() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source("conn", "source", vec![Kind::TurnEnded], now);
+        let receipt = state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        assert_eq!(receipt["status"], "subscribed");
+        for minutes in [0, 1, 5, 6, 9, 12, 18, 19, 22, 22, 25] {
+            assert!(
+                state
+                    .observe(
+                        Fact {
+                            event: Kind::TurnEnded,
+                            agent: "source".into(),
+                            host: "h".into(),
+                            file: None,
+                            other_agent: None,
+                        },
+                        now + Duration::from_secs(minutes * 60)
+                    )
+                    .is_empty()
+            );
+        }
+        let list = state.request("owner", Request::List {}, now, 100);
+        assert_eq!(list["subscriptions"].as_array().unwrap().len(), 1);
+        assert_eq!(list["subscriptions"][0]["suppressed_total"], 11);
+        assert_eq!(
+            list["subscriptions"][0]["notification_mode"],
+            "journal_only"
+        );
+        let types = state.request("owner", Request::Types {}, now, 100);
+        assert!(
+            types["events"][0]["meaning"]
+                .as_str()
+                .unwrap()
+                .contains("once=true")
+        );
+    }
+
+    #[test]
+    fn spec135_legacy_repeated_turn_subscription_stays_silent_after_restore() {
+        let now = Instant::now();
+        // Format effectivement stocké avant la correction, sans nouveau champ.
+        let bytes = br#"[{"id":"legacy","owner":"owner","event":"turn_ended","agent":"source","file":null,"once":false,"expires_at":3700}]"#;
+        let mut state = Observations::restore(bytes, now, 110).unwrap();
+        assert!(state.owner_returned("owner", now).is_empty());
+        assert!(
+            state
+                .due_source_notices(now + SOURCE_NOTICE_GRACE)
+                .is_empty()
+        );
+        state.set_source("conn", "source", vec![Kind::TurnEnded], now);
+        assert!(
+            state
+                .due_source_notices(now + SOURCE_NOTICE_GRACE)
+                .is_empty()
+        );
+        assert!(state.report_gap("source", 7, now).is_empty());
+        assert!(
+            state
+                .observe(
+                    Fact {
+                        event: Kind::TurnEnded,
+                        agent: "source".into(),
+                        host: "h".into(),
+                        file: None,
+                        other_agent: None,
+                    },
+                    now
+                )
+                .is_empty()
+        );
+        let list = state.request("owner", Request::List {}, now, 110);
+        assert_eq!(list["subscriptions"][0]["id"], "legacy");
+        assert_eq!(list["subscriptions"][0]["expires_at"], 3700);
+        assert_eq!(list["subscriptions"][0]["state"], "active");
+        assert_eq!(list["subscriptions"][0]["facts_lost_total"], 7);
+        assert_eq!(list["subscriptions"][0]["observation_gaps"], 1);
+        assert_eq!(
+            list["subscriptions"][0]["notification_mode"],
+            "journal_only"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&state.snapshot().unwrap()).unwrap(),
+            serde_json::from_slice::<Value>(bytes).unwrap()
+        );
+    }
+
+    #[test]
+    fn spec135_one_shot_wait_and_permission_alerts_still_wake_the_owner() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source(
+            "conn",
+            "source",
+            vec![Kind::TurnEnded, Kind::PermissionRequired],
+            now,
+        );
+        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        let receipt = state.request("owner", sub(Kind::TurnEnded, true), now, 100);
+        assert_eq!(receipt["subscription"]["notification_mode"], "notify");
+        let fact = Fact {
+            event: Kind::TurnEnded,
+            agent: "source".into(),
+            host: "h".into(),
+            file: None,
+            other_agent: None,
+        };
+        assert_eq!(state.observe(fact.clone(), now).len(), 1);
+        assert!(
+            state
+                .observe(fact, now + Duration::from_secs(60))
+                .is_empty()
+        );
+        state.request("owner", long_sub(Kind::PermissionRequired), now, 100);
+        for seconds in [1, 60] {
+            let notices = state.observe(
+                Fact {
+                    event: Kind::PermissionRequired,
+                    agent: "source".into(),
+                    host: "h".into(),
+                    file: None,
+                    other_agent: None,
+                },
+                now + Duration::from_secs(seconds),
+            );
+            assert_eq!(notices.len(), 1);
+            assert!(notices[0].body.contains("permission_required"));
+        }
+    }
+
+    #[test]
     fn spec101_gap_is_counted_filtered_and_notification_rate_bounded() {
         let now = Instant::now();
         let mut state = Observations::default();
@@ -587,7 +737,18 @@ mod tests {
             state.request("owner", sub(Kind::FileWritten, false), now, 100)["reason"],
             "no_compatible_source"
         );
-        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        state.request(
+            "owner",
+            Request::Sub {
+                event: Kind::TurnEnded,
+                agent: None,
+                file: None,
+                once: true,
+                ttl_secs: Some(3600),
+            },
+            now,
+            100,
+        );
         state.remove_source("conn", now);
         assert_eq!(
             state.request("owner", Request::List {}, now, 100)["subscriptions"][0]["state"],
@@ -610,13 +771,13 @@ mod tests {
     fn spec119_aller_retour_bref_de_source_sans_avis() {
         let now = Instant::now();
         let mut state = Observations::default();
-        state.set_source("conn", "a", vec![Kind::TurnEnded], now);
-        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        state.set_source("conn", "a", vec![Kind::PermissionRequired], now);
+        state.request("owner", long_sub(Kind::PermissionRequired), now, 100);
         state.remove_source("conn", now);
         state.set_source(
             "conn2",
             "a",
-            vec![Kind::TurnEnded],
+            vec![Kind::PermissionRequired],
             now + Duration::from_secs(3),
         );
         assert!(
@@ -639,15 +800,15 @@ mod tests {
     fn spec119_source_qui_clignote_avis_borne_par_periode() {
         let now = Instant::now();
         let mut state = Observations::default();
-        state.set_source("conn", "a", vec![Kind::TurnEnded], now);
-        state.request("owner", long_sub(Kind::TurnEnded), now, 100);
+        state.set_source("conn", "a", vec![Kind::PermissionRequired], now);
+        state.request("owner", long_sub(Kind::PermissionRequired), now, 100);
         // Le cas du 25/09 : indisponible puis disponible toutes les 3 s, 10 min.
         let mut notices = Vec::new();
         for tick in 0..600u64 {
             let at = now + Duration::from_secs(tick);
             match tick % 6 {
                 0 => state.remove_source("conn", at),
-                3 => state.set_source("conn", "a", vec![Kind::TurnEnded], at),
+                3 => state.set_source("conn", "a", vec![Kind::PermissionRequired], at),
                 _ => {}
             }
             notices.extend(state.due_source_notices(at).into_iter().map(|n| n.body));

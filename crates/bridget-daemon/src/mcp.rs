@@ -1920,7 +1920,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_events",
-            "description": "S'abonner aux faits reçus après création, les lister ou se désabonner. Consulter types pour les sources compatibles ; une source impossible est refusée. Notifications non bloquantes, DND respecté. once=une occurrence ; expiration défaut1h, max7j. Après redémarrage : abonnements conservés interrompus, réabonnement explicite requis. Fin de tour n'est pas succès. Fichiers : écritures structurées attestées seulement, pas shell ni surveillance globale ; via T3, Codex uniquement et couverture partielle.",
+            "description": "S'abonner aux faits reçus après création, les lister ou se désabonner. Consulter types pour les sources compatibles ; une source impossible est refusée. turn_ended avec once=false reste silencieux (journal_only), même après redémarrage ; état et lacunes consultables via list, faits via bridget_journal. Pour attendre une seule fin de tour, utiliser once=true. Une fin de tour n'est pas un succès ni une fin de mission ; utiliser le contrôleur de missions pour les rappels. Autres notifications non bloquantes, DND respecté. once=une occurrence ; expiration défaut1h, max7j. Abonnements repris automatiquement après redémarrage, faits de la coupure non rejoués. Fichiers : écritures structurées attestées seulement, pas shell ni surveillance globale ; via T3, Codex uniquement et couverture partielle.",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["types","sub","list","unsub"]},
                 "event":{"enum":["turn_ended","permission_required","file_written","file_collision"]},
