@@ -11,7 +11,7 @@ Objectif : rendre le nom humain et l’UUID sans changer l’identité routable.
 Test indépendant : les cas nommé, absent, vide, blanc, égal à l’UUID et délégué
 produisent exactement le libellé du contrat.
 
-- [ ] T002 [US1] [US3] Ajouter les tests rouges `spec134` puis implémenter le libellé `nom (UUID)` avec repli UUID et provenance conservée dans `crates/bridget-core/src/message.rs`
+- [x] T002 [US1] [US3] Ajouter les tests rouges `spec134` puis implémenter le libellé `nom (UUID)` avec repli UUID et provenance conservée dans `crates/bridget-core/src/message.rs`
 
 ## Phase 3 — Lots T3
 

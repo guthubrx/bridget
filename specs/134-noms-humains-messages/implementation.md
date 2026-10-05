@@ -32,6 +32,19 @@
 - **Notes** : le runtime officiel SpecKit ne fournit pas ses scripts ou modèles
   dans ce dépôt. Les artefacts ont suivi les formats existants du projet.
 
+### T002 — Libellé commun
+
+- **Statut** : Complété
+- **Fichier** : `crates/bridget-core/src/message.rs`
+- **Test rouge** : 3 tests `spec134`, 2 échecs prouvant que le nom était ignoré.
+- **Test vert** : 3 tests `spec134` passés ; le test de compatibilité `spec133`
+  passe aussi.
+- **Résultat** : le nom nettoyé précède l’UUID complet. Les noms absents, vides,
+  blancs ou égaux à l’UUID gardent le format historique. La provenance déléguée
+  reste après le parent.
+- **Self-review XIX/XX** : une seule fonction centrale change. Aucun helper,
+  état, dépendance ou branche hors besoin. Le calcul reste O(1).
+
 ## Self-review Article XIX/XX
 
 - Pourquoi cette solution est nécessaire : à compléter après le diff.

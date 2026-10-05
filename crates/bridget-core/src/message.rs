@@ -195,19 +195,66 @@ impl BridgetMessage {
     }
 
     /// Libellé de présentation. L'identité routable reste toujours `from`.
+    /// Complexité : O(1).
     pub fn sender_label(&self) -> String {
+        let sender = self
+            .from_display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|display_name| {
+                !display_name.is_empty() && *display_name != self.from.as_str()
+            })
+            .map_or_else(
+                || self.from.clone(),
+                |display_name| format!("{display_name} ({})", self.from),
+            );
         match &self.delegated_origin {
             Some(origin) => format!(
                 "{} (via sous-agent {} {})",
-                self.from, origin.provider, origin.child_ref
+                sender, origin.provider, origin.child_ref
             ),
-            None => self.from.clone(),
+            None => sender,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec134_libelle_associe_nom_humain_et_uuid_complet() {
+        let agent_id = "cbd8d228-62ef-494b-80b7-bf08333591d6";
+        let mut message = super::BridgetMessage::new(agent_id, "destinataire", "message");
+        message.from_display_name = Some(" Regional ".into());
+
+        assert_eq!(message.sender_label(), format!("Regional ({agent_id})"));
+    }
+
+    #[test]
+    fn spec134_libelle_replie_les_noms_inexploitables_sur_uuid() {
+        let agent_id = "cbd8d228-62ef-494b-80b7-bf08333591d6";
+        for display_name in [None, Some(""), Some("   "), Some(agent_id)] {
+            let mut message = super::BridgetMessage::new(agent_id, "destinataire", "message");
+            message.from_display_name = display_name.map(str::to_string);
+            assert_eq!(message.sender_label(), agent_id, "cas {display_name:?}");
+        }
+    }
+
+    #[test]
+    fn spec134_libelle_garde_la_provenance_apres_le_parent_nomme() {
+        let agent_id = "cbd8d228-62ef-494b-80b7-bf08333591d6";
+        let mut message = super::BridgetMessage::new(agent_id, "destinataire", "message");
+        message.from_display_name = Some("Regional".into());
+        message.delegated_origin = Some(super::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "0123456789abcdef".into(),
+        });
+
+        assert_eq!(
+            message.sender_label(),
+            format!("Regional ({agent_id}) (via sous-agent codex 0123456789abcdef)")
+        );
+    }
+
     #[test]
     fn spec133_provenance_deleguee_est_fermee_et_retrocompatible() {
         let old: super::BridgetMessage =
