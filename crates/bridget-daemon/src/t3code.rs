@@ -3005,7 +3005,7 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
             rendered.push_str(&format!(
                 "\n── {}/{total} — de {} (id {}) ──\n{}\n",
                 index + 1,
-                message.from,
+                message.sender_label(),
                 message.id,
                 message.body
             ));
@@ -3432,6 +3432,29 @@ mod tests {
         assert!(
             request.contains("3 messages Bridget"),
             "le destinataire sait qu'il lit un lot"
+        );
+    }
+
+    #[test]
+    fn spec134_lot_associe_chaque_nom_au_bon_uuid() {
+        let first_id = "87515984-f549-49ae-ab9c-a6c47dada0e5";
+        let second_id = "cbd8d228-62ef-494b-80b7-bf08333591d6";
+        let mut first = bridget_core::BridgetMessage::new(first_id, "bob", "premier");
+        first.id = "m-1".into();
+        first.from_display_name = Some("cx-coordinator".into());
+        let mut second = bridget_core::BridgetMessage::new(second_id, "bob", "second");
+        second.id = "m-2".into();
+        second.from_display_name = Some("Regional".into());
+
+        let text = batch_envelope(&[first, second]);
+
+        assert!(
+            text.contains(&format!("de cx-coordinator ({first_id}) (id m-1)")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("de Regional ({second_id}) (id m-2)")),
+            "{text}"
         );
     }
 

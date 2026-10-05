@@ -20,7 +20,7 @@ Objectif : appliquer le libellé commun à chaque message groupé.
 Test indépendant : un lot de deux expéditeurs nommés associe chaque nom au bon
 UUID complet.
 
-- [ ] T003 [US2] Ajouter le test rouge `spec134` puis remplacer l’accès direct à l’expéditeur par `sender_label()` dans `crates/bridget-daemon/src/t3code.rs`
+- [x] T003 [US2] Ajouter le test rouge `spec134` puis remplacer l’accès direct à l’expéditeur par `sender_label()` dans `crates/bridget-daemon/src/t3code.rs`
 
 ## Phase 4 — Réparation du profil
 

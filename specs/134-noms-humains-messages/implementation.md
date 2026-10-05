@@ -45,6 +45,19 @@
 - **Self-review XIX/XX** : une seule fonction centrale change. Aucun helper,
   état, dépendance ou branche hors besoin. Le calcul reste O(1).
 
+### T003 — Lots T3
+
+- **Statut** : Complété
+- **Fichier** : `crates/bridget-daemon/src/t3code.rs`
+- **Test rouge** : le lot affichait les deux UUID sans les noms attendus.
+- **Test vert** : le nouveau test `spec134` et les 3 tests `spec114_lot`
+  passent.
+- **Résultat** : chaque élément du lot appelle le même `sender_label()` que le
+  rendu unitaire.
+- **Self-review XIX/XX** : une seule expression remplace un accès direct
+  divergent. Aucun format parallèle n’est ajouté. Le lot reste O(n), avec sa
+  borne existante.
+
 ## Self-review Article XIX/XX
 
 - Pourquoi cette solution est nécessaire : à compléter après le diff.
