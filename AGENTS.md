@@ -1,11 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/133-relais-sous-agents/plan.md.
-Périmètre de ce tour : relais MCP borné des sous-agents internes sous l'autorité
-de leur parent Bridget. L'utilisateur a autorisé le commit, la fusion, le
-déploiement des services installés et le nettoyage le 2026-10-04.
+Plan actif : specs/134-noms-humains-messages/plan.md.
+Périmètre de ce tour : afficher le nom humain à côté de l'UUID dans les messages
+Bridget et réparer les profils absents au prochain enregistrement. L'utilisateur
+a autorisé le commit, la fusion, le déploiement, le push et le nettoyage le
+2026-10-05.
 Tous les essais utilisent un BRIDGET_HOME et une socket isolés.
-Sélection SpecKit : SPECIFY_FEATURE=133-relais-sous-agents ; branche
-session-133-relais-sous-agents.
+Sélection SpecKit : SPECIFY_FEATURE=134-noms-humains-messages ; branche
+session-134-noms-humains-messages.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->
