@@ -8,6 +8,44 @@
 - **Terminé** : 2026-10-05
 - **Statut** : Livré en production
 
+## Reprise — saturation des noms provisoires, 2026-10-05
+
+- Correctif en cours sur `fix-134-profils-satures`, dans le worktree dédié.
+- Observation réelle : les 1 000 noms `Agent` à `Agent (1000)` sont occupés.
+  Le profil de `29aaed9b-9f6f-4849-87a5-1a23bbe01948` est absent. Le pont
+  connaît son titre `opus-city-coder-1` mais reçoit `IdentityUnavailable`.
+- Cause confirmée : `available_display_name()` limite les essais à 1 000.
+  L'erreur `noms affichés épuisés` est ignorée par l'enregistrement.
+- Limite de la livraison initiale : les tests couvraient le profil absent,
+  pas la saturation. La recette avec `3D-collision` ne prouvait pas la
+  réparation de tous les fils. La clôture initiale était donc trop large.
+- Test rouge : `spec134_profils_satures_se_reparent_puis_prennent_le_titre_t3`
+  échoue sur `Invalid("noms affichés épuisés")` avant correction.
+- Correctif : une lecture des noms occupés, un ensemble en mémoire, au plus
+  p+1 variantes pour p profils ; aucun plafond arbitraire. Le suffixe reste
+  dans la longueur maximale, y compris pour les noms Unicode de 80 caractères.
+  Les erreurs de création du profil sont désormais journalisées.
+- Tests verts : création et réparation sur schémas actuel/historique,
+  idempotence, titre T3, Unicode et réutilisation d'un nom libéré ; test du
+  chemin daemon Register → DisplayNameSet → profil → enveloppe T3.
+- Six tests ciblés daemon SPEC-134 passent. Le premier passage ciblé sans
+  TMPDIR court avait une erreur de harnais `socket trop longue` ; relancé
+  avec une racine temporaire courte et privée, il passe sans mutation produit.
+- Self-review XVIII/XIX/XX : deux fonctions de production existantes modifiées,
+  aucune table ni dépendance ajoutée. Une allocation est O(p) en temps/mémoire.
+  Les chemins de lecture ordinaires restent inchangés. Les erreurs de stockage
+  ne coupent pas le routage ; elles sont visibles, sans contenu de message.
+- `cargo fmt --all -- --check`, `git diff --check` et Clippy tous targets sans
+  avertissement passent sur l'état final. Les tests complets passent avec une
+  racine isolée : 44 tests core, 1 005 tests daemon (10 ignorés), 294 tests
+  transport (1 ignoré), intégrations et doctests sans échec. L'intégration
+  Register ajoutée après la compilation du passage complet a passé parmi les
+  six tests ciblés frais ; le code de production n'a plus changé.
+  Journal complet : `/tmp/b134.yaTk9E/tests.log`.
+- Les messages historiques ne sont pas réécrits. Sauvegarde cohérente SQLite,
+  binaire et plists avant livraison dans
+  `/Users/moi/.cache/bridget-deploy-backups/spec134-saturation-H3XqQq`.
+
 ## Revue du plan
 
 - Auditeur externe : agent Claude `29aaed9b-9f6f-4849-87a5-1a23bbe01948`.

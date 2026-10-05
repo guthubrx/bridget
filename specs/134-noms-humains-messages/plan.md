@@ -1,9 +1,29 @@
 # Plan 134 — Noms humains dans les messages Bridget
 
-Statut : Implémenté. Branche : session-134-noms-humains-messages.
+Statut : Correctif implémenté, recette de production en cours.
+Branche initiale : session-134-noms-humains-messages.
+Branche de reprise : fix-134-profils-satures.
 Spec : specs/134-noms-humains-messages/spec.md.
 
 ## Contexte technique
+
+### Correctif de saturation — 2026-10-05
+
+Observation de production : les 1 000 variantes provisoires `Agent` à
+`Agent (1000)` sont occupées. `available_display_name()` tente seulement ces
+variantes. Sa transaction échoue, puis l'enregistrement ignore l'erreur.
+Le pont possède le titre T3 mais son profil est absent : `DisplayNameSet`
+retourne `IdentityUnavailable`.
+
+Le correctif reprend SPEC-134 dans un worktree dédié. L'allocation lit les noms
+occupés en une requête, puis utilise un ensemble et au plus p+1 essais pour p
+profils. Une place existe nécessairement parmi ces p+1 noms. Coût O(p) par
+allocation, mémoire O(p), sans plafond numérique arbitraire et sans une requête
+par essai. Un échec de stockage produit un avertissement au lieu d'être ignoré.
+Les tests reproduisent la saturation sur les deux schémas, la création et la
+réparation idempotentes, puis le titre T3 et le libellé. La recette réelle doit
+compter les fils T3 connectés sans profil et vérifier le message de l'expéditeur
+qui a déclenché l'incident. Aucun historique ni verdict n'est supprimé.
 
 Le projet est un espace de travail Rust 2024. Les messages normalisés vivent
 dans `bridget-core`. Le daemon enrichit déjà chaque message livré avec

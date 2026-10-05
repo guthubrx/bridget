@@ -5746,10 +5746,11 @@ fn managed_definition_for_register(
 }
 
 fn ensure_agent_profile_for_registration(state: &DaemonState, agent_id: &str) {
-    let Ok(mut profiles) = crate::agent_profile::AgentProfileStore::open(&state.db_path) else {
-        return;
-    };
-    let _ = profiles.ensure_agent_ids([agent_id]);
+    let result = crate::agent_profile::AgentProfileStore::open(&state.db_path)
+        .and_then(|mut profiles| profiles.ensure_agent_ids([agent_id]));
+    if let Err(error) = result {
+        warn!("profil de l'agent {agent_id} non créé : {error}");
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -18510,6 +18511,72 @@ mod presence_tests {
         );
         message.hops = 4;
         message
+    }
+
+    #[test]
+    fn spec134_enregistrement_sature_publie_le_nom_t3_dans_enveloppe() {
+        let sender = "89000000-0000-4000-8000-000000000299";
+        let (mut state, config) = state_with_registered_agent("b134-saturation");
+        state
+            .store
+            .connection()
+            .execute_batch(
+                "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<1000)
+             INSERT INTO agent_identities(agent_id,created_at,updated_at)
+             SELECT 'saturated-fixture-' || n,1,1 FROM seq;
+             WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<1000)
+             INSERT OR IGNORE INTO agent_profiles
+             SELECT 'saturated-fixture-' || n,
+                 CASE n WHEN 1 THEN 'Agent' ELSE 'Agent (' || n || ')' END,
+                 CASE n WHEN 1 THEN 'agent' ELSE 'agent (' || n || ')' END,
+                 'round','blue','',1,1,1 FROM seq;",
+            )
+            .unwrap();
+        let (writer, _reader) = control_socket("b134-saturation");
+        state.connections.insert("conn-saturation".into(), writer);
+        assert!(matches!(
+            handle_register_with_channel(
+                "conn-saturation",
+                2,
+                "claude".into(),
+                sender.into(),
+                Some("macbook".into()),
+                Some("t3code".into()),
+                ChannelReport::Unknown,
+                Some(PresenceMode::Cli),
+                None,
+                Some("macOS".into()),
+                Some("instance-saturation".into()),
+                None,
+                false,
+                Some(true),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let shared = Arc::new(Mutex::new(state));
+        let result = handle_wrapper_message(
+            "conn-saturation",
+            WrapperToDaemon::DisplayNameSet {
+                request: bridget_transport::protocol::DisplayNameRequest {
+                    version: 1,
+                    display_name: "opus-city-coder-1".into(),
+                },
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::DisplayNameResult {
+                outcome: bridget_transport::protocol::DisplayNameOutcome::Applied { .. },
+            })
+        ));
+        let mut message = BridgetMessage::new(sender, "destinataire", "test");
+        message.from_display_name = provider_display_name(&shared.lock().unwrap(), sender);
+        assert!(
+            crate::t3code::envelope(&message).contains(&format!("de opus-city-coder-1 ({sender})"))
+        );
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]

@@ -34,5 +34,24 @@
     "production_roundtrip": "pass",
     "production_request_id": "mcp-97667-6ac34040-5"
   },
+  "saturation_fix": {
+    "status": "validated_awaiting_production",
+    "production_observation": "1000 provisional names occupied; missing profile for opus-city-coder-1",
+    "red": "Invalid: noms affichés épuisés",
+    "green_daemon_spec134_tests": 6,
+    "current_and_legacy_schema": "pass",
+    "registration_title_and_t3_envelope": "pass",
+    "unicode_and_reusable_gap": "pass",
+    "workspace_exit_code": 0,
+    "workspace_daemon_passed": 1005,
+    "workspace_core_passed": 44,
+    "workspace_transport_passed": 294,
+    "workspace_note": "production source final; additional Register integration test added afterwards and included in the six fresh targeted tests",
+    "workspace_log": "/tmp/b134.yaTk9E/tests.log",
+    "fmt": "pass",
+    "clippy": "pass",
+    "diff_check": "pass",
+    "backup": "/Users/moi/.cache/bridget-deploy-backups/spec134-saturation-H3XqQq"
+  },
   "open_findings": []
 }

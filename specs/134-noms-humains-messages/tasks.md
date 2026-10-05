@@ -39,7 +39,13 @@ Test indépendant : conserver une identité, retirer son profil, rappeler deux f
 - [x] T006 Faire la self-review Article XIX/XX, la contre-revue adverse post-implémentation, la convergence des artefacts et l’audit final ; résultat observable dans `specs/134-noms-humains-messages/implementation.md` et `specs/134-noms-humains-messages/validation/results.json`
 - [x] T007 Fusionner dans `main`, construire depuis la racine principale, sauvegarder le binaire actif, déployer, relancer uniquement `com.bridget.daemon` et `com.bridget.t3`, vérifier le build-id et un message réel, pousser vers `https://github.com/guthubrx/bridget.git`, puis nettoyer le worktree et la branche
 
-## Dépendances
+## Correctif de saturation — reprise du 2026-10-05
+
+- [x] T008 Reproduire les 1 000 noms provisoires occupés sur les schémas actuel et historique ; vérifier l'échec avant correction.
+- [x] T009 Supprimer le plafond arbitraire dans l'allocation existante, borner la recherche par le nombre de profils et rendre les échecs d'enregistrement visibles ; vérifier réparation, renommage T3 et absence de régression.
+- [ ] T010 Livrer le correctif autorisé de SPEC-134 avec sauvegarde, vérifier les noms des fils connectés et un message réel, puis consigner les limites.
+
+## Dépendances initiales
 
 1. T001 précède toute modification.
 2. T002 précède T003, car le lot réutilise le libellé central.

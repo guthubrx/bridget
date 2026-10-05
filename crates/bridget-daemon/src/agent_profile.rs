@@ -1287,23 +1287,29 @@ fn available_display_name(
     candidate: &str,
 ) -> Result<String, AgentProfileError> {
     let base = clean_display_name(candidate)?;
-    for suffix in 1..=1_000 {
+    // O(p) en temps et mémoire, p = profils stockés. Une lecture, pas p
+    // requêtes. Parmi p+1 variantes distinctes, au moins une est disponible.
+    let mut statement = conn
+        .prepare("SELECT display_name_normalized FROM agent_profiles")
+        .map_err(AgentProfileError::Sqlite)?;
+    let occupied = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(AgentProfileError::Sqlite)?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(AgentProfileError::Sqlite)?;
+    for suffix in 1..=occupied.len() + 1 {
         let display_name = if suffix == 1 {
             base.clone()
         } else {
-            format!("{base} ({suffix})")
+            let ending = format!(" ({suffix})");
+            let prefix: String = base
+                .chars()
+                .take(MAX_DISPLAY_NAME_CHARS - ending.len())
+                .collect();
+            format!("{prefix}{ending}")
         };
         let normalized = normalize_display_name(&display_name)?;
-        let exists = conn
-            .query_row(
-                "SELECT 1 FROM agent_profiles WHERE display_name_normalized = ?1",
-                [normalized],
-                |_| Ok(()),
-            )
-            .optional()
-            .map_err(AgentProfileError::Sqlite)?
-            .is_some();
-        if !exists {
+        if !occupied.contains(&normalized) {
             return Ok(display_name);
         }
     }
@@ -1429,6 +1435,95 @@ mod tests {
     fn store() -> (AgentProfileStore, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!("bridget-profile-{}.db", Uuid::new_v4()));
         (AgentProfileStore::open(&path).unwrap(), path)
+    }
+
+    #[test]
+    fn spec134_nom_de_repli_long_reste_borne_et_reutilise_un_trou() {
+        let (mut store, path) = store();
+        let owner = Uuid::new_v4().to_string();
+        store.ensure_agent_ids([&owner]).unwrap();
+        let base = "É".repeat(MAX_DISPLAY_NAME_CHARS);
+        store.rename_display_name(&owner, &base, |_| false).unwrap();
+        let tx = store.conn.transaction().unwrap();
+        let fallback = available_display_name(&tx, &base).unwrap();
+        assert_eq!(fallback.chars().count(), MAX_DISPLAY_NAME_CHARS);
+        assert!(fallback.ends_with(" (2)"));
+        assert_ne!(
+            normalize_display_name(&fallback).unwrap(),
+            normalize_display_name(&base).unwrap()
+        );
+        assert_eq!(available_display_name(&tx, "Agent").unwrap(), "Agent");
+        tx.commit().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn spec134_profils_satures_se_reparent_puis_prennent_le_titre_t3() {
+        for legacy in [false, true] {
+            let path = std::env::temp_dir().join(format!("bridget-profile-{}.db", Uuid::new_v4()));
+            if legacy {
+                Connection::open(&path)
+                    .unwrap()
+                    .execute_batch(
+                        "CREATE TABLE agent_identities (
+                        agent_id TEXT PRIMARY KEY, current_routing_name TEXT NOT NULL UNIQUE,
+                        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);",
+                    )
+                    .unwrap();
+            }
+            let mut store = AgentProfileStore::open(&path).unwrap();
+            let tx = store.conn.transaction().unwrap();
+            for suffix in 1..=1_000 {
+                let id = Uuid::new_v4().to_string();
+                let name = if suffix == 1 {
+                    "Agent".to_string()
+                } else {
+                    format!("Agent ({suffix})")
+                };
+                let identity_sql = if legacy {
+                    "INSERT INTO agent_identities VALUES (?1, ?1, 1, 1)"
+                } else {
+                    "INSERT INTO agent_identities VALUES (?1, 1, 1)"
+                };
+                tx.execute(identity_sql, [&id]).unwrap();
+                tx.execute(
+                    "INSERT INTO agent_profiles VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, 1)",
+                    params![id, name, normalize_display_name(&name).unwrap()],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+            let fresh = Uuid::new_v4().to_string();
+            let missing_profile = Uuid::new_v4().to_string();
+            let identity_sql = if legacy {
+                "INSERT INTO agent_identities VALUES (?1, ?1, 1, 1)"
+            } else {
+                "INSERT INTO agent_identities VALUES (?1, 1, 1)"
+            };
+            store
+                .conn
+                .execute(identity_sql, [&missing_profile])
+                .unwrap();
+
+            store.ensure_agent_ids([&fresh, &missing_profile]).unwrap();
+            store.ensure_agent_ids([&fresh, &missing_profile]).unwrap();
+            let names: Vec<String> = store.conn.prepare(
+                "SELECT display_name FROM agent_profiles WHERE agent_id IN (?1, ?2) ORDER BY display_name",
+            ).unwrap().query_map(params![fresh, missing_profile], |row| row.get(0)).unwrap()
+                .collect::<Result<_, _>>().unwrap();
+            assert_eq!(names, ["Agent (1001)", "Agent (1002)"]);
+            let profile = store
+                .rename_display_name(&fresh, "opus-city-coder-1", |_| false)
+                .unwrap();
+            assert_eq!(profile.display_name, "opus-city-coder-1");
+            let mut message = bridget_core::BridgetMessage::new(&fresh, "destinataire", "test");
+            message.from_display_name = Some(profile.display_name);
+            assert_eq!(
+                message.sender_label(),
+                format!("opus-city-coder-1 ({fresh})")
+            );
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     /// Session 110 : un fil T3 réimporté reprend le nom que son ancienne
