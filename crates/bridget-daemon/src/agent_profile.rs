@@ -385,8 +385,9 @@ impl AgentProfileStore {
         transaction.commit().map_err(AgentProfileError::Sqlite)
     }
 
-    /// Crée les profils des identifiants opaques déjà établis. Cette voie ne
+    /// Garantit l'identité, le profil et son état d'application. Cette voie ne
     /// crée aucun alias ni nom de routage lisible.
+    /// Complexité : O(n), n étant le nombre d'identifiants fournis.
     pub fn ensure_agent_ids<I>(&mut self, agent_ids: I) -> Result<(), AgentProfileError>
     where
         I: IntoIterator,
@@ -403,37 +404,41 @@ impl AgentProfileStore {
             if agent_id.is_empty() {
                 continue;
             }
-            let exists = transaction
+            let existing_profile = transaction
                 .query_row(
-                    "SELECT 1 FROM agent_identities WHERE agent_id = ?1",
+                    "SELECT profile.agent_id IS NOT NULL
+                     FROM agent_identities identity
+                     LEFT JOIN agent_profiles profile ON profile.agent_id = identity.agent_id
+                     WHERE identity.agent_id = ?1",
                     [agent_id],
-                    |_| Ok(()),
+                    |row| row.get::<_, bool>(0),
                 )
                 .optional()
-                .map_err(AgentProfileError::Sqlite)?
-                .is_some();
-            if exists {
-                continue;
+                .map_err(AgentProfileError::Sqlite)?;
+            if existing_profile.is_none() {
+                if legacy_identity_schema {
+                    transaction.execute(
+                        "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
+                        params![agent_id, now],
+                    ).map_err(AgentProfileError::Sqlite)?;
+                } else {
+                    transaction.execute(
+                        "INSERT INTO agent_identities(agent_id, created_at, updated_at) VALUES (?1, ?2, ?2)",
+                        params![agent_id, now],
+                    ).map_err(AgentProfileError::Sqlite)?;
+                }
             }
-            let display_name = available_display_name(&transaction, "Agent")?;
-            let normalized = normalize_display_name(&display_name)?;
-            if legacy_identity_schema {
+
+            if existing_profile != Some(true) {
+                let display_name = available_display_name(&transaction, "Agent")?;
+                let normalized = normalize_display_name(&display_name)?;
                 transaction.execute(
-                    "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
-                    params![agent_id, now],
-                ).map_err(AgentProfileError::Sqlite)?;
-            } else {
-                transaction.execute(
-                    "INSERT INTO agent_identities(agent_id, created_at, updated_at) VALUES (?1, ?2, ?2)",
-                    params![agent_id, now],
+                    "INSERT INTO agent_profiles(agent_id, display_name, display_name_normalized, avatar_shape, avatar_color, instructions, instructions_revision, revision, updated_at) VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, ?4)",
+                    params![agent_id, display_name, normalized, now],
                 ).map_err(AgentProfileError::Sqlite)?;
             }
             transaction.execute(
-                "INSERT INTO agent_profiles(agent_id, display_name, display_name_normalized, avatar_shape, avatar_color, instructions, instructions_revision, revision, updated_at) VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, ?4)",
-                params![agent_id, display_name, normalized, now],
-            ).map_err(AgentProfileError::Sqlite)?;
-            transaction.execute(
-                "INSERT INTO agent_profile_applications(agent_id, provider_spawn_id, instructions_revision, status, observed_at, diagnostic_code) VALUES (?1, NULL, 1, 'applied', ?2, NULL)",
+                "INSERT OR IGNORE INTO agent_profile_applications(agent_id, provider_spawn_id, instructions_revision, status, observed_at, diagnostic_code) VALUES (?1, NULL, 1, 'applied', ?2, NULL)",
                 params![agent_id, now],
             ).map_err(AgentProfileError::Sqlite)?;
         }
@@ -1548,6 +1553,53 @@ mod tests {
             .query_row("SELECT count(*) FROM agent_profiles", [], |row| row.get(0))
             .unwrap();
         assert_eq!(before, after);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn spec134_ensure_repare_profil_et_application_manquants_sans_doublon() {
+        fn count(store: &AgentProfileStore, table: &str, id: &str) -> i64 {
+            store
+                .conn
+                .query_row(
+                    &format!("SELECT count(*) FROM {table} WHERE agent_id=?1"),
+                    [id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        }
+
+        let (mut store, path) = store();
+        let id = Uuid::new_v4().to_string();
+        store.ensure_agent_ids([id.as_str()]).unwrap();
+        store
+            .conn
+            .execute(
+                "DELETE FROM agent_profile_applications WHERE agent_id=?1",
+                [id.as_str()],
+            )
+            .unwrap();
+        store
+            .conn
+            .execute("DELETE FROM agent_profiles WHERE agent_id=?1", [id.as_str()])
+            .unwrap();
+
+        store.ensure_agent_ids([id.as_str()]).unwrap();
+        store.ensure_agent_ids([id.as_str()]).unwrap();
+
+        assert_eq!(count(&store, "agent_identities", &id), 1);
+        assert_eq!(count(&store, "agent_profiles", &id), 1);
+        assert_eq!(count(&store, "agent_profile_applications", &id), 1);
+
+        store
+            .conn
+            .execute(
+                "DELETE FROM agent_profile_applications WHERE agent_id=?1",
+                [id.as_str()],
+        )
+        .unwrap();
+        store.ensure_agent_ids([id.as_str()]).unwrap();
+        assert_eq!(count(&store, "agent_profile_applications", &id), 1);
         std::fs::remove_file(path).unwrap();
     }
 

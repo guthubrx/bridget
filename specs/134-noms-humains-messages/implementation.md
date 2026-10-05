@@ -58,6 +58,20 @@
   divergent. Aucun format parallèle n’est ajouté. Le lot reste O(n), avec sa
   borne existante.
 
+### T004 — Réparation des profils
+
+- **Statut** : Complété
+- **Fichier** : `crates/bridget-daemon/src/agent_profile.rs`
+- **Test rouge** : une identité conservée sans profil restait avec zéro profil
+  après deux appels à `ensure_agent_ids()`.
+- **Test vert** : 1 test `spec134` puis les 9 tests du module de profils passent.
+- **Résultat** : une seule lecture joint identité et profil. La transaction crée
+  l’identité si nécessaire, crée le profil s’il manque, puis garantit l’état
+  d’application avec un insert idempotent.
+- **Self-review XIX/XX** : le contrat de la fonction existante est renforcé.
+  Aucune migration, table, commande ou dépendance. Complexité O(n), avec une
+  requête de lecture et des écritures conditionnelles par identifiant.
+
 ## Self-review Article XIX/XX
 
 - Pourquoi cette solution est nécessaire : à compléter après le diff.

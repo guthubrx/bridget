@@ -31,7 +31,7 @@ Test indépendant : conserver une identité, retirer son profil, rappeler deux f
 `ensure_agent_ids()` puis vérifier une seule identité, un seul profil et un seul
 état d’application.
 
-- [ ] T004 [P] [US4] Ajouter le test rouge `spec134` puis rendre `ensure_agent_ids()` idempotent sur les trois lignes dans `crates/bridget-daemon/src/agent_profile.rs`
+- [x] T004 [P] [US4] Ajouter le test rouge `spec134` puis rendre `ensure_agent_ids()` idempotent sur les trois lignes dans `crates/bridget-daemon/src/agent_profile.rs`
 
 ## Phase 5 — Validation et livraison
 
