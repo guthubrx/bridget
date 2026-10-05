@@ -1,6 +1,6 @@
 # Plan 134 — Noms humains dans les messages Bridget
 
-Statut : Correctif implémenté, recette de production en cours.
+Statut : Correctif livré, recette de production vérifiée.
 Branche initiale : session-134-noms-humains-messages.
 Branche de reprise : fix-134-profils-satures.
 Spec : specs/134-noms-humains-messages/spec.md.

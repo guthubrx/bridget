@@ -43,7 +43,7 @@ Test indépendant : conserver une identité, retirer son profil, rappeler deux f
 
 - [x] T008 Reproduire les 1 000 noms provisoires occupés sur les schémas actuel et historique ; vérifier l'échec avant correction.
 - [x] T009 Supprimer le plafond arbitraire dans l'allocation existante, borner la recherche par le nombre de profils et rendre les échecs d'enregistrement visibles ; vérifier réparation, renommage T3 et absence de régression.
-- [ ] T010 Livrer le correctif autorisé de SPEC-134 avec sauvegarde, vérifier les noms des fils connectés et un message réel, puis consigner les limites.
+- [x] T010 Livrer le correctif autorisé de SPEC-134 avec sauvegarde, vérifier les noms des fils connectés et un message réel, puis consigner les limites.
 
 ## Dépendances initiales
 

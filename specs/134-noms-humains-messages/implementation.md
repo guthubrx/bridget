@@ -10,7 +10,7 @@
 
 ## Reprise — saturation des noms provisoires, 2026-10-05
 
-- Correctif en cours sur `fix-134-profils-satures`, dans le worktree dédié.
+- Correctif livré depuis `fix-134-profils-satures`, dans le worktree dédié.
 - Observation réelle : les 1 000 noms `Agent` à `Agent (1000)` sont occupés.
   Le profil de `29aaed9b-9f6f-4849-87a5-1a23bbe01948` est absent. Le pont
   connaît son titre `opus-city-coder-1` mais reçoit `IdentityUnavailable`.
@@ -45,6 +45,28 @@
 - Les messages historiques ne sont pas réécrits. Sauvegarde cohérente SQLite,
   binaire et plists avant livraison dans
   `/Users/moi/.cache/bridget-deploy-backups/spec134-saturation-H3XqQq`.
+- Commit source : `c1712153b484`, fusion en avance rapide dans main. Construction
+  release verrouillée depuis main, dans une cible séparée de la production.
+- Binaire remplacé atomiquement, SHA-256
+  `8ab9d061c674521bc25a3a16f7b39c374cfd1cac8ecbf3fc71d57e751faca1ee`.
+  Seuls les services `com.bridget.daemon` et `com.bridget.t3` ont été relancés.
+  Le build-id du daemon est `c1712153b484` ; les deux services sont running.
+- Avant : 38 fils T3, 33 sans nom. Après : 38 fils, zéro sans nom et zéro nom
+  provisoire. Un nouveau fil apparu ensuite porte déjà son titre réel :
+  contrôle frais à 39 fils, zéro sans nom.
+- L'expéditeur du signalement porte maintenant `opus-city-coder-1`.
+  L'envoi par ce nom est résolu au bon UUID. Recette `8f654d6acfdd4`, réponse
+  `t3-b8b7ebac-07a4-441b-bf8e-ec7bb951e73d` contenant `NOM134 OK`.
+  L'affichage final de la réponse dans l'interface n'a pas été inspecté :
+  la réparation de l'annuaire, le trajet réel et le rendu par test sont vérifiés.
+- Comparaison avec la sauvegarde : aucun corps ni expéditeur de ledger conservé
+  n'a changé. Le nettoyage standard de rétention au redémarrage a expiré deux
+  entrées du 28/09, âgées de plus de sept jours. Le log de purge le confirme.
+  Ces deux entrées restent intégrales dans la sauvegarde SQLite. Aucune
+  restauration ancienne ni modification de la politique de rétention.
+- Limites : les anciens en-têtes T3 restent inchangés ; la nouvelle livraison
+  utilise les profils réparés. Pas de nouvelle contre-revue externe revendiquée
+  pour ce correctif, seulement self-review et preuves exécutées.
 
 ## Revue du plan
 

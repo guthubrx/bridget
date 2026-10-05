@@ -35,7 +35,7 @@
     "production_request_id": "mcp-97667-6ac34040-5"
   },
   "saturation_fix": {
-    "status": "validated_awaiting_production",
+    "status": "delivered",
     "production_observation": "1000 provisional names occupied; missing profile for opus-city-coder-1",
     "red": "Invalid: noms affichés épuisés",
     "green_daemon_spec134_tests": 6,
@@ -51,7 +51,27 @@
     "fmt": "pass",
     "clippy": "pass",
     "diff_check": "pass",
-    "backup": "/Users/moi/.cache/bridget-deploy-backups/spec134-saturation-H3XqQq"
+    "backup": "/Users/moi/.cache/bridget-deploy-backups/spec134-saturation-H3XqQq",
+    "source_commit": "c1712153b484",
+    "release_build": "pass",
+    "binary_sha256": "8ab9d061c674521bc25a3a16f7b39c374cfd1cac8ecbf3fc71d57e751faca1ee",
+    "daemon_build_id": "c1712153b484",
+    "services": "daemon and t3 running",
+    "initial_t3_threads": 38,
+    "initial_missing_names": 33,
+    "recovered_t3_threads": 38,
+    "recovered_missing_names": 0,
+    "recovered_provisional_names": 0,
+    "subsequent_t3_threads": 39,
+    "subsequent_missing_names": 0,
+    "target_name": "opus-city-coder-1",
+    "production_request_id": "8f654d6acfdd4",
+    "production_response_id": "t3-b8b7ebac-07a4-441b-bf8e-ec7bb951e73d",
+    "production_response_contains": "NOM134 OK",
+    "ui_header_visual_check": "not performed",
+    "retained_ledger_body_or_sender_changes": 0,
+    "expired_ledger_rows_kept_in_backup": 2,
+    "additional_external_review": "not claimed"
   },
   "open_findings": []
 }
