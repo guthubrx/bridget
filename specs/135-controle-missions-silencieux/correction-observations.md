@@ -28,7 +28,7 @@ minutes. Le contrôle silencieux des missions ne couvre donc pas ce circuit.
 - [x] Appliquer une règle calculée depuis `event` et `once`, sans migration SQL.
 - [x] Vérifier les attentes ponctuelles et les alertes utiles.
 - [x] Exécuter les tests du workspace, le formatage et Clippy.
-- [ ] Sauvegarder, livrer le binaire et vérifier le silence sur les faits réels.
+- [x] Sauvegarder, livrer le binaire et vérifier le silence sur les faits réels.
 
 Périmètre : module d'observation, description MCP et ce journal. Le worktree
 SPEC-135 existant et les changements de la compétence agent-loop sont préservés.
@@ -58,10 +58,47 @@ Les 99 tests du contrôleur agent-loop PASS, sans modification de son code.
 Sauvegarde avant livraison :
 `/Users/moi/.cache/bridget-deploy-backups/spec135-observations-G7Ak8B/`.
 Elle conserve le binaire actif, une copie SQLite cohérente, les deux plists et
-le registre des agents. Déploiement encore à vérifier.
+le registre des agents. Une seconde copie SQLite `bridget.at-switch.db` a été
+prise juste avant le remplacement.
 
 Le contrôle de missions reste inchangé. Aucun verdict ni état de mission
 n'est déduit d'une fin de tour. Revue locale : aucun nouveau stockage ni
 transport ; la règle précède la création du message. Les traces, les filtres,
 l'expiration et les compteurs de lacune restent conservés. Le changement réduit
 les réveils et la charge de suivi, sans masquer une décision de mission.
+
+## Livraison et constat réel
+
+- Commit code : `9403489a1aff79d4263c258fa8f8d1e86f6feb54`, fusion rapide dans
+  main et push github/main effectués.
+- Build release isolé : PASS, 54,63 s. Binaire actif et copie de build ont le
+  même SHA256 : `26b74e21074cff084db6048c5e6d5046096a46c0279adb71e9f5d9c9e5723f8a`.
+- Daemon et pont T3 relancés ; build actif `9403489a1aff`, daemon en ligne et
+  46 agents revenus. Les identifiants des agents avant/après sont identiques.
+- Les sept abonnements persistants de Politique sont conservés à l'identique.
+- Sonde ponctuelle en production, abonnement sans filtre d'agent : reçu
+  `notification_mode=journal_only`, puis `suppressed_total=1`,
+  `notifications_lost=0`. Un vrai fait est donc observé et rendu silencieux,
+  sans perte de remise invoquée pour expliquer le silence. Une lacune est
+  comptée séparément (`observation_gaps=1`), jamais reconstruite en fait.
+- Depuis le relevé de livraison à 15:01:33 UTC, les journaux locaux de Politique
+  et du contrôleur de recette ne montrent aucun nouveau message portant
+  l'identifiant `bridget-observation:`. Ce constat est borné à cette recette ;
+  il n'est pas une revendication de couverture totale des sources.
+- Politique a accepté le message de nouvelle règle `mcp-96911-6ac3bc06-1`.
+  L'information vers cx-coordinator `mcp-96911-6ac3bc06-2` reste en vol au dernier
+  relevé, sans revendication de réception. Aucun accusé demandé. La politique
+  est appliquée par le daemon et ne dépend pas de ces messages.
+- Les deux sondes de recette sont désabonnées. Le contrôleur Politique demeure
+  activé : passages 364 puis 366, dernier code de sortie 0. Aucun registre de
+  mission ni verdict modifié par cette correction.
+
+Conservation : huit entrées du ledger datées du 28/09, âgées de plus de sept
+jours, ont été purgées par la rétention existante au redémarrage. Le log daemon
+à 15:01:24 UTC l'atteste. Elles restent toutes présentes dans la sauvegarde
+SQLite prise avant remplacement. Aucun contenu des entrées restantes n'a changé.
+Ne pas présenter cette purge normale comme une conservation dans la base active.
+
+Les travaux non commités de la branche SPEC-135 et les trois fichiers de la
+compétence agent-loop sont préservés. Seul le correctif d'observation est livré.
+Les anciens messages déjà affichés ne sont pas effacés.
