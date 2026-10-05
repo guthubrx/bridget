@@ -5,8 +5,8 @@
 - **Spec** : 134-noms-humains-messages
 - **Branche** : session-134-noms-humains-messages
 - **Démarré** : 2026-10-05
-- **Terminé** : En cours
-- **Statut** : In Progress
+- **Terminé** : 2026-10-05
+- **Statut** : Implemented, prêt à livrer
 
 ## Revue du plan
 
@@ -68,16 +68,61 @@
 - **Résultat** : une seule lecture joint identité et profil. La transaction crée
   l’identité si nécessaire, crée le profil s’il manque, puis garantit l’état
   d’application avec un insert idempotent.
+- **État transitoire attendu** : le profil réparé reçoit d’abord un nom unique
+  `Agent N`. Le pont T3 republie ensuite le titre du fil. L’en-tête transitoire
+  `Agent N (UUID)` est sûr et ne change jamais l’identité routable.
 - **Self-review XIX/XX** : le contrat de la fonction existante est renforcé.
   Aucune migration, table, commande ou dépendance. Complexité O(n), avec une
   requête de lecture et des écritures conditionnelles par identifiant.
 
+### T005 — Validation
+
+- **Formatage** : `cargo fmt --all -- --check` passé.
+- **Tests SPEC-134** : 6 tests passés. Ils couvrent le libellé, les replis, la
+  provenance, les lots, la réparation idempotente et l’autorité du profil.
+- **Régressions ciblées** : 3 tests `spec114_lot` et 9 tests `agent_profile`
+  passés.
+- **Espace de travail** : 44 tests `bridget-core` passés. Le module principal
+  `bridget-daemon` a passé 1001 tests, avec 10 tests ignorés et 2 tests de CLI
+  dépendants de l’identité du processus parent. Ces deux tests ont ensuite
+  passé séparément dans un `BRIDGET_HOME` privé sans identité héritée.
+- **Cadre stable macOS** : `TMPDIR` court et privé, masque `077`, tests
+  sérialisés. Ce cadre évite la limite `SUN_LEN` et les fichiers temporaires
+  partagés. Les échecs initiaux venaient du harnais, pas du code SPEC-134.
+- **Analyse statique** : `cargo clippy --workspace --all-targets -- -D warnings`
+  passé.
+- **Construction** : `cargo build --locked --release -p bridget-daemon` passé.
+
+### T006 — Revue et convergence
+
+- **Contre-revue externe** : `APPROVE_WITH_CHANGES` par l’agent Claude
+  `29aaed9b-9f6f-4849-87a5-1a23bbe01948`.
+- **Condition validation** : satisfaite par T005.
+- **Condition anti-usurpation** : satisfaite par le test
+  `spec134_le_nom_livre_vient_du_profil_et_jamais_du_message_entrant`. Un faux
+  `from_display_name` client est remplacé par le nom du profil.
+- **Condition documentaire** : le nom transitoire `Agent N` est documenté dans
+  T004 ci-dessus.
+- **Convergence** : spec, plan, tâches, contrat, journal et résultats décrivent
+  le même comportement. Aucune exigence orpheline ni tâche ouverte avant la
+  livraison.
+- **Audit final** : aucun défaut fonctionnel ou de sécurité ouvert dans le
+  périmètre. Le nom reste une projection. L’UUID reste l’autorité.
+
 ## Self-review Article XIX/XX
 
-- Pourquoi cette solution est nécessaire : à compléter après le diff.
-- Pourquoi elle est plus simple ou plus maintenable : à compléter après le diff.
-- Hypothèses prises : à compléter après le diff.
-- Vérifications réalisées : à compléter après les tests.
-- Non vérifié : à compléter avant livraison.
-- Code supprimé ou évité : à compléter après le diff.
-- Complexité ajoutée et justification : à compléter après le diff.
+- Pourquoi cette solution est nécessaire : l’UUID seul rend les messages
+  difficiles à attribuer. Le nom existe déjà dans le profil et dans le message.
+- Pourquoi elle est maintenable : une seule fonction construit le libellé. Les
+  lots appellent la même fonction. La réparation reste dans la transaction
+  existante.
+- Hypothèses prises : le nom est informatif et peut changer. Le daemon reste
+  l’autorité qui enrichit le message au moment de la remise.
+- Vérifications réalisées : tests rouges puis verts, régressions ciblées,
+  espace de travail, formatage, Clippy, release et contre-revue externe.
+- Non vérifié avant T007 : le redémarrage des deux services installés et le
+  rendu d’un message réel avec le nouveau binaire.
+- Code supprimé ou évité : aucun format parallèle, aucun annuaire, aucune table,
+  aucune migration globale et aucune dépendance.
+- Complexité ajoutée : O(1) par libellé. La réparation reste O(n) pour n
+  identifiants enregistrés.

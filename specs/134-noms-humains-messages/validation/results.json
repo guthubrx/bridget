@@ -1,0 +1,27 @@
+{
+  "spec": "134-noms-humains-messages",
+  "date": "2026-10-05",
+  "status": "pass",
+  "targeted_tests": {
+    "spec134": 6,
+    "spec114_lot": 3,
+    "agent_profile": 9,
+    "failed": 0
+  },
+  "workspace": {
+    "bridget_core_passed": 44,
+    "bridget_daemon_passed_in_main_run": 1001,
+    "bridget_daemon_parent_identity_tests_rerun_passed": 2,
+    "ignored": 10,
+    "effective_failed": 0,
+    "environment": "TMPDIR court et privé, umask 077, tests sérialisés; deux tests CLI relancés dans un BRIDGET_HOME isolé"
+  },
+  "quality": {
+    "fmt": "pass",
+    "clippy_all_targets_deny_warnings": "pass",
+    "release_build_locked": "pass",
+    "external_review": "APPROVE_WITH_CHANGES_RESOLVED",
+    "final_audit": "pass"
+  },
+  "open_findings": []
+}

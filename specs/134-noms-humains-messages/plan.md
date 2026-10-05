@@ -1,6 +1,6 @@
 # Plan 134 — Noms humains dans les messages Bridget
 
-Statut : Planifié. Branche : session-134-noms-humains-messages.
+Statut : Implémenté. Branche : session-134-noms-humains-messages.
 Spec : specs/134-noms-humains-messages/spec.md.
 
 ## Contexte technique
@@ -78,10 +78,12 @@ protocole persistant n’est nécessaire.
 2. Écrire un test rouge du lot T3 avec deux expéditeurs nommés.
 3. Écrire un test rouge qui conserve l’identité, retire son profil et vérifie que
    `ensure_agent_ids()` recrée le profil et l’état d’application.
-4. Exécuter les tests ciblés des modules message, profil et T3.
-5. Exécuter `cargo fmt --check`, les tests de l’espace de travail, `cargo clippy`
+4. Vérifier que le daemon remplace toujours un nom fourni par le client par le
+   nom issu du profil de l’expéditeur.
+5. Exécuter les tests ciblés des modules message, profil et T3.
+6. Exécuter `cargo fmt --check`, les tests de l’espace de travail, `cargo clippy`
    sans avertissement et `cargo build --release`.
-6. Construire un daemon privé et vérifier un enregistrement réel sur une base de
+7. Construire un daemon privé et vérifier un enregistrement réel sur une base de
    test. La production n’est remplacée qu’après fusion et vérification fraîche.
 
 ## Déploiement et retour arrière

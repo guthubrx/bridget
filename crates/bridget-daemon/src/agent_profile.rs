@@ -1581,7 +1581,10 @@ mod tests {
             .unwrap();
         store
             .conn
-            .execute("DELETE FROM agent_profiles WHERE agent_id=?1", [id.as_str()])
+            .execute(
+                "DELETE FROM agent_profiles WHERE agent_id=?1",
+                [id.as_str()],
+            )
             .unwrap();
 
         store.ensure_agent_ids([id.as_str()]).unwrap();
@@ -1596,8 +1599,8 @@ mod tests {
             .execute(
                 "DELETE FROM agent_profile_applications WHERE agent_id=?1",
                 [id.as_str()],
-        )
-        .unwrap();
+            )
+            .unwrap();
         store.ensure_agent_ids([id.as_str()]).unwrap();
         assert_eq!(count(&store, "agent_profile_applications", &id), 1);
         std::fs::remove_file(path).unwrap();

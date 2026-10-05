@@ -18512,6 +18512,60 @@ mod presence_tests {
         message
     }
 
+    #[test]
+    fn spec134_le_nom_livre_vient_du_profil_et_jamais_du_message_entrant() {
+        let sender = "89000000-0000-4000-8000-000000000200";
+        let (mut state, config) = state_with_registered_agent("spec134-display-authority");
+        let (target_writer, mut target_reader) = control_socket("spec134-display-authority");
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(
+            &shared,
+            "client-spec134-display",
+            "134_scope_displaynameproof",
+            sender,
+        );
+        crate::agent_profile::AgentProfileStore::open(&config.db_path)
+            .unwrap()
+            .rename_display_name(sender, "Regional", |_| false)
+            .unwrap();
+
+        let mut message = idempotent_message("nom sous autorité du daemon");
+        message.from_display_name = Some("Nom forgé".to_string());
+        let result = handle_wrapper_message(
+            "client-spec134-display",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "spec134-display-authority".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+
+        let delivered = match read_control(&mut target_reader) {
+            DaemonToWrapper::DeliverIdempotent { message, .. } => message,
+            other => panic!("DeliverIdempotent attendu vers le wrapper: {other:?}"),
+        };
+        assert_eq!(delivered.from, sender);
+        assert_eq!(delivered.from_display_name.as_deref(), Some("Regional"));
+        assert_eq!(
+            delivered.sender_label(),
+            format!("Regional ({sender})"),
+            "le nom forgé par l'appelant ne doit jamais atteindre le fournisseur"
+        );
+
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     /// ORACLE — SendIdempotent reply=false (tous les mandats le service compagnon) doit
     /// poser deadline_at au DEFAULT natif pour un type ABSENT de agents.json
     /// (codex). Mutant : omettre stamp dans defer_idempotent_delivery → None.

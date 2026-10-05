@@ -201,9 +201,7 @@ impl BridgetMessage {
             .from_display_name
             .as_deref()
             .map(str::trim)
-            .filter(|display_name| {
-                !display_name.is_empty() && *display_name != self.from.as_str()
-            })
+            .filter(|display_name| !display_name.is_empty() && *display_name != self.from.as_str())
             .map_or_else(
                 || self.from.clone(),
                 |display_name| format!("{display_name} ({})", self.from),

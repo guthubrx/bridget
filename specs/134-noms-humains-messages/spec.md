@@ -2,7 +2,7 @@
 
 **Branche** : session-134-noms-humains-messages
 **Date** : 2026-10-05
-**Statut** : Draft
+**Statut** : Implemented
 **Priorité** : P1
 **Demande** : afficher un nom humain à côté de l’identifiant de l’expéditeur dans les messages Bridget.
 **Dépendances** : 098 (pont T3), 101 (identité T3), 110 (profil et nom de présentation), 114 (lots de messages), 133 (provenance des sous-agents).

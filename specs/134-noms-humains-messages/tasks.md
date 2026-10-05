@@ -35,8 +35,8 @@ Test indépendant : conserver une identité, retirer son profil, rappeler deux f
 
 ## Phase 5 — Validation et livraison
 
-- [ ] T005 Exécuter les tests ciblés, `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` et `cargo build --locked --release -p bridget-daemon`, puis consigner les preuves dans `specs/134-noms-humains-messages/implementation.md`
-- [ ] T006 Faire la self-review Article XIX/XX, la contre-revue adverse post-implémentation, la convergence des artefacts et l’audit final ; résultat observable dans `specs/134-noms-humains-messages/implementation.md` et `specs/134-noms-humains-messages/validation/results.json`
+- [x] T005 Exécuter les tests ciblés, `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` et `cargo build --locked --release -p bridget-daemon`, puis consigner les preuves dans `specs/134-noms-humains-messages/implementation.md`
+- [x] T006 Faire la self-review Article XIX/XX, la contre-revue adverse post-implémentation, la convergence des artefacts et l’audit final ; résultat observable dans `specs/134-noms-humains-messages/implementation.md` et `specs/134-noms-humains-messages/validation/results.json`
 - [ ] T007 Fusionner dans `main`, construire depuis la racine principale, sauvegarder le binaire actif, déployer, relancer uniquement `com.bridget.daemon` et `com.bridget.t3`, vérifier le build-id et un message réel, pousser vers `https://github.com/guthubrx/bridget.git`, puis nettoyer le worktree et la branche
 
 ## Dépendances
