@@ -118,3 +118,55 @@ le findingMEDIUM ni les mesures non faites (couverture de lignes/CVE/p99).
 Rapport : audits/2026-10-06/session-2026-10-06-spec-136-01/scoring.md.
 T010 terminé, T011 livraison toujours ouvert. Binaire release isolé reconstruit
 avec commit source cd1c3435, pas avec un identifiant dirty.
+
+## Bascule réelle et recette production
+Le 06/10 à04:27CEST, main fusionné en fast-forward et poussé à401f54f0.
+Sauvegarde cohérente immédiatement avant bascule : at-switch.db, ledger9098,
+quick_check=ok. Remplacement atomique du binaire puis redémarrage des deux
+LaunchAgents. Daemon buildcd1c3435cdbd, PID38973 ; T3 PID38975, santé HTTP200,
+45agents reconnectés, SQLite sain, schéma fils2. Le premier status était hors
+ligne immédiatement après kickstart ; contrôle ultérieur en ligne sans reprise.
+Comparaison par id+target+body avec la sauvegarde de bascule : zéro message
+absent ou modifié. Aucune restauration de DB et aucune nouvelle purge.
+SHA256 binaire02cfdf77ad5b6971572e328bae551dbc1028e74a993abc39778a5263611211e6.
+
+Recette CLI avec l'identité réelle bdget, fil
+a667ad8a-7d67-41d4-b451-2c003190df98, membre opus-city-coder-1.
+Trois publications silencieuses : history1, action2, decision3 remplaçant2.
+Zéro notice/wake, read ne contient que le corps3 et deux références ; history
+conserve exactement les trois corps. History avec notify est refusé sortie2,
+sans entrée supplémentaire. Relecture avant ACK : même reçu/snapshot/entrées,
+notice pending_receipt_replayed ; ACK3 puis clôture réelle, trois entrées gardées.
+Le reçu confirme cette lecture de recette, pas une mission métier.
+
+Règle envoyée une fois aux quatre responsables, reply=false, aucun accusé
+demandé. Politique et psychologie : accepted ; cx-coordinator et3D-collision
+encore in_flight au premier contrôle. Rejeu exact des clés lit le sort de remise,
+sans nouvel envoi métier. Identifiants et résultats dans validation/results.json.
+La remise ne prouve pas encore l'adoption de la règle par les équipes.
+
+## Clôture technique et limites de remise
+Les quatre messages de règle sont présents au ledger avec leur destinataire
+exact et leur corps de1102 caractères. Deux phases acked, deux dispatching.
+Annuaire réel : cx-coordinator et3D-collision busy. Le wrapper attend leur tour
+libre avant dispatch, conformément à drive_queue ; ne pas interrompre leurs
+travaux ni créer une seconde remise. Cela n'empêche pas la livraison du code.
+Règle envoyée et conservée pour quatre, remise effective prouvée pour deux.
+Son adoption reste à observer ; aucun succès inter-agents inventé.
+
+T001–T011 terminées pour le périmètre technique136 ; aucune tâche de code ouverte.
+Nettoyage limité à136, avec contrôles branche fusionnée, copie propre et aucun
+processus dans le dossier/ports de cette session.135 conserve sa branche,
+son HEAD e5d48591 et toutes ses modifications non committées.
+Clôture documentaire committée puis fusion/push ; contrôle réel du nettoyage
+et de la synchronisation Git requis avant le rapport utilisateur.
+
+Temps mural : environ50min depuis03:45CEST, ETA initiale65–102min ; recalibrage
+après Tasks60–95min restantes. Écart environ−40% contre milieu initial83,5min.
+Cause : réutilisation des fils102 et dix tests bornés, compilation/tests plus
+rapides que la provision ; reprises de tests incluses. Analyze et Converge
+manuels documentés, protocole audit v14 exécuté, aucune phase fonctionnelle
+omise. Aucune table/service/dépendance créée ; contrats/colonnes/docs étendus.
+Aucun arbitrage anti-doublon nouveau ; aucun diff fonctionnel non committé.
+Finding restant : QUAL-001 MEDIUM de lisibilité. Pas de CRITICAL/HIGH.
+Prochaine observation : adoption du canal structuré par les coordinateurs.

@@ -1,6 +1,6 @@
 {
   "spec": "136",
-  "status": "validation_pass_delivery_pending",
+  "status": "implemented_production_verified",
   "date": "2026-10-06",
   "scope": "fils structurés explicites ; aucun tri des anciens messages directs",
   "tests": {
@@ -51,7 +51,7 @@
   "release": {
     "exit_code": 0,
     "isolated_binary": "/Users/moi/.cache/bridget-builds/spec136/release/bridget",
-    "rebuild_with_commit_before_switch": false,
+    "rebuild_with_commit_before_switch": true,
     "code_commit": "cd1c3435cdbd487ec8b6c5ae40063c8fcdcebdaf",
     "binary_sha256": "02cfdf77ad5b6971572e328bae551dbc1028e74a993abc39778a5263611211e6"
   },
@@ -77,7 +77,43 @@
   ],
   "delivery": {
     "backup": "/Users/moi/.cache/bridget-deploy-backups/spec136-messages-z4GmT7",
-    "deployed": false
+    "deployed": true,
+    "build_id": "cd1c3435cdbd",
+    "main_pushed_before_switch": "401f54f03fc96bbec4e1183c6fb38783296901d8",
+    "production": {
+      "daemon_pid": 38973,
+      "t3_pid": 38975,
+      "agents_connected_after_restart": 45,
+      "http_health": 200,
+      "sqlite_quick_check": "ok",
+      "thread_schema_version": 2,
+      "ledger_at_switch": 9098,
+      "missing_or_changed_backup_messages": 0
+    },
+    "recipe": {
+      "thread_id": "a667ad8a-7d67-41d4-b451-2c003190df98",
+      "entries": 3,
+      "wakes": 0,
+      "notices": 0,
+      "current_bodies": 1,
+      "compact_references": 2,
+      "history_exact_bodies": 3,
+      "history_notify_rejected_exit_code": 2,
+      "pending_receipt_replayed": true,
+      "acked_seq": 3,
+      "state": "closed",
+      "entries_preserved": true,
+      "receipt": "a832aa96-e86c-472d-8190-60b542c14a19"
+    },
+    "rule_messages": [
+      {"agent": "cx-coordinator", "id": "mcp-24398-6ac45d28-3", "issued_at": 1791253800, "status": "in_flight"},
+      {"agent": "3D-collision", "id": "mcp-24398-6ac45d28-4", "issued_at": 1791253800, "status": "in_flight"},
+      {"agent": "Politique", "id": "mcp-24398-6ac45d28-5", "issued_at": 1791253800, "status": "accepted"},
+      {"agent": "psychologie", "id": "mcp-24398-6ac45d28-6", "issued_at": 1791253800, "status": "accepted"}
+    ],
+    "rule_adoption_measured": false,
+    "rule_delivery_limit": "Deux remises accepted ; deux enregistrées au ledger, phase dispatching, destinataires busy. Pas de preuve de remise finale ni d'adoption pour ces deux agents.",
+    "cleanup_scope": "136 uniquement ; worktree135 actif et modifications préservés"
   },
   "audit": {
     "grade": "A",

@@ -1,6 +1,6 @@
 # Spécification 136 — Messages utiles, historique conservé
 
-Statut: In Progress | Priorité: P1 | Date: 2026-10-06
+Statut: Implemented | Priorité: P1 | Date: 2026-10-06
 Branche: session-136-messages-utiles | Tests: 10/10 ciblés (100%) ; workspace PASS
 
 ## Pourquoi
