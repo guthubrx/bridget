@@ -1,12 +1,11 @@
 <!-- SPECKIT START -->
-Plan actif : specs/134-noms-humains-messages/plan.md.
-Périmètre de ce tour : afficher le nom humain à côté de l'UUID dans les messages
-Bridget et réparer les profils absents au prochain enregistrement. L'utilisateur
-a autorisé le commit, la fusion, le déploiement, le push et le nettoyage le
-2026-10-05.
-Tous les essais utilisent un BRIDGET_HOME et une socket isolés.
-Sélection SpecKit : SPECIFY_FEATURE=134-noms-humains-messages ; branche
-session-134-noms-humains-messages.
+Plan actif : specs/135-controle-missions-silencieux/plan.md.
+Périmètre de ce tour : rendre agent-loop silencieux sans changement utile et
+contraindre le suivi des missions par prise en charge, progrès et escalade.
+Tous les essais utilisent des runs agent-loop isolés. La boucle Politique ne
+sera migrée qu'après validation complète.
+Sélection SpecKit : SPECIFY_FEATURE=135-controle-missions-silencieux ; branche
+session-135-controle-missions-silencieux.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->
