@@ -65,6 +65,15 @@ inconnu reste possible avec avertissement. Aucun second accord humain obligatoir
 Les fils mixtes exigent le motif même en silence : tous leurs membres lisent.
 Ces recettes ne prouvent pas qu'un daemon ou catalogue MCP déjà vivant est actualisé.
 
+Consommateurs Python legacy : `bridget_agents()` sans racine n'est plus un
+annuaire global. Pour vérifier un UUID ou un rôle déjà mandaté, choisir
+explicitement `global_scope=True` ou le helper `bridget_agents_by_id` du moteur
+Agent Loop. Cette consultation n'est ni recrutement, ni suggestion, ni motif
+d'envoi. Transmettre toujours la racine de contexte et le motif requis à l'envoi.
+Le moteur canonique et les nouvelles boucles utilisent déjà la consultation
+adéquate ; un wrapper Psychologie ancien nécessitait l'adaptation de son seul
+appel d'inventaire. Aucun contenu de mission n'est nécessaire à ce contrôle.
+
 ## 3. Fournisseurs et permissions
 
 Le HOME du fournisseur porte son abonnement ; ne pas le remplacer ou copier

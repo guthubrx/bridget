@@ -1,0 +1,11 @@
+--- a/orchestration/psychologie-heartbeat/heartbeat.py
++++ b/orchestration/psychologie-heartbeat/heartbeat.py
+@@ -338,7 +338,7 @@
+         nonlocal directory
+         if transport is None:
+             if directory is None:
+-                directory = canon.bridget_agents()
++                directory = canon.bridget_agents(global_scope=True, project_root=str(run.get('project_root') or ''))
+             try:
+                 canon.resolve_bridget_target(ROOT_UUID, directory)
+             except SystemExit:
