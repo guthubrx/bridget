@@ -246,3 +246,41 @@ Captures finales :
 Clôture documentaire finale mesurée :2026-10-06T19:03:33Z, soit21:03:33CEST et133min33s depuis18:50CEST. Scope final de l'audit :56 fichiers utiles (16 auxiliaires neufs),35 sources, après ajout et lecture du rapport de convergence et du JSON de résultats. Le compteur54 plus haut était le snapshot avant ces deux ajouts. Validator officiel répété :exit0,0erreur,0warning. Toutes les écritures sont terminées ; le principal reprend la relecture indépendante et décide du pass2, non revendiqué ici.
 
 Pass2 principal achevé19:05:11UTC :CONVERGED,39s,20/20, zéro tâche ajoutée, tasks byte-identiques5f9cb26b2a9e49f58eb63ba5b9ae905ab46a63f0aa48cb1a354ad7e0fda68e9b. Durée totale à cette vérification :135min11s depuis18:50CEST, soit+22,9% par rapport à la borne initiale110min ; dernière borne recalibrée21:07CEST respectée. Cause : extension de la garde SteerCurrent, correction publication concurrente et adaptation des fixtures legacy après observation réelle. Code/tests inchangés, aucune livraison production.
+
+## Livraison locale autorisée et vérifiée — 2026-10-06
+
+L'utilisateur autorise ensuite les commits, la fusion, le push et la livraison
+locale. Les mentions précédentes « aucune livraison production » restent les
+résultats historiques du pipeline initial. La livraison est maintenant achevée.
+Les preuves et les empreintes détaillées figurent dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/delivery.md.
+
+Bridget est publié sur github/main au commit
+`7f6aba8527d2ee764e61613e3e579f54a290bf65`. Le daemon actif annonce ce build.
+L'application T3 reste ouverte : 28 fils, 28 présences actives et 28 projets
+attestés. Agent Loop est publié sur main au commit `8008b08e`. Ses quatre
+fichiers actifs sont identiques à la publication. La branche active 104 reste
+distincte et non poussée pour préserver les autres travaux.
+
+Les validations après commit sont PASS : release, clippy frais et formatage.
+Les 152 tests Python installés passent. La recette isolée avec le daemon réel
+passe aussi. Ce sont des répétitions, sans ajout aux comptes précédents.
+Les sources Rust et le moteur canonique restent inchangés après ces tests.
+
+Les 519 fichiers de tâches et résultats restent identiques avant et après
+bascule. Aucun verdict n'est modifié. La comparaison SQLite confirme zéro
+corps modifié, 434 entrées de fils présentes et inchangées, et zéro message
+non expiré absent. Huit messages expirés du 29 septembre sont purgés par la
+règle existante de sept jours. Tous restent dans le snapshot privé. Ce constat
+ne signifie pas que le ledger complet est identique octet pour octet.
+
+Le contrôle avant arrêt ne trouve aucun tour managed actif. Les deux
+LaunchAgents Agent Loop sont rechargés. Politique effectue neuf passages et
+Psychologie dix passages après réactivation, avec dernier exit zéro et sans
+nouvelle erreur observée. Le wrapper Psychologie legacy reçoit uniquement
+la consultation globale explicite du ROOT mandaté. Trois tests RED deviennent
+GREEN et sont rejoués PASS. Le contrôle réel trouve ROOT connected ; le dry-run
+envoie zéro message, signale une anomalie et ne clôture pas la mission.
+Aucun rappel réseau de production n'est revendiqué. Les anciens projets
+inconnus restent inconnus. Le nettoyage des trois worktrees attend encore
+la confirmation de l'utilisateur.
