@@ -2167,6 +2167,37 @@ pub enum ThreadNotifyAll {
     All,
 }
 
+/// Classe déclarée par l'auteur, jamais déduite du texte (session136).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadEntryKind {
+    History,
+    Action,
+    Blocker,
+    Decision,
+}
+
+impl ThreadEntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::History => "history",
+            Self::Action => "action",
+            Self::Blocker => "blocker",
+            Self::Decision => "decision",
+        }
+    }
+}
+
+// Missing conserve le contrat legacy ; null explicite refuse une métadonnée
+// invalide au lieu de la dégrader silencieusement en dépôt non classé.
+fn deserialize_present_optional<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ThreadAction {
@@ -2193,6 +2224,18 @@ pub enum ThreadAction {
         reply_to_seq: Option<u64>,
         #[serde(default)]
         ack_receipt: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        kind: Option<ThreadEntryKind>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        supersedes_seq: Option<u64>,
     },
     Read {
         thread_id: String,
@@ -6904,6 +6947,34 @@ mod spec102_thread_contract_tests {
             action(r#"{"action":"post","thread_id":"t","body":"b","operation_id":"op"}"#).is_err()
         );
         assert!(action(r#"{"action":"post","thread_id":"t","body":"b","notify":"everyone","operation_id":"op"}"#).is_err());
+    }
+
+    #[test]
+    fn spec136_post_metadata_is_closed_and_legacy_wire_unchanged() {
+        let legacy =
+            r#"{"action":"post","thread_id":"t","body":"b","notify":[],"operation_id":"op"}"#;
+        let value = serde_json::to_value(action(legacy).unwrap()).unwrap();
+        assert!(value.get("kind").is_none());
+        assert!(value.get("supersedes_seq").is_none());
+        for kind in ["history", "action", "blocker", "decision"] {
+            let mut typed = value.clone();
+            typed["kind"] = serde_json::json!(kind);
+            let parsed: ThreadAction = serde_json::from_value(typed).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap()["kind"], kind);
+        }
+        for invalid in [
+            serde_json::json!({"kind":null}),
+            serde_json::json!({"kind":"typo"}),
+            serde_json::json!({"supersedes_seq":null}),
+            serde_json::json!({"supersedes_seq":-1}),
+        ] {
+            let mut typed = value.clone();
+            typed
+                .as_object_mut()
+                .unwrap()
+                .extend(invalid.as_object().unwrap().clone());
+            assert!(serde_json::from_value::<ThreadAction>(typed).is_err());
+        }
     }
 
     #[test]

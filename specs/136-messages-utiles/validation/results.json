@@ -1,0 +1,80 @@
+{
+  "spec": "136",
+  "status": "validation_pass_delivery_pending",
+  "date": "2026-10-06",
+  "scope": "fils structurés explicites ; aucun tri des anciens messages directs",
+  "tests": {
+    "workspace": {
+      "command": "cargo test --workspace --no-fail-fast -- --test-threads=1",
+      "exit_code": 0,
+      "reported_pass_executions": 1603,
+      "includes_nested_worker_execution": 1,
+      "ignored": 52,
+      "failed": 0,
+      "log": "/Users/moi/.cache/bridget-builds/spec136-tests-confirmed.log"
+    },
+    "spec136": {
+      "new_tests": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    "mcp_contract_regression": "PASS",
+    "prior_runs": [
+      {
+        "log": "/Users/moi/.cache/bridget-builds/spec136-tests.log",
+        "exit_code": 101,
+        "cause": "attente de version1 dans spec102_v34, migration actuelle2 ; corrigé sans supprimer preuves de conservation"
+      },
+      {
+        "log": "/Users/moi/.cache/bridget-builds/spec136-tests-final.log",
+        "exit_code": 101,
+        "cause": "EINVAL set_read_timeout en fermeture socket dans ancien test Claude inchangé"
+      },
+      {
+        "log": "/Users/moi/.cache/bridget-builds/spec136-native-retest.log",
+        "exit_code": 0,
+        "passed": 4
+      }
+    ]
+  },
+  "fmt": {
+    "exit_code": 0
+  },
+  "clippy": {
+    "command": "cargo clippy --workspace --all-targets -- -D warnings",
+    "exit_code": 0,
+    "log": "/Users/moi/.cache/bridget-builds/spec136-clippy-final.log"
+  },
+  "diff_check": {
+    "exit_code": 0
+  },
+  "release": {
+    "exit_code": 0,
+    "isolated_binary": "/Users/moi/.cache/bridget-builds/spec136/release/bridget",
+    "rebuild_with_commit_before_switch": true
+  },
+  "review": {
+    "plan": "APPROVE_WITH_CHANGES",
+    "implementation": "APPROVE",
+    "provider": "Z.AI",
+    "model": "glm-5.3 auto-déclaré",
+    "harness": "Claude Code/T3",
+    "runtime_tests_by_reviewer": false
+  },
+  "coverage": {
+    "functional_requirements": 12,
+    "mapped": 12,
+    "new_functional_scenarios": 10,
+    "line_coverage_measured": false
+  },
+  "limits": [
+    "Aucune exécution fournisseur payant",
+    "Gherkin descriptif, assertions exécutées par Rust",
+    "Une annotation de complexité a été corrigée après compilation des tests ; aucune instruction exécutable modifiée, clippy final recompilé",
+    "Anciennes notifications/messages libres conservés, pas de conversion"
+  ],
+  "delivery": {
+    "backup": "/Users/moi/.cache/bridget-deploy-backups/spec136-messages-z4GmT7",
+    "deployed": false
+  }
+}

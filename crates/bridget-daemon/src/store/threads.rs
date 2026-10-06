@@ -6,16 +6,18 @@
 //! opération de rejeu et intentions de sollicitation sont commises ensemble
 //! ou pas du tout. Aucune E/S fournisseur ni appel réseau ici.
 //!
-//! Complexités : lecture O(log E + P) par l'index `(thread_id, seq)`,
+//! Complexités : lecture O(log E + P log E), P ≤ 200, par l'index de plage
+//! `(thread_id, seq)` et la jointure au successeur unique indexé ;
 //! publication O(log E + M) avec M ≤ 16 membres, liste O(log T + L) par
 //! l'index `(agent_id, thread_id)`. Aucune requête ne parcourt les corps.
 
 use super::{Store, StoreError};
+use bridget_transport::protocol::ThreadEntryKind;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 
 /// Version propre aux fils, distincte du schéma idempotence (`store_schema`).
-pub(crate) const THREAD_SCHEMA_VERSION: i64 = 1;
+pub(crate) const THREAD_SCHEMA_VERSION: i64 = 2;
 
 /// Bornes vérifiées dans la transaction ; les valeurs V1 sont fixées par le
 /// module métier, jamais par une option de configuration.
@@ -57,6 +59,7 @@ pub(crate) enum ThreadRefusal {
     CreatorRequired,
     NotAMember(Vec<String>),
     InvalidReplyReference,
+    InvalidSupersession,
     CapacityExceeded(&'static str),
     ReceiptInvalid,
     ReceiptObsolete,
@@ -220,6 +223,8 @@ pub(crate) struct PostEntry<'a> {
     pub notices: &'a [&'a str],
     pub reply_to_seq: Option<u64>,
     pub ack_receipt: Option<&'a str>,
+    pub kind: Option<ThreadEntryKind>,
+    pub supersedes_seq: Option<u64>,
     pub now: i64,
     pub limits: &'a ThreadLimits,
 }
@@ -378,6 +383,24 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<(), StoreError> {
              ON thread_wakes(state, last_attempt_at);",
     )
     .map_err(StoreError::Sqlite)?;
+    // Migration additive et atomique. O(C), C ≤ 10 colonnes : aucune copie
+    // de corps ou remise à zéro des compteurs, reçus et sollicitations.
+    let columns: std::collections::HashSet<String> = {
+        let mut stmt = tx
+            .prepare("PRAGMA table_info(discussion_entries)")
+            .map_err(sql)?;
+        stmt.query_map([], |row| row.get(1))
+            .map_err(sql)?
+            .collect::<Result<_, _>>()
+            .map_err(sql)?
+    };
+    if !columns.contains("kind") {
+        tx.execute_batch("ALTER TABLE discussion_entries ADD COLUMN kind TEXT CHECK (kind IS NULL OR kind IN ('history','action','blocker','decision'));").map_err(sql)?;
+    }
+    if !columns.contains("supersedes_seq") {
+        tx.execute_batch("ALTER TABLE discussion_entries ADD COLUMN supersedes_seq INTEGER CHECK (supersedes_seq IS NULL OR supersedes_seq > 0);").map_err(sql)?;
+    }
+    tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS idx_discussion_entries_supersedes ON discussion_entries(thread_id, supersedes_seq) WHERE supersedes_seq IS NOT NULL;").map_err(sql)?;
     tx.execute(
         "INSERT OR IGNORE INTO thread_schema_migrations (version, applied_at)
          VALUES (?1, strftime('%s','now'))",
@@ -399,6 +422,7 @@ pub(crate) fn schema_ready(conn: &Connection) -> Result<bool, StoreError> {
         ("table", "thread_wakes"),
         ("index", "idx_discussion_members_agent"),
         ("index", "idx_thread_wakes_delivery"),
+        ("index", "idx_discussion_entries_supersedes"),
     ];
     for (kind, name) in expected {
         let present: bool = conn
@@ -618,8 +642,10 @@ fn entry_json(
 }
 
 /// Lit une plage croissante, bornée en nombre et en octets sérialisés ; ne
-/// coupe jamais une entrée. La première entrée est toujours transmise : le
-/// dépôt garantit qu'elle tient dans le budget (`entry_too_large` sinon).
+/// coupe jamais une entrée. `projection_snapshot` choisit une lecture compacte,
+/// évaluée au snapshot du reçu ; None garde les corps exacts de l'histoire.
+/// O(log E + P log E), P ≤ 200 : une jointure au successeur unique indexé,
+/// aucune requête par entrée. Le dépôt borne une entrée indivisible.
 fn read_range(
     tx: &Transaction<'_>,
     thread_id: &str,
@@ -627,31 +653,71 @@ fn read_range(
     to_seq: u64,
     limit: u32,
     byte_budget: usize,
+    projection_snapshot: Option<u64>,
 ) -> Result<Vec<Value>, StoreError> {
     if from_seq > to_seq || limit == 0 {
         return Ok(Vec::new());
     }
     let mut statement = tx
         .prepare(
-            "SELECT seq, message_id, author_id, created_at, body, notify_json, reply_to_seq
-             FROM discussion_entries
-             WHERE thread_id = ?1 AND seq >= ?2 AND seq <= ?3
-             ORDER BY seq ASC LIMIT ?4",
+            "SELECT e.seq, e.message_id, e.author_id, e.created_at, e.body, e.notify_json,
+                    e.reply_to_seq, e.kind, e.supersedes_seq, s.seq
+             FROM discussion_entries e
+             LEFT JOIN discussion_entries s
+               ON s.thread_id = e.thread_id AND s.supersedes_seq = e.seq
+              AND s.supersedes_seq IS NOT NULL AND s.seq <= COALESCE(?5, ?3)
+             WHERE e.thread_id = ?1 AND e.seq >= ?2 AND e.seq <= ?3
+             ORDER BY e.seq ASC LIMIT ?4",
         )
         .map_err(sql)?;
     let rows = statement
         .query_map(
-            params![thread_id, from_seq as i64, to_seq as i64, i64::from(limit)],
+            params![
+                thread_id,
+                from_seq as i64,
+                to_seq as i64,
+                i64::from(limit),
+                projection_snapshot.map(|v| v as i64)
+            ],
             |row| {
-                Ok(entry_json(
-                    u64_of(row.get(0)?),
+                let seq = u64_of(row.get(0)?);
+                let kind: Option<String> = row.get(7)?;
+                let supersedes = opt_u64(row.get(8)?);
+                let successor = opt_u64(row.get(9)?);
+                let mut entry = entry_json(
+                    seq,
                     &row.get::<_, String>(1)?,
                     &row.get::<_, String>(2)?,
                     row.get(3)?,
                     &row.get::<_, String>(4)?,
                     &row.get::<_, String>(5)?,
                     opt_u64(row.get(6)?),
-                ))
+                );
+                if let Some(kind) = &kind {
+                    entry["kind"] = json!(kind);
+                }
+                if let Some(supersedes) = supersedes {
+                    entry["supersedes_seq"] = json!(supersedes);
+                }
+                if let Some(successor) = successor {
+                    entry["superseded_by_seq"] = json!(successor);
+                }
+                if projection_snapshot.is_some()
+                    && (kind.as_deref() == Some("history") || successor.is_some())
+                {
+                    entry
+                        .as_object_mut()
+                        .expect("entry_json est un objet")
+                        .remove("body");
+                    entry["presentation"] = json!(if successor.is_some() {
+                        "superseded_reference"
+                    } else {
+                        "history_reference"
+                    });
+                    entry["history_ref"] =
+                        json!({"thread_id":thread_id,"from_seq":seq,"to_seq":seq});
+                }
+                Ok(entry)
             },
         )
         .map_err(sql)?;
@@ -873,6 +939,45 @@ impl Store {
                 targets
             }
         };
+        if let Some(supersedes) = request.supersedes_seq {
+            // O(log E + M), M ≤ 16. Même transaction que le dépôt et avant
+            // l'ACK : une référence refusée ne confirme aucune lecture.
+            let prior: Option<(String, Option<String>, String, bool)> = tx
+                .query_row(
+                    "SELECT author_id, kind, notify_json,
+                        EXISTS(SELECT 1 FROM discussion_entries s
+                               WHERE s.thread_id = ?1 AND s.supersedes_seq = ?2)
+                 FROM discussion_entries WHERE thread_id = ?1 AND seq = ?2",
+                    params![request.thread_id, supersedes.min(i64::MAX as u64) as i64],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(sql)?;
+            let valid = match prior {
+                Some((author, kind, notify, replaced)) => {
+                    let old_notify: Value = serde_json::from_str(&notify)
+                        .map_err(|_| StoreError::Invariant("cibles de fil illisibles"))?;
+                    supersedes > 0
+                        && supersedes <= thread.last_seq
+                        && author == request.actor
+                        && kind.as_deref() != Some("history")
+                        && !replaced
+                        && old_notify.get("targets") == Some(&json!(targets))
+                        && matches!(
+                            request.kind,
+                            Some(
+                                ThreadEntryKind::Action
+                                    | ThreadEntryKind::Blocker
+                                    | ThreadEntryKind::Decision
+                            )
+                        )
+                }
+                None => false,
+            };
+            if !valid {
+                return Ok(ThreadTxOutcome::Refused(ThreadRefusal::InvalidSupersession));
+            }
+        }
         if let Some(receipt) = request.ack_receipt {
             match apply_ack(&tx, request.thread_id, &member, receipt)? {
                 AckApplied::Acknowledged(_) | AckApplied::Already(_) => {}
@@ -907,8 +1012,8 @@ impl Store {
         let notify_json = json!({"mode": request.notify.mode(), "targets": targets}).to_string();
         tx.execute(
             "INSERT INTO discussion_entries
-                 (thread_id, seq, message_id, author_id, body, created_at, notify_json, reply_to_seq)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (thread_id, seq, message_id, author_id, body, created_at, notify_json, reply_to_seq, kind, supersedes_seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 request.thread_id,
                 seq as i64,
@@ -918,6 +1023,8 @@ impl Store {
                 request.now,
                 notify_json,
                 request.reply_to_seq.map(|value| value as i64),
+                request.kind.map(ThreadEntryKind::as_str),
+                request.supersedes_seq.map(|value| value as i64),
             ],
         )
         .map_err(sql)?;
@@ -1146,6 +1253,7 @@ impl Store {
                 u64_of(through_seq),
                 u32::MAX,
                 usize::MAX,
+                Some(u64_of(snapshot_seq)),
             )?;
             return Ok(ReadOutcome::Page {
                 page: Page {
@@ -1170,6 +1278,7 @@ impl Store {
             snapshot_seq,
             limit,
             byte_budget,
+            Some(snapshot_seq),
         )?;
         let Some(through_seq) = last_seq_of(&entries) else {
             return Ok(ReadOutcome::Page {
@@ -1268,7 +1377,15 @@ impl Store {
             Some(to_seq) => to_seq,
             None => thread.last_seq,
         };
-        let entries = read_range(&tx, thread_id, from_seq, snapshot_seq, limit, byte_budget)?;
+        let entries = read_range(
+            &tx,
+            thread_id,
+            from_seq,
+            snapshot_seq,
+            limit,
+            byte_budget,
+            None,
+        )?;
         let through_seq = last_seq_of(&entries).unwrap_or(from_seq.saturating_sub(1));
         let has_more = !entries.is_empty() && through_seq < snapshot_seq;
         Ok(HistoryOutcome::Page(Page {
@@ -1515,10 +1632,94 @@ mod spec102_quota_tests {
                 notices: &[],
                 reply_to_seq: None,
                 ack_receipt: None,
+                kind: None,
+                supersedes_seq: None,
                 now: 2,
                 limits,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn spec136_v1_schema_migration_preserves_legacy_and_is_repeatable() {
+        let (store, root) = store();
+        let id = "13600000-0000-4000-8000-000000000001";
+        create(&store, &crate::threads::LIMITS, id);
+        post(&store, &crate::threads::LIMITS, id, "legacy exact\né");
+        let read_request = ReadRequest {
+            actor: B,
+            thread_id: id,
+            limit: 200,
+            byte_budget: 60000,
+            receipt_id: "13600000-0000-4000-8000-000000000002",
+            receipt_ttl_secs: 600,
+            now: 2,
+        };
+        let pending_read = store.thread_read(&read_request).unwrap();
+        let operations: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM thread_operations", [], |r| r.get(0))
+            .unwrap();
+        // Reproduire le schémaV1 sur disque : mêmes tables/lignes, sans les
+        // deux colonnes/indexV2. Aucun processus ou base de production.
+        store
+            .conn
+            .execute_batch(
+                "DROP INDEX idx_discussion_entries_supersedes;
+            ALTER TABLE discussion_entries DROP COLUMN supersedes_seq;
+            ALTER TABLE discussion_entries DROP COLUMN kind;
+            DELETE FROM thread_schema_migrations WHERE version=2;
+            INSERT OR IGNORE INTO thread_schema_migrations VALUES(1,1);",
+            )
+            .unwrap();
+        drop(store);
+        let migrated = Store::open(&root.join("db.sqlite")).unwrap();
+        let first = migrated.thread_history(B, id, 1, None, 200, 60000).unwrap();
+        assert_eq!(
+            migrated
+                .conn
+                .query_row("SELECT COUNT(*) FROM thread_operations", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            operations
+        );
+        let replay = migrated.thread_read(&read_request).unwrap();
+        assert!(
+            matches!((&pending_read,&replay), (ReadOutcome::Page { page:p,receipt:r,.. },ReadOutcome::Page { page:p2,receipt:r2,.. }) if p == p2 && r == r2)
+        );
+        assert!(
+            matches!(&first, HistoryOutcome::Page(p) if p.entries[0]["body"] == "legacy exact\né" && p.entries[0].get("kind").is_none())
+        );
+        assert_eq!(
+            migrated
+                .thread_show(B, id)
+                .unwrap()
+                .unwrap()
+                .thread
+                .body_bytes,
+            "legacy exact\né".len() as u64
+        );
+        drop(migrated);
+        let reopened = Store::open(&root.join("db.sqlite")).unwrap();
+        assert_eq!(
+            reopened.thread_history(B, id, 1, None, 200, 60000).unwrap(),
+            first
+        );
+        let version: i64 = reopened
+            .conn
+            .query_row(
+                "SELECT MAX(version) FROM thread_schema_migrations",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 2);
+        let plan: Vec<String> = reopened.conn.prepare("EXPLAIN QUERY PLAN SELECT s.seq FROM discussion_entries e LEFT JOIN discussion_entries s ON s.thread_id=e.thread_id AND s.supersedes_seq=e.seq AND s.supersedes_seq IS NOT NULL AND s.seq<=10 WHERE e.thread_id=?1 AND e.seq>=1 AND e.seq<=10 ORDER BY e.seq LIMIT 200").unwrap().query_map([id], |r| r.get(3)).unwrap().collect::<Result<_,_>>().unwrap();
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("idx_discussion_entries_supersedes")),
+            "{plan:?}"
+        );
     }
 
     fn entries(store: &Store, thread_id: &str) -> u64 {

@@ -1,0 +1,6 @@
+0307fcd107561c0a4e79125c6b0e6312ae023966aaae7bc695dbcbdbbc20d559  crates/bridget-daemon/src/cli.rs
+53b502f3b4f8300d5027ded51c603888898bdf0199f04c7f2bce2c76d36136cd  crates/bridget-daemon/src/mcp.rs
+988af2de58956bd02234f9d246c897ba8b9327ff556a7ba6881ae0ed66084292  crates/bridget-daemon/src/store/threads.rs
+2a6a07c1fbfd934bcd57fea98fdfc85482665288483f122873ddf5c5c4c8d96d  crates/bridget-daemon/src/threads.rs
+815c95146ae5c8de198c526b097f111d002878a9440de73e6945456276308f36  crates/bridget-daemon/tests/spec102_threads_test.rs
+fea3a5ed42f8b9f83f3215e5512033dfd83dbd4fc3b3f8e9988132dcdc224a29  crates/bridget-transport/src/protocol.rs

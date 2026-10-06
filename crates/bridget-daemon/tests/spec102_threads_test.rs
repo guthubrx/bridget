@@ -66,6 +66,355 @@ pub fn spec102_root(label: &str) -> std::path::PathBuf {
     root
 }
 
+// Session136 réutilise le harnais102 : aucun second daemon ou fournisseur réel.
+fn post136(
+    client: &mut Client,
+    thread_id: &str,
+    kind: &str,
+    body: &str,
+    notify: Value,
+    supersedes: Option<u64>,
+) -> Value {
+    let mut request = json!({"action":"post","thread_id":thread_id,"kind":kind,"body":body,"notify":notify,"operation_id":op()});
+    if let Some(seq) = supersedes {
+        request["supersedes_seq"] = json!(seq);
+    }
+    thread(client, request)
+}
+
+#[test]
+fn spec136_history_silent_and_exact() {
+    let mut q = Quartet::start("spec136-history");
+    let id = create(&mut q.a, "136", &[AGENT_B])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let bodies: Vec<String> = (0..64)
+        .map(|n| format!("PRIVATE_PROOF_{n}: {}", "é".repeat(1500)))
+        .collect();
+    for body in &bodies {
+        assert_eq!(
+            post136(&mut q.a, &id, "history", body, json!([]), None)["status"],
+            "posted"
+        );
+    }
+    assert_silent(&mut q.b);
+    assert_eq!(own_wake(&mut q.b, &id)["state"], "none");
+    let page = thread(
+        &mut q.b,
+        json!({"action":"read","thread_id":id,"limit":200}),
+    );
+    assert_eq!(page["entries"].as_array().unwrap().len(), 64);
+    assert!(!page.to_string().contains("PRIVATE_PROOF"));
+    assert_eq!(page["entries"][0]["presentation"], "history_reference");
+    let archived: Vec<String> = history_all(&mut q.b, &id)
+        .into_iter()
+        .map(|v| v["body"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(archived, bodies);
+    q.stop();
+}
+
+#[test]
+fn spec136_supersession_keeps_only_current_bodies() {
+    let mut q = Quartet::start("spec136-current");
+    let id = create(&mut q.a, "136", &[AGENT_B])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        post136(
+            &mut q.a,
+            &id,
+            "blocker",
+            "blocage indépendant",
+            json!([]),
+            None
+        )["seq"],
+        1
+    );
+    assert_eq!(
+        post136(&mut q.a, &id, "action", "ancienne0", json!([AGENT_B]), None)["seq"],
+        2
+    );
+    for n in 1..11 {
+        assert_eq!(
+            post136(
+                &mut q.a,
+                &id,
+                "action",
+                &format!("ancienne{n}"),
+                json!([AGENT_B]),
+                Some(n + 1)
+            )["status"],
+            "posted"
+        );
+    }
+    let wake = own_wake(&mut q.b, &id);
+    assert_eq!(wake["pending_seq"], 12);
+    announce_capability(&mut q.b);
+    let notice = expect_notice(&mut q.b);
+    assert_eq!(notice.through_seq, 12);
+    assert_eq!(notice.generation, 1);
+    ack_notice(&mut q.b, &notice);
+    assert_silent(&mut q.b);
+    let page = thread(&mut q.b, json!({"action":"read","thread_id":id}));
+    let bodies: Vec<&str> = page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["body"].as_str())
+        .collect();
+    assert_eq!(bodies, vec!["blocage indépendant", "ancienne10"]);
+    assert_eq!(page["entries"][1]["superseded_by_seq"], 3);
+    assert_eq!(history_all(&mut q.b, &id).len(), 12);
+    q.stop();
+}
+
+#[test]
+fn spec136_supersession_refusals_are_atomic() {
+    let mut q = Quartet::start("spec136-refuse");
+    let id = create(&mut q.a, "136", &[AGENT_B, AGENT_C])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    post136(&mut q.a, &id, "action", "original", json!([AGENT_B]), None);
+    post136(&mut q.a, &id, "history", "preuve", json!([]), None);
+    let page = thread(&mut q.a, json!({"action":"read","thread_id":id}));
+    let receipt = page["receipt"].as_str().unwrap();
+    let refused = thread(
+        &mut q.a,
+        json!({"action":"post","thread_id":id,"kind":"action","body":"mauvaise audience","notify":[AGENT_C],"supersedes_seq":1,"ack_receipt":receipt,"operation_id":op()}),
+    );
+    assert_eq!(refused["code"], "invalid_supersession");
+    assert_eq!(
+        thread(&mut q.a, json!({"action":"show","thread_id":id}))["own_acked_seq"],
+        0
+    );
+    assert_eq!(
+        post136(
+            &mut q.c,
+            &id,
+            "action",
+            "autre auteur",
+            json!([AGENT_B]),
+            Some(1)
+        )["code"],
+        "invalid_supersession"
+    );
+    assert_eq!(
+        post136(
+            &mut q.a,
+            &id,
+            "action",
+            "remplace preuve",
+            json!([]),
+            Some(2)
+        )["code"],
+        "invalid_supersession"
+    );
+    assert_eq!(
+        post136(
+            &mut q.a,
+            &id,
+            "action",
+            "future",
+            json!([AGENT_B]),
+            Some(999)
+        )["code"],
+        "invalid_supersession"
+    );
+    assert_eq!(
+        post136(
+            &mut q.a,
+            &id,
+            "action",
+            "correct",
+            json!([AGENT_B]),
+            Some(1)
+        )["status"],
+        "posted"
+    );
+    assert_eq!(
+        post136(
+            &mut q.a,
+            &id,
+            "action",
+            "branche",
+            json!([AGENT_B]),
+            Some(1)
+        )["code"],
+        "invalid_supersession"
+    );
+    assert_eq!(history_all(&mut q.b, &id).len(), 3);
+    q.stop();
+}
+
+#[test]
+fn spec136_receipt_snapshot_survives_later_replacement() {
+    let mut q = Quartet::start("spec136-snapshot");
+    let id = create(&mut q.a, "136", &[AGENT_B])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    post136(&mut q.a, &id, "action", "initial", json!([AGENT_B]), None);
+    post136(&mut q.a, &id, "history", "preuve", json!([]), None);
+    let first = thread(&mut q.b, json!({"action":"read","thread_id":id,"limit":1}));
+    post136(
+        &mut q.a,
+        &id,
+        "decision",
+        "correction",
+        json!([AGENT_B]),
+        Some(1),
+    );
+    let replay = thread(
+        &mut q.b,
+        json!({"action":"read","thread_id":id,"limit":200}),
+    );
+    assert_eq!(replay["entries"], first["entries"]);
+    assert_eq!(replay["receipt"], first["receipt"]);
+    assert_eq!(replay["entries"][0]["body"], "initial");
+    thread(
+        &mut q.b,
+        json!({"action":"ack","thread_id":id,"receipt":first["receipt"]}),
+    );
+    let next = thread(&mut q.b, json!({"action":"read","thread_id":id}));
+    assert_eq!(next["entries"][1]["body"], "correction");
+    assert_eq!(next["entries"][0]["presentation"], "history_reference");
+    q.stop();
+}
+
+#[test]
+fn spec136_classes_bounds_and_idempotence() {
+    let mut q = Quartet::start("spec136-bounds");
+    let id = create(&mut q.a, "136", &[AGENT_B])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        post136(&mut q.a, &id, "history", "preuve", json!([AGENT_B]), None)["code"],
+        "invalid_request"
+    );
+    assert_eq!(
+        post136(&mut q.a, &id, "history", "preuve", json!([]), Some(1))["code"],
+        "invalid_request"
+    );
+    assert_eq!(
+        post136(&mut q.a, &id, "action", &"é".repeat(1025), json!([]), None)["code"],
+        "invalid_request"
+    );
+    assert_eq!(
+        post136(&mut q.a, &id, "action", &"é".repeat(1024), json!([]), None)["status"],
+        "posted"
+    );
+    let operation = op();
+    let request = json!({"action":"post","thread_id":id,"kind":"blocker","body":"blocage","notify":[],"operation_id":operation});
+    let posted = thread(&mut q.a, request.clone());
+    let replayed = thread(&mut q.a, request.clone());
+    assert_eq!(posted["message_id"], replayed["message_id"]);
+    let mut divergent = request;
+    divergent["kind"] = json!("decision");
+    assert_eq!(thread(&mut q.a, divergent)["code"], "envelope_mismatch");
+    let legacy = json!({"action":"post","thread_id":id,"body":"annule tout","notify":[],"operation_id":op()});
+    let legacy_result = thread(&mut q.a, legacy.clone());
+    assert_eq!(
+        thread(&mut q.a, legacy)["message_id"],
+        legacy_result["message_id"]
+    );
+    assert_eq!(history_all(&mut q.b, &id).len(), 3);
+    let page = thread(&mut q.b, json!({"action":"read","thread_id":id}));
+    assert!(
+        page["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry.get("body").is_some())
+    );
+    assert_eq!(page["entries"][1]["body"], "blocage");
+    assert_eq!(page["entries"][2]["body"], "annule tout");
+    q.stop();
+}
+
+#[test]
+fn spec136_structured_history_survives_daemon_restart() {
+    let mut q = Quartet::start("spec136-restart");
+    let id = create(&mut q.a, "136", &[AGENT_B])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    post136(&mut q.a, &id, "history", "preuve exacte", json!([]), None);
+    post136(&mut q.a, &id, "action", "initial", json!([AGENT_B]), None);
+    post136(
+        &mut q.a,
+        &id,
+        "decision",
+        "courant",
+        json!([AGENT_B]),
+        Some(2),
+    );
+    q.stop();
+    let daemon = spawn_daemon(&q.root, None);
+    let mut b = register_agent_as(&q.socket, AGENT_B, "spec136-restarted-b");
+    let page = thread(&mut b, json!({"action":"read","thread_id":id}));
+    assert!(page["entries"][0].get("body").is_none());
+    assert_eq!(page["entries"][1]["superseded_by_seq"], 3);
+    assert_eq!(page["entries"][2]["body"], "courant");
+    let history = history_all(&mut b, &id);
+    assert_eq!(history[0]["body"], "preuve exacte");
+    assert_eq!(history[1]["body"], "initial");
+    stop_cooperatively(daemon);
+}
+
+#[test]
+fn spec136_effective_audience_and_legacy_supersession() {
+    let mut q = Quartet::start("spec136-audience");
+    let id = create(&mut q.a, "136", &[AGENT_B, AGENT_C, AGENT_D])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let original = post(&mut q.a, &id, "legacy exact", json!("all"));
+    assert_eq!(original["seq"], 1);
+    let operation = op();
+    let request = json!({"action":"post","thread_id":id,"kind":"decision","body":"courant","notify":[AGENT_D,AGENT_B,AGENT_C,AGENT_B],"supersedes_seq":1,"operation_id":operation});
+    assert_eq!(thread(&mut q.a, request.clone())["status"], "posted");
+    let mut divergent = request;
+    divergent["supersedes_seq"] = json!(2);
+    assert_eq!(thread(&mut q.a, divergent)["code"], "envelope_mismatch");
+    let page = thread(&mut q.b, json!({"action":"read","thread_id":id}));
+    assert_eq!(page["entries"][0]["presentation"], "superseded_reference");
+    assert_eq!(page["entries"][1]["body"], "courant");
+    let other = create(&mut q.a, "autre", &[AGENT_B])["thread_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        post136(
+            &mut q.a,
+            &other,
+            "action",
+            "autre fil",
+            json!([AGENT_B]),
+            Some(1)
+        )["code"],
+        "invalid_supersession"
+    );
+    let mut outsider = register_agent_as(&q.socket, AGENT_E, "spec136-outsider");
+    assert_eq!(
+        post136(
+            &mut outsider,
+            &id,
+            "action",
+            "intrusion",
+            json!([AGENT_B]),
+            Some(2)
+        )["code"],
+        "thread_unavailable"
+    );
+    assert_eq!(history_all(&mut q.b, &id)[0]["body"], "legacy exact");
+    q.stop();
+}
+
 fn agent_list(socket: &Path) -> Vec<String> {
     let mut probe = Client::connect(socket);
     probe.send(WrapperToDaemon::ListAgents);
@@ -702,7 +1051,7 @@ fn spec102_v34_migration_base_pre102_et_contraintes_effectives() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2, "migration additive de la session136");
     let idempotence: i64 = conn
         .query_row(
             "SELECT MAX(version) FROM idempotency_schema_migrations",

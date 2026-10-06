@@ -888,7 +888,7 @@ const THREAD_USAGE: &str = "usage :\n  \
   bridget thread create --title TITRE --member UUID|NOM [--member …] --id UUID\n  \
   bridget thread list [--limit N] [--after UUID]\n  \
   bridget thread show THREAD\n  \
-  bridget thread post THREAD (--silent | --notify UUID|NOM [--notify …] | --all) --id UUID [--reply-to N] [--ack RECU] -- TEXTE\n  \
+  bridget thread post THREAD (--silent | --notify UUID|NOM [--notify …] | --all) --id UUID [--kind history|action|blocker|decision] [--supersedes N] [--reply-to N] [--ack RECU] -- TEXTE\n  \
   bridget thread read THREAD [--limit N]\n  \
   bridget thread ack THREAD RECU\n  \
   bridget thread history THREAD [--from-seq N] [--to-seq N] [--limit N]\n  \
@@ -993,7 +993,7 @@ struct ThreadArgs {
     text: Option<String>,
 }
 
-const THREAD_SINGLE_OPTIONS: [&str; 8] = [
+const THREAD_SINGLE_OPTIONS: [&str; 10] = [
     "--title",
     "--id",
     "--limit",
@@ -1002,6 +1002,8 @@ const THREAD_SINGLE_OPTIONS: [&str; 8] = [
     "--ack",
     "--from-seq",
     "--to-seq",
+    "--kind",
+    "--supersedes",
 ];
 const THREAD_MULTI_OPTIONS: [&str; 2] = ["--member", "--notify"];
 const THREAD_FLAGS: [&str; 2] = ["--silent", "--all"];
@@ -1091,6 +1093,8 @@ fn parse_thread_args(
             "--id",
             "--reply-to",
             "--ack",
+            "--kind",
+            "--supersedes",
         ],
         "read" => &["--limit"],
         "history" => &["--from-seq", "--to-seq", "--limit"],
@@ -1181,6 +1185,19 @@ fn parse_thread_args(
                 operation_id: id()?,
                 reply_to_seq: thread_positive(&parsed, "--reply-to")?,
                 ack_receipt: parsed.single.get("--ack").cloned(),
+                kind: parsed
+                    .single
+                    .get("--kind")
+                    .map(|kind| {
+                        serde_json::from_value(serde_json::Value::String(kind.clone())).map_err(
+                            |_| {
+                                "thread post : --kind attend history, action, blocker ou decision"
+                                    .to_string()
+                            },
+                        )
+                    })
+                    .transpose()?,
+                supersedes_seq: thread_positive(&parsed, "--supersedes")?,
             }
         }
         "read" => ThreadAction::Read {
@@ -1299,6 +1316,50 @@ mod spec102_cli_thread_tests {
             "5 caractères : trop court"
         );
         assert!(resolve("ffffff").unwrap_err().contains("inconnu"));
+    }
+
+    #[test]
+    fn spec136_cli_structured_options_are_strict() {
+        let parsed = parse_thread_args(
+            &args(&[
+                "post",
+                T,
+                "--kind",
+                "decision",
+                "--supersedes",
+                "4",
+                "--notify",
+                B,
+                "--id",
+                OP,
+                "--",
+                "consigne",
+            ]),
+            &resolver,
+        )
+        .unwrap();
+        let value = serde_json::to_value(parsed).unwrap();
+        assert_eq!(value["kind"], "decision");
+        assert_eq!(value["supersedes_seq"], 4);
+        for invalid in [
+            args(&[
+                "post", T, "--silent", "--id", OP, "--kind", "typo", "--", "x",
+            ]),
+            args(&[
+                "post",
+                T,
+                "--silent",
+                "--id",
+                OP,
+                "--supersedes",
+                "0",
+                "--",
+                "x",
+            ]),
+            args(&["read", T, "--kind", "action"]),
+        ] {
+            assert!(parse_thread_args(&invalid, &resolver).is_err());
+        }
     }
 
     #[test]

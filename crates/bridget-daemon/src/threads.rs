@@ -13,7 +13,8 @@ use crate::store::threads::{
 };
 use crate::store::{Store, StoreError};
 use bridget_transport::protocol::{
-    THREAD_CONTRACT_VERSION, ThreadAction, ThreadNotify, ThreadRequest, ThreadResult,
+    THREAD_CONTRACT_VERSION, ThreadAction, ThreadEntryKind, ThreadNotify, ThreadRequest,
+    ThreadResult,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -23,6 +24,7 @@ pub(crate) const MIN_MEMBERS: usize = 2;
 pub(crate) const MAX_MEMBERS: usize = 16;
 pub(crate) const TITLE_MAX_CHARS: usize = 160;
 pub(crate) const BODY_MAX_BYTES: usize = 16 * 1024;
+pub(crate) const ACTION_MAX_BYTES: usize = 2048;
 pub(crate) const PAGE_DEFAULT: u32 = 50;
 pub(crate) const PAGE_MAX: u32 = 200;
 /// JSON complet d'une page, reçu et métadonnées compris.
@@ -120,6 +122,11 @@ fn refusal_result(refusal: ThreadRefusal) -> Value {
         ThreadRefusal::InvalidReplyReference => error(
             "invalid_reply_reference",
             "reply_to_seq ne désigne aucune entrée de ce fil.",
+            false,
+        ),
+        ThreadRefusal::InvalidSupersession => error(
+            "invalid_supersession",
+            "Remplacement refusé : cible actuelle, même auteur et mêmes destinataires requis.",
             false,
         ),
         ThreadRefusal::CapacityExceeded(kind) => error(
@@ -307,6 +314,8 @@ pub(crate) fn handle(
             operation_id,
             reply_to_seq,
             ack_receipt,
+            kind,
+            supersedes_seq,
         } => post(
             store,
             actor,
@@ -316,6 +325,8 @@ pub(crate) fn handle(
             &operation_id,
             reply_to_seq,
             ack_receipt.as_deref(),
+            kind,
+            supersedes_seq,
             now,
         ),
         ThreadAction::Read { thread_id, limit } => read(store, actor, &thread_id, limit, now),
@@ -480,11 +491,37 @@ fn post(
     operation_id: &str,
     reply_to_seq: Option<u64>,
     ack_receipt: Option<&str>,
+    kind: Option<ThreadEntryKind>,
+    supersedes_seq: Option<u64>,
     now: i64,
 ) -> Result<Value, Value> {
     let thread_id = require_uuid(thread_id, "thread_id")?;
     let operation_id = require_uuid(operation_id, "operation_id")?;
     validate_body(body)?;
+    if kind == Some(ThreadEntryKind::History) {
+        if !matches!(notify, ThreadNotify::Targets(targets) if targets.is_empty())
+            || supersedes_seq.is_some()
+        {
+            return Err(error(
+                "invalid_request",
+                "history exige notify:[] et aucun remplacement.",
+                false,
+            ));
+        }
+    } else if kind.is_some() && body.len() > ACTION_MAX_BYTES {
+        return Err(error(
+            "invalid_request",
+            "Action, blocage ou décision limité à 2048 octets ; publier les preuves en history.",
+            false,
+        ));
+    }
+    if supersedes_seq.is_some() && kind.is_none() {
+        return Err(error(
+            "invalid_request",
+            "supersedes_seq exige une classe déclarée.",
+            false,
+        ));
+    }
     if reply_to_seq == Some(0) {
         return Err(error(
             "invalid_request",
@@ -521,7 +558,8 @@ fn post(
         }
     };
     let message_id = uuid::Uuid::new_v4().hyphenated().to_string();
-    let entry_len = entry_json_len(&message_id, actor, body, &canonical_targets, reply_to_seq);
+    let entry_len = entry_json_len(&message_id, actor, body, &canonical_targets, reply_to_seq)
+        + if kind.is_some() { 128 } else { 0 };
     if entry_len > ENTRY_MAX_JSON_BYTES {
         return Err(error(
             "entry_too_large",
@@ -548,6 +586,14 @@ fn post(
     if let Some(receipt) = ack_receipt.as_deref() {
         parts.push(receipt.as_bytes());
     }
+    let supersedes_bytes = supersedes_seq.map(u64::to_be_bytes);
+    if let Some(kind) = kind {
+        // Suffixe absent pour les anciens dépôts : leur empreinte reste exacte.
+        parts.extend([b"entry-control-v1".as_slice(), kind.as_str().as_bytes()]);
+        if let Some(bytes) = &supersedes_bytes {
+            parts.push(bytes);
+        }
+    }
     let canonical_hash = digest(&parts);
     let outcome = store
         .thread_post(PostEntry {
@@ -561,6 +607,8 @@ fn post(
             notices: &notices,
             reply_to_seq,
             ack_receipt: ack_receipt.as_deref(),
+            kind,
+            supersedes_seq,
             now,
             limits: &LIMITS,
         })
@@ -723,8 +771,13 @@ fn close(
 pub(crate) fn notice_body(thread_id: &str, through_seq: u64) -> String {
     format!(
         "Sollicitation dans le fil {thread_id}, nouveautés jusqu'à {through_seq}. \
-         Lis les nouveautés avec bridget_thread/read. Confirme la plage reçue, puis publie \
-         dans le fil si utile. Ne réponds pas par message direct à cette alerte."
+         Lis les nouveautés avec bridget_thread/read. Les références sans body \
+         sont des preuves historiques ou des consignes remplacées : history permet \
+         de les relire, jamais de les exécuter comme consignes actuelles. Confirme \
+         chaque page reçue, puis contrôle has_more et les pages suivantes avant \
+         d'agir. L'ACK n'accepte aucune mission. Publie preuves avec kind=history \
+         et notify:[], consignes courtes avec kind=action/blocker/decision et \
+         supersedes_seq si remplacement. Ne réponds pas par message direct à cette alerte."
     )
 }
 

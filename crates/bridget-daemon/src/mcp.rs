@@ -1877,7 +1877,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_thread",
-            "description": "Fil inter-agents partagé : create, list, show, post, read, ack, history, close. Un dépôt avec notify:[] reste silencieux ; notify liste des UUID membres ou \"all\" (auteur exclu) ; le texte du corps n'est jamais interprété. Recevoir une alerte ≠ lire (read) ≠ confirmer (ack). operation_id UUID obligatoire pour create/post/close, à réutiliser à l'identique pour rejouer sans dupliquer. Pages bornées (limit 1–200, 60 Kio) avec reçu ; history relit une plage sans déplacer le repère. Aucun résumé automatique ; les erreurs portent code et retryable.",
+            "description": "Fil inter-agents partagé : create/list/show/post/read/ack/history/close. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Confirmer chaque page via ack, puis contrôler has_more et les pages suivantes avant d'agir ; le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/post/close, rejeu exact sans duplicat. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["create","list","show","post","read","ack","history","close"]},
                 "thread_id":{"type":"string","minLength":36,"maxLength":36},
@@ -1888,6 +1888,8 @@ fn tools() -> Vec<Value> {
                 "notify":{"oneOf":[{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},{"enum":["all"]}]},
                 "reply_to_seq":{"type":"integer","minimum":1},
                 "ack_receipt":{"type":"string","minLength":36,"maxLength":36},
+                "kind":{"enum":["history","action","blocker","decision"]},
+                "supersedes_seq":{"type":"integer","minimum":1},
                 "receipt":{"type":"string","minLength":36,"maxLength":36},
                 "limit":{"type":"integer","minimum":1,"maximum":200},
                 "after_thread_id":{"type":"string","minLength":36,"maxLength":36},
@@ -1946,7 +1948,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_send",
-            "description": "Envoyer un message Bridget à un équipier.",
+            "description": "Envoyer un message direct Bridget à un équipier, pour une action autonome ou une demande suivie. Pour la coordination répétée, utiliser bridget_thread : preuves longues et comptes rendus kind=history avec notify:[], action/blocage/décision courts (≤2048 octets), supersedes_seq pour remplacer explicitement. Ne pas doubler le fil partagé par des rafales de messages directs récapitulatifs. reply=false signifie sans réponse attendue, pas sans action. Aucun ancien message libre n'est filtré automatiquement.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -2299,7 +2301,7 @@ mod tests {
             };
             assert_eq!(request.version, 1);
             assert!(
-                matches!(request.request, ThreadAction::Post { ref thread_id, .. } if thread_id == "33333333-3333-4333-8333-333333333333")
+                matches!(request.request, ThreadAction::Post { ref thread_id, kind:Some(bridget_transport::protocol::ThreadEntryKind::Action), supersedes_seq:Some(1), .. } if thread_id == "33333333-3333-4333-8333-333333333333")
             );
             std::io::Write::write_all(
                 &mut stream,
@@ -2318,7 +2320,7 @@ mod tests {
             "alice",
             "instance102",
             "bridget_thread",
-            json!({"action":"post","thread_id":"33333333-3333-4333-8333-333333333333","body":"b","notify":[],"operation_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"})
+            json!({"action":"post","thread_id":"33333333-3333-4333-8333-333333333333","kind":"action","supersedes_seq":1,"body":"b","notify":[],"operation_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"})
                 .as_object()
                 .unwrap(),
             &socket,

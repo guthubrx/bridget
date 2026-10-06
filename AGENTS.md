@@ -1,12 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/134-noms-humains-messages/plan.md.
-Périmètre de ce tour : afficher le nom humain à côté de l'UUID dans les messages
-Bridget et réparer les profils absents au prochain enregistrement. L'utilisateur
-a autorisé le commit, la fusion, le déploiement, le push et le nettoyage le
-2026-10-05.
+Plan actif : specs/136-messages-utiles/plan.md.
+Périmètre : historique silencieux, actions courtes et remplacement explicite
+dans les fils Bridget existants. Session autorisée le 2026-10-06.
+Ne jamais déduire un remplacement du texte, ni effacer les messages historiques.
+Préserver le travail non fusionné de la session 135.
 Tous les essais utilisent un BRIDGET_HOME et une socket isolés.
-Sélection SpecKit : SPECIFY_FEATURE=134-noms-humains-messages ; branche
-session-134-noms-humains-messages.
+Sélection SpecKit : SPECIFY_FEATURE=136-messages-utiles ; branche
+session-136-messages-utiles.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

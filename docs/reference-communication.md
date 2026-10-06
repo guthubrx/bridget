@@ -190,6 +190,37 @@ l'alerte de fil est une remise idempotente `from: bridget` sans réponse
 attendue, jamais relayée comme un message direct. Les wrappers annoncent la
 capacité d'alerte après enregistrement ; un client ancien publie et lit mais
 n'est pas sollicité.
+La session 136 sépare les preuves des consignes dans ces mêmes fils.
+Publier comptes rendus et preuves avec `kind: "history"` et `notify: []` :
+le daemon refuse toute cible, au lieu d'envoyer une notification inutile.
+Publier une nouvelle consigne avec `kind: "action"`, un blocage avec `"blocker"`
+et une décision avec `"decision"`. Leur corps est limité à 2048 octets UTF-8 :
+citer la séquence de la preuve longue, ne pas recopier le compte rendu.
+`supersedes_seq` remplace explicitement une consigne antérieure du même auteur,
+pour les mêmes cibles effectives figées au dépôt. La cible doit être courante,
+non historique ; changer l'audience ou créer une branche est refusé atomiquement.
+Le texte seul ne remplace jamais une consigne. Les membres du fil restent fixes.
+
+`read` rend les corps courants et des références sans `body` pour les historiques
+et consignes remplacées, avec `history_ref`, `presentation` et, si remplacé,
+`superseded_by_seq`. Pour relire exactement une preuve, utiliser
+`history` avec les `thread_id`, `from_seq` et `to_seq` de `history_ref`.
+La relecture ne déplace pas le repère. Tous les membres autorisés peuvent lire
+l'histoire : les cibles sont des sollicitations, pas des droits de confidentialité.
+Un ancien reçu garde son snapshot : confirmer chaque page, puis consulter les
+pages restantes avant d'agir. Une correction publiée après la lecture reste nouvelle
+après l'ACK. L'ACK confirme la projection reçue, pas un succès ni la fin d'une mission.
+Une consigne déjà reçue ne peut être rappelée du contexte fournisseur.
+
+CLI : `bridget thread post FIL --kind history --silent --id UUID -- 'preuve'` ;
+consigne : `bridget thread post FIL --kind action --notify UUID --id UUID -- 'action et référence de preuve'` ;
+correction : ajouter `--supersedes SEQUENCE`. MCP : mêmes `kind` et `supersedes_seq`
+dans `bridget_thread`, avec `operation_id`. Réutiliser cette clé et l'enveloppe
+exacte après perte de réponse ; changer la classe ou la référence est refusé.
+Ne pas doubler les publications par des rafales de messages directs récapitulatifs.
+Les messages directs sans classe restent inchangés ; Bridget ne devine pas lesquels
+sont obsolètes. Les anciens textes déjà livrés ne sont pas supprimés.
+
 La session 103 ajoute le dossier de passation : l'agent rédige objectif, résumé,
 résultats déclarés, décisions, questions, prochain pas, références et limites ;
 `bridget_handoff` (et `bridget handoff --json-stdin`) valide, rend un corps v1
