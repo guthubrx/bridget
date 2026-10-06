@@ -1,0 +1,59 @@
+{
+  "schema_version": "completed-outbox-cleanup-v1",
+  "scope": "notification_only",
+  "reason": "Migration explicite des lots déjà remis ; aucun verdict, aucune tâche ni anomalie validés.",
+  "completed": [
+    {
+      "recipient": "existing_bridget:3de3f2a6-6b4a-4415-8a1b-a870fe5a010f",
+      "batch": {
+        "id": "941ce732b9d71331c60a68c17dca33db76f95624e8dfd897d4e4443153407279",
+        "issued_at": 1791289712,
+        "issuer_scope": "agent-loop-e6f99823a9e745fcba2c4f441f7e61f3522d1767fc506dafde9c176823a818cd",
+        "message": "[agent-loop politique-20261004]\nrun_dir: /Users/moi/Documents/opus2D/gouvernance/agent-loops/politique-20261004\naudience: coordinator\nactions: 1\nsuivi: /Users/moi/Documents/opus2D/gouvernance/agent-loops/politique-20261004/heartbeat-state.json\n- task=p4-interface event=task.blocker_check_due status=review age_sec=353 reminder=2 due_at=2026-10-06T12:22:39.780317Z\nAction: attribue, arbitre ou relance. Une intention future ne compte pas."
+      },
+      "receipt": {
+        "schema_version": "mission-notification-v2",
+        "state": "accepted",
+        "delivery_id": "941ce732b9d71331c60a68c17dca33db76f95624e8dfd897d4e4443153407279",
+        "recipient": "existing_bridget:3de3f2a6-6b4a-4415-8a1b-a870fe5a010f",
+        "accepted_at": "2026-10-06T12:28:32.924687Z"
+      },
+      "events": [
+        {
+          "action_count": 1,
+          "audience": "coordinator",
+          "delivery_id": "941ce732b9d71331c60a68c17dca33db76f95624e8dfd897d4e4443153407279",
+          "event": "heartbeat.digest_sent",
+          "recipient": "existing_bridget:3de3f2a6-6b4a-4415-8a1b-a870fe5a010f",
+          "ts": "2026-10-06T12:28:33.158626Z"
+        }
+      ]
+    },
+    {
+      "recipient": "existing_bridget:87515984-f549-49ae-ab9c-a6c47dada0e5",
+      "batch": {
+        "id": "288b5ca062351320e34ca1c1a45dc3d71b540edd3e5deacb79ddba96e125609e",
+        "issued_at": 1791191024,
+        "issuer_scope": "agent-loop-e6f99823a9e745fcba2c4f441f7e61f3522d1767fc506dafde9c176823a818cd",
+        "message": "[agent-loop politique-20261004]\nrun_dir: /Users/moi/Documents/opus2D/gouvernance/agent-loops/politique-20261004\naudience: escalation\nactions: 1\nsuivi: /Users/moi/Documents/opus2D/gouvernance/agent-loops/politique-20261004/heartbeat-state.json\n- task=- event=run.open_no_ready status=open age_sec=0 reminder=3\nAction: arbitre la coordination ou réattribue la mission."
+      },
+      "receipt": {
+        "schema_version": "mission-notification-v2",
+        "state": "accepted",
+        "delivery_id": "288b5ca062351320e34ca1c1a45dc3d71b540edd3e5deacb79ddba96e125609e",
+        "recipient": "existing_bridget:87515984-f549-49ae-ab9c-a6c47dada0e5",
+        "accepted_at": "2026-10-05T09:03:44.819455Z"
+      },
+      "events": [
+        {
+          "action_count": 1,
+          "audience": "escalation",
+          "delivery_id": "288b5ca062351320e34ca1c1a45dc3d71b540edd3e5deacb79ddba96e125609e",
+          "event": "heartbeat.digest_sent",
+          "recipient": "existing_bridget:87515984-f549-49ae-ab9c-a6c47dada0e5",
+          "ts": "2026-10-05T09:03:44.820325Z"
+        }
+      ]
+    }
+  ]
+}

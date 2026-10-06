@@ -1,0 +1,70 @@
+{
+  "schema_version": "systemic135-delivery-v1",
+  "date": "2026-10-06",
+  "historical_evidence_preserved": "validation/results.json",
+  "tests": {
+    "canonical": {
+      "passed": 124,
+      "existing": 99,
+      "systemic": 25
+    },
+    "psychologie": {
+      "passed": 22
+    },
+    "unique_total": 146,
+    "claude_forwarding": {
+      "passed": 99,
+      "duplicates_canonical": true
+    },
+    "python_entrypoints": 5,
+    "skills_validated": 2,
+    "diff_check": "PASS",
+    "targeted_independent_review": "APPROVE",
+    "coverage": "not measured",
+    "transport": "simulated in tests"
+  },
+  "sources": {
+    "dotfiles_main_commit": "5fc64e37bd77b93a2ea929dfb93fa21f82898494",
+    "dotfiles_main_pushed": true,
+    "active_branch_scoped_commit": "2c5280f2",
+    "canonical_sha256": "8adb0da5400c7dc76c0d5969e1c8c69d0277c4a3641d4b421ae5e86c5b3e8515",
+    "bridget_documents_merged": false
+  },
+  "runtime": {
+    "controller_interval_seconds": 60,
+    "politique_successful_scheduled_runs": 2,
+    "psychologie_successful_scheduled_runs": 3,
+    "checked_task_result_files": 406,
+    "changed_task_result_files": [],
+    "notification_only_migration": {
+      "completed_batches_archived": 2,
+      "evidence": "validation/completed-outboxes.json",
+      "tasks_accepted": false
+    },
+    "bridget_restarted": false,
+    "release_sha256": "02cfdf77ad5b6971572e328bae551dbc1028e74a993abc39778a5263611211e6"
+  },
+  "cleanup": {
+    "debug_build": "cargo clean --profile dev",
+    "archived_installation_backups": 7,
+    "backup_root": "/Users/moi/Documents/bridget-cleanup-20261006-hdwG80",
+    "removed_merged_worktrees": [
+      "SPEC137 Bridget",
+      "SPEC137 T3"
+    ],
+    "foreign_changes_preserved": true
+  },
+  "t3": {
+    "source_commit": "3d30a4836b9eac935938ec5537383e02fff85508",
+    "branch": "local/v0.0.45",
+    "source_pushed": true,
+    "tests_passed": 200,
+    "installed_application_replaced": false
+  },
+  "limitations": [
+    "Ancienne remise ambiguë : décision ROOT nécessaire, aucune fausse validation.",
+    "Pas de garantie idempotente du transport tmux historique.",
+    "Application T3 installée inchangée ; installation du rendu différée pour préserver les agents.",
+    "Inventaire local, pas une qualification des contrôleurs distants."
+  ]
+}
