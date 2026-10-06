@@ -108,3 +108,13 @@ Converge manuel : passage1 CONVERGED,12/12 preuves,0 tâche ajoutée, tâches
 strictement byte-identiques ; reçu dans convergence.md.
 Audit v14 initial préparé en lecture ; passe fix/scoring à produire sur baseline
 committée propre, conformément au gate de la skill. Aucune livraison présumée.
+
+## Audit final
+Baseline propre cd1c3435. Cycle1fix : aucun candidat CRITICAL/HIGH, aucun patch.
+Cycle-scoring readonly : seconde lecture des contrôles/migration/rejeu, hashes
+inchangés. Grade A sur le diff136 ; QUAL-001 MEDIUM de longueur, non bloquant.
+Validateur v14 :0 erreur,0 warning, sortie0. Ce contrôle de format n'efface pas
+le findingMEDIUM ni les mesures non faites (couverture de lignes/CVE/p99).
+Rapport : audits/2026-10-06/session-2026-10-06-spec-136-01/scoring.md.
+T010 terminé, T011 livraison toujours ouvert. Binaire release isolé reconstruit
+avec commit source cd1c3435, pas avec un identifiant dirty.

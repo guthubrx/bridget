@@ -1,0 +1,2 @@
+[cycle-1] baseline cd1c3435 propre, tests PASS ; 0 candidat ; aucune modification.
+[cycle-scoring] relecture indépendante en phase readonly ; mêmes preuves ; QUAL-001 MEDIUM ; source hashes OK.

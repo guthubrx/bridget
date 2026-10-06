@@ -15,4 +15,3 @@ Aucun code, artefact ou case existante modifié pendant la passe.
 Après la passe, ce reçu de convergence est consigné. T010 garde l'audit final
 à terminer ; T011 garde la livraison. Ces obligations ne sont pas masquées.
 Nombre de passages1, tâches ajoutées0.
-

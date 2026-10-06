@@ -1,0 +1,107 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-06T02:10:00Z",
+    "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/136-messages-utiles",
+    "scope_mode": "diff",
+    "diff": {
+      "base": "main@43afebbf",
+      "files_count": 6
+    },
+    "mode": "LIGHT",
+    "grid": "all"
+  },
+  "repo": {
+    "files_count": 178,
+    "languages": [
+      "rust",
+      "python"
+    ],
+    "frameworks": [
+      "serde",
+      "rusqlite"
+    ],
+    "type": "local-daemon-cli-mcp",
+    "has_ui": false,
+    "has_llm_integration": true,
+    "db_type": "sqlite",
+    "ci_system": "none_detected",
+    "container": false
+  },
+  "sampling": null,
+  "hot_paths": [
+    {
+      "type": "socket_handler",
+      "path": "crates/bridget-daemon/src/daemon.rs:10817",
+      "trigger": "ThreadRequest avec identité de connexion active"
+    },
+    {
+      "type": "sql_post",
+      "path": "crates/bridget-daemon/src/store/threads.rs:884",
+      "trigger": "post transactionnel"
+    },
+    {
+      "type": "sql_read",
+      "path": "crates/bridget-daemon/src/store/threads.rs:648",
+      "trigger": "read/history bornés"
+    },
+    {
+      "type": "migration",
+      "path": "crates/bridget-daemon/src/store/threads.rs:283",
+      "trigger": "Store::open"
+    }
+  ],
+  "threat_model": {
+    "assets": [
+      "corps/provenance",
+      "reçus et curseurs",
+      "identités/audiences",
+      "rejeux durables"
+    ],
+    "attackers": [
+      {
+        "type": "local_authenticated_agent",
+        "risk": "high",
+        "scenario": "remplacement illégitime ou agrandissement d'audience"
+      },
+      {
+        "type": "local_unregistered_client",
+        "risk": "medium",
+        "scenario": "forger auteur ou extraire corps"
+      }
+    ],
+    "surfaces": [
+      "socket Unix et outils CLI/MCP",
+      "metadata JSON et migration SQLite"
+    ],
+    "controls": [
+      "identité issue de connexion",
+      "membre avant accès",
+      "même auteur/cibles avant remplacement",
+      "champs/classes fermés",
+      "bornes/quota existants"
+    ]
+  },
+  "slos": {
+    "defined": false,
+    "proposed": {
+      "latency_p99_ms": 500,
+      "error_rate_percent": 0.1,
+      "availability_percent": 99.9
+    }
+  },
+  "modules_actifs": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "10",
+    "11",
+    "12"
+  ]
+}

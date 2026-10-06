@@ -1,0 +1,8 @@
+{
+  "module": "03",
+  "findings": [],
+  "positive_findings": [
+    "store/threads.rs:941 contrôle auteur/cibles/tête avant ACK ; identité de connexion vérifiée dans daemon.rs:10817.",
+    "protocol.rs:2199 deny_unknown_fields ; classes fermées et null explicite refusé, aucune interprétation du corps."
+  ]
+}

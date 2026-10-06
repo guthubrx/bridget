@@ -1,0 +1,8 @@
+{
+  "module": "08",
+  "findings": [],
+  "positive_findings": [
+    "Une seule jointure bornée remplace des corps par références ;64 preuves de≈3Kio ne sont pas recopiées dans read.",
+    "WAL et busy_timeout2s existants vérifiés ; aucun appel réseau sous transaction SQL ajouté."
+  ]
+}

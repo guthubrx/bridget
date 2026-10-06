@@ -1,0 +1,8 @@
+{
+  "module": "12",
+  "findings": [],
+  "positive_findings": [
+    "Aucune dépendance, table, service ou minuteur ajouté ; état des remplacements dérivé par jointure.",
+    "Helper générique à deux usages justifié par compatibilité absence/null ; enum utilisé par CLI/MCP/métier/store, contrainte réelle."
+  ]
+}

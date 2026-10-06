@@ -1,0 +1,34 @@
+{
+  "module": "05",
+  "findings": [
+    {
+      "id": "QUAL-001",
+      "fingerprint": "5ba571ac941c",
+      "category": "quality",
+      "subcategory": "function_length",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/store/threads.rs",
+      "line": 649,
+      "title": "Lecture et projection regroupées dans une fonction de 88 lignes",
+      "description": "read_range s'étend de649 à736 et dépasse le seuil de50 lignes. La projection de métadonnées partage le corps avec SQL et budget de page. Le comportement est couvert ; le défaut porte sur la lisibilité, pas sur une perte prouvée.",
+      "evidence": "if projection_snapshot.is_some()\n    && (kind.as_deref() == Some(\"history\") || successor.is_some())\n{",
+      "exploitability": "N/A",
+      "impact": "Coût de lecture accru lors d'une future modification des pages et de leur projection.",
+      "path_type": "hot",
+      "remediation": "Dans une tâche de lisibilité distincte, extraire la projection d'une entrée sans déplacer le calcul du snapshot ni le budget. Ne pas créer un framework de présentation.",
+      "verification": "Tests136 et102 inchangés verts, replay snapshot et pages en octets identiques ; fonction centrale réduite.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "audit-v14/module05/seuil50"
+      ],
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null
+    }
+  ],
+  "positive_findings": [
+    "cargo fmt --all --check et clippy --workspace --all-targets -D warnings exécutés, sortie0.",
+    "Séparation conservée : protocole partagé, validation métier, SQL transactionnel ; aucun TODO/stub ajouté."
+  ]
+}

@@ -51,7 +51,9 @@
   "release": {
     "exit_code": 0,
     "isolated_binary": "/Users/moi/.cache/bridget-builds/spec136/release/bridget",
-    "rebuild_with_commit_before_switch": true
+    "rebuild_with_commit_before_switch": false,
+    "code_commit": "cd1c3435cdbd487ec8b6c5ae40063c8fcdcebdaf",
+    "binary_sha256": "02cfdf77ad5b6971572e328bae551dbc1028e74a993abc39778a5263611211e6"
   },
   "review": {
     "plan": "APPROVE_WITH_CHANGES",
@@ -76,5 +78,27 @@
   "delivery": {
     "backup": "/Users/moi/.cache/bridget-deploy-backups/spec136-messages-z4GmT7",
     "deployed": false
+  },
+  "audit": {
+    "grade": "A",
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 0,
+    "validator": {
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 0
+    },
+    "session": "audits/2026-10-06/session-2026-10-06-spec-136-01",
+    "fix_cycles": 1,
+    "scoring_cycles": 1,
+    "code_corrections": 0
+  },
+  "convergence": {
+    "issue": "CONVERGED",
+    "passes": 1,
+    "added_tasks": 0,
+    "tasks_sha256": "0651872da1a92b7820a74ed39cbcb0ab1f191dc05e0d5c9950dd839636dea139"
   }
 }

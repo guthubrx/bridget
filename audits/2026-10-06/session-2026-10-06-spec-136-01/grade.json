@@ -1,0 +1,80 @@
+{
+  "grade": "A",
+  "date": "2026-10-06",
+  "spec": "136",
+  "scope": "diff136 dans cinq sources Rust + un fichier de tests ; pas le dépôt entier",
+  "coverage_percent": 100,
+  "justification": "Aucun défaut bloquant prouvé sur les hunks contrôlés. Un warning de longueur de fonction MEDIUM, suite fraîche PASS, limites de mesure déclarées.",
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 97,
+      "findings_count": 1
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "ux": {
+      "grade": "N/A",
+      "numeric": null,
+      "findings_count": 0
+    }
+  }
+}

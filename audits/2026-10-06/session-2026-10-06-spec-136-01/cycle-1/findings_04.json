@@ -1,0 +1,8 @@
+{
+  "module": "04",
+  "findings": [],
+  "positive_findings": [
+    "store/threads.rs:662 jointure unique indexée, aucune requête par entrée ; P≤200, membres≤16.",
+    "store/threads.rs:1716 EXPLAIN QUERY PLAN réellement testé sur l'index partiel ; pas de boucle quadratique ajoutée."
+  ]
+}

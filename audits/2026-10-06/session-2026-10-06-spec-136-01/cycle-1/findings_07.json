@@ -1,0 +1,8 @@
+{
+  "module": "07",
+  "findings": [],
+  "positive_findings": [
+    "JSCPD local exécuté sur six fichiers, 3.5747339194817216% ; bloc maximal29 lignes, aucun bloc>100.",
+    "Un seul harnais102 réutilisé ; neuf lignes de préparation répétées dans deux tests indépendants, pas de second harnais."
+  ]
+}

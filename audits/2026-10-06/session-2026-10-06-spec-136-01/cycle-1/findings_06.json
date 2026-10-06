@@ -1,0 +1,8 @@
+{
+  "module": "06",
+  "findings": [],
+  "positive_findings": [
+    "Tests136 sur vrai daemon/socket/SQLite privés : corps exacts, refus sans ACK, replay et restart.",
+    "Migration V1 testée avec ancien reçu ouvert et compteurs/operations conservés ; aucune suppression en migration."
+  ]
+}
