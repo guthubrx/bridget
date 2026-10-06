@@ -55,7 +55,7 @@
   et comparer tâches/résultats à la sauvegarde.
 - [x] T016 Préserver un digest en vol si de nouveaux faits arrivent après un
   crash ; tester la reprise et refuser toute association historique ambiguë.
-- [ ] T017 Livrer les sources et documents, vérifier les fusions et le push,
+- [x] T017 Livrer les sources et documents, vérifier les fusions et le push,
   puis retirer uniquement les builds inutilisés et les worktrees fusionnés.
 
 ## Dépendances initiales

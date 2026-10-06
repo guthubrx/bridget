@@ -28,7 +28,9 @@
     "dotfiles_main_pushed": true,
     "active_branch_scoped_commit": "2c5280f2",
     "canonical_sha256": "8adb0da5400c7dc76c0d5969e1c8c69d0277c4a3641d4b421ae5e86c5b3e8515",
-    "bridget_documents_merged": false
+    "bridget_documents_merged": true,
+    "bridget_documents_merge_commit": "4415a1623e7f427d20fa638867daf6ecdc97726e",
+    "bridget_documents_pushed": true
   },
   "runtime": {
     "controller_interval_seconds": 60,
@@ -50,9 +52,17 @@
     "backup_root": "/Users/moi/Documents/bridget-cleanup-20261006-hdwG80",
     "removed_merged_worktrees": [
       "SPEC137 Bridget",
-      "SPEC137 T3"
+      "SPEC137 T3",
+      "SPEC135 Bridget",
+      "SPEC135 dotfiles"
     ],
-    "foreign_changes_preserved": true
+    "foreign_changes_preserved": true,
+    "removed_local_branches": [
+      "session-137-entetes-discrets",
+      "session-137-entetes-bridget",
+      "session-135-controle-missions-silencieux",
+      "session-135-agent-loop-systemic"
+    ]
   },
   "t3": {
     "source_commit": "3d30a4836b9eac935938ec5537383e02fff85508",

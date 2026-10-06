@@ -229,3 +229,11 @@ cadence60s. Les 406 fichiers de tâches et résultats sont byte-identiques à la
 sauvegarde faite juste avant installation. Le daemon et l'adaptateur Bridget
 gardent leurs PID et leur binaire release. La preuve historique results.json
 n'est pas remplacée par la preuve fraîche systemic-delivery.json.
+
+Clôture de livraison : 17/17 tâches. Documents135 fusionnés au commit4415a162
+et poussés dans Bridget/main. Les worktrees135 Bridget et dotfiles, ainsi que
+leurs branches locales, sont retirés après contrôle de propreté et d'ascendance.
+Avec les deux worktrees137, quatre worktrees terminés sont nettoyés. Les autres
+branches, builds actifs et travaux non fusionnés restent en place. L'empreinte
+du patch déjà staged dans le worktree dotfiles/main reste byte-identique avant
+et après fusion :6588fe2ba33bdec78a96fa2cb48d52a419df3c1e3f8ab31347030aeead9521d5.
