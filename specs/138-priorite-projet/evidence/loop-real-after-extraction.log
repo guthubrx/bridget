@@ -1,0 +1,7 @@
+
+running 1 test
+[BRIDGET] PID file écrit avec verrou exclusif: /tmp/bgcanon-82213273f5eb4bfc8507714054caba08/bridget.pid (PID 66186)
+test mcp::tests::spec138_real_agent_loop_cli_daemon_scoped_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1046 filtered out; finished in 1.55s
+

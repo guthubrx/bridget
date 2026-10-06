@@ -9,7 +9,7 @@ runtime or Maicie implementation is required. Maicie may remain an external
 consumer of the public protocol. Native Codex/Claude drivers and ACP provide the
 primary session path; tmux is not required.
 
-## Branch status
+## Historical standalone validation (089)
 
 Session 089 has a validated standalone package: 1,199 automated tests passed,
 50 real crash cycles were replayed, fmt/clippy passed and independent review
@@ -50,6 +50,45 @@ target and correlation are safer when several requests coexist.
 An address is a UUID. `bridget rename "Team B"` or `bridget_rename` changes only
 the owning session's display name; retries, instance and history stay bound to
 the same identity. Neither a provider name nor `--from` grants another identity.
+
+### Recent communication contracts (133–138)
+
+Messages and batches show the human display name beside the full UUID. The UUID
+still controls routing and access. An attested internal T3 subagent can only use
+MCP `bridget_who` and `bridget_send`, with child provenance and the parent's identity.
+Replies return to the parent; the child has no separate directory entry or mailbox.
+
+Communication discovery defaults to the same project. Use `bridget who --global`
+or `bridget agents --json --global` for an intentional global view, not a send mandate.
+A standalone client supplies `--project-root /absolute/project/root` on `who`, `agents`
+or `send`; without it, its project stays unknown and local suggestions stay empty.
+Attested T3/wrapper agents inherit their context. Display domains are not project proof.
+
+For a known other project, use `--cross-project-reason 'Reason for this exchange'`
+on `send`/`thread`, or MCP `cross_project_reason` beside `to`/`action`. The trimmed
+reason is 1–512 UTF-8 bytes without control characters; null and blank values fail.
+`project_warnings` is returned to the caller, outside the message body. There is no
+second mandatory human confirmation. Unknown legacy sends remain possible with a warning.
+The client requires `communication_projects_v1`; an old server cannot silently ignore the reason.
+
+Shared threads use `kind:history` with `notify:[]` for evidence, and `action`, `blocker`
+or `decision` for short instructions. `supersedes_seq` explicitly replaces an instruction
+from the same author for the same recipients. `read` returns references for history and
+replaced entries; `history` reads their exact bodies without changing the cursor.
+Every member can read, even with `notify:[]`; mixed-project create/post still needs a reason.
+Replies to genuine OPEN tracked requests with reversed participants can reuse the accepted reason.
+Accepted receipts and historical canonical forms are preserved without replaying effects.
+
+Observations report facts, not new missions or required inter-agent replies. A turn end is
+not mission success. The separate Agent Loop controller tracks acceptance, verifiable progress,
+follow-up decisions and explicit closure, with grouped reminders. It does not recruit outside
+the project automatically. Existing worker/coordinator/ROOT mandates bind UUID, role and reason;
+their reminders continue. A cross-project ROOT without a mandate creates a visible decision.
+Retries keep the frozen source root, reason, target and body. Loop is not a new Bridget service.
+
+The T3 compact-header code and preview were validated separately in137. This README does not
+prove that those visual changes are installed in an already-running T3 application.
+See [the communication reference](docs/reference-communication.md) for exact contracts and limits.
 
 ### Communication guarantees and upgrade 099
 
@@ -120,9 +159,11 @@ bridget t3 uninstall      # revokes the session, removes the service, wipes brid
 
 Requirements: t3code running (the app or `t3 --mode web --no-browser`) and the
 `t3` CLI installed (`npm i -g t3`). A delivered message waits for the thread to
-be idle (two-minute bound), starts a turn with the message text, and the reply
-of that turn goes back to the sender as a linked reply: pairing follows the FIFO
-order of turns after the last turn closed at delivery time. The held session is
+be idle without an automatic wait expiry (queue bounded to64 deliveries per thread).
+Explicit deadlines, cancellation and closed tracked requests still apply. Pairing uses the
+attested turn origin, with FIFO fallback when origin was not observed. Untracked messages
+to busy Claude/Cursor threads may join the current turn; tracked requests and notifications wait.
+The reply of a tracked turn goes back as a linked reply. The held session is
 administrative (t3code 0.0.40 issues no other kind) and lives only in a 0600
 file inside Bridget state; a 401 triggers one renewal, a second one is an
 explicit failure shown by `status`. The thread journal (`bridget attach`) never
@@ -252,7 +293,7 @@ replace or install the running binary automatically.
 | `idempotency_expired` | Retry protection expired, not permission to resend silently. |
 
 A retry keeps the same `id`, `issued_at`, instance and arguments, including body,
-target, timeout, `reply` and `in_reply_to`. Prepare the key/time pair before the
+target, timeout, `reply`, `in_reply_to`, cross-project reason and frozen source context. Prepare the key/time pair before the
 first call if the workflow must survive losing its first receipt. A new key
 cannot promise deduplication after an ambiguous result.
 
@@ -269,7 +310,8 @@ MCP request scope defaults to `mine` (incoming and outgoing); `all` reads the
 authorized global scope.
 
 `status`, `who` and `agents` reject an unavailable inventory instead of printing
-an empty list. Their probe is bounded; `status` never opens a client-side database.
+an empty list. A caller with an unknown project is different: local discovery returns
+an empty list with a project warning. Their probe is bounded; `status` never opens a client-side database.
 The protocol does not publish an exhaustive message count, so this total remains
 explicitly unavailable. A bounded ledger view must not be presented as that total.
 
@@ -371,16 +413,17 @@ data: no rendering, JavaScript or browser is part of the core.
 ## Build independently
 
 Implementation directory:
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget`.
 Rust is pinned in rust-toolchain.toml.
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget
 PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
+umask 077
 bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
 export BRIDGET_HOME="$bridget_state"
 export BRIDGET_SOCKET="$BRIDGET_HOME/bridget.sock"
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
+/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/bridget daemon
 ```
 
 Use a NEW private, short, absolute state directory. The daemon stays in the
@@ -427,8 +470,9 @@ A collision is a risk: different agents, same host and lexically normalized
 absolute path, within 30 seconds. No file lock, filesystem access or Git merge.
 Symlink aliases, case differences and incorrectly named hosts are limitations.
 
-Subscriptions are daemon-memory state: default 1 hour, max 7 days, 16 per agent,
-128 overall. Auxiliary client disconnects preserve them; daemon restarts do not.
+Subscriptions default to 1 hour, max 7 days, 16 per agent and 128 overall. Their traces
+persist: unexpired subscriptions resume after daemon restart, with a warning to the owner.
+Facts lost during the outage are not replayed. Auxiliary client disconnects preserve them.
 `once` consumes a trigger even if delivery fails. Missing agents, DND, queue
 pressure and expired deliveries are losses, not durable work. Receipts expose
 `notifications_lost`, `evicted_writes`; lists expose `suppressed_total` for the
@@ -457,5 +501,11 @@ Do not run unaudited historical harnesses against real HOME. Ignored provider or
 SSH tests do not count as passed gates. The
 [test map](specs/089-communication-core/test-map.md) records their dispositions.
 
-Bridget does not prove work correctness or completion. Task orchestration, T3
-integration, A2A servers and catalogue bookkeeping remain outside this extraction.
+The isolated 138 workspace validation passed 1633 Rust tests (55 ignored), with fmt,
+clippy -Dwarnings and release passing. Agent Loop passed 152 Python tests. The 63 new
+feature tests are subsets, not extra totals; 29 written Gherkin scenarios were not run as Gherkin.
+The final real CLI/MCP/Loop recipe passed. The independent138 review used the same provider.
+
+Bridget does not prove work correctness or completion. Task orchestration remains an
+external Agent Loop concern. The T3 adapter is separate from the communication core;
+A2A servers and catalogue bookkeeping are not required.

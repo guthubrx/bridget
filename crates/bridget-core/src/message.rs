@@ -73,6 +73,13 @@ pub struct DelegatedOrigin {
 /// Message normalisé qui circule entre agents via le daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgetMessage {
+    /// Choix volontaire interprojets. Absent conserve le contrat historique.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_reason"
+    )]
+    pub cross_project_reason: Option<String>,
     /// UUID court pour déduplication et quarantaine.
     pub id: String,
     /// Identifiant opaque de l'expéditeur. Il sert exclusivement au routage.
@@ -155,6 +162,7 @@ impl BridgetMessage {
             .take(13)
             .collect::<String>();
         BridgetMessage {
+            cross_project_reason: None,
             id,
             from: from.into(),
             from_display_name: None,
@@ -214,6 +222,12 @@ impl BridgetMessage {
             None => sender,
         }
     }
+}
+
+fn deserialize_present_reason<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(de).map(Some)
 }
 
 #[cfg(test)]

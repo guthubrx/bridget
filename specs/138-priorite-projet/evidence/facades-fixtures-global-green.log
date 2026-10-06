@@ -1,0 +1,119 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.74s
+     Running tests/claude_interactive_097_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/claude_interactive_097_test-62cf7ac2942290ca)
+
+running 9 tests
+test vraie_tui_claude_code_recoit_un_message_et_repond ... ignored, recette réelle Claude Code : BRIDGET_CLAUDE_097_BIN, BRIDGET_CLAUDE_097_CWD et compte local requis
+test claude_interactif_refuse_un_pipe_avant_presence_ou_fournisseur ... ok
+test type_tmux_sans_pane_est_refuse_avant_toute_presence ... ok
+test bypass_explicite_de_l_humain_est_relaye_tel_quel ... ok
+test code_de_sortie_du_fournisseur_est_relaye ... ok
+test daemon_redemarre_meme_identite_notification_et_remise_par_le_pty ... ok
+test saisie_partielle_preservee_corps_hostile_refuse_et_notification_remise ... ok
+test session_pty_relaie_remet_et_restaure_le_terminal ... ok
+test sigterm_du_wrapper_termine_le_fournisseur_et_restaure_le_terminal ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 17.01s
+
+     Running tests/codex_interactive_090_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/codex_interactive_090_test-df9cc86262cac274)
+
+running 16 tests
+test eof_fournisseur_pendant_permission_borne ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test fermeture_terminal_pendant_permission_bornee ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test menu_annule_nettoie_serveur_avant_presence ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test menu_reprise_reel_sans_fil_provisoire ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test nom_codex_absent_refuse_sans_presence ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test nom_codex_ambigu_refuse_sans_selection_arbitraire ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test nouveau_fil_reste_non_destructif_et_messages_bridget_ciblent_le_parent ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test permission_native_refusee_sans_reponse_et_session_reutilisable ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test reprise_absente_refusee_avant_presence ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test reprise_historique_pagine_rendu_par_la_tui_native ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test reprise_historique_reste_non_destructive_et_messages_bridget_ciblent_le_parent ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test reprise_humaine_par_nom_et_fil_sans_uuid_bridget ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test reprise_initiale_yolo_nom_et_historique_reels ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test reprise_nom_codex_reel_conserve_historique_et_messages ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test vraie_tui_et_daemon_partagent_fil_messages_et_permissions ... ignored, recette Codex local explicite, BRIDGET_CODEX_090_BIN requis
+test codex_interactif_refuse_un_pipe_avant_presence_ou_fournisseur ... ok
+
+test result: ok. 1 passed; 0 failed; 15 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/core_089_isolation_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_isolation_test-6607ed9e6ade2801)
+
+running 8 tests
+test namespace_explicite_et_defaut_ne_rejoignent_jamais_historique ... ok
+test bootstrap_env_clear_conserve_namespace_et_abonnement_sans_secret_implicite ... ok
+test vrai_client_refuse_racine_historique_sans_contacter_la_socket ... ok
+test api_wrapper_refuse_un_namespace_de_session_divergent_avant_lancement ... ok
+test symlink_droits_et_fichier_detourne_sont_refuses_avant_creation ... ok
+test migration_explicite_ne_peut_modifier_les_fichiers_historiques ... ok
+test sous_etats_lies_sont_refuses_avant_bootstrap_ou_ecriture ... ok
+test vrai_daemon_et_clients_n_utilisent_que_namespace_prive ... FAILED
+
+failures:
+
+---- vrai_daemon_et_clients_n_utilisent_que_namespace_prive stdout ----
+
+thread 'vrai_daemon_et_clients_n_utilisent_que_namespace_prive' (13486121) panicked at crates/bridget-daemon/tests/core_089_isolation_test.rs:400:5:
+assertion `left != right` failed: {"id":2,"jsonrpc":"2.0","result":{"code":"auxiliary_credential_required","content":[{"text":"auxiliary_credential_required : relancez le wrapper et son client auxiliaire","type":"text"}],"isError":true}}
+  left: Bool(true)
+ right: true
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vrai_daemon_et_clients_n_utilisent_que_namespace_prive
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+error: test failed, to rerun pass `-p bridget-daemon --test core_089_isolation_test`
+     Running tests/core_089_native_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_native_test-886fe026814425fe)
+
+running 5 tests
+test fixture::performance_daemon_worker ... ignored, sous-processus privé des bancs, jamais un daemon de production
+test gate_reel_claude_stream_json_reponse_liee_et_attach ... ignored, requiert l'autorisation d'utiliser le compte Claude local : BRIDGET_CLAUDE_NATIVE_GATE=1
+test gate_reel_codex_app_server_gpt_5_6_terra_et_attach ... ignored, requiert un compte Codex local et BRIDGET_CODEX_NATIVE_GATE=1
+test wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus ... ok
+test wrapper_codex_natif_repond_et_reste_attachable ... FAILED
+
+failures:
+
+---- wrapper_codex_natif_repond_et_reste_attachable stdout ----
+
+thread 'wrapper_codex_natif_repond_et_reste_attachable' (13486148) panicked at crates/bridget-daemon/tests/core_089_native_test.rs:416:5:
+assertion failed: who.contains("EFFORT") && who.contains("LIMITE")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    wrapper_codex_natif_repond_et_reste_attachable
+
+test result: FAILED. 1 passed; 1 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+error: test failed, to rerun pass `-p bridget-daemon --test core_089_native_test`
+     Running tests/core_089_status_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_status_test-ddc27f34858d73d1)
+
+running 3 tests
+test fixture::performance_daemon_worker ... ignored, sous-processus privé des bancs, jamais un daemon de production
+test who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse ... FAILED
+test consultations_reelles_ne_creent_aucun_profil_durable ... ok
+
+failures:
+
+---- who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse stdout ----
+
+thread 'who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse' (13486248) panicked at crates/bridget-daemon/tests/core_089_status_test.rs:253:9:
+bridget who: daemon_protocol: réponse daemon inattendue pour cette opération
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
+
+test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+error: test failed, to rerun pass `-p bridget-daemon --test core_089_status_test`
+error: 3 targets failed:
+    `-p bridget-daemon --test core_089_isolation_test`
+    `-p bridget-daemon --test core_089_native_test`
+    `-p bridget-daemon --test core_089_status_test`

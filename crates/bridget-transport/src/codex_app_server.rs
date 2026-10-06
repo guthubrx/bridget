@@ -4891,6 +4891,33 @@ for line in sys.stdin:
             thread::sleep(Duration::from_millis(10));
         }
         assert!(finished, "le tour de détail n'a pas terminé");
+        if with_activity {
+            // Le terminal est émis avant que le faux fournisseur ne reprenne
+            // sa boucle stdin. Sa trace, et non la fin du tour, prouve qu'il
+            // a effectivement reçu les décisions JSON-RPC avant l'arrêt.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let frames: Vec<Value> = fs::read_to_string(&trace)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str(line).ok())
+                    .collect();
+                let received = ["approval-7", "approval-8", "approval-9"].iter().all(|id| {
+                    frames.iter().any(|frame| {
+                        frame["id"].as_str() == Some(*id)
+                            && frame["result"]["decision"].as_str() == Some("accept")
+                    })
+                });
+                if received {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "le fournisseur n'a pas reçu les trois décisions: {frames:?}"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
         transport.stop();
 
         let journal_path = fs::read_dir(root.join("codex-native"))
@@ -6940,31 +6967,28 @@ for line in sys.stdin:
         transport.deliver(&message("eof-1")).expect("livraison");
 
         let started = Instant::now();
+        let mut events = Vec::new();
         while started.elapsed() < Duration::from_secs(2) {
-            let turns_started = fs::read_to_string(&trace)
-                .unwrap_or_default()
-                .lines()
-                .filter(|line| line.contains("\"method\":\"turn/start\""))
-                .count();
-            if turns_started >= 2 {
+            events.extend(transport.drain_events());
+            // La seconde requête tracée précède sa réponse. Seul cet événement
+            // prouve que le worker a reçu l'identifiant du tour actif.
+            if events.iter().any(|event| {
+                matches!(&event.kind,
+                ManagedEventKind::PromptDispatched {message_id} if message_id == "eof-1")
+            }) {
                 break;
             }
             thread::sleep(Duration::from_millis(5));
         }
         assert!(
-            fs::read_to_string(&trace)
-                .unwrap_or_default()
-                .lines()
-                .filter(|line| line.contains("\"method\":\"turn/start\""))
-                .count()
-                >= 2,
-            "le tour suspendu n'a jamais atteint wait_for_turn"
+            events.iter().any(|event| matches!(&event.kind,
+                ManagedEventKind::PromptDispatched {message_id} if message_id == "eof-1")),
+            "le tour suspendu n'a pas reçu son identifiant: {events:?}"
         );
         let adapter_pid = transport.process_id() as i32;
 
         assert_eq!(unsafe { libc::kill(adapter_pid, libc::SIGTERM) }, 0);
         let deadline = Instant::now() + Duration::from_secs(1);
-        let mut events = Vec::new();
         while Instant::now() < deadline {
             events.extend(transport.drain_events());
             if events.iter().any(|event| {

@@ -20,7 +20,7 @@ use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalWriter,
 };
 use bridget_transport::protocol::{
-    DaemonToWrapper, PresenceMode, RequestInfo, WrapperToDaemon, decode,
+    CommunicationProjectSource, DaemonToWrapper, PresenceMode, RequestInfo, WrapperToDaemon, decode,
 };
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -1423,6 +1423,9 @@ struct LinkWorker {
     /// Titre refusé par le daemon (nom déjà pris) et date du refus : on
     /// retente à intervalle borné, car le nom peut se libérer plus tard.
     title_refused_at: Option<Instant>,
+    /// Fait déjà annoncé sur cette connexion propriétaire. Un changement
+    /// est envoyé au daemon, qui décide seul de sa cohérence.
+    project_context: Option<(Option<String>, Option<String>)>,
     last_key: String,
     turn_wait: Duration,
     queue: VecDeque<(DaemonToWrapper, Instant)>,
@@ -1490,7 +1493,7 @@ impl LinkWorker {
         );
         let state_path = paths.thread_state(&summary.id);
         let state = ThreadState::load(&state_path);
-        Ok(Self {
+        let mut worker = Self {
             thread_id: summary.id.clone(),
             journal_dir: journal_root.join(&agent_id),
             agent_id,
@@ -1504,6 +1507,7 @@ impl LinkWorker {
             state,
             title,
             title_refused_at: None,
+            project_context: None,
             last_key: String::new(),
             turn_wait: turn_wait(),
             queue: VecDeque::new(),
@@ -1520,7 +1524,29 @@ impl LinkWorker {
             journal_block: None,
             observation_events: Vec::new(),
             observation_schema: Vec::new(),
-        })
+        };
+        worker.report_project_context(summary);
+        Ok(worker)
+    }
+
+    fn report_project_context(&mut self, summary: &ThreadSummary) {
+        let context = (
+            summary.workspace_root.clone(),
+            summary.worktree_path.clone(),
+        );
+        if self.project_context.as_ref() == Some(&context) {
+            return;
+        }
+        send_wrapper_message(
+            &self.writer,
+            WrapperToDaemon::CommunicationProjectFact {
+                root: context.0.clone().unwrap_or_default(),
+                source: CommunicationProjectSource::T3,
+                host: crate::wrapper::host_name(),
+                worktree_root: context.1.clone(),
+            },
+        );
+        self.project_context = Some(context);
     }
 
     fn run(mut self, inbox: Receiver<LinkEvent>) {
@@ -1561,6 +1587,7 @@ impl LinkWorker {
     fn handle_event(&mut self, event: LinkEvent) {
         match event {
             LinkEvent::Tick(summary) => {
+                self.report_project_context(&summary);
                 send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
                 let title = display_title(&summary.title);
                 let retry = self
@@ -1610,6 +1637,9 @@ impl LinkWorker {
 
     fn handle_frame(&mut self, frame: DaemonToWrapper) {
         match frame {
+            // Verdict de l'annonce propriétaire, pas une livraison ni une
+            // réponse de mission. Aucun texte n'est injecté dans le fil.
+            DaemonToWrapper::ProjectContextResult { .. } => {}
             delivery
             @ (DaemonToWrapper::Deliver(_) | DaemonToWrapper::DeliverIdempotent { .. }) => {
                 if self.queue.len() >= QUEUE_BOUND
@@ -1628,7 +1658,7 @@ impl LinkWorker {
                 self.discard_by_id(&id, Discard::RequestClosed("annulée"));
                 info!("demande {id} retirée avant démarrage : {reason}");
             }
-            DaemonToWrapper::Ack { id } => {
+            DaemonToWrapper::Ack { id, .. } => {
                 self.response_sent
                     .retain(|request, _| reply_id(request) != id);
                 self.state
@@ -4148,6 +4178,87 @@ mod tests {
     }
 
     #[test]
+    fn spec138_t3_owner_announces_unknown_project_instead_of_using_adapter_cwd() {
+        let (mut worker, peer) = worker099();
+        peer.set_nonblocking(true).unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut fact = None;
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                    if value["type"] == "CommunicationProjectFact" {
+                        fact = Some(value);
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("lecture fait T3: {error}"),
+            }
+        }
+        let fact = fact.expect("annonce propriétaire T3 absente");
+        assert_eq!(fact["source"], "t3");
+        assert_eq!(fact["root"], "");
+        assert_eq!(fact["host"], crate::wrapper::host_name());
+        assert!(fact["worktree_root"].is_null());
+        worker.relay.shutdown();
+        worker.journal.stop();
+    }
+
+    #[test]
+    fn spec138_t3_reannounces_only_changed_project_facts_and_keeps_verdict_out_of_conversation() {
+        let (mut worker, peer) = worker099();
+        peer.set_nonblocking(true).unwrap();
+        let mut reader = BufReader::new(peer);
+        let drain = |reader: &mut BufReader<UnixStream>| {
+            let mut facts = Vec::new();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                        if value["type"] == "CommunicationProjectFact" {
+                            facts.push(value);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => panic!("lecture fait T3: {error}"),
+                }
+            }
+            facts
+        };
+        assert_eq!(drain(&mut reader).len(), 1);
+        let mut current = summary(None);
+        current.workspace_root = Some("/tmp/project-a".into());
+        current.worktree_path = Some("/tmp/project-b".into());
+        worker.last_key = current.change_key();
+        worker.handle_event(LinkEvent::Tick(Box::new(current.clone())));
+        worker.handle_event(LinkEvent::Tick(Box::new(current.clone())));
+        let facts = drain(&mut reader);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["root"], "/tmp/project-a");
+        assert_eq!(facts[0]["worktree_root"], "/tmp/project-b");
+        // Le transport expose la contradiction telle quelle ; il ne choisit
+        // pas de lui-même le worktree comme projet. Le daemon tranche.
+        worker.handle_frame(DaemonToWrapper::ProjectContextResult {
+            project: None,
+            project_warnings: Vec::new(),
+        });
+        assert!(worker.queue.is_empty());
+        assert!(worker.state.pending.is_empty());
+        assert!(drain(&mut reader).is_empty());
+        current.workspace_root = None;
+        worker.handle_event(LinkEvent::Tick(Box::new(current)));
+        let facts = drain(&mut reader);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0]["root"], "");
+        worker.relay.shutdown();
+        worker.journal.stop();
+    }
+
+    #[test]
     fn spec101_http_capacites_honnetes_et_lacune_signalee() {
         use bridget_transport::protocol::ObservationKind as Kind;
         for provider in ["codex", "claudeAgent"] {
@@ -4242,6 +4353,7 @@ mod tests {
             "une liste bornée vide ne prouve rien"
         );
         worker.handle_frame(DaemonToWrapper::Ack {
+            project_warnings: Vec::new(),
             id: reply_id("req"),
         });
         assert_eq!(ThreadState::load(&worker.state_path).pending.len(), 1);
@@ -4947,6 +5059,7 @@ mod tests {
         ThreadSummary {
             id: "thread-1".to_string(),
             project_id: "p".to_string(),
+            workspace_root: None,
             title: "Fil".to_string(),
             provider_instance_id: None,
             runtime_mode: "approval-required".to_string(),

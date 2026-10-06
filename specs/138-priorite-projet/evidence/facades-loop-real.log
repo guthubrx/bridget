@@ -1,0 +1,10 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.43s
+     Running unittests src/lib.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/bridget_daemon-54d50906404159c8)
+
+running 1 test
+[BRIDGET] PID file écrit avec verrou exclusif: /tmp/bgcanon-49eb9049139b439ab0f99c07899107a0/bridget.pid (PID 91136)
+test mcp::tests::spec138_real_agent_loop_cli_daemon_scoped_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1045 filtered out; finished in 1.57s
+

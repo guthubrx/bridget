@@ -1,0 +1,147 @@
+{
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 972,
+        "endLoc": {
+          "column": 4,
+          "line": 972,
+          "position": 39586
+        },
+        "name": "agent_loop.py",
+        "start": 966,
+        "startLoc": {
+          "column": 25,
+          "line": 966,
+          "position": 39369
+        }
+      },
+      "format": "python",
+      "fragment": "    terminal: bool = True,\n    blockers: list[dict[str, Any]] | None = None,\n    output_paths: list[str] | None = None,\n    metrics: dict[str, Any] | None = None,\n    next_recommendation: str = \"\",\n    logs: dict[str, str] | None = None,\n) -> dict[str, Any]:",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 7,
+      "secondFile": {
+        "end": 1001,
+        "endLoc": {
+          "column": 4,
+          "line": 1001,
+          "position": 40382
+        },
+        "name": "agent_loop.py",
+        "start": 995,
+        "startLoc": {
+          "column": 20,
+          "line": 995,
+          "position": 40165
+        }
+      },
+      "tokens": 63
+    },
+    {
+      "firstFile": {
+        "end": 3431,
+        "endLoc": {
+          "column": 84,
+          "line": 3431,
+          "position": 148757
+        },
+        "name": "agent_loop.py",
+        "start": 3424,
+        "startLoc": {
+          "column": 16,
+          "line": 3424,
+          "position": 148499
+        }
+      },
+      "format": "python",
+      "fragment": "    rd = run_dir(args)\n    errors = collect_errors(rd)\n    if errors:\n        for err in errors:\n            print(f\"ERROR {err}\", file=sys.stderr)\n        return 1\n    if not args.dry_run:\n        cmd_refresh_sessions(argparse.Namespace(root=args.root, run_id=args.run_id))",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 8,
+      "secondFile": {
+        "end": 3535,
+        "endLoc": {
+          "column": 84,
+          "line": 3535,
+          "position": 153039
+        },
+        "name": "agent_loop.py",
+        "start": 3528,
+        "startLoc": {
+          "column": 35,
+          "line": 3528,
+          "position": 152781
+        }
+      },
+      "tokens": 55
+    },
+    {
+      "firstFile": {
+        "end": 3622,
+        "endLoc": {
+          "column": 23,
+          "line": 3622,
+          "position": 156951
+        },
+        "name": "agent_loop.py",
+        "start": 3615,
+        "startLoc": {
+          "column": 12,
+          "line": 3615,
+          "position": 156566
+        }
+      },
+      "format": "python",
+      "fragment": "            if audience == \"worker\":\n                session = session_for_worker_event(item[\"event\"])\n            else:\n                role = str(orchestrator_role) if audience == \"coordinator\" else escalation_role\n                if role not in role_sessions:\n                    role_sessions[role] = resolve_role(rd, role)\n                session = role_sessions[role]\n            if session:",
+      "isNew": false,
+      "kind": "exact",
+      "lines": 8,
+      "secondFile": {
+        "end": 3735,
+        "endLoc": {
+          "column": 27,
+          "line": 3735,
+          "position": 163565
+        },
+        "name": "agent_loop.py",
+        "start": 3728,
+        "startLoc": {
+          "column": 16,
+          "line": 3728,
+          "position": 163152
+        }
+      },
+      "tokens": 56
+    }
+  ],
+  "statistics": {
+    "detectionDate": "2026-10-06T18:34:49.809Z",
+    "formats": {
+      "python": {
+        "clones": 3,
+        "duplicatedLines": 20,
+        "duplicatedTokens": 174,
+        "lines": 4453,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 0.44913541432741977,
+        "percentageTokens": 0.5191860118159576,
+        "sources": 2,
+        "tokens": 33514
+      }
+    },
+    "total": {
+      "clones": 3,
+      "duplicatedLines": 20,
+      "duplicatedTokens": 174,
+      "lines": 4453,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 0.44913541432741977,
+      "percentageTokens": 0.5191860118159576,
+      "sources": 2,
+      "tokens": 33514
+    }
+  }
+}

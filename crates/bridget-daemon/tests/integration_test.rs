@@ -14,7 +14,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn ack(peer: &mut Client, id: &str) {
-    assert!(matches!(peer.receive(), DaemonToWrapper::Ack { id: actual } if actual == id));
+    assert!(matches!(peer.receive(), DaemonToWrapper::Ack { id: actual, .. } if actual == id));
 }
 fn request_states(root: &Path) -> Vec<bridget_transport::protocol::RequestInfo> {
     let mut peer = Client::connect(&socket(root));

@@ -13,7 +13,7 @@
 <p align="center">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-daemon%20%2B%20CLI%20%2B%20MCP-000000?logo=rust">
   <img alt="Local-first" src="https://img.shields.io/badge/local--first-socket%20Unix%20%2B%20SQLite%20WAL-0A66FF">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1513%20verts-2FA84F">
+  <img alt="Tests Rust" src="https://img.shields.io/badge/tests%20Rust-1633%20verts-2FA84F">
   <img alt="Licence" src="https://img.shields.io/badge/licence-MIT-lightgrey">
 </p>
 
@@ -46,21 +46,26 @@ un paramètre qu'on pourrait inventer.
 ## Soixante secondes pour essayer
 
 ```sh
-# 1. Construire et lancer le daemon (macOS, launchd)
-cargo build --release -p bridget-daemon
-./target/release/bridget daemon &
+# 1. Construire et lancer une instance privée depuis les sources
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget
+/Users/moi/.cargo/bin/cargo build --release -p bridget-daemon
+umask 077
+export BRIDGET_HOME="$(mktemp -d /tmp/bgessai.XXXXXX)"
+export BRIDGET_SOCKET="$BRIDGET_HOME/bridget.sock"
+export PATH="/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release:$PATH"
+bridget daemon &
 
-# 2. Voir qui est là
-bridget who
+# 2. Voir les agents du projet ; --global permet une recherche volontaire
+bridget who --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget
 
 # 3. Parler à un agent et attendre sa réponse
-bridget send --to '<agent_id_uuid>' --reply --timeout 120 -- 'Vérifie ce point et réponds avec ton résultat.'
+bridget send --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget --to '<agent_id_uuid>' --reply --timeout 120 -- 'Vérifie ce point et réponds avec ton résultat.'
 
 # 4. Ouvrir un fil à trois, sans réveiller personne, puis solliciter un seul membre
 #    (--id est une clé de rejeu : la même après une coupure, jamais un doublon)
 bridget thread create --title "Relecture sécurité" --member '<B>' --member '<C>' --id "$(uuidgen)"
-bridget thread post '<fil>' --silent --id "$(uuidgen)" -- "Contexte : voici le périmètre."
-bridget thread post '<fil>' --notify '<B>' --id "$(uuidgen)" -- "B, peux-tu vérifier le point 3 ?"
+bridget thread post '<fil>' --kind history --silent --id "$(uuidgen)" -- "Contexte : voici le périmètre."
+bridget thread post '<fil>' --kind action --notify '<B>' --id "$(uuidgen)" -- "B, peux-tu vérifier le point 3 ?"
 
 # 5. Retrouver et citer
 bridget ledger search --query "point 3" --limit 5
@@ -69,19 +74,36 @@ bridget ledger read --id '<id>' --target '<uuid>' --offset <match_offset> --dige
 
 Le guide complet d'installation, y compris le pont vers T3 Code (`bridget t3 install`), est dans
 [docs/communication-installation.md](docs/communication-installation.md).
+Un daemon neuf n'a pas encore d'agents : lancer leurs wrappers ou rattacher T3.
+Les exemples de fil supposent une session attestée et des membres du même projet.
+Un fil mixte exige un motif explicite à chaque création ou dépôt, même silencieux.
 
 ## Ce que Bridget sait faire
 
 **Se trouver.** Un annuaire vivant : nom, fournisseur, modèle, effort, disponibilité, domaine. Un agent
 peut se renommer, se déclarer « ne pas déranger » ou changer de domaine, mais seulement pour lui-même.
+`who` et `agents` visent le même projet par défaut ; `--global` ouvre une vue globale volontaire,
+pas un mandat d'envoi. Un client autonome fournit `--project-root` ; sans preuve, son projet reste
+inconnu, sans suggestion locale. Le domaine d'affichage ne prouve pas l'appartenance au projet.
 
 **Se parler sans se perdre.** Envoi idempotent avec reçu, réponses liées à leur question, demandes suivies
 avec rappels et escalade, annulation propre. Un disjoncteur coupe les échanges qui s'emballent et le pont
 T3 ne relaie que les réponses attendues : deux agents ne peuvent plus se répondre en boucle.
+Les en-têtes montrent le nom humain et l'UUID complet ; le nom ne change ni le routage ni les droits.
+Le code et l'aperçu T3 des en-têtes discrets ont été validés séparément (137).
+Cette documentation ne prouve pas leur installation dans une application T3 déjà ouverte.
+Un sous-agent interne T3 attesté utilise seulement MCP `bridget_who` et `bridget_send`, avec la
+provenance du sous-agent et l'identité du parent. La réponse revient au parent, pas au sous-agent.
+Pour un autre projet connu, ajouter `--cross-project-reason 'motif volontaire'` ; MCP utilise
+`cross_project_reason`. L'avertissement revient au caller, hors du corps, sans seconde confirmation
+humaine. Un échange legacy de projet inconnu reste possible avec avertissement, jamais déclaré local.
 
 **Discuter à plusieurs sans gaspiller.** Les fils partagés (2 à 16 membres) sont des carnets communs :
 écrire est silencieux, la sollicitation est ciblée, la lecture est incrémentale avec un signet par membre.
 Trois agents qui échangent dix fois consomment quelques tours, pas soixante.
+`kind:history` conserve une preuve sans sollicitation ; `action`, `blocker` et `decision` portent
+des consignes courtes. `supersedes_seq` remplace explicitement une consigne du même auteur et des
+mêmes cibles. L'histoire reste lisible ; `notify:[]` n'est pas privé : tous les membres peuvent lire.
 
 **Se passer le relais.** Le dossier de passation transporte objectif, résumé, décisions, questions,
 prochain pas et références. Bridget valide la structure, refuse plutôt que de tronquer, et ne certifie
@@ -95,6 +117,11 @@ partielle par construction : Bridget vous le dit, au lieu de vous laisser croire
 permission et aux écritures concurrentes, artefacts publiés inertes et relus par référence exacte. Les
 abonnements survivent à un redémarrage du daemon, et l'état d'une source n'est annoncé qu'une fois stable :
 chaque avis réveille un agent, Bridget n'en envoie donc pas pour rien.
+Une observation est un fait, pas une nouvelle mission ni une demande de réponse inter-agent.
+Une fin de tour ne prouve pas la fin du travail. Le contrôleur Agent Loop reste extérieur à Bridget :
+il suit prise en charge, progrès vérifiable et décision de suite, avec rappels regroupés et clôture
+explicite. Il ne recrute pas ailleurs par défaut. Worker, coordinateur et ROOT déjà mandatés par
+UUID/rôle/motif gardent leurs rappels ; ROOT extérieur sans mandat crée une décision visible.
 
 **S'étendre.** Fédération SSH entre serveurs, adaptateur T3 Code pour les fils de bureau, pilotes natifs
 Claude et Codex sans tmux, protocole public pour les services extérieurs comme le service compagnon.
@@ -132,10 +159,12 @@ budgets de travail par appel. Tout est typé : chaque refus a un code et une rai
 
 ## Qualité
 
-1 556 tests automatisés, dont des crashs réels rejoués, des bancs de charge et des matrices
-CLI/MCP ; `fmt` et `clippy -D warnings` verts ; chaque session a sa spécification, son plan, ses tâches,
-son journal d'implémentation et sa contre-revue par un agent d'un autre fournisseur. Les décisions
-d'architecture sont historisées dans [docs/decisions](docs/decisions) (47 ADR à ce jour).
+La validation isolée de la session138 compte 1 633 tests Rust réussis et 55 ignorés, plus 152 tests
+Python Agent Loop réussis (124 existants et 28 nouveaux). Les 63 tests138 propres sont un sous-ensemble,
+pas un total à ajouter. La recette réelle CLI/MCP/Loop passe ; `fmt`, `clippy -D warnings` et release
+passent. Chaque session conserve ses artefacts et ses revues. La revue138 est indépendante mais du
+même fournisseur ; aucun succès n'est attribué aux 29 scénarios Gherkin seulement rédigés. Les décisions
+d'architecture sont historisées dans [docs/decisions](docs/decisions) (50 documents à ce jour).
 
 ## Aller plus loin
 
@@ -143,7 +172,7 @@ d'architecture sont historisées dans [docs/decisions](docs/decisions) (47 ADR �
 - [Référence complète de la communication](docs/reference-communication.md) : reçus, observation, sessions natives, construction sans toucher à l'installation
 - [Installation et pont T3 Code](docs/communication-installation.md)
 - [Fédération SSH entre serveurs](docs/federation-services.md)
-- [Décisions d'architecture](docs/decisions) : 47 ADR datées, contexte, décision, conséquences
+- [Décisions d'architecture](docs/decisions) : contexte, décision et conséquences
 - [Journal des changements](CHANGELOG.md) : ce qui change d'une version à l'autre
 
 ## Licence

@@ -523,6 +523,7 @@ pub(crate) struct HandoffTransport {
     pub in_reply_to: Option<String>,
     pub id: Option<String>,
     pub issued_at: Option<i64>,
+    pub cross_project_reason: Option<String>,
 }
 
 /// Requête commune aux façades MCP et CLI : mêmes règles, mêmes refus.
@@ -533,13 +534,14 @@ pub(crate) struct HandoffRequest {
     pub transport: Option<HandoffTransport>,
 }
 
-const TRANSPORT_FIELDS: [&str; 6] = [
+const TRANSPORT_FIELDS: [&str; 7] = [
     "to",
     "reply",
     "reply_timeout",
     "in_reply_to",
     "id",
     "issued_at",
+    "cross_project_reason",
 ];
 
 /// Analyse stricte de l'objet complet (`action`, `draft`, transport pour `send`).
@@ -557,6 +559,7 @@ pub(crate) fn parse_request(value: &Value) -> Result<HandoffRequest, HandoffErro
             "in_reply_to",
             "id",
             "issued_at",
+            "cross_project_reason",
         ],
     )?;
     let action = match map.get("action").and_then(Value::as_str) {
@@ -606,6 +609,17 @@ pub(crate) fn parse_request(value: &Value) -> Result<HandoffRequest, HandoffErro
         return Err(err("reply_timeout", "réservé à reply=true"));
     }
     let in_reply_to = optional_text(map, "in_reply_to", MAX_ITEM_BYTES)?;
+    let cross_project_reason = map
+        .get("cross_project_reason")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| err("cross_project_reason", "chaîne attendue (null refusé)"))
+        })
+        .transpose()?;
+    let cross_project_reason =
+        crate::communication::validate_cross_project_reason(cross_project_reason)
+            .map_err(|reason| err("cross_project_reason", reason))?;
     let id = optional_text(map, "id", MAX_LABEL_BYTES)?;
     let issued_at = match map.get("issued_at") {
         None => None,
@@ -630,6 +644,7 @@ pub(crate) fn parse_request(value: &Value) -> Result<HandoffRequest, HandoffErro
             in_reply_to,
             id,
             issued_at,
+            cross_project_reason,
         }),
     })
 }
@@ -884,6 +899,46 @@ mod tests {
             let error = parse_request(&request).unwrap_err();
             assert_eq!(error.field, field, "{request} → {error}");
         }
+    }
+
+    #[test]
+    fn spec138_handoff_accepts_structured_reason_without_body_rewrite() {
+        let base =
+            json!({"action":"send","to":"11111111-1111-4111-8111-111111111111","draft":minimal()});
+        let rendered = parse_request(&base).unwrap().rendered;
+        let mut explicit = base;
+        explicit["cross_project_reason"] = json!("Comparer le contrat partagé");
+        assert_eq!(parse_request(&explicit).unwrap().rendered, rendered);
+        assert_eq!(
+            parse_request(&explicit)
+                .unwrap()
+                .transport
+                .unwrap()
+                .cross_project_reason
+                .as_deref(),
+            Some("Comparer le contrat partagé")
+        );
+        for invalid in [
+            Value::Null,
+            json!(" "),
+            json!("\nComparer"),
+            json!("é".repeat(257)),
+            json!(true),
+        ] {
+            explicit["cross_project_reason"] = invalid;
+            assert!(parse_request(&explicit).is_err());
+        }
+        explicit["cross_project_reason"] = json!(format!(" {} ", "é".repeat(256)));
+        assert_eq!(
+            parse_request(&explicit)
+                .unwrap()
+                .transport
+                .unwrap()
+                .cross_project_reason
+                .unwrap()
+                .len(),
+            512
+        );
     }
 
     #[test]

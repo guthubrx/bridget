@@ -1,0 +1,9 @@
+{
+  "module": "06",
+  "findings": [],
+  "positive_findings": [
+    "06 — Le contrôle conserve les warnings dans le résultat durable ; un replay accepté ne réexécute pas l'effet (execution_store.rs / spec138_project_test.rs).",
+    "06 — CAS, archive et publication partagent le verrou de tâche ; les tests couvrent course et pannes E/S ordinaires (agent_loop.py:638)."
+  ],
+  "scope_mode": "diff"
+}

@@ -482,8 +482,11 @@ fn execute_tool_at_with_identity(
             )
         }
         "bridget_thread" => {
+            let cross_project_reason = project_reason(arguments)?;
+            let mut action_arguments = arguments.clone();
+            action_arguments.remove("cross_project_reason");
             let action: bridget_transport::protocol::ThreadAction =
-                serde_json::from_value(Value::Object(arguments.clone()))
+                serde_json::from_value(Value::Object(action_arguments))
                     .map_err(|error| ToolError::InvalidParams(format!("thread : {error}")))?;
             let result = crate::communication::client::thread_request(
                 principal,
@@ -492,6 +495,7 @@ fn execute_tool_at_with_identity(
                 bridget_transport::protocol::ThreadRequest {
                     version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
                     request: action,
+                    cross_project_reason,
                 },
             )?;
             Ok(result.result)
@@ -507,6 +511,9 @@ fn execute_tool_at_with_identity(
                     send.insert("to".into(), Value::from(transport.to));
                     send.insert("body".into(), Value::from(request.rendered.body.clone()));
                     send.insert("reply".into(), Value::from(transport.reply));
+                    if let Some(reason) = transport.cross_project_reason {
+                        send.insert("cross_project_reason".into(), Value::from(reason));
+                    }
                     if let Some(timeout) = transport.reply_timeout {
                         send.insert("reply_timeout".into(), Value::from(timeout));
                     }
@@ -532,7 +539,10 @@ fn execute_tool_at_with_identity(
             let excerpt = request.read(socket)?;
             if let Some(to) = request.to {
                 let body = excerpt.shared_body();
-                let send = json!({"to":to,"body":body,"reply":request.reply});
+                let mut send = json!({"to":to,"body":body,"reply":request.reply});
+                if let Some(reason) = request.cross_project_reason {
+                    send["cross_project_reason"] = json!(reason);
+                }
                 let receipt = execute_send(identity, send.as_object().expect("objet"), socket)?;
                 Ok(json!({"excerpt":excerpt,"send":receipt}))
             } else {
@@ -668,8 +678,10 @@ fn execute_send(
             "in_reply_to",
             "id",
             "issued_at",
+            "cross_project_reason",
         ],
     )?;
+    let cross_project_reason = project_reason(arguments)?;
     let mut to = required_non_empty_string(arguments, "to")?;
     let uuid_prefix =
         (6..36).contains(&to.len()) && to.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
@@ -730,6 +742,7 @@ fn execute_send(
     message.reply_timeout = reply_timeout;
     message.in_reply_to = in_reply_to;
     message.delegated_origin = identity.delegated_origin.clone();
+    message.cross_project_reason = cross_project_reason;
     let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -749,13 +762,30 @@ fn execute_send(
     match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
         issuer_scope,
-        capabilities: vec![ClientCapability::SendIdempotent],
+        capabilities: if message.cross_project_reason.is_some() {
+            vec![
+                ClientCapability::SendIdempotent,
+                ClientCapability::CommunicationProjectsV1,
+            ]
+        } else {
+            vec![ClientCapability::SendIdempotent]
+        },
     })? {
         DaemonToWrapper::ClientWelcome {
             capabilities,
             build_id,
             ..
         } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if message.cross_project_reason.is_some()
+                && !capabilities.contains(&ClientCapability::CommunicationProjectsV1)
+            {
+                return Err(ToolError::Technical {
+                    code: "communication_projects_unsupported",
+                    message:
+                        "le daemon ne négocie pas le motif interprojets ; aucun message envoyé"
+                            .into(),
+                });
+            }
             if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
                 eprintln!("{warning}");
             }
@@ -773,8 +803,16 @@ fn execute_send(
         message_id: id.clone(),
         issued_at,
     }) {
-        Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
-            Ok(send_issue_result(&id, issued_at, issue))
+        Ok(DaemonToWrapper::IdempotencyResult {
+            issue,
+            project_warnings,
+            ..
+        }) => {
+            let mut result = send_issue_result(&id, issued_at, issue);
+            if !project_warnings.is_empty() {
+                result["project_warnings"] = json!(project_warnings);
+            }
+            Ok(result)
         }
         Ok(other) => unexpected_response(other),
         Err(ToolError::Technical {
@@ -996,7 +1034,21 @@ fn execute_who(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["domain"])?;
+    reject_unknown_arguments(arguments, &["domain", "scope"])?;
+    let scope = match arguments.get("scope") {
+        None => bridget_transport::protocol::CommunicationDirectoryScope::SameProject,
+        Some(Value::String(scope)) if scope == "same_project" => {
+            bridget_transport::protocol::CommunicationDirectoryScope::SameProject
+        }
+        Some(Value::String(scope)) if scope == "global" => {
+            bridget_transport::protocol::CommunicationDirectoryScope::Global
+        }
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "scope doit valoir same_project ou global".into(),
+            ));
+        }
+    };
     let domain = match arguments.get("domain") {
         Some(value) => Some(
             value
@@ -1006,16 +1058,23 @@ fn execute_who(
         ),
         None => None,
     };
-    // L'annuaire est la projection publique du daemon : sa lecture n'exige
-    // aucune preuve d'identité, comme `bridget who` au clavier. Les outils qui
-    // écrivent ou lisent une portée privée restent attestés.
-    let _ = (identity, instance_id);
-    let mut connection = DaemonConnection::connect(socket)?;
-    match connection.exchange(&WrapperToDaemon::ListAgents)? {
-        DaemonToWrapper::AgentList { agents } => Ok(json!({
+    match crate::communication::client::directory_request(
+        Some((identity, instance_id)),
+        socket,
+        scope,
+        None,
+    )? {
+        DaemonToWrapper::CommunicationDirectory {
+            agents,
+            project,
+            project_warnings,
+        } => Ok(json!({
             "agents": agents.into_iter().filter(|agent| {
-                domain.as_deref().is_none_or(|wanted| agent.domain.as_deref() == Some(wanted))
-            }).collect::<Vec<_>>()
+                domain.as_deref().is_none_or(|wanted| agent.agent.domain.as_deref() == Some(wanted))
+            }).collect::<Vec<_>>(),
+            "project": project,
+            "project_warnings": project_warnings,
+            "scope": scope,
         })),
         other => unexpected_response(other),
     }
@@ -1758,6 +1817,13 @@ fn optional_bool(
         .transpose()
 }
 
+/// Réutilise la validation commune ; null n'est jamais l'absence d'un mandat.
+fn project_reason(arguments: &serde_json::Map<String, Value>) -> Result<Option<String>, ToolError> {
+    let reason = optional_non_empty_string(arguments, "cross_project_reason")?;
+    crate::communication::validate_cross_project_reason(reason.as_deref())
+        .map_err(ToolError::InvalidParams)
+}
+
 fn optional_positive_u64(
     arguments: &serde_json::Map<String, Value>,
     key: &str,
@@ -1885,6 +1951,7 @@ fn tools() -> Vec<Value> {
                 "members":{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},
                 "operation_id":{"type":"string","minLength":36,"maxLength":36},
                 "body":{"type":"string","minLength":1,"maxLength":16384},
+                "cross_project_reason":{"type":"string","minLength":1,"maxLength":512,"description":"Choix interprojets volontaire pour tous les membres lecteurs, même sans notification. 1–512 octets UTF-8 sans contrôles."},
                 "notify":{"oneOf":[{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},{"enum":["all"]}]},
                 "reply_to_seq":{"type":"integer","minimum":1},
                 "ack_receipt":{"type":"string","minLength":36,"maxLength":36},
@@ -1916,6 +1983,7 @@ fn tools() -> Vec<Value> {
                 "reply":{"type":"boolean","default":false},
                 "reply_timeout":{"type":"integer","minimum":1},
                 "in_reply_to":{"type":"string","minLength":1},
+                "cross_project_reason":{"type":"string","minLength":1,"maxLength":512},
                 "id":{"type":"string","minLength":1},
                 "issued_at":{"type":"integer","minimum":1}
             },"required":["action","draft"],"additionalProperties":false}
@@ -1942,7 +2010,8 @@ fn tools() -> Vec<Value> {
                     "tail":{"type":"integer","minimum":1,"maximum":200},
                     "from_seq":{"type":"integer","minimum":1},
                     "to":{"type":"string","minLength":1},
-                    "reply":{"type":"boolean","default":false}
+                    "reply":{"type":"boolean","default":false},
+                    "cross_project_reason":{"type":"string","minLength":1,"maxLength":512}
                 }, "required":["agent"], "additionalProperties":false
             }
         }),
@@ -1954,6 +2023,7 @@ fn tools() -> Vec<Value> {
                 "properties": {
                     "to": { "type": "string", "minLength": 1 },
                     "body": { "type": "string", "minLength": 1 },
+                    "cross_project_reason": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Motif volontaire d'un échange hors projet ; 1–512 octets UTF-8 sans contrôles. Ne pas déduire le motif depuis body. Le warning est rendu hors corps." },
                     "reply": { "type": "boolean", "default": false },
                     "reply_timeout": { "type": "integer", "minimum": 1 },
                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
@@ -1979,10 +2049,10 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_who",
-            "description": "Lister les équipiers Bridget visibles.",
+            "description": "Proposer les équipiers du même projet par défaut. scope=global affiche les autres projets volontairement, sans autoriser un envoi extérieur. Un projet inconnu ne produit aucun candidat local.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "domain": { "type": "string" } },
+                "properties": { "domain": { "type": "string" }, "scope": {"enum":["same_project","global"],"default":"same_project"} },
                 "additionalProperties": false
             }
         }),
@@ -3004,6 +3074,7 @@ mod tests {
                 DaemonToWrapper::IdempotencyResult {
                     operation_kind: "send".into(),
                     idempotency_key: message_id,
+                    project_warnings: Vec::new(),
                     issue: IdempotencyIssue::Accepted {
                         expires_at: 9999999999,
                     },
@@ -3523,6 +3594,7 @@ mod tests {
                     DaemonToWrapper::IdempotencyResult {
                         operation_kind: "send".to_string(),
                         idempotency_key: "retry-me".to_string(),
+                        project_warnings: Vec::new(),
                         issue: IdempotencyIssue::Accepted { expires_at: 60 },
                     },
                 );
@@ -3599,6 +3671,7 @@ mod tests {
                 DaemonToWrapper::IdempotencyResult {
                     operation_kind: "send".into(),
                     idempotency_key: "delegated-message".into(),
+                    project_warnings: Vec::new(),
                     issue: IdempotencyIssue::Accepted { expires_at: 60 },
                 },
             );
@@ -3676,6 +3749,7 @@ mod tests {
                 DaemonToWrapper::IdempotencyResult {
                     operation_kind: "send".to_string(),
                     idempotency_key: "reply-1".to_string(),
+                    project_warnings: Vec::new(),
                     issue: IdempotencyIssue::Accepted { expires_at: 60 },
                 },
             );
@@ -3798,6 +3872,7 @@ mod tests {
                     DaemonToWrapper::IdempotencyResult {
                         operation_kind: "send".to_string(),
                         idempotency_key: "retry-1".to_string(),
+                        project_warnings: Vec::new(),
                         issue: IdempotencyIssue::Accepted {
                             expires_at: 1_700_000_060,
                         },
@@ -4119,6 +4194,7 @@ mod tests {
                 DaemonToWrapper::IdempotencyResult {
                     operation_kind: "send".to_string(),
                     idempotency_key: "retry-cut".to_string(),
+                    project_warnings: Vec::new(),
                     issue: IdempotencyIssue::Accepted {
                         expires_at: 1_700_000_060,
                     },
@@ -4211,6 +4287,7 @@ mod tests {
                     DaemonToWrapper::IdempotencyResult {
                         operation_kind: "send".to_string(),
                         idempotency_key: "ack-differe-1".to_string(),
+                        project_warnings: Vec::new(),
                         issue,
                     },
                 );
@@ -4574,7 +4651,7 @@ mod tests {
     }
 
     #[test]
-    fn who_lit_l_annuaire_public_sans_enregistrement() {
+    fn spec138_who_inherits_project_and_defaults_to_local_directory() {
         let socket = test_socket("who");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
@@ -4582,21 +4659,585 @@ mod tests {
             let read_stream = stream.try_clone().unwrap();
             let mut reader = BufReader::new(read_stream);
             let mut writer = BufWriter::new(stream);
-            // L'annuaire est public : aucune preuve ni enregistrement avant la
-            // commande, exactement comme `bridget who` au clavier.
+            let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } = read_command(&mut reader)
+            else {
+                panic!("identité du caller exigée")
+            };
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    agent_id,
+                    credential: None,
+                },
+            );
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::ClientHello { capabilities, .. } if capabilities == vec![ClientCapability::CommunicationProjectsV1])
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "fixture".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 60,
+                    capabilities: vec![ClientCapability::CommunicationProjectsV1],
+                },
+            );
             assert!(matches!(
                 read_command(&mut reader),
-                WrapperToDaemon::ListAgents
+                WrapperToDaemon::DirectoryScoped {
+                    scope: bridget_transport::protocol::CommunicationDirectoryScope::SameProject
+                }
             ));
             write_command(
                 &mut writer,
-                DaemonToWrapper::AgentList { agents: Vec::new() },
+                DaemonToWrapper::CommunicationDirectory {
+                    agents: Vec::new(),
+                    project: None,
+                    project_warnings: Vec::new(),
+                },
             );
         });
         let result =
             execute_tool_at("codex-1", "bridget_who", &serde_json::Map::new(), &socket).unwrap();
-        assert_eq!(result, json!({ "agents": [] }));
+        assert_eq!(
+            result,
+            json!({ "agents": [], "project":null, "project_warnings":[], "scope":"same_project" })
+        );
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn spec138_valid_send_reason_reaches_transport_without_rewriting_body() {
+        let socket = test_socket("reason-missing");
+        let arguments = json!({"to":"11111111-1111-4111-8111-111111111111", "body":"exact body", "cross_project_reason":"Comparer le contrat"});
+        let error = execute_tool_at(
+            "codex-1",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ToolError::Technical {
+                    code: "daemon_unreachable",
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn spec138_invalid_reasons_and_scope_are_rejected_before_transport() {
+        let socket = test_socket("invalid-reason");
+        for reason in [
+            Value::Null,
+            json!(" "),
+            json!("x\nsecret"),
+            json!("é".repeat(257)),
+            json!(12),
+        ] {
+            let args = json!({"to":"11111111-1111-4111-8111-111111111111", "body":"unchanged", "cross_project_reason":reason});
+            assert!(matches!(
+                execute_tool_at(
+                    "codex-1",
+                    "bridget_send",
+                    args.as_object().unwrap(),
+                    &socket
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+        for scope in [Value::Null, json!(true), json!("all")] {
+            assert!(matches!(
+                execute_tool_at(
+                    "codex-1",
+                    "bridget_who",
+                    json!({"scope":scope}).as_object().unwrap(),
+                    &socket
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn spec138_old_server_without_capability_receives_no_message() {
+        let socket = test_socket("old-server");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::ClientHello {capabilities, ..} if capabilities.contains(&ClientCapability::CommunicationProjectsV1))
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "old-server".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 60,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+            let mut line = String::new();
+            assert_eq!(
+                reader.read_line(&mut line).unwrap(),
+                0,
+                "aucun message après capacité absente"
+            );
+        });
+        let args = json!({"to":"11111111-1111-4111-8111-111111111111", "body":"PRIVATE_PROMPT unchanged", "cross_project_reason":"Revue volontaire"});
+        assert!(matches!(
+            execute_tool_at(
+                "codex-1",
+                "bridget_send",
+                args.as_object().unwrap(),
+                &socket
+            ),
+            Err(ToolError::Technical {
+                code: "communication_projects_unsupported",
+                ..
+            })
+        ));
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn spec138_send_returns_structured_warning_outside_exact_body() {
+        let socket = test_socket("warning-body");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let body = "PRIVATE_PROMPT exact\nOPAQUE_REASONING";
+        let warning = bridget_transport::protocol::ProjectWarning {
+            code: "cross_project".into(),
+            sender_project: Some(bridget_transport::protocol::CommunicationProject {
+                host: "test".into(),
+                root: "/a".into(),
+            }),
+            recipient_project: Some(bridget_transport::protocol::CommunicationProject {
+                host: "test".into(),
+                root: "/b".into(),
+            }),
+            recipient: "11111111-1111-4111-8111-111111111111".into(),
+            reason: Some("Revue volontaire".into()),
+        };
+        let expected = warning.clone();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::ClientHello {capabilities,..} if capabilities.contains(&ClientCapability::CommunicationProjectsV1))
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "fixture".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 60,
+                    capabilities: vec![
+                        ClientCapability::SendIdempotent,
+                        ClientCapability::CommunicationProjectsV1,
+                    ],
+                },
+            );
+            let WrapperToDaemon::SendIdempotent {
+                message,
+                message_id,
+                ..
+            } = read_command(&mut reader)
+            else {
+                panic!("send attendu")
+            };
+            assert_eq!(message.body, body);
+            assert_eq!(
+                message.cross_project_reason.as_deref(),
+                Some("Revue volontaire")
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::IdempotencyResult {
+                    operation_kind: "send".into(),
+                    idempotency_key: message_id,
+                    issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                    project_warnings: vec![warning],
+                },
+            );
+        });
+        let arguments = json!({"to":"11111111-1111-4111-8111-111111111111", "body":body,"cross_project_reason":" Revue volontaire "});
+        let result = execute_tool_at(
+            "codex-1",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["project_warnings"], json!([expected]));
+        assert_eq!(result["status"], "accepted");
+        assert!(
+            !result["project_warnings"]
+                .to_string()
+                .contains("PRIVATE_PROMPT")
+        );
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn spec138_real_daemon_mcp_directory_and_cross_project_send_share_guard() {
+        scoped_facades_real_daemon(None);
+    }
+
+    #[test]
+    #[ignore = "requiert un script Agent Loop et un binaire local explicites, jamais la production"]
+    fn spec138_real_agent_loop_cli_daemon_scoped_replay() {
+        let script = std::env::var_os("BRIDGET_SPEC138_AGENT_LOOP_SCRIPT")
+            .map(std::path::PathBuf::from)
+            .expect("BRIDGET_SPEC138_AGENT_LOOP_SCRIPT explicite requis");
+        let binary = std::env::var_os("BRIDGET_SPEC138_BIN")
+            .map(std::path::PathBuf::from)
+            .expect("BRIDGET_SPEC138_BIN explicite requis");
+        assert!(script.is_absolute() && script.is_file());
+        assert!(binary.is_absolute() && binary.is_file());
+        scoped_facades_real_daemon(Some((script, binary)));
+    }
+
+    // Réutilise le même daemon privé que les projections CLI/MCP : aucun second harnais.
+    fn scoped_facades_real_daemon(loop_inputs: Option<(std::path::PathBuf, std::path::PathBuf)>) {
+        use bridget_transport::protocol::{CommunicationProjectSource, ProjectRelation};
+        let (socket, _) = crate::cli::idempotency_projection_tests::start_real_daemon();
+        let root = socket.parent().unwrap();
+        let project_a = root.join("a");
+        let project_b = root.join("b");
+        for project in [&project_a, &project_b] {
+            std::fs::create_dir(project).unwrap();
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "--quiet"])
+                    .arg(project)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let mut owner = crate::cli::idempotency_projection_tests::owner_connection(&socket);
+        let host = crate::build_info::local_host();
+        assert!(matches!(
+            owner
+                .exchange(&WrapperToDaemon::CommunicationProjectFact {
+                    root: project_a.to_string_lossy().into_owned(),
+                    source: CommunicationProjectSource::Git,
+                    host: host.clone(),
+                    worktree_root: None
+                })
+                .unwrap(),
+            DaemonToWrapper::ProjectContextResult {
+                project: Some(_),
+                ..
+            }
+        ));
+        let recipient = "89000000-0000-4000-8000-000000000201";
+        let mut target = DaemonConnection::connect(&socket).unwrap();
+        assert!(matches!(
+            target
+                .exchange(&WrapperToDaemon::Register {
+                    identity_version: 2,
+                    agent_type: "fixture".into(),
+                    agent_id: recipient.into(),
+                    host: Some(host.clone()),
+                    transport: Some("test".into()),
+                    channel: bridget_transport::ChannelReport::Unknown,
+                    mode: Some(bridget_transport::protocol::PresenceMode::Cli),
+                    location: None,
+                    os: None,
+                    instance_id: Some("test-recipient138".into()),
+                    domain: Some("same-visible-name".into()),
+                    turn_in_progress: false,
+                    journal_available: Some(false)
+                })
+                .unwrap(),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(matches!(
+            target
+                .exchange(&WrapperToDaemon::CommunicationProjectFact {
+                    root: project_b.to_string_lossy().into_owned(),
+                    source: CommunicationProjectSource::Git,
+                    host,
+                    worktree_root: None
+                })
+                .unwrap(),
+            DaemonToWrapper::ProjectContextResult {
+                project: Some(_),
+                ..
+            }
+        ));
+        let identity = crate::cli::idempotency_projection_tests::caller_identity();
+        let who = super::execute_tool_at_with_identity(
+            &identity,
+            "bridget_who",
+            json!({}).as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(who["agents"].as_array().unwrap().len(), 1);
+        assert_eq!(who["agents"][0]["agent_id"], identity.name);
+        let all = super::execute_tool_at_with_identity(
+            &identity,
+            "bridget_who",
+            json!({"scope":"global"}).as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(all["agents"].as_array().unwrap().len(), 2);
+        let external = all["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|agent| agent["agent_id"] == recipient)
+            .unwrap();
+        assert_eq!(
+            external["project_relation"],
+            serde_json::to_value(ProjectRelation::Other).unwrap()
+        );
+        let rejected = super::execute_tool_at_with_identity(
+            &identity,
+            "bridget_send",
+            json!({"to":recipient,"body":"PRIVATE_PROMPT unchanged"})
+                .as_object()
+                .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(rejected["status"], "cross_project_reason_required");
+        assert!(
+            rejected
+                .to_string()
+                .contains("cross_project_reason_required")
+        );
+        let sent = super::execute_tool_at_with_identity(&identity,"bridget_send",json!({"to":recipient,"body":"PRIVATE_PROMPT unchanged","cross_project_reason":"Revue volontaire"}).as_object().unwrap(),&socket).unwrap();
+        assert!(
+            matches!(sent["status"].as_str(), Some("accepted" | "in_flight")),
+            "{sent}"
+        );
+        assert_eq!(sent["project_warnings"][0]["code"], "cross_project");
+        let response = target.read_response("test-delivery").unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = response else {
+            panic!("remise réelle attendue, réponse observée : {response:?}")
+        };
+        assert_eq!(message.body, "PRIVATE_PROMPT unchanged");
+        assert_eq!(
+            message.cross_project_reason.as_deref(),
+            Some("Revue volontaire")
+        );
+        let connection = rusqlite::Connection::open(root.join("bridget.db")).unwrap();
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM ledger WHERE target=?1",
+                [recipient],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "le refus n'a rien déposé");
+
+        // La vraie projection CLI de fond négocie son contexte propre sans Register.
+        let mut bare = BridgetMessage::new("human", recipient, "Bare exact body");
+        let mut options = crate::cli::IdempotentSendOptions {
+            id: bare.id.clone(),
+            issued_at: now_secs(),
+            issuer_scope: issuer_scope("test138-background-client"),
+        };
+        let refused = crate::cli::send_idempotent_to_daemon_at_with_project(
+            &socket,
+            &bare,
+            &options,
+            None,
+            Some(&project_a),
+        )
+        .unwrap();
+        assert!(
+            matches!(refused,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {reason,..},..} if reason.contains("cross_project_reason_required"))
+        );
+        bare.cross_project_reason = Some("Relance mandatée".into());
+        options.id = uuid::Uuid::new_v4().to_string();
+        bare.id = options.id.clone();
+        let result = crate::cli::send_idempotent_to_daemon_at_with_project(
+            &socket,
+            &bare,
+            &options,
+            None,
+            Some(&project_a),
+        )
+        .unwrap();
+        let DaemonToWrapper::IdempotencyResult {
+            issue,
+            project_warnings,
+            ..
+        } = result
+        else {
+            panic!("issue CLI attendue")
+        };
+        assert!(crate::cli::send_deposited(&issue), "{issue:?}");
+        assert_eq!(project_warnings[0].code, "cross_project");
+        let DaemonToWrapper::DeliverIdempotent { message, .. } =
+            target.read_response("test-cli-delivery").unwrap()
+        else {
+            panic!("remise CLI réelle attendue")
+        };
+        assert_eq!(message.from, "human");
+        assert_eq!(message.body, "Bare exact body");
+        let all = super::execute_tool_at_with_identity(
+            &identity,
+            "bridget_who",
+            json!({"scope":"global"}).as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(
+            all["agents"].as_array().unwrap().len(),
+            2,
+            "le client CLI de fond ne crée aucun faux agent"
+        );
+
+        if let Some((script, binary)) = loop_inputs {
+            let python = r#"
+import argparse, contextlib, importlib.util, io, json, pathlib, subprocess, sys, time, uuid
+spec = importlib.util.spec_from_file_location("agent_loop_spec138", sys.argv[1])
+loop = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = loop
+spec.loader.exec_module(loop)
+project, owner, recipient, run_parent = sys.argv[2:6]
+local = loop.bridget_agents(project_root=project)
+assert {agent["agent_id"] for agent in local} == {owner}, local
+global_agents = loop.bridget_agents(project_root=project, global_scope=True)
+assert len(global_agents) == 2, global_agents
+external = next(agent for agent in global_agents if agent["agent_id"] == recipient)
+assert external["project_relation"] == "other", external
+run = pathlib.Path(run_parent) / "loop-fixture"
+run.mkdir()
+(run / "run.json").write_text(json.dumps({"run_id":"loop-fixture", "project_root":project, "policies":{}}))
+args = argparse.Namespace(root=run_parent, run_id="loop-fixture", role="root", target=recipient,
+                          backend="existing_bridget", session_id="", jsonl_path="", notes="",
+                          cross_project_reason="")
+before = {str(path):path.read_bytes() for path in run.rglob("*") if path.is_file()}
+try:
+    loop.cmd_attach_agent(args)
+except SystemExit as error:
+    assert str(error) == "cross_project_reason_required", error
+else:
+    raise AssertionError("attribution interprojets sans mandat acceptée")
+assert before == {str(path):path.read_bytes() for path in run.rglob("*") if path.is_file()}
+args.cross_project_reason = "Mandat réel de recette"
+with contextlib.redirect_stdout(io.StringIO()):
+    assert loop.cmd_attach_agent(args) == 0
+session = json.loads((run / "sessions" / ("root-" + recipient[:12] + ".json")).read_text())
+assert session["cross_project_mandate"] == {"agent_id":recipient, "role":"root", "reason":"Mandat réel de recette"}
+context = {"id": str(uuid.uuid4()), "issued_at": int(time.time()),
+           "issuer_scope": "spec138-loop-background-receipt", "project_root": project}
+try:
+    loop.send_bridget_message(recipient, "Loop exact PRIVATE_PROMPT body", replay=context)
+except subprocess.CalledProcessError:
+    pass
+else:
+    raise AssertionError("envoi inter-projets sans motif accepté")
+context.update(id=str(uuid.uuid4()), **loop.bridget_scope_context(json.loads((run / "run.json").read_text()), session, external, "root"))
+loop.send_bridget_message(recipient, "Loop exact PRIVATE_PROMPT body", replay=context)
+loop.send_bridget_message(recipient, "Loop exact PRIVATE_PROMPT body", replay=context)
+assert len(loop.bridget_agents(project_root=project, global_scope=True)) == 2
+print(json.dumps({"same_project":len(local),"global":len(global_agents),
+                  "replay":"same_receipt","body":"exact","attach":"mandated"}))
+"#;
+            let output = std::process::Command::new("python3")
+                .arg("-c")
+                .arg(python)
+                .arg(&script)
+                .arg(&project_a)
+                .arg(&identity.name)
+                .arg(recipient)
+                .arg(root)
+                .env("AGENT_LOOP_BRIDGET_BIN", &binary)
+                .env("BRIDGET_HOME", root)
+                .env("BRIDGET_SOCKET", &socket)
+                .env("TMPDIR", root)
+                .env("PYTHONDONTWRITEBYTECODE", "1")
+                .env("BRIDGET_AGENT_ID", "borrowed-t3-identity-must-be-removed")
+                .env(
+                    "BRIDGET_AGENT_INSTANCE_ID",
+                    "borrowed-instance-must-be-removed",
+                )
+                .current_dir(&project_b)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "Agent Loop échoue dans le namespace isolé : {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.contains("AVERTISSEMENT PROJET: "));
+            assert!(stderr.contains("cross_project"));
+            assert!(!stderr.contains("PRIVATE_PROMPT"));
+            let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(summary["same_project"], 1);
+            assert_eq!(summary["global"], 2);
+            assert_eq!(summary["attach"], "mandated");
+            let DaemonToWrapper::DeliverIdempotent { message, .. } =
+                target.read_response("test-loop-delivery").unwrap()
+            else {
+                panic!("remise Agent Loop → CLI → daemon attendue")
+            };
+            assert_eq!(message.from, "human");
+            assert_eq!(message.body, "Loop exact PRIVATE_PROMPT body");
+            assert_eq!(
+                message.cross_project_reason.as_deref(),
+                Some("Mandat réel de recette")
+            );
+            let count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM ledger WHERE target=?1",
+                    [recipient],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                count, 3,
+                "deux projections initiales et une remise Loop ; aucun dépôt au refus ni au rejeu"
+            );
+        }
     }
 }

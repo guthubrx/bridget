@@ -1,0 +1,183 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-06T18:56:40Z",
+    "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet",
+    "external_scope": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+    "scope_mode": "diff",
+    "diff": {
+      "base": "e8ed4d62",
+      "external_base": "5fc64e37",
+      "tracked_files": 39,
+      "new_code_files": 1,
+      "ancillary_new_files": 16,
+      "scope_files_count": 56,
+      "definition": "Hunks modifiés + contexte nécessaire ; source neuve entière ; docs de session. Les logs et résultats d'outils sont des preuves, pas du code scanné."
+    },
+    "mode": "LIGHT",
+    "grid": "pre-merge"
+  },
+  "repo": {
+    "files_count": 177,
+    "files_count_definition": "Contexte source Rust/Python du worktree Bridget, hors target/.git/.worktrees/audits/specs ; pas un taux de couverture dépôt.",
+    "languages": [
+      "rust",
+      "python"
+    ],
+    "frameworks": [],
+    "libraries": [
+      "serde",
+      "rusqlite"
+    ],
+    "type": "local-daemon-cli-mcp",
+    "has_ui": false,
+    "has_llm_integration": true,
+    "db_type": "sqlite",
+    "ci_system": "none_detected",
+    "container": false
+  },
+  "sampling": null,
+  "coverage": {
+    "percent": 100,
+    "unit": "diff_hunks_plus_context_and_new_source",
+    "repository_percent": null,
+    "scope_files": [
+      ".specify/feature.json",
+      "AGENTS.md",
+      "crates/bridget-core/src/message.rs",
+      "crates/bridget-daemon/src/attach.rs",
+      "crates/bridget-daemon/src/cli.rs",
+      "crates/bridget-daemon/src/communication.rs",
+      "crates/bridget-daemon/src/communication/client.rs",
+      "crates/bridget-daemon/src/daemon.rs",
+      "crates/bridget-daemon/src/execution_store.rs",
+      "crates/bridget-daemon/src/handoff.rs",
+      "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "crates/bridget-daemon/src/mcp.rs",
+      "crates/bridget-daemon/src/store/threads.rs",
+      "crates/bridget-daemon/src/t3code.rs",
+      "crates/bridget-daemon/src/t3code_contract.rs",
+      "crates/bridget-daemon/src/threads.rs",
+      "crates/bridget-daemon/src/wrapper.rs",
+      "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "crates/bridget-daemon/tests/core_089_federation_test.rs",
+      "crates/bridget-daemon/tests/core_089_isolation_test.rs",
+      "crates/bridget-daemon/tests/core_089_native_test.rs",
+      "crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "crates/bridget-daemon/tests/core_089_status_test.rs",
+      "crates/bridget-daemon/tests/execution_store_test.rs",
+      "crates/bridget-daemon/tests/fixtures/claude_interactive_097.py",
+      "crates/bridget-daemon/tests/fixtures/codex_interactive_090.py",
+      "crates/bridget-daemon/tests/integration_test.rs",
+      "crates/bridget-daemon/tests/managed_parity_test.rs",
+      "crates/bridget-daemon/tests/search_104_test.rs",
+      "crates/bridget-daemon/tests/spec100_observation_test.rs",
+      "crates/bridget-daemon/tests/spec102_threads_test.rs",
+      "crates/bridget-transport/src/codex_app_server.rs",
+      "crates/bridget-transport/src/protocol.rs",
+      "docs/reference-communication.md",
+      "skills/bridget/SKILL.md",
+      "crates/bridget-daemon/tests/spec138_project_test.rs",
+      "docs/decisions/046-priorite-projet-communication.md",
+      "specs/138-priorite-projet/adversarial-review-project-scope-inventory.md",
+      "specs/138-priorite-projet/analysis-report.md",
+      "specs/138-priorite-projet/checklists/requirements.md",
+      "specs/138-priorite-projet/contracts/communication.md",
+      "specs/138-priorite-projet/data-model.md",
+      "specs/138-priorite-projet/implementation.md",
+      "specs/138-priorite-projet/plan.md",
+      "specs/138-priorite-projet/quickstart.md",
+      "specs/138-priorite-projet/research.md",
+      "specs/138-priorite-projet/reuse-audit.md",
+      "specs/138-priorite-projet/spec.md",
+      "specs/138-priorite-projet/tasks.md",
+      "tests/features/138-priorite-projet.feature",
+      {
+        "external_root": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+        "file": "claude/.claude/skills/agent-loop/scripts/agent_loop.py"
+      },
+      {
+        "external_root": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+        "file": "codex/.codex/skills/agent-loop/SKILL.md"
+      },
+      {
+        "external_root": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+        "file": "codex/.codex/skills/agent-loop/scripts/agent_loop.py"
+      },
+      {
+        "external_root": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+        "file": "codex/.codex/skills/agent-loop/tests/test_agent_loop.py"
+      },
+      "specs/138-priorite-projet/convergence-report.md",
+      "specs/138-priorite-projet/validation/results.json"
+    ]
+  },
+  "modules_actifs": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "09",
+    "10",
+    "11",
+    "12"
+  ],
+  "hot_paths": [
+    {
+      "file": "crates/bridget-daemon/src/communication.rs",
+      "line": 66,
+      "trigger": "rattachement projet vivant"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "trigger": "annuaire, Send, fils et contrôle SteerCurrent"
+    },
+    {
+      "file": "crates/bridget-daemon/src/execution_store.rs",
+      "trigger": "warnings durables et replay de contrôle"
+    },
+    {
+      "root": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+      "file": "codex/.codex/skills/agent-loop/scripts/agent_loop.py",
+      "trigger": "dispatch, rappel et commit sous verrou"
+    }
+  ],
+  "threat_model": {
+    "assets": [
+      "identité et contexte projet",
+      "corps transmis",
+      "audience des fils",
+      "reçus et enveloppes durables"
+    ],
+    "surfaces": [
+      "socket Unix",
+      "CLI/MCP et fédération existante",
+      "faits T3/wrapper",
+      "stockage SQLite et fichiers Loop"
+    ],
+    "controls": [
+      "fait projet de connexion indépendant de from/domain",
+      "garde avant dépôt/notif/injection",
+      "motif UTF-8 borné explicite",
+      "replay accepté avant garde mutable",
+      "membership avant lecture fil",
+      "CAS et publication sous même verrou"
+    ]
+  },
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/audits/baseline.json",
+    "exists": false,
+    "modified": false
+  },
+  "limitations": [
+    "Garde de contexte, pas frontière anti-malveillance ni permissions infranchissables",
+    "Identité projet inconnue : legacy possible avec avertissement, sans suggestion ni autorecrutement",
+    "T020 : pannes E/S ordinaires sous même verrou ; crash machine/rollback indisponible et writers/backends legacy non convertis non garantis",
+    "Pas de fournisseur distinct pour les revues ; revue indépendante au même fournisseur",
+    "Aucun audit intégral du dépôt ; performance/UX module08 non actifs"
+  ]
+}

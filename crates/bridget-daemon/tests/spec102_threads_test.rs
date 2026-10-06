@@ -15,12 +15,238 @@ use bridget_transport::protocol::{THREAD_CONTRACT_VERSION, ThreadRequest};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::io::BufRead;
+use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use support::*;
 
 /// Socket et namespace du poste ; aucun test ne doit les toucher.
 const PRODUCTION_SOCKET: &str = "/Users/moi/.cache/bridget-core/bridget.sock";
+
+// SPEC138 étend le harnais102 : mêmes connexions, daemon et base isolés.
+fn thread138(client: &mut Client, action: Value, reason: Option<&str>) -> Value {
+    let mut frame = json!({"type":"ThreadRequest","request":{"version":1,"request":action}});
+    if let Some(reason) = reason {
+        frame["request"]["cross_project_reason"] = json!(reason);
+    }
+    writeln!(client.writer, "{frame}").unwrap();
+    client.writer.flush().unwrap();
+    match client.receive() {
+        DaemonToWrapper::ThreadResult { result } => result.result,
+        other => panic!("résultat de fil attendu : {other:?}"),
+    }
+}
+
+fn project138(client: &mut Client, root: &Path) {
+    // L'annonce propriétaire doit employer le même hôte attesté que le daemon.
+    // Ces fixtures sont réinscrites avec ce fait, jamais avec un domaine fictif.
+    let frame = json!({"type":"CommunicationProjectFact","root":root,"source":"git","host":"idempotency-isolated","worktree_root":null});
+    writeln!(client.writer, "{frame}").unwrap();
+    client.writer.flush().unwrap();
+    let mut response = String::new();
+    client.reader.read_line(&mut response).unwrap();
+    let response: Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["type"], "ProjectContextResult", "{response}");
+    assert!(response["project"].is_object(), "{response}");
+}
+
+fn git138(root: &Path, name: &str) -> std::path::PathBuf {
+    let path = root.join(name);
+    std::fs::create_dir_all(&path).unwrap();
+    assert!(
+        std::process::Command::new("/usr/bin/git")
+            .args(["init", "--quiet"])
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    path
+}
+
+fn register138(socket: &Path, agent: &str, instance: &str) -> Client {
+    let mut client = Client::connect(socket);
+    client.send(WrapperToDaemon::Register {
+        identity_version: 2,
+        agent_type: "fixture".into(),
+        agent_id: agent.into(),
+        host: Some("idempotency-isolated".into()),
+        transport: Some("acp".into()),
+        channel: None.into(),
+        mode: Some(bridget_transport::protocol::PresenceMode::Acp),
+        location: None,
+        os: Some("test".into()),
+        instance_id: Some(instance.into()),
+        domain: None,
+        journal_available: None,
+        turn_in_progress: false,
+    });
+    assert!(matches!(
+        client.receive(),
+        DaemonToWrapper::Registered { .. }
+    ));
+    client
+}
+
+fn quartet138(label: &str) -> Quartet {
+    let root = spec102_root(label);
+    let socket = socket(&root);
+    let daemon = spawn_daemon(&root, None);
+    Quartet {
+        a: register138(&socket, AGENT_A, "spec138-a"),
+        b: register138(&socket, AGENT_B, "spec138-b"),
+        c: register138(&socket, AGENT_C, "spec138-c"),
+        d: register138(&socket, AGENT_D, "spec138-d"),
+        root,
+        socket,
+        daemon: Some(daemon),
+    }
+}
+
+#[test]
+fn spec138_unknown_legacy_thread_returns_durable_warning() {
+    let mut q = Quartet::start("spec138-unknown");
+    let action =
+        json!({"action":"create","title":"legacy","members":[AGENT_B],"operation_id":op()});
+    let first = thread138(&mut q.a, action.clone(), None);
+    assert_eq!(first["status"], "created");
+    assert_eq!(first["project_warnings"][0]["code"], "project_unknown");
+    let db = rusqlite::Connection::open(q.root.join("state/bridget.db")).unwrap();
+    let canonical: String = db.query_row(
+        "SELECT canonical_hash FROM thread_operations WHERE actor_id = ?1 AND operation_id = ?2",
+        rusqlite::params![AGENT_A, action["operation_id"].as_str().unwrap()],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(
+        canonical, "3d78fc86cdcb69b1426e46762030ed76bea32e3d1b6b645c9e92e0bc492da5c7",
+        "None doit conserver le canon historique exact"
+    );
+    assert_eq!(thread138(&mut q.a, action, None), first);
+    assert_silent(&mut q.b);
+    q.stop();
+}
+
+#[test]
+fn spec138_mixed_thread_checks_all_readers_even_with_unknown() {
+    let mut q = quartet138("spec138-readers");
+    let a = git138(&q.root, "project-a");
+    let b = git138(&q.root, "project-b");
+    project138(&mut q.a, &a);
+    project138(&mut q.b, &b);
+    // C est inscrit mais sans fait projet. Il ne neutralise pas A/B connus.
+    let create =
+        json!({"action":"create","title":"mixte","members":[AGENT_B,AGENT_C],"operation_id":op()});
+    assert_eq!(
+        thread138(&mut q.a, create.clone(), None)["code"],
+        "cross_project_reason_required"
+    );
+    assert_eq!(
+        thread(&mut q.a, json!({"action":"list"}))["threads"],
+        json!([])
+    );
+    let accepted = thread138(&mut q.a, create, Some("Vérifier le contrat partagé"));
+    assert_eq!(accepted["status"], "created", "{accepted}");
+    let warnings = accepted["project_warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|v| v["code"] == "cross_project"));
+    assert!(warnings.iter().any(|v| v["code"] == "project_unknown"));
+    let id = accepted["thread_id"].as_str().unwrap();
+    let post = json!({"action":"post","thread_id":id,"body":"PRIVATE_BODY_exact","kind":"history","notify":[],"operation_id":op()});
+    assert_eq!(
+        thread138(&mut q.a, post.clone(), None)["code"],
+        "cross_project_reason_required"
+    );
+    assert_eq!(
+        thread(&mut q.a, json!({"action":"show","thread_id":id}))["last_seq"],
+        0
+    );
+    let posted = thread138(&mut q.a, post.clone(), Some("Vérifier le contrat partagé"));
+    assert_eq!(posted["status"], "posted", "{posted}");
+    let page = thread(&mut q.a, json!({"action":"read","thread_id":id}));
+    let receipt = page["receipt"].as_str().unwrap();
+    let refused_with_ack = thread138(
+        &mut q.a,
+        json!({"action":"post","thread_id":id,"body":"nouvelle action","notify":[],"ack_receipt":receipt,"operation_id":op()}),
+        None,
+    );
+    assert_eq!(refused_with_ack["code"], "cross_project_reason_required");
+    let shown = thread(&mut q.a, json!({"action":"show","thread_id":id}));
+    assert_eq!(
+        shown["own_acked_seq"], 0,
+        "le refus ne confirme aucune lecture"
+    );
+    assert_eq!(shown["last_seq"], 1, "le refus ne dépose aucune entrée");
+    assert_eq!(
+        thread138(&mut q.a, post.clone(), Some("Autre motif"))["code"],
+        "envelope_mismatch"
+    );
+    assert_eq!(thread138(&mut q.a, post, None)["code"], "envelope_mismatch");
+    assert_eq!(history_all(&mut q.b, id)[0]["body"], "PRIVATE_BODY_exact");
+    assert_eq!(own_wake(&mut q.b, id)["state"], "none");
+    assert_silent(&mut q.b);
+    assert_silent(&mut q.c);
+    q.stop();
+}
+
+#[test]
+fn spec138_accepted_thread_replay_precedes_changed_project_guard_after_restart() {
+    let mut q = quartet138("spec138-replay");
+    let a = git138(&q.root, "project-a");
+    let b = git138(&q.root, "project-b");
+    project138(&mut q.a, &a);
+    project138(&mut q.b, &a);
+    let create =
+        json!({"action":"create","title":"local accepté","members":[AGENT_B],"operation_id":op()});
+    let created = thread138(&mut q.a, create.clone(), None);
+    assert_eq!(created["status"], "created");
+    let id = created["thread_id"].as_str().unwrap();
+    let post = json!({"action":"post","thread_id":id,"body":"historique exact","notify":[],"operation_id":op()});
+    let posted = thread138(&mut q.a, post.clone(), None);
+    assert_eq!(posted["status"], "posted");
+    // Une alerte acceptée mais pas encore remise garde son contrat initial.
+    let pending = json!({"action":"post","thread_id":id,"body":"action acceptée avant restart","notify":[AGENT_B],"operation_id":op()});
+    let pending_posted = thread138(&mut q.a, pending.clone(), None);
+    assert_eq!(pending_posted["status"], "posted");
+    q.stop();
+    q.daemon = Some(spawn_daemon(&q.root, None));
+    q.a = register138(&q.socket, AGENT_A, "spec138-a-restart");
+    q.b = register138(&q.socket, AGENT_B, "spec138-b-restart");
+    project138(&mut q.a, &a);
+    project138(&mut q.b, &b);
+    assert_eq!(thread138(&mut q.a, create, None), created);
+    assert_eq!(thread138(&mut q.a, post, None), posted);
+    assert_eq!(thread138(&mut q.a, pending, None), pending_posted);
+    assert_eq!(history_all(&mut q.b, id).len(), 2);
+    announce_capability(&mut q.b);
+    let notice = expect_notice(&mut q.b);
+    assert_eq!(notice.through_seq, 2);
+    ack_notice(&mut q.b, &notice);
+    assert_silent(&mut q.b);
+    q.stop();
+}
+
+#[test]
+fn spec138_invalid_reason_never_creates_a_thread() {
+    let mut q = Quartet::start("spec138-invalid-reason");
+    for reason in [
+        "  ".to_string(),
+        "é".repeat(257),
+        "motif\ncontrôle".to_string(),
+        "x\0y".to_string(),
+    ] {
+        let action =
+            json!({"action":"create","title":"invalide","members":[AGENT_B],"operation_id":op()});
+        assert_eq!(
+            thread138(&mut q.a, action, Some(&reason))["code"],
+            "invalid_cross_project_reason"
+        );
+    }
+    assert_eq!(
+        thread(&mut q.a, json!({"action":"list"}))["threads"],
+        json!([])
+    );
+    assert_silent(&mut q.b);
+    q.stop();
+}
 
 /// Identités synthétiques des quatre participants de la recette (UUID v4 de
 /// forme valide, jamais présentes dans l'annuaire installé).
@@ -471,6 +697,7 @@ pub fn thread(client: &mut Client, action: Value) -> Value {
         serde_json::from_value(action).expect("action de fil valide côté test");
     client.send(WrapperToDaemon::ThreadRequest {
         request: ThreadRequest {
+            cross_project_reason: None,
             version: THREAD_CONTRACT_VERSION,
             request,
         },
@@ -1090,6 +1317,7 @@ fn spec102_v22_roles_non_autorises_et_identite_absente() {
         .to_string();
     let request = || WrapperToDaemon::ThreadRequest {
         request: ThreadRequest {
+            cross_project_reason: None,
             version: THREAD_CONTRACT_VERSION,
             request: serde_json::from_value(json!({"action":"show","thread_id":thread_id}))
                 .unwrap(),

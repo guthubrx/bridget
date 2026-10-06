@@ -9,7 +9,7 @@ de runtime Docker/projet ni d'implémentation le service compagnon dans ce produ
 rester un service extérieur utilisant le protocole public. La voie principale
 utilise les pilotes natifs Codex/Claude ou ACP ; tmux n'est pas requis.
 
-## État de cette branche
+## Validation historique de l'extraction 089
 
 Extraction physique et paquet autonome validés dans la session
 089 : 1 199 tests automatiques réussis, 50 crashs réels rejoués, fmt/clippy verts
@@ -56,6 +56,122 @@ L'adresse est l'UUID. `bridget rename "Équipe B"` ou `bridget_rename` change
 seulement le nom affiché depuis la session propriétaire ; les rejeux, l'instance
 et l'historique restent liés à la même identité. Un nom de fournisseur ou un
 champ `--from` ne permet pas d'usurper cette identité.
+
+### Noms et relais de sous-agents — sessions 133–134
+
+Les messages simples et chaque élément d'un lot affichent le nom humain puis
+l'UUID complet, si le nom est exploitable ; sinon, l'UUID seul. Le nom n'est
+jamais une autorité. Le prochain enregistrement répare un profil manquant sans
+réécrire les messages anciens ni créer une seconde identité.
+
+Un sous-agent interne T3 attesté peut uniquement consulter l'annuaire et envoyer
+par MCP (`bridget_who`, `bridget_send`). Le message porte l'identité du parent et
+une provenance enfant. La réponse revient au parent. Le sous-agent n'a ni boîte
+de réception ni inscription durable, et la délégation ne lui ouvre pas la CLI.
+Une filiation ambiguë ou périmée est refusée, sans identité devinée.
+
+Les en-têtes T3 discrets137 concernent la présentation : nom et UUID complets,
+corps, copie et historique restent inchangés. Leur code et l'aperçu isolé sont
+validés ; vérifier séparément la version réellement chargée dans T3 avant
+d'affirmer que le rendu est installé. Aucun changement du protocole de transport.
+
+### Priorité au projet — session 138
+
+Ce contrat décrit les fonctions de la session138. Il ne constitue pas une preuve
+d'installation du binaire ou de mise à jour d'un catalogue MCP déjà vivant.
+
+L'annuaire de communication et les suggestions visent le même projet par défaut.
+L'appartenance utilise un rattachement attesté T3 ou une racine commune Git et
+l'hôte attesté. Dépôt, worktree et lien symbolique peuvent partager cette racine.
+Deux dépôts homonymes restent distincts. Le domaine mutable sert à l'affichage.
+Le contrat administratif `ListAgents` conserve son diagnostic global.
+
+```sh
+bridget who
+bridget agents --json
+bridget who --global
+bridget agents --json --global
+```
+
+MCP `bridget_who` expose `scope:"same_project"` par défaut, ou `scope:"global"`
+sur choix volontaire. Les agents conservent leur UUID et reçoivent
+`communication_project` et `project_relation` (`same`, `other`, `unknown`).
+Le filtre `domain` est cosmétique. Une vue globale facilite une recherche
+volontaire ; elle n'accorde aucun mandat d'envoi.
+
+Un projet inconnu n'est jamais déclaré local. Il ne produit aucune suggestion
+locale ni recrutement automatique. Les envois historiques dont le projet reste
+inconnu gardent leur compatibilité avec un warning émetteur. Dans un fil A/B/U,
+U inconnu ne supprime pas la divergence attestée entre A et B.
+
+Un nouvel envoi, une création de fil ou un dépôt accessible à un autre projet
+connu exige `cross_project_reason`. La présence d'un motif valide exprime le
+choix volontaire. Le motif trimé mesure 1 à 512 octets UTF-8, sans caractère de
+contrôle. Vide, espaces seuls, null explicite ou dépassement sont refusés.
+
+```sh
+bridget send --to '<agent_id_uuid>' --cross-project-reason 'Comparer le contrat commun aux deux projets' -- 'Vérifie cette divergence.'
+```
+
+```json
+{"name":"bridget_send","arguments":{"to":"<agent_id_uuid>","body":"Vérifie cette divergence.","cross_project_reason":"Comparer le contrat commun aux deux projets"}}
+{"name":"bridget_thread","arguments":{"action":"post","thread_id":"<thread_uuid>","operation_id":"<operation_uuid>","body":"Constat partagé.","notify":[],"cross_project_reason":"Coordination volontaire de cette audience"}}
+```
+
+Le motif figure dans les arguments MCP au même niveau que `to` ou `action`.
+CLI `send` et `thread` exposent `--cross-project-reason`. Les façades de passation
+et de journal transmis portent le même champ structuré et utilisent la garde
+daemon commune. Aucun texte libre ne vaut choix interprojets.
+
+La garde établit les warnings avant dépôt ou notification. Le caller reçoit
+`project_warnings` dans le résultat de l'outil après traitement : codes
+`cross_project` ou `project_unknown`. Les résultats de fil portent ce tableau
+dans leur résultat. Le corps envoyé reste exact. Une demande explicite valide
+n'exige aucune deuxième confirmation humaine bloquante.
+
+La garde de fil vérifie tous les lecteurs. `notify:[]` signifie zéro sollicitation,
+pas confidentialité. Un motif volontaire peut être repris par le caller pour
+la même audience à chaque opération. Aucun consentement implicite n'est déduit
+des anciennes entrées. La lecture des anciens fils conserve les accès actuels
+sans notification ni nouveau mandat.
+
+Une réponse directe peut reprendre le motif durable d'une demande suivie OPEN
+acceptée. Son émetteur doit être la cible initiale et son destinataire l'émetteur
+initial. Une référence `in_reply_to` forgée ou liée à d'autres participants
+n'accorde rien. Les réponses restent soumises aux contrôles d'accès actuels.
+
+Le client de fond peut porter `--project-root` sur `send`. `who` et `agents`
+acceptent aussi cette racine explicite. Le daemon valide la racine et l'hôte
+sur la propre connexion Client négociée. Aucun Register d'agent temporaire ni
+identité T3 empruntée. Le contexte ne remplace jamais un fait auxiliaire parent.
+Un client CLI autonome sans racine reste inconnu, y compris who/agents : liste
+locale vide et warning. Aucun cwd implicite ne lui est ajouté. Les agents
+rattachés à T3/wrapper héritent de leur contexte sans option supplémentaire.
+
+Le client exige la capacité `CommunicationProjectsV1`, valeur protocole
+`communication_projects_v1`, avant le nouveau motif ou la portée scoped.
+Un ancien serveur sans cette capacité provoque un refus client avant transmission.
+Le client ne retire pas le motif et ne rabat pas la découverte sur le global.
+
+Agent Loop conserve `run.project_root` distinct de `run.domain`. `init --project-root`
+pose la racine, avec le cwd d'initialisation comme défaut pour un nouveau run.
+Les options `add-task --cross-project-reason` et `attach-agent --cross-project-reason`
+portent un mandat `cross_project_mandate` limité à l'UUID, au rôle et au motif.
+Absence ou état busy d'un local ne recrute personne ailleurs. Les rappels du
+responsable, du coordinateur et de ROOT déjà mandatés restent possibles.
+ROOT extérieur configuré sans mandat produit une décision à prendre visible.
+
+L'outbox fige racine, motif, cible et corps avant la première tentative. La
+reprise utilise cette enveloppe même après modification du run. Changer le motif
+sous une clé existante constitue un conflit de canon, comme changer le corps.
+Les formes historiques sans motif conservent leur canon et leurs reçus. Une
+opération déjà acceptée garde son résultat ; l'histoire n'est jamais rejouée.
+La consigne injectée par ExecutionControlV1/SteerCurrent.message utilise aussi
+la garde partagée avant injection. Une cible extérieure connue exige le motif
+structuré ; l'inconnu reste averti. Les warnings sont hors du corps. Le résultat
+accepté les conserve après changement des faits ou restart, sans réinjecter.
+Les anciennes commandes rendent [] ; Interrupt sans message ne change pas.
+Cette règle n'annonce aucune option CLI de contrôle nouvelle.
 
 ### Garanties de communication et mise à jour 099
 
@@ -376,7 +492,8 @@ Cette évolution n'installe ni ne remplace automatiquement le binaire en service
 | `idempotency_expired` | Protection de rejeu expirée, pas permission de recréer silencieusement. |
 
 Pour un retry MCP : mêmes `id` et `issued_at`, même instance et mêmes arguments
-(corps, cible, délai, `reply`, `in_reply_to`). Préparer le couple avant le premier
+(corps, cible, délai, `reply`, `in_reply_to`, motif interprojets et racine de contexte
+figés). Préparer le couple avant le premier
 appel si le workflow doit survivre à la perte du premier reçu. Ne pas renvoyer
 avec une clé neuve après une issue ambiguë.
 
@@ -392,8 +509,10 @@ reste inconnue. `ledger` lit le maître ; une coupure ne crée pas une base loca
 vide. MCP peut consulter les demandes entrantes et sortantes (`mine`, défaut),
 ou la portée globale (`requests_scope=all`).
 
-`status`, `who` et `agents` refusent un inventaire non attesté au lieu de rendre
-une liste vide. Leur sonde est bornée ; `status` n'ouvre aucune base côté client.
+`status`, `who` et `agents` refusent un inventaire daemon non attesté au lieu de
+rendre une liste vide. Un projet appelant inconnu est un autre fait : son annuaire
+local est vide avec warning, selon le contrat138. Leur sonde est bornée ;
+`status` n'ouvre aucune base côté client.
 Le total des messages n'étant pas publié par le protocole, il reste explicitement
 indisponible ; le ledger expose une vue bornée, pas un total prétendument exhaustif.
 `ledger search` (ou `bridget_ledger` `action=search`) cherche une page bornée et
@@ -515,12 +634,12 @@ Un appel direct à Cargo ne déclenche pas cet entretien. Voir le
 [guide des caches de compilation](docs/build-cache.md) pour les réglages et limites.
 
 Répertoire de réalisation :
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget`.
 
 Rust est épinglé dans rust-toolchain.toml. Construire avec Cargo disponible :
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget
 PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
 ```
 
@@ -533,10 +652,11 @@ que le daemon tourne, avec les mêmes droits privés. Une copie à chaud de la b
 incomplète ; copier les trois fichiers ou utiliser `VACUUM INTO`.
 
 ```sh
+umask 077
 bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
 export BRIDGET_HOME="$bridget_state"
 export BRIDGET_SOCKET="$BRIDGET_HOME/bridget.sock"
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
+/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/bridget daemon
 ```
 
 Ce daemon reste au premier plan. Les autres terminaux doivent recevoir EXACTEMENT
@@ -547,6 +667,20 @@ décrit le paquet à liste de sources fermée, ses empreintes et les préconditi
 de compte. Ce n'est pas une autorisation de bascule de la flotte.
 
 ## Observer et partager, sans bloquer le travail
+
+Une notification `[Bridget observation]` rapporte un fait et ses limites. Elle
+n'est pas une consigne, ne demande pas de réponse inter-agent et ne déclenche
+pas automatiquement une nouvelle surveillance ou correction. Une fin de tour
+ne valide jamais une mission ni ne remplace sa réponse attendue.
+
+Le contrôle des missions135 appartient à Agent Loop, extérieur au daemon Bridget.
+Une mission nouvelle lie identifiant, responsable, échéance et résultat attendu.
+Par défaut, la prise en charge est attendue en 120s et le progrès vérifiable en 300s.
+Les échéances visent le responsable, puis le coordinateur, puis ROOT ou une décision.
+Les alertes sont regroupées par destinataire ; un heartbeat inchangé ne déclenche pas
+une rafale de messages. Un résultat terminal exige une décision de suite sans
+transformer son verdict. `ready_tasks:0` n'est pas une clôture : celle-ci est explicite
+et refuse les obligations encore ouvertes. Les anciennes missions ne sont pas réécrites.
 
 Pour les agents : la [skill Bridget](skills/bridget/SKILL.md) explique quel outil
 choisir ; les [recettes pratiques](skills/bridget/references/commandes.md#recettes-pratiques--observer-prolonger-partager)

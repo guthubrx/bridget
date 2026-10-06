@@ -197,7 +197,7 @@ fn gate_reel_claude_stream_json_reponse_liee_et_attach() {
             && agent.model_mismatch.is_none())),
         "présence Claude gérée incohérente : {info:?}"
     );
-    let who = fixture::run_isolated(&root, &["who"], false);
+    let who = fixture::run_isolated(&root, &["who", "--global"], false);
     assert!(who.status.success());
     let who_text = String::from_utf8_lossy(&who.stdout);
     assert!(
@@ -405,6 +405,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     ));
     let who = fixture::isolated_command(&root)
         .arg("who")
+        .arg("--global")
         .output()
         .expect("exécution who réelle");
     assert!(

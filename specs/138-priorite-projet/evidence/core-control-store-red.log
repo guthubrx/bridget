@@ -1,0 +1,28 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.13s
+     Running tests/execution_store_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/execution_store_test-69e32ec76fbd60a5)
+
+running 2 tests
+
+thread 'spec_138_control_warnings_new_store_has_empty_default' (13280533) panicked at crates/bridget-daemon/tests/execution_store_test.rs:15:5:
+assertion `left == right` failed
+  left: 10
+ right: 11
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test spec_138_control_warnings_new_store_has_empty_default ... FAILED
+
+thread 'spec_138_control_warnings_migrate_legacy_commands_idempotently' (13280532) panicked at crates/bridget-daemon/tests/execution_store_test.rs:39:5:
+assertion `left == right` failed
+  left: 10
+ right: 11
+test spec_138_control_warnings_migrate_legacy_commands_idempotently ... FAILED
+
+failures:
+
+failures:
+    spec_138_control_warnings_migrate_legacy_commands_idempotently
+    spec_138_control_warnings_new_store_has_empty_default
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p bridget-daemon --test execution_store_test`

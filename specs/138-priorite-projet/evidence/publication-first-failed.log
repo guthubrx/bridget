@@ -1,0 +1,128 @@
+
+running 44 tests
+............................................
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+
+running 1047 tests
+..........................................> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K??:?? [événement] update payload v1 non pris en charge
+> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+
+........attach: abonnement actif
+??:?? [erreur] événement journal illisible
+............................> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+[2K[1A[2K> 
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> [2C
+
+...> A
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> A[3C
+[2K[1A[2K> A
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> A[3C
+[2K[1A[2K> A
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> A[3C
+[2K[1A[2K> A
+[statut] annuaire indisponible — modèle/effort/état inconnus[1A> A[3C
+
+...... 87/1047
+....................................................................................... 174/1047
+............................................................Initialized empty Git repository in /private/tmp/f138.Z9ykLM/bridget-build-id-59629/.git/
+....................i...... 261/1047
+....
+running 1 test
+........test daemon::arret_tests::adaptateur_d_arret_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1046 filtered out; finished in 0.21s
+
+............[main (root-commit) 0bcde12] first
+ 1 file changed, 1 insertion(+)
+ create mode 100644 tracked.txt
+.......[main 85a9ebf] second
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+...................................................i.... 348/1047
+................................
+thread 'daemon::presence_tests::recovery_daemon_child' (14061191) panicked at crates/bridget-daemon/src/daemon.rs:17356:44:
+called `Result::unwrap()` on an `Err` value: "état non privé dans le namespace : /tmp/bg908-e2e-59629-d4b2097f/.state/bridget.db"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+.............................................i......... 435/1047
+........................i....... 467/1047
+daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels --- FAILED
+................. 485/1047
+daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique --- FAILED
+i...................................................................................... 573/1047
+..........ii..i.........................................................i.............. 660/1047
+....................................................................................... 747/1047
+............i.......................................................................... 834/1047
+....................................................................................... 921/1047
+................................................ 969/1047
+wrapper::reconnect_tests::branchement_mcp_n_ecrit_aucune_configuration_utilisateur --- FAILED
+....................................i........................................
+failures:
+
+---- daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels stdout ----
+
+thread 'daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels' (14061638) panicked at crates/bridget-daemon/src/daemon.rs:26438:13:
+le wrapper réel ne s'est pas enregistré
+
+---- daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique stdout ----
+
+thread 'daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique' (14061138) panicked at crates/bridget-daemon/src/daemon.rs:17327:13:
+socket daemon absente après reprise
+
+---- wrapper::reconnect_tests::branchement_mcp_n_ecrit_aucune_configuration_utilisateur stdout ----
+
+thread 'wrapper::reconnect_tests::branchement_mcp_n_ecrit_aucune_configuration_utilisateur' (14065075) panicked at crates/bridget-daemon/src/wrapper.rs:7430:9:
+assertion `left == right` failed
+  left: String("/Users/moi")
+ right: "/tmp/f138.Z9ykLM/bridget-spec-068-replay-59629/home"
+
+
+failures:
+    daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique
+    daemon::presence_tests::stop_apres_register_traverse_le_wrapper_et_le_superviseur_reels
+    wrapper::reconnect_tests::branchement_mcp_n_ecrit_aucune_configuration_utilisateur
+
+test result: FAILED. 1033 passed; 3 failed; 11 ignored; 0 measured; 0 filtered out; finished in 33.34s
+
+error: test failed, to rerun pass `-p bridget-daemon --lib`

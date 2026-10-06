@@ -1,0 +1,95 @@
+{
+  "grade": "A",
+  "date": "2026-10-06",
+  "spec": "138",
+  "scope": "Diff SPEC138 BridgetWT + Agent Loop DotfilesWT ; hunks, contexte et source neuve uniquement",
+  "coverage_percent": 100,
+  "justification": "98,333/100 pondérés. Zéro C/H et cinq MED ouverts : qualité88=A-, complexité97=A. Couverture100% du diff borné ; pas une note du dépôt entier.",
+  "numeric": 98.33333333333333,
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 3
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 97,
+      "findings_count": 1,
+      "weight": 2
+    },
+    "quality": {
+      "grade": "A-",
+      "numeric": 88,
+      "findings_count": 4,
+      "weight": 2
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "performance": {
+      "grade": "N/A",
+      "numeric": null,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "ux": {
+      "grade": "N/A",
+      "numeric": null,
+      "findings_count": 0,
+      "weight": 1
+    }
+  }
+}

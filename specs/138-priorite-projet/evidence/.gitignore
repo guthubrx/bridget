@@ -1,0 +1,3 @@
+# Conserver les preuves de validation de cette session dans sa future livraison.
+# Le dépôt ignore normalement les logs d'exécution.
+!*.log

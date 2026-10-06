@@ -185,6 +185,7 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    CommunicationProjectsV1,
     SendIdempotent,
     Lookup,
     ExecutionControlV1,
@@ -237,6 +238,8 @@ pub enum ExecutionControlRefusal {
     InvalidCommand,
     TargetUnavailable,
     MessageRequired,
+    CrossProjectReasonRequired,
+    InvalidCrossProjectReason,
 }
 
 /// Issue publique immédiate d'une commande de contrôle.
@@ -2147,6 +2150,12 @@ pub const THREAD_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadRequest {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
+    pub cross_project_reason: Option<String>,
     pub version: u16,
     pub request: ThreadAction,
 }
@@ -2291,6 +2300,16 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    CommunicationProjectFact {
+        root: String,
+        source: CommunicationProjectSource,
+        host: String,
+        #[serde(default)]
+        worktree_root: Option<String>,
+    },
+    DirectoryScoped {
+        scope: CommunicationDirectoryScope,
+    },
     /// Session 102 : opération sur un fil, réservée à une identité attestée.
     ThreadRequest {
         request: ThreadRequest,
@@ -3184,6 +3203,15 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    ProjectContextResult {
+        project: Option<CommunicationProject>,
+        project_warnings: Vec<ProjectWarning>,
+    },
+    CommunicationDirectory {
+        agents: Vec<ScopedAgentInfo>,
+        project: Option<CommunicationProject>,
+        project_warnings: Vec<ProjectWarning>,
+    },
     /// Session 102 : résultat d'une opération de fil.
     ThreadResult {
         result: ThreadResult,
@@ -3388,6 +3416,8 @@ pub enum DaemonToWrapper {
     },
     /// Issue durable ou calculée d'un `SendIdempotent`.
     IdempotencyResult {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        project_warnings: Vec<ProjectWarning>,
         operation_kind: String,
         idempotency_key: String,
         issue: IdempotencyIssue,
@@ -3397,6 +3427,8 @@ pub enum DaemonToWrapper {
         command_id: String,
         execution_id: String,
         outcome: ExecutionControlOutcome,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        project_warnings: Vec<ProjectWarning>,
     },
     /// Ordre à destination du wrapper qui porte l'exécution ciblée.
     /// Delta de descendance du wrapper demandeur, lu ou réveillé à partir du
@@ -3559,6 +3591,8 @@ pub enum DaemonToWrapper {
     },
     /// Acquittement d'un envoi.
     Ack {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        project_warnings: Vec<ProjectWarning>,
         id: String,
     },
     /// Refus d'un envoi avec raison.
@@ -3943,6 +3977,7 @@ impl WrapperToDaemon {
             | Self::Unsubscribe { .. }
             | Self::Heartbeat
             | Self::SelectRuntime { .. }
+            | Self::DirectoryScoped { .. }
             | Self::ListAgents => None,
             Self::Send(message) if !message.reply => None,
             Self::Send(_) => Some(AttachRefusal::ReplyNotAllowed),
@@ -3995,6 +4030,52 @@ pub struct DiskSpaceFact {
     pub volume: String,
     pub free_bytes: u64,
     pub observed_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommunicationProject {
+    pub host: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommunicationProjectSource {
+    Git,
+    T3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommunicationDirectoryScope {
+    SameProject,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRelation {
+    Same,
+    Other,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectWarning {
+    pub code: String,
+    pub sender_project: Option<CommunicationProject>,
+    pub recipient_project: Option<CommunicationProject>,
+    pub recipient: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopedAgentInfo {
+    #[serde(flatten)]
+    pub agent: AgentInfo,
+    pub communication_project: Option<CommunicationProject>,
+    pub project_relation: ProjectRelation,
 }
 
 /// Information sur un agent connecté.
@@ -5450,6 +5531,7 @@ mod tests {
             } if build_id == "fixture-build" && capabilities == vec![ClientCapability::Lookup]
         ));
         let result = DaemonToWrapper::IdempotencyResult {
+            project_warnings: Vec::new(),
             operation_kind: "send".to_string(),
             idempotency_key: "message-1".to_string(),
             issue: IdempotencyIssue::OutcomeUnknown {
@@ -5466,6 +5548,7 @@ mod tests {
                     expires_at: 123,
                     delivery_id: Some(delivery_id),
                 },
+                ..
             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
         ));
         assert!(!welcome.allowed_for_attach());
@@ -7003,6 +7086,7 @@ mod spec102_thread_contract_tests {
     #[test]
     fn spec102_v22_enveloppe_versionnee_et_variantes_de_protocole() {
         let request = ThreadRequest {
+            cross_project_reason: None,
             version: THREAD_CONTRACT_VERSION,
             request: ThreadAction::Show {
                 thread_id: "t".into(),
@@ -7059,6 +7143,7 @@ mod spec102_thread_contract_tests {
         assert!(
             WrapperToDaemon::ThreadRequest {
                 request: ThreadRequest {
+                    cross_project_reason: None,
                     version: 1,
                     request: ThreadAction::List {
                         limit: None,

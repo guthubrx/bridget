@@ -1,0 +1,317 @@
+{
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-06T18:56:40Z",
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet",
+    "external_scope": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project",
+    "audit_mode": "fix",
+    "audit_grid": "pre-merge",
+    "scope_mode": "diff",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "numeric_score": 98.33333333333333,
+    "release_blocked": false,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "complexity": "A",
+      "quality": "A-",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "performance": "N/A",
+      "ux": "N/A"
+    },
+    "repository": {
+      "files_count": 177,
+      "files_count_definition": "Contexte source Rust/Python du worktree Bridget, hors target/.git/.worktrees/audits/specs ; pas un taux de couverture dépôt.",
+      "languages": [
+        "rust",
+        "python"
+      ],
+      "frameworks": [],
+      "libraries": [
+        "serde",
+        "rusqlite"
+      ],
+      "type": "local-daemon-cli-mcp",
+      "has_ui": false,
+      "has_llm_integration": true,
+      "db_type": "sqlite",
+      "ci_system": "none_detected",
+      "container": false
+    },
+    "coverage_definition": "diff_hunks_plus_context_and_new_source",
+    "cycle": "cycle-1"
+  },
+  "execution_metrics": {
+    "files_scanned": 56,
+    "files_total": 56,
+    "source_files_scanned": 35,
+    "source_files_total": 35,
+    "coverage_estimate_percent": 100,
+    "repository_coverage_percent": null,
+    "lines_analyzed": null,
+    "lines_analyzed_reason": "Hunks et contexte lus par le principal et la revue ; aucun total de lignes intégrales prétendu.",
+    "tools_used": [
+      "git",
+      "rg",
+      "radon",
+      "jscpd",
+      "cargo",
+      "unittest",
+      "fingerprint.py",
+      "validate_session.py"
+    ],
+    "sampling_method": null,
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "10",
+      "11",
+      "12"
+    ],
+    "phases_skipped": [
+      "08",
+      "09-corrections"
+    ],
+    "warnings": [
+      "Garde de contexte, pas frontière anti-malveillance ni permissions infranchissables",
+      "Identité projet inconnue : legacy possible avec avertissement, sans suggestion ni autorecrutement",
+      "T020 : pannes E/S ordinaires sous même verrou ; crash machine/rollback indisponible et writers/backends legacy non convertis non garantis",
+      "Pas de fournisseur distinct pour les revues ; revue indépendante au même fournisseur",
+      "Aucun audit intégral du dépôt ; performance/UX module08 non actifs"
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 5,
+    "low": 0,
+    "total": 5,
+    "by_category": {
+      "quality": 4,
+      "performance": 1
+    }
+  },
+  "findings": [
+    {
+      "id": "QUAL-001",
+      "category": "quality",
+      "file": "crates/bridget-daemon/src/communication.rs",
+      "line": 66,
+      "title": "Résolution du projet de communication : responsabilité Git imbriquée",
+      "description": "resolve_communication_project couvre 61 lignes (66–126), dont le helper local git_common. La validation des faits et la commande Git restent correctes, mais leur lecture dans une même fonction augmente l'effort de revue.",
+      "evidence": "    fn git_common(path: &std::path::Path) -> Option<std::path::PathBuf> {\n        let output = std::process::Command::new(\"git\")\n            .args([\"-C\"])\n            .arg(path)\n            .args([\"rev-parse\", \"--path-format=absolute\", \"--git-common-dir\"])\n            .env_remove(\"GIT_DIR\")\n            .env_remove(\"GIT_WORK_TREE\")\n            .env_remove(\"GIT_COMMON_DIR\")",
+      "impact": "Lisibilité et coût de maintenance du chemin de rattachement projet.",
+      "remediation": "Sortir le helper local git_common déjà existant. Conserver exactement les validations, les variables supprimées, la canonicalisation et les résultats ; aucune nouvelle abstraction.",
+      "verification": "Rejouer les tests spec138 Git/worktrees/symlinks/homonymes/forgeries et vérifier la forme des faits.",
+      "regression_risk": "LOW",
+      "severity": "MEDIUM",
+      "exploitability": "N/A",
+      "path_type": "hot",
+      "effort": "S",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null,
+      "fingerprint": "bea116d53b68"
+    },
+    {
+      "id": "QUAL-002",
+      "category": "quality",
+      "file": "../../../../../../../Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project/codex/.codex/skills/agent-loop/scripts/agent_loop.py",
+      "line": 628,
+      "title": "update_task concentre CAS, preuves et publication sous verrou",
+      "description": "La fonction couvre 59 lignes et présente une complexité cyclomatique de 21. Elle mêle comparaison concurrente, anti-rejeu des preuves, archive, publication, commit et reprise après panne. Le verrou commun corrige la course T020 ; il doit rester commun lors de toute extraction.",
+      "evidence": "    with path.with_suffix(\".lock\").open(\"a\") as lock:\n        fcntl.flock(lock, fcntl.LOCK_EX)\n        latest = load_json(path, task)\n        if expected_statuses is not None and latest.get(\"status\") not in expected_statuses:\n            raise SystemExit(\"task changed concurrently; reload before updating\")\n        if expected_fields is not None and any(latest.get(key) != value for key, value in expected_fields.items()):\n            raise SystemExit(\"task changed concurrently; reload before updating\")\n        proof_hash = fields.get(\"last_progress_hash\")",
+      "impact": "La maintenance du commit et de son rollback devient plus difficile ; aucun défaut fonctionnel supplémentaire n'est démontré.",
+      "remediation": "Séparer les responsabilités CAS/preuves et archive/publication en helpers locaux concrets. Garder le même verrou couvrant résultat et tâche. Ne pas introduire de couche de transaction générale.",
+      "verification": "Rejouer les 152 tests Python, notamment interleave CAS/publication et pannes E/S T020 ; conserver les références canoniques et la reprise bornée.",
+      "regression_risk": "MEDIUM",
+      "severity": "MEDIUM",
+      "exploitability": "N/A",
+      "path_type": "hot",
+      "effort": "S",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null,
+      "fingerprint": "5ee8d0e1c9f9"
+    },
+    {
+      "id": "QUAL-003",
+      "category": "quality",
+      "file": "../../../../../../../Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project/codex/.codex/skills/agent-loop/scripts/agent_loop.py",
+      "line": 1990,
+      "title": "Préparation Bridget : initialisation et reprise restent entremêlées",
+      "description": "prepare_bridget_dispatch couvre 43 lignes et présente une complexité cyclomatique de 23. Les conditions retry pilotent validation, résolution, contexte et enveloppe dans une même branche. La séparation initial/retry rendrait plus explicite l'immuabilité de l'enveloppe durable.",
+      "evidence": "    saved_delivery = task.get(\"dispatch_delivery\", {})\n    retry = bool(saved_delivery and task.get(\"dispatch_delivery_state\") == \"pending\")\n    if retry and task.get(\"status\") != \"dispatched\" and not (\n        task.get(\"status\") == \"blocked\" and task.get(\"blocked_reason\") == \"dispatch_transport_failed\"\n    ):\n        raise SystemExit(\"terminal result prevents dispatch replay\")\n    target = str(saved_delivery.get(\"target\") if retry else task.get(\"agent_target\") or \"\").strip()",
+      "impact": "Coût de revue des reprises et risque de modifier par erreur une enveloppe déjà figée lors d'une évolution.",
+      "remediation": "Clarifier les chemins initial et retry sans recalculer cible, motif, source, corps ou identifiant du retry. Réutiliser les helpers existants ; aucune politique générale.",
+      "verification": "Rejouer les tests de mutation de mandat après failure, reprise à enveloppe figée et vrai Loop/CLI/daemon.",
+      "regression_risk": "MEDIUM",
+      "severity": "MEDIUM",
+      "exploitability": "N/A",
+      "path_type": "hot",
+      "effort": "S",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null,
+      "fingerprint": "7aa653414dac"
+    },
+    {
+      "id": "QUAL-004",
+      "category": "quality",
+      "file": "../../../../../../../Volumes/8TB2/01-workflow/git-worktrees/dotfiles/138-agent-loop-project/codex/.codex/skills/agent-loop/scripts/agent_loop.py",
+      "line": 3610,
+      "title": "route associe choix du destinataire et transitions d'escalade",
+      "description": "La closure route couvre 83 lignes et présente une complexité cyclomatique de 25. Elle associe destinataire, motif, garde de projet, blocs de reprise, échec de destinataire, regroupement et escalation. La complexité 90 du parent est une dette de contexte (HEAD89) ; le constat porte sur la branche modifiée.",
+      "evidence": "    def route(item: dict[str, Any]) -> None:\n        nonlocal scope_directory\n        while True:\n            item = {**item, \"last_notified_at\": tick_at}\n            audience = item[\"audience\"]\n            if audience == \"worker\":\n                session = session_for_worker_event(item[\"event\"])\n            else:\n                role = str(orchestrator_role) if audience == \"coordinator\" else escalation_role",
+      "impact": "Lecture et maintenance des rappels worker/coordinator/ROOT plus difficiles ; aucun rappel perdu confirmé.",
+      "remediation": "Séparer le calcul concret du destinataire/motif des transitions d'escalade. Préserver les mêmes oracles, le mandat par UUID/rôle et le motif figé par lot.",
+      "verification": "Rejouer les tests des trois rôles mandatés, ROOT hors projet sans mandat, digest de motifs distincts et rappels durables.",
+      "regression_risk": "MEDIUM",
+      "severity": "MEDIUM",
+      "exploitability": "N/A",
+      "path_type": "hot",
+      "effort": "S",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null,
+      "fingerprint": "4a2cf61ce048"
+    },
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "file": "crates/bridget-daemon/src/t3code_contract.rs",
+      "line": 271,
+      "title": "Coût de parse_snapshot non documenté",
+      "description": "La fonction publique non triviale ajoute un index des projets et une consultation par thread sans annotation du coût. L'index est une amélioration O(P+T) ; aucun bug de performance n'est démontré.",
+      "evidence": "pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {\n    const SRC: &str = \"GET /api/orchestration/snapshot\";\n    let value: Value = serde_json::from_str(text).map_err(|_| shape(SRC, \"json\"))?;\n    let snapshot_sequence = value\n        .get(\"snapshotSequence\")\n        .and_then(Value::as_u64)\n        .ok_or_else(|| shape(SRC, \"snapshotSequence\"))?;\n    let mut projects = Vec::new();\n    let mut project_roots: HashMap<String, Option<String>> = HashMap::new();",
+      "impact": "Le lecteur ne dispose pas de la borne explicite du coût JSON, projets et threads.",
+      "remediation": "Ajouter une documentation Big-O : coût du parsing JSON et des données lues/copées, puis index O(P+T) attendu avec HashMap. Préciser P=projets et T=threads.",
+      "verification": "Relire la documentation et conserver les tests de snapshot, références absentes et identifiants ambigus.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "severity": "MEDIUM",
+      "exploitability": "N/A",
+      "path_type": "hot",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null,
+      "fingerprint": "be476edf1ba6"
+    }
+  ],
+  "suppressed": [],
+  "positive_findings": [
+    "03 — Le projet source est issu du fait de connexion ; from et domain ne font pas autorité (daemon.rs / communication.rs).",
+    "04 — parse_snapshot indexe les projets et consulte chaque thread par HashMap ; index attendu O(P+T) (t3code_contract.rs:279).",
+    "05 — La copie Claude délègue au moteur canonique au lieu de recopier le moteur (scope externe claude/.claude/skills/agent-loop/scripts/agent_loop.py).",
+    "06 — Le contrôle conserve les warnings dans le résultat durable ; un replay accepté ne réexécute pas l'effet (execution_store.rs / spec138_project_test.rs).",
+    "06 — CAS, archive et publication partagent le verrou de tâche ; les tests couvrent course et pannes E/S ordinaires (agent_loop.py:638).",
+    "07 — Aucun bloc de 100 lignes dans les deux rapports JSCPD ; les taux sont des mesures de contexte, pas du diff.",
+    "12 — Cargo.toml/Cargo.lock et les manifests des crates restent inchangés ; aucun nouveau service, registre ou framework."
+  ],
+  "duplicated_code": {
+    "measurement_scope": "Fichiers complets de contexte ; pas taux du diff.",
+    "bridget": {
+      "sources": 31,
+      "lines": 76832,
+      "total_occurrences": 322,
+      "duplicated_lines": 3096,
+      "jscpd_percentage": 4.029571012078301,
+      "max_block_lines": 40,
+      "top5_block_lines": [
+        40,
+        29,
+        28,
+        25,
+        25
+      ]
+    },
+    "agent_loop": {
+      "sources": 2,
+      "lines": 4453,
+      "total_occurrences": 3,
+      "duplicated_lines": 20,
+      "jscpd_percentage": 0.44913541432741977
+    },
+    "baseline_limitation": "isNew=false et newClones=0 sans baseline ne prouvent pas absence de clone nouveau."
+  },
+  "ai_hygiene": {
+    "suspected_ai_ratio_percent": null,
+    "confirmed_new_stubs": 0,
+    "confirmed_new_critical_todos": 0,
+    "method": "Scan diff et seconde lecture ; ne permet pas d'inférer une origine du code."
+  },
+  "validation": {
+    "workspace": {
+      "passed": 1633,
+      "failed": 0,
+      "ignored": 55,
+      "filtered": 0,
+      "summaries": 78,
+      "excludedNested": 3
+    },
+    "python": {
+      "passed": 152,
+      "baseline": 124,
+      "new": 28
+    },
+    "feature_unique": {
+      "rust": 35,
+      "python": 28,
+      "total": 63,
+      "subset_not_additive": true
+    },
+    "loop_opt_in": {
+      "passed": 1,
+      "subset_not_additive": true
+    },
+    "bdd": {
+      "written": 29,
+      "executed": 0
+    },
+    "fmt": "PASS",
+    "clippy": "PASS -D warnings",
+    "release": "PASS",
+    "skills": "PASS (Bridget et Agent Loop ; adaptateur Claude inclus)"
+  },
+  "roadmap": {
+    "immediate": [],
+    "short_term": [
+      "PERF-001"
+    ],
+    "medium_term": [
+      "QUAL-001",
+      "QUAL-002",
+      "QUAL-003",
+      "QUAL-004"
+    ],
+    "long_term": []
+  }
+}

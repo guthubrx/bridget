@@ -1,0 +1,35 @@
+Diff in /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/tests/integration_test.rs:14:
+ use std::time::{Duration, Instant};
+ 
+ fn ack(peer: &mut Client, id: &str) {
+-    assert!(matches!(peer.receive(), DaemonToWrapper::Ack { project_warnings: Vec::new(),  id: actual } if actual == id));
++    assert!(
++        matches!(peer.receive(), DaemonToWrapper::Ack { project_warnings: Vec::new(),  id: actual } if actual == id)
++    );
+ }
+ fn request_states(root: &Path) -> Vec<bridget_transport::protocol::RequestInfo> {
+     let mut peer = Client::connect(&socket(root));
+Diff in /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/tests/managed_parity_test.rs:708:
+     let id = message.id.clone();
+     peer.send(&WrapperToDaemon::Send(message));
+     match peer.recv() {
+-        DaemonToWrapper::Ack { project_warnings: Vec::new(),  id: acked } => assert_eq!(acked, id),
++        DaemonToWrapper::Ack {
++            project_warnings: Vec::new(),
++            id: acked,
++        } => assert_eq!(acked, id),
+         other => panic!("accusé inattendu: {other:?}"),
+     }
+     id
+Diff in /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/tests/spec100_observation_test.rs:84:
+                     assert_eq!(message.from, AGENT);
+                     assert!(message.reply);
+                     assert!(message.body.contains("preuve CLI 🦀"));
+-                    write(DaemonToWrapper::Ack { project_warnings: Vec::new(),  id: message.id });
++                    write(DaemonToWrapper::Ack {
++                        project_warnings: Vec::new(),
++                        id: message.id,
++                    });
+                 } else {
+                     assert!(matches!(
+                         read(),

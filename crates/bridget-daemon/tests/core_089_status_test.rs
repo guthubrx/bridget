@@ -2,7 +2,10 @@
 #[path = "support/idempotent.rs"]
 pub mod fixture;
 
-use bridget_transport::protocol::{CLIENT_CONTRACT_VERSION, ConnectionRole, decode, encode};
+use bridget_transport::protocol::{
+    CLIENT_CONTRACT_VERSION, ClientCapability, CommunicationDirectoryScope, ConnectionRole, decode,
+    encode,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -45,7 +48,11 @@ fn consultations_reelles_ne_creent_aucun_profil_durable() {
         })
     };
     let before = counts();
-    for args in [&["who"][..], &["agents", "--json"], &["status"]] {
+    for args in [
+        &["who", "--global"][..],
+        &["agents", "--json", "--global"],
+        &["status"],
+    ] {
         let output = fixture::run_isolated(&root, args, false);
         assert!(output.status.success(), "{}", fixture::output_text(&output));
         // Retirer l'exception éphémère de Register crée une identité et un
@@ -57,7 +64,12 @@ fn consultations_reelles_ne_creent_aucun_profil_durable() {
 
 #[test]
 fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse() {
-    for args in [&["who"][..], &["agents", "--json"], &["status"]] {
+    for args in [
+        &["who", "--global"][..],
+        &["agents", "--json", "--global"],
+        &["status"],
+    ] {
+        let scoped = args[0] != "status";
         let root = fixture::test_root("089-status");
         let listener = UnixListener::bind(fixture::socket(&root)).unwrap();
         // Parent déjà privé ; ne pas dépendre de l'umask du lanceur de tests
@@ -121,10 +133,82 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
             let mut line = String::new();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             reader.read_line(&mut line).unwrap();
-            assert!(matches!(
-                decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { .. }
-            ));
+            let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+                panic!("sonde d'inventaire attendue")
+            };
+            if scoped {
+                // L'inventaire diagnostic préalable est valide. Le refus doit
+                // venir du nouvel annuaire, pas d'une sonde ou capacité absente.
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        credential: None,
+                        agent_id,
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode(line.trim()).unwrap(),
+                    WrapperToDaemon::ListAgents
+                ));
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+                )
+                .unwrap();
+                drop(reader);
+                drop(stream);
+                stream = accept();
+                reader = BufReader::new(stream.try_clone().unwrap());
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode(line.trim()).unwrap(),
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Client
+                    }
+                ));
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Client
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(
+                    matches!(decode(line.trim()).unwrap(), WrapperToDaemon::ClientHello { capabilities, .. } if capabilities == vec![ClientCapability::CommunicationProjectsV1])
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::ClientWelcome {
+                        version: CLIENT_CONTRACT_VERSION,
+                        build_id: "fixture".into(),
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: vec![ClientCapability::CommunicationProjectsV1],
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode(line.trim()).unwrap(),
+                    WrapperToDaemon::DirectoryScoped {
+                        scope: CommunicationDirectoryScope::Global
+                    }
+                ));
+            }
             // Un JSON décodable mais non corrélé, suivi d'une liste plausible :
             // ignorer Registered ou ignorer agents_inventory_available rendrait
             // une sortie de succès et ferait échouer les trois oracles CLI.
@@ -136,7 +220,16 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
                     agent_id: "étranger".into()
                 })
                 .unwrap(),
-                encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+                encode(&if scoped {
+                    DaemonToWrapper::CommunicationDirectory {
+                        agents: vec![],
+                        project: None,
+                        project_warnings: vec![],
+                    }
+                } else {
+                    DaemonToWrapper::AgentList { agents: vec![] }
+                })
+                .unwrap()
             )
             .unwrap();
             line.clear();
@@ -156,7 +249,15 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
             output.stdout.is_empty(),
             "aucune sortie trompeuse : {args:?}"
         );
-        assert!(String::from_utf8_lossy(&output.stderr).contains("inventaire indisponible"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(if scoped {
+                "réponse daemon inattendue"
+            } else {
+                "inventaire indisponible"
+            }),
+            "{stderr}"
+        );
         assert!(!root.join("state/bridget.db").exists());
         std::fs::remove_dir_all(root).unwrap();
     }

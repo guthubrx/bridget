@@ -1287,6 +1287,7 @@ pub fn thread(client: &mut Client, action: Value) -> Value {
         serde_json::from_value(action).expect("action de fil valide");
     client.send(WrapperToDaemon::ThreadRequest {
         request: bridget_transport::protocol::ThreadRequest {
+            cross_project_reason: None,
             version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
             request,
         },

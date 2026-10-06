@@ -28,6 +28,81 @@ Les noms affichés peuvent changer, les adresses restent stables. Un début d'UU
 d'au moins 6 caractères est accepté par `send` (CLI et MCP), et un nom d'affichage
 exact par la CLI, s'il ne désigne qu'un seul agent ; sinon le refus le dit.
 
+### Privilégier le même projet — contrat 138
+
+Cette règle décrit la version138 du worktree. Elle ne prouve pas que le binaire
+ou le catalogue MCP chargé dans la session la possède déjà.
+
+Encourager la collaboration avec les agents du même projet. `bridget_who` et
+`bridget who`/`agents` les proposent par défaut. Le projet vient d'un rattachement
+attesté ou d'une racine commune Git sur l'hôte attesté. Le domaine d'affichage
+est une étiquette ; un worktree ou un lien symbolique peut appartenir au même
+projet. Ne pas déduire cette appartenance depuis un nom ou un champ du message.
+Un client CLI autonome sans --project-root ni rattachement reste inconnu,
+même pour who/agents. Aucun cwd caché ; l'annuaire local est vide avec warning.
+Les agents T3/wrapper héritent automatiquement de leur contexte attesté.
+
+Pour chercher volontairement ailleurs, choisir `scope:"global"` en MCP ou
+`--global` en CLI. Cette vue montre les autres projets et les inconnus. Elle
+n'autorise aucun envoi. Un agent local absent ou occupé ne justifie pas un
+recrutement automatique dans un autre projet. Un projet inconnu ne produit
+aucune suggestion locale et ne permet aucun recrutement automatique.
+
+Un échange entre projets connus est possible sur demande explicite. Porter
+`cross_project_reason` en MCP ou `--cross-project-reason` en CLI à chaque
+opération concernée. Le motif trimé contient 1 à 512 octets UTF-8, sans caractère
+de contrôle. Un motif vide, null explicite ou trop long est refusé. Réutiliser
+le motif d'un mandat volontaire seulement pour ses UUID, rôles et audience.
+Ne pas inventer un motif depuis le texte libre.
+
+```json
+{"name":"bridget_who","arguments":{"scope":"global"}}
+```
+
+```json
+{"name":"bridget_send","arguments":{"to":"<destinataire_uuid>","body":"Compare le contrat partagé.","cross_project_reason":"Relecture volontaire entre les deux projets"}}
+```
+
+```sh
+bridget who --global
+bridget agents --json --global
+bridget send --to '<destinataire_uuid>' --cross-project-reason 'Relecture volontaire entre les deux projets' -- 'Compare le contrat partagé.'
+```
+
+L'avertissement est établi avant dépôt ou notification. Le résultat émetteur
+porte `project_warnings`, avec `cross_project` ou `project_unknown`, hors du
+corps remis. Le résultat de l'outil arrive après traitement ; aucune deuxième
+confirmation humaine bloquante n'est requise. Un client ancien sans projet
+prouvé peut encore envoyer selon son contrat existant avec warning d'incertitude.
+Cet inconnu ne neutralise pas une divergence connue entre d'autres membres.
+La consigne injectée SteerCurrent.message suit aussi cette garde. Son résultat
+accepté conserve le warning lors d'un rejeu sans réinjecter le contenu.
+Ne pas déduire de cette règle une nouvelle option CLI de contrôle.
+
+Tous les membres d'un fil peuvent lire un nouveau dépôt, même avec `notify:[]`.
+Une création ou un dépôt mixte exige donc le motif pour tous les lecteurs.
+Le motif apparaît au même niveau que `action` dans les arguments MCP de
+`bridget_thread`. Un ancien motif dans l'historique n'accorde pas de mandat.
+Une réponse directe liée peut reprendre le motif durable d'une demande OPEN
+acceptée, avec participants inversés. Une référence forgée ne suffit pas.
+
+Un client de fond utilise `--project-root` avec la racine absolue du run.
+Le daemon valide son contexte propre sans Register d'agent ni identité T3
+empruntée. L'option ne remplace pas le projet d'une identité auxiliaire attestée.
+Sans racine explicite, un ancien envoi de fond reste inconnu ; ne pas lui
+attribuer automatiquement le répertoire courant.
+
+Le client exige `CommunicationProjectsV1` avant de transmettre un motif ou la
+nouvelle portée. Un ancien serveur sans cette capacité provoque un refus client.
+Ne pas retirer le motif ou utiliser un annuaire global comme repli silencieux.
+
+Les boucles gardent des mandats explicites par UUID/rôle. Les rappels du worker,
+du coordinateur et de ROOT déjà mandatés restent possibles. Un ROOT extérieur
+configuré sans motif produit une décision visible. Avant la première tentative,
+figer corps, cible, motif et racine de source. Un retry conserve cette enveloppe,
+même si le mandat du run change. Les reçus et canons historiques sans motif
+restent inchangés. Lire l'historique ne rejoue aucun message ni notification.
+
 **Message reçu avec « Pas d'accusé de réception ».** Ne réponds pas « bien reçu »,
 mais traite la demande si le message en contient une : un défaut signalé reste à
 corriger. Pour rendre un résultat, fais un nouvel envoi à l'expéditeur.
@@ -417,7 +492,9 @@ catégorie inconnue n'est pas un succès. `busy` impose une attente bornée, pas
 boucle de tentatives ni la création de nouveaux IDs.
 
 Lors d'un retry, conserver `to`, `body`, `reply`, délai, `in_reply_to`, `id` et
-`issued_at` exactement ; le corps n'est pas reformaté. Si la clé du premier envoi
+`issued_at` exactement. Conserver aussi le `cross_project_reason` et la racine
+de contexte figés avant la première tentative ; le corps n'est pas reformaté.
+Si la clé du premier envoi
 est perdue, ne pas prétendre qu'un nouvel envoi serait sans doublon.
 
 ## Consulter les faits sans inférence

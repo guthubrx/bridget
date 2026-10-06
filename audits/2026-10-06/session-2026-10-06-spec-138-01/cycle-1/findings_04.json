@@ -1,0 +1,31 @@
+{
+  "module": "04",
+  "findings": [
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "file": "crates/bridget-daemon/src/t3code_contract.rs",
+      "line": 271,
+      "title": "Coût de parse_snapshot non documenté",
+      "description": "La fonction publique non triviale ajoute un index des projets et une consultation par thread sans annotation du coût. L'index est une amélioration O(P+T) ; aucun bug de performance n'est démontré.",
+      "evidence": "pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {\n    const SRC: &str = \"GET /api/orchestration/snapshot\";\n    let value: Value = serde_json::from_str(text).map_err(|_| shape(SRC, \"json\"))?;\n    let snapshot_sequence = value\n        .get(\"snapshotSequence\")\n        .and_then(Value::as_u64)\n        .ok_or_else(|| shape(SRC, \"snapshotSequence\"))?;\n    let mut projects = Vec::new();\n    let mut project_roots: HashMap<String, Option<String>> = HashMap::new();",
+      "impact": "Le lecteur ne dispose pas de la borne explicite du coût JSON, projets et threads.",
+      "remediation": "Ajouter une documentation Big-O : coût du parsing JSON et des données lues/copées, puis index O(P+T) attendu avec HashMap. Préciser P=projets et T=threads.",
+      "verification": "Relire la documentation et conserver les tests de snapshot, références absentes et identifiants ambigus.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "severity": "MEDIUM",
+      "exploitability": "N/A",
+      "path_type": "hot",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null,
+      "fingerprint": "be476edf1ba6"
+    }
+  ],
+  "positive_findings": [
+    "04 — parse_snapshot indexe les projets et consulte chaque thread par HashMap ; index attendu O(P+T) (t3code_contract.rs:279)."
+  ],
+  "scope_mode": "diff"
+}

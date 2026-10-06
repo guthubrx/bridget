@@ -1,4 +1,7 @@
 //! SC08908 : aucun accès implicite à l'instance historique, HOME fournisseur intact.
+#[path = "support/idempotent.rs"]
+pub mod communication_fixture;
+
 use bridget_daemon::environment::Namespace;
 use bridget_daemon::lifecycle::{SourceEnvironment, build_environment};
 use bridget_daemon::registry::AgentDefinition;
@@ -333,7 +336,7 @@ fn vrai_daemon_et_clients_n_utilisent_que_namespace_prive() {
         assert!(Instant::now() < deadline, "socket privée non prête");
         std::thread::yield_now();
     }
-    let who = Process::start(f.command().args(["agents", "--json"])).finish();
+    let who = Process::start(f.command().args(["agents", "--json", "--global"])).finish();
     assert!(
         who.status.success(),
         "{}",
@@ -366,7 +369,21 @@ fn vrai_daemon_et_clients_n_utilisent_que_namespace_prive() {
     // d'identité et sa connexion doivent converger vers le même daemon.
     private_dir(&f.path("state/agent-names"));
     let name_file = f.path("state/agent-names/test-instance");
-    private_file(&name_file, b"a3d27a89-80d5-4e0f-9b84-cf5523ecb026");
+    let owner_id = "a3d27a89-80d5-4e0f-9b84-cf5523ecb026";
+    // Une preuve de nom n'est pas une connexion propriétaire. Le helper
+    // existant reçoit le vrai Registered et conserve son credential privé.
+    let _owner = communication_fixture::register_agent_as(&socket, owner_id, "isolation-instance");
+    private_file(&name_file, owner_id.as_bytes());
+    let database = rusqlite::Connection::open_with_flags(
+        f.path("state/bridget.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let identities_before: i64 = database
+        .query_row("SELECT count(*) FROM agent_identities", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
     let mut mcp_command = f.command();
     mcp_command
         .arg("mcp")
@@ -379,7 +396,7 @@ fn vrai_daemon_et_clients_n_utilisent_que_namespace_prive() {
         for frame in [
             serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
             serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-            serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_who","arguments":{}}}),
+            serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_who","arguments":{"scope":"global"}}}),
         ] {
             writeln!(input, "{frame}").unwrap();
         }
@@ -398,6 +415,23 @@ fn vrai_daemon_et_clients_n_utilisent_que_namespace_prive() {
     let response = frames.iter().find(|frame| frame["id"] == 2).unwrap();
     assert!(response.get("error").is_none(), "{response}");
     assert_ne!(response["result"]["isError"], true, "{response}");
+    assert!(
+        response["result"]["structuredContent"]["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["agent_id"] == owner_id),
+        "{response}"
+    );
+    let identities_after: i64 = database
+        .query_row("SELECT count(*) FROM agent_identities", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        identities_after, identities_before,
+        "la lecture MCP ne crée aucune identité"
+    );
     assert_ne!(
         response["result"]["structuredContent"]["status"], "identity_not_found",
         "{response}"
@@ -406,7 +440,7 @@ fn vrai_daemon_et_clients_n_utilisent_que_namespace_prive() {
     let duplicate = Process::start(f.command().arg("daemon")).finish();
     assert!(!duplicate.status.success());
     assert!(
-        Process::start(f.command().arg("who"))
+        Process::start(f.command().args(["who", "--global"]))
             .finish()
             .status
             .success()

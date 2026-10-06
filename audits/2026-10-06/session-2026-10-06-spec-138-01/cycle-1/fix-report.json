@@ -1,0 +1,20 @@
+{
+  "audit_mode": "fix",
+  "phase9_entered": false,
+  "reason": "Worktrees WIP et baseline historique rouge ; aucun candidat CRITICAL/HIGH. Les cinq MED restent recommandations ouvertes.",
+  "selected": 0,
+  "attempted": 0,
+  "fixed": 0,
+  "blocked": 0,
+  "skipped": 0,
+  "auto_commit": false,
+  "commits": [],
+  "findings": [],
+  "deferred_nonblocking": [
+    "QUAL-001",
+    "QUAL-002",
+    "QUAL-003",
+    "QUAL-004",
+    "PERF-001"
+  ]
+}

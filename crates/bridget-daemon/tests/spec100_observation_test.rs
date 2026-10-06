@@ -84,7 +84,10 @@ fn spec100_cli_share_and_events_use_registered_identity() {
                     assert_eq!(message.from, AGENT);
                     assert!(message.reply);
                     assert!(message.body.contains("preuve CLI 🦀"));
-                    write(DaemonToWrapper::Ack { id: message.id });
+                    write(DaemonToWrapper::Ack {
+                        project_warnings: Vec::new(),
+                        id: message.id,
+                    });
                 } else {
                     assert!(matches!(
                         read(),

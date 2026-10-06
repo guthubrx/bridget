@@ -1,0 +1,48 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.72s
+     Running tests/core_089_federation_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_federation_test-7c47ab331631d6a0)
+
+running 5 tests
+test charge_locale_distante_600_evenements_en_soixante_secondes ... ignored, 600 événements / 60 s, deux machines ; namespace BRIDGET_HOME dédié requis
+test deux_machines_cli_reel_demande_reponse_ledger_journal ... ignored, deux machines autorisées requises ; paramètres BRIDGET_SSH_REMOTE_* explicites
+test deux_machines_coupure_reprise_curseur_et_lacune ... ignored, recette SSH distante : coupe/reprise du seul tunnel de test
+test fixture::performance_daemon_worker ... ignored, sous-processus privé des bancs, jamais un daemon de production
+test ssh_unix_reel_garde_annuaire_ledger_permissions_et_coupure_honnete ... ignored, recette réelle opt-in : BRIDGET_SSH_LOCAL_GATE=1, sshd local requis
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/core_089_isolation_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_isolation_test-6607ed9e6ade2801)
+
+running 9 tests
+test communication_fixture::performance_daemon_worker ... ignored, sous-processus privé des bancs, jamais un daemon de production
+test namespace_explicite_et_defaut_ne_rejoignent_jamais_historique ... ok
+test bootstrap_env_clear_conserve_namespace_et_abonnement_sans_secret_implicite ... ok
+test api_wrapper_refuse_un_namespace_de_session_divergent_avant_lancement ... ok
+test vrai_client_refuse_racine_historique_sans_contacter_la_socket ... ok
+test symlink_droits_et_fichier_detourne_sont_refuses_avant_creation ... ok
+test migration_explicite_ne_peut_modifier_les_fichiers_historiques ... ok
+test sous_etats_lies_sont_refuses_avant_bootstrap_ou_ecriture ... ok
+test vrai_daemon_et_clients_n_utilisent_que_namespace_prive ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+     Running tests/core_089_native_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_native_test-886fe026814425fe)
+
+running 5 tests
+test fixture::performance_daemon_worker ... ignored, sous-processus privé des bancs, jamais un daemon de production
+test gate_reel_claude_stream_json_reponse_liee_et_attach ... ignored, requiert l'autorisation d'utiliser le compte Claude local : BRIDGET_CLAUDE_NATIVE_GATE=1
+test gate_reel_codex_app_server_gpt_5_6_terra_et_attach ... ignored, requiert un compte Codex local et BRIDGET_CODEX_NATIVE_GATE=1
+test wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus ... ok
+test wrapper_codex_natif_repond_et_reste_attachable ... ok
+
+test result: ok. 2 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.73s
+
+     Running tests/core_089_status_test.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/core_089_status_test-ddc27f34858d73d1)
+
+running 3 tests
+test fixture::performance_daemon_worker ... ignored, sous-processus privé des bancs, jamais un daemon de production
+test who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse ... ok
+test consultations_reelles_ne_creent_aucun_profil_durable ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.54s
+

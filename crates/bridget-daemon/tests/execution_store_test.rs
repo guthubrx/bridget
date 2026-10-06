@@ -4,15 +4,279 @@ use bridget_daemon::execution_store::{
 };
 use bridget_daemon::{ConditionalTransition, ExecutionStore};
 use bridget_transport::protocol::{
-    ExecutionProviderContext, ProjectReference, ProviderObservation, ProviderOperation,
+    CommunicationProject, ExecutionProviderContext, ProjectReference, ProjectWarning,
+    ProviderObservation, ProviderOperation,
 };
 use rusqlite::Connection;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn spec_138_control_warnings_new_store_has_empty_default() {
+    let store = ExecutionStore::open_in_memory().unwrap();
+    assert_eq!(store.schema_version().unwrap(), 11);
+    store
+        .record_starting("submission-138", "execution-138", "agent-b", 10)
+        .unwrap();
+    assert_eq!(
+        store
+            .reserve_control_command(
+                "client:a",
+                "command-138",
+                "execution-138",
+                b"canon",
+                11,
+                200
+            )
+            .unwrap(),
+        ControlReservation::New
+    );
+    assert!(
+        store
+            .lookup_control_command("client:a", "command-138", 12)
+            .unwrap()
+            .unwrap()
+            .project_warnings
+            .is_empty()
+    );
+    assert!(matches!(
+        store.reserve_control_command("client:a", "command-138", "execution-138", b"canon", 12, 200).unwrap(),
+        ControlReservation::Replayed(record) if record.project_warnings.is_empty()
+    ));
+    assert!(
+        store
+            .mark_control_dispatched("client:a", "command-138", 13, &[])
+            .unwrap()
+    );
+    assert!(
+        store
+            .lookup_control_command("client:a", "command-138", 14)
+            .unwrap()
+            .unwrap()
+            .project_warnings
+            .is_empty()
+    );
+}
+
+#[test]
+fn spec_138_control_warnings_migrate_legacy_commands_idempotently() {
+    let path = std::env::temp_dir().join(format!("bridget-138-legacy-{}.db", uuid::Uuid::new_v4()));
+    let legacy = Connection::open(&path).unwrap();
+    legacy.execute_batch(
+        "CREATE TABLE executions (execution_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, state TEXT NOT NULL);
+         INSERT INTO executions VALUES ('execution-138', 'submission-138', 'running');
+         CREATE TABLE execution_control_commands (issuer_scope TEXT NOT NULL, command_id TEXT NOT NULL, canonical_bytes BLOB NOT NULL, execution_id TEXT NOT NULL, state TEXT NOT NULL, refusal_reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (issuer_scope, command_id));
+         INSERT INTO execution_control_commands VALUES ('client:a', 'command-138', X'63616e6f6e', 'execution-138', 'refused', 'ancienne_raison', 10, 12, 200);",
+    ).unwrap();
+    drop(legacy);
+    let migrated = ExecutionStore::open(&path).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 11);
+    drop(migrated);
+    let reopened = ExecutionStore::open(&path).unwrap();
+    assert_eq!(reopened.schema_version().unwrap(), 11);
+    assert!(
+        reopened
+            .lookup_control_command("client:a", "command-138", 13)
+            .unwrap()
+            .unwrap()
+            .project_warnings
+            .is_empty()
+    );
+    assert!(matches!(
+        reopened.reserve_control_command("client:a", "command-138", "execution-138", b"canon", 13, 200).unwrap(),
+        ControlReservation::Replayed(record)
+            if record.status == ControlCommandStatus::Refused { reason: "ancienne_raison".into() }
+                && record.project_warnings.is_empty()
+    ));
+    let check = Connection::open(&path).unwrap();
+    let preserved: (Vec<u8>, String, String, i64, String) = check.query_row(
+        "SELECT canonical_bytes, state, refusal_reason, expires_at, project_warnings FROM execution_control_commands WHERE command_id = 'command-138'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    ).unwrap();
+    assert_eq!(
+        preserved,
+        (
+            b"canon".to_vec(),
+            "refused".into(),
+            "ancienne_raison".into(),
+            200,
+            "[]".into()
+        )
+    );
+    drop(check);
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn spec_138_control_warnings_survive_restart_and_outcomes_without_rewriting_canon() {
+    let path =
+        std::env::temp_dir().join(format!("bridget-138-control-{}.db", uuid::Uuid::new_v4()));
+    let warnings = vec![ProjectWarning {
+        code: "cross_project_allowed".into(),
+        sender_project: Some(CommunicationProject {
+            host: "host-a".into(),
+            root: "/project-a/.git".into(),
+        }),
+        recipient_project: Some(CommunicationProject {
+            host: "host-a".into(),
+            root: "/project-b/.git".into(),
+        }),
+        recipient: "agent-b".into(),
+        reason: Some("Relecture mandatée — été".into()),
+    }];
+    let store = ExecutionStore::open(&path).unwrap();
+    store
+        .record_starting("submission-138", "execution-138", "agent-b", 10)
+        .unwrap();
+    assert_eq!(
+        store
+            .reserve_control_command(
+                "client:a",
+                "accepted-138",
+                "execution-138",
+                b"canon-accepted",
+                11,
+                200
+            )
+            .unwrap(),
+        ControlReservation::New
+    );
+    assert!(
+        store
+            .mark_control_dispatched("client:a", "accepted-138", 12, &warnings)
+            .unwrap()
+    );
+    drop(store);
+    let recovered = ExecutionStore::open(&path).unwrap();
+    let dispatched = recovered
+        .lookup_control_command("client:a", "accepted-138", 13)
+        .unwrap()
+        .unwrap();
+    assert_eq!(dispatched.status, ControlCommandStatus::Dispatched);
+    assert_eq!(dispatched.project_warnings, warnings);
+    assert!(
+        !recovered
+            .mark_control_dispatched("client:a", "accepted-138", 13, &[])
+            .unwrap()
+    );
+    assert!(
+        recovered
+            .resolve_control_command("client:a", "accepted-138", true, None, 14)
+            .unwrap()
+    );
+    assert_eq!(
+        recovered
+            .reserve_control_command(
+                "client:a",
+                "refused-138",
+                "execution-138",
+                b"canon-refused",
+                15,
+                200
+            )
+            .unwrap(),
+        ControlReservation::New
+    );
+    assert!(
+        recovered
+            .mark_control_dispatched("client:a", "refused-138", 16, &warnings)
+            .unwrap()
+    );
+    assert!(
+        recovered
+            .resolve_control_command(
+                "client:a",
+                "refused-138",
+                false,
+                Some("target_unavailable"),
+                17
+            )
+            .unwrap()
+    );
+    drop(recovered);
+    let reopened = ExecutionStore::open(&path).unwrap();
+    let accepted = reopened
+        .lookup_control_command("client:a", "accepted-138", 18)
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.status, ControlCommandStatus::Accepted);
+    assert_eq!(accepted.project_warnings, warnings);
+    assert_eq!(
+        reopened
+            .reserve_control_command(
+                "client:a",
+                "accepted-138",
+                "execution-138",
+                b"canon-accepted",
+                19,
+                200
+            )
+            .unwrap(),
+        ControlReservation::Replayed(accepted.clone())
+    );
+    assert_eq!(
+        reopened
+            .reserve_control_command(
+                "client:a",
+                "accepted-138",
+                "execution-138",
+                b"canon-changed",
+                19,
+                200
+            )
+            .unwrap(),
+        ControlReservation::EnvelopeMismatch
+    );
+    assert_eq!(
+        reopened
+            .lookup_control_command("client:a", "accepted-138", 20)
+            .unwrap()
+            .unwrap(),
+        accepted
+    );
+    let refused = reopened
+        .lookup_control_command("client:a", "refused-138", 20)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        refused.status,
+        ControlCommandStatus::Refused {
+            reason: "target_unavailable".into()
+        }
+    );
+    assert_eq!(refused.project_warnings, warnings);
+    assert_eq!(
+        reopened
+            .reserve_control_command(
+                "client:a",
+                "refused-138",
+                "execution-138",
+                b"canon-refused",
+                21,
+                200
+            )
+            .unwrap(),
+        ControlReservation::Replayed(refused)
+    );
+    let check = Connection::open(&path).unwrap();
+    let durable: (Vec<u8>, String) = check.query_row("SELECT canonical_bytes, project_warnings FROM execution_control_commands WHERE command_id = 'accepted-138'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+    assert_eq!(
+        durable,
+        (
+            b"canon-accepted".to_vec(),
+            serde_json::to_string(&warnings).unwrap()
+        )
+    );
+    drop(check);
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn migration_execution_store_est_additive_et_idempotente() {
     let store = ExecutionStore::open_in_memory().expect("magasin en mémoire");
-    assert_eq!(store.schema_version().expect("version"), 10);
+    assert_eq!(store.schema_version().expect("version"), 11);
 }
 
 #[test]
@@ -27,10 +291,10 @@ fn migration_execution_store_garde_les_tables_heritees_et_rejoue_sans_effet() {
         legacy.execute_batch("CREATE TABLE legacy_messages (id TEXT PRIMARY KEY); INSERT INTO legacy_messages VALUES ('m-1');").unwrap();
     }
     let first = ExecutionStore::open(&path).expect("migration additive");
-    assert_eq!(first.schema_version().unwrap(), 10);
+    assert_eq!(first.schema_version().unwrap(), 11);
     drop(first);
     let second = ExecutionStore::open(&path).expect("migration idempotente");
-    assert_eq!(second.schema_version().unwrap(), 10);
+    assert_eq!(second.schema_version().unwrap(), 11);
     drop(second);
     let legacy = Connection::open(&path).unwrap();
     let preserved: i64 = legacy
@@ -51,7 +315,7 @@ fn migration_execution_store_complete_les_lignes_heritees_sans_les_effacer() {
     legacy.execute_batch("CREATE TABLE executions (execution_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, state TEXT NOT NULL); INSERT INTO executions VALUES ('e-1', 's-1', 'running');").unwrap();
     drop(legacy);
     let store = ExecutionStore::open(&path).expect("migration héritée");
-    assert_eq!(store.schema_version().unwrap(), 10);
+    assert_eq!(store.schema_version().unwrap(), 11);
     drop(store);
     let check = Connection::open(&path).unwrap();
     let revision_columns: i64 = check
@@ -349,7 +613,7 @@ fn commande_de_controle_rejouee_ne_declenche_pas_deux_actions() {
     );
     assert!(
         store
-            .mark_control_dispatched("client:alice", "commande-1", 12)
+            .mark_control_dispatched("client:alice", "commande-1", 12, &[])
             .unwrap()
     );
     assert!(matches!(

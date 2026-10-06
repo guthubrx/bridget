@@ -4,7 +4,9 @@ pub mod fixture;
 
 use bridget_daemon::idempotency::{IdempotencyKey, IdempotencyStore, OperationKind, Reservation};
 use bridget_daemon::store::Store;
-use bridget_transport::protocol::{decode, encode};
+use bridget_transport::protocol::{
+    CLIENT_CONTRACT_VERSION, ClientCapability, CommunicationDirectoryScope, decode, encode,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use fixture::*;
 use serde_json::{Value, json};
@@ -72,14 +74,57 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
                 .set_write_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let writer = BufWriter::new(stream);
-            // L'annuaire est public : `bridget_who` interroge sans preuve ni
-            // enregistrement, la première trame est directement ListAgents.
+            let mut writer = BufWriter::new(stream);
+            // Le véritable MCP lit au nom de son auxiliaire attesté. Les huit
+            // échanges atteignent DirectoryScoped avant de rester bloqués.
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
-                WrapperToDaemon::ListAgents
+                WrapperToDaemon::RegisterAuxiliary {
+                    agent_id, instance_id, credential: presented,
+                } if agent_id == ACTOR && instance_id == "eight-real-connections" && presented == credential
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id: ACTOR.into(),
+                    credential: None,
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                WrapperToDaemon::ClientHello { contract_version, capabilities, .. }
+                    if contract_version == CLIENT_CONTRACT_VERSION
+                        && capabilities == vec![ClientCapability::CommunicationProjectsV1]
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "fixture".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::CommunicationProjectsV1],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                WrapperToDaemon::DirectoryScoped {
+                    scope: CommunicationDirectoryScope::SameProject
+                }
             ));
             connections.push((reader, writer));
         }
@@ -95,7 +140,12 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
             writeln!(
                 writer,
                 "{}",
-                encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+                encode(&DaemonToWrapper::CommunicationDirectory {
+                    agents: vec![],
+                    project: None,
+                    project_warnings: vec![],
+                })
+                .unwrap()
             )
             .unwrap();
             writer.flush().unwrap();

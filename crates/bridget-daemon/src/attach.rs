@@ -39,6 +39,11 @@ pub(crate) struct JournalRequest {
     pub to: Option<String>,
     #[serde(default)]
     pub reply: bool,
+    #[serde(
+        default,
+        deserialize_with = "crate::communication::client::deserialize_project_reason"
+    )]
+    pub cross_project_reason: Option<String>,
 }
 
 impl JournalRequest {
@@ -50,9 +55,11 @@ impl JournalRequest {
         if (self.tail.is_some() && self.from_seq.is_some())
             || (self.reply && self.to.is_none())
             || self.to.as_ref().is_some_and(|to| to.trim().is_empty())
+            || (self.cross_project_reason.is_some() && self.to.is_none())
         {
             return Err(ClientError::InvalidParams(
-                "tail/from_seq exclusifs ; reply exige to non vide".into(),
+                "tail/from_seq exclusifs ; reply et cross_project_reason exigent to non vide"
+                    .into(),
             ));
         }
         let window = self
@@ -636,7 +643,7 @@ impl AttachClientState {
                     });
                 }
             }
-            DaemonToWrapper::Ack { id } if self.pending_send.contains_key(&id) => {
+            DaemonToWrapper::Ack { id, .. } if self.pending_send.contains_key(&id) => {
                 outcome
                     .events
                     .push(AttachEvent::SendAcknowledged { message_id: id });
@@ -5898,6 +5905,33 @@ mod tests {
         server.join().unwrap();
     }
 
+    #[test]
+    fn spec138_journal_accepts_structured_reason_for_forwarding() {
+        let request: JournalRequest = serde_json::from_value(json!({"agent":"a", "to":"11111111-1111-4111-8111-111111111111", "cross_project_reason":"Partager un diagnostic demandé"})).unwrap();
+        assert_eq!(
+            request.to.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            request.cross_project_reason.as_deref(),
+            Some("Partager un diagnostic demandé")
+        );
+        for invalid in [
+            serde_json::Value::Null,
+            json!(" "),
+            json!("x\n"),
+            json!("é".repeat(257)),
+            json!(3),
+        ] {
+            assert!(
+                serde_json::from_value::<JournalRequest>(
+                    json!({"agent":"a","to":"b","cross_project_reason":invalid})
+                )
+                .is_err()
+            );
+        }
+    }
+
     fn subscribe(state: &mut AttachClientState, id: &str) {
         state.subscription_requested();
         let result = state
@@ -7554,6 +7588,7 @@ mod tests {
         state
             .dispatch(DaemonToWrapper::Ack {
                 id: "message-1".to_string(),
+                project_warnings: Vec::new(),
             })
             .unwrap();
         state
@@ -7612,6 +7647,7 @@ mod tests {
             .unwrap()
             .dispatch(DaemonToWrapper::Ack {
                 id: message_id.clone(),
+                project_warnings: Vec::new(),
             })
             .unwrap();
         assert_eq!(

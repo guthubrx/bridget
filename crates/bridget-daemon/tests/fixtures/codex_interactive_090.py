@@ -244,7 +244,7 @@ def main():
             until(lambda: b"Choix :" in transcript, "menu réel depuis thread/list")
             menu_children = subprocess.check_output(["/usr/bin/pgrep", "-P", (root / "wrapper.pid").read_text()]).decode().split()
             assert menu_children, "aucun app-server réel au menu"
-            assert not json.loads(cli("agents", "--json")), "présence avant choix humain"
+            assert not json.loads(cli("agents", "--json", "--global")), "présence avant choix humain"
             menu_socket = next(state.glob("c-*.sock"))
             menu_observer = probe.Client(str(menu_socket))
             assert menu_observer.rpc("thread/loaded/list", {})["result"]["data"] == [], "fil provisoire créé pour le menu"
@@ -259,7 +259,7 @@ def main():
             until(lambda: wrapper.poll() is not None, "sélection refusée/annulée avant présence")
             tick()
             assert wrapper.returncode != 0
-            assert not json.loads(cli("agents", "--json"))
+            assert not json.loads(cli("agents", "--json", "--global"))
             assert not list(state.glob("c-*.sock"))
             if selection == "--menu-cancel":
                 for pid in menu_children:
@@ -272,7 +272,7 @@ def main():
         if "--missing-resume" in sys.argv:
             until(lambda: wrapper.poll() is not None, "fil absent refusé avant présence")
             assert wrapper.returncode != 0
-            assert not json.loads(cli("agents", "--json")), "présence fabriquée après échec de reprise"
+            assert not json.loads(cli("agents", "--json", "--global")), "présence fabriquée après échec de reprise"
             assert not list(state.glob("c-*.sock")), "socket privée survivante"
             assert terminal_restored()
             assert b"thread/resume" in transcript, transcript.decode(errors="replace")
@@ -291,7 +291,7 @@ def main():
         until(lambda: (b"gpt-5.6-luna" if live else b"fixture") in transcript
             and (b"context" in transcript or b"shortcuts" in transcript), "TUI configurée (pas seulement l'écran Resuming) prête à saisir")
         if human_resume:
-            original = next(a for a in json.loads(cli("agents", "--json")) if a["display_name"] == "gui-coder")
+            original = next(a for a in json.loads(cli("agents", "--json", "--global")) if a["display_name"] == "gui-coder")
             original_id = original["agent_id"]
 
             def resolve_wire(frame):
@@ -376,7 +376,7 @@ def main():
                 socket_path = next(state.glob("c-*.sock"))
                 observer = probe.Client(str(socket_path))
                 loaded = observer.rpc("thread/loaded/list", {})["result"]["data"]
-                agent = next(a for a in json.loads(cli("agents", "--json")) if a["state"] == "connected")
+                agent = next(a for a in json.loads(cli("agents", "--json", "--global")) if a["state"] == "connected")
                 assert agent["agent_id"] == original_id and agent["display_name"] == "gui-coder", agent
                 if restart_mode == "name-new-thread":
                     assert loaded != [thread_id]
@@ -392,7 +392,7 @@ def main():
             print("human_resume_same_identity_and_history_active_refused_restart_durable", flush=True)
             return
         if copied_resume or paginated_resume:
-            agent = next(a for a in json.loads(cli("agents", "--json"))
+            agent = next(a for a in json.loads(cli("agents", "--json", "--global"))
                 if a.get("agent_id") == "90000000-0000-4000-8000-000000000001")
             assert agent["display_name"] == "coder-recette-090"
             assert probe.Fixture.count == 0, "tour fournisseur indésirable à la reprise"
@@ -426,7 +426,7 @@ def main():
                 print("human_busy_fifo_no_early_ack", flush=True)
         until(lambda: any(json.loads(line).get("event") == "turn_end" for p in (state / "sessions").rglob("*.jsonl") for line in p.read_bytes().splitlines()), "terminal du tour humain attesté")
         until(lambda: b"OK-090" in transcript, "réponse visible dans la TUI")
-        agents = json.loads(cli("agents", "--json"))
+        agents = json.loads(cli("agents", "--json", "--global"))
         agent = next(a for a in agents if a.get("agent_id") == "90000000-0000-4000-8000-000000000001")
         assert agent.get("mode") != "tmux", agent
         print("human_turn_native", probe.Fixture.count, "presence", agent, flush=True)
@@ -472,7 +472,7 @@ def main():
                 stdin=subprocess.DEVNULL, stdout=daemon_log, stderr=daemon_log)
             until(lambda: (state / "bridget.sock").exists(), "socket Bridget recréée")
             def reconnected():
-                return any(a.get("agent_id") == agent["agent_id"] and a.get("state") == "connected" for a in json.loads(cli("agents", "--json")))
+                return any(a.get("agent_id") == agent["agent_id"] and a.get("state") == "connected" for a in json.loads(cli("agents", "--json", "--global")))
             until(reconnected, "même identité après redémarrage réel du daemon")
             assert observer.rpc("thread/loaded/list", {})["result"]["data"] == [thread_id]
             assert probe.Fixture.count == count_before, "prompt de reconstruction caché"
@@ -510,7 +510,7 @@ def main():
             loaded = observer.rpc("thread/loaded/list", {})["result"]["data"]
             assert navigated_thread != thread_id and navigated_thread in loaded, loaded
             assert wrapper.poll() is None and socket_path.exists(), "notification globale devenue destructive"
-            connected = [entry for entry in json.loads(cli("agents", "--json"))
+            connected = [entry for entry in json.loads(cli("agents", "--json", "--global"))
                 if entry.get("agent_id") == agent["agent_id"] and entry.get("state") == "connected"]
             assert len(connected) == 1 and connected[0]["connection_id"] == agent["connection_id"], connected
 

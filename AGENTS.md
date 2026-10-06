@@ -1,12 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/136-messages-utiles/plan.md.
-Périmètre : historique silencieux, actions courtes et remplacement explicite
-dans les fils Bridget existants. Session autorisée le 2026-10-06.
-Ne jamais déduire un remplacement du texte, ni effacer les messages historiques.
-Préserver le travail non fusionné de la session 135.
+Plan actif : specs/138-priorite-projet/plan.md.
+Périmètre : priorité au même projet et exception inter-projets volontaire.
+Session autorisée le 2026-10-06 par my-specify-all. Aucun commit automatique.
+Ne pas réactiver le registre de projets retiré ni utiliser le domaine comme preuve.
+Préserver les échanges mandatés, les relances et les verdicts des missions.
 Tous les essais utilisent un BRIDGET_HOME et une socket isolés.
-Sélection SpecKit : SPECIFY_FEATURE=136-messages-utiles ; branche
-session-136-messages-utiles.
+Sélection SpecKit : SPECIFY_FEATURE=138-priorite-projet ; branche
+session-138-priorite-projet.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

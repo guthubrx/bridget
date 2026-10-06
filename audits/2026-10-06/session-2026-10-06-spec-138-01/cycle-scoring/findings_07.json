@@ -1,0 +1,8 @@
+{
+  "module": "07",
+  "findings": [],
+  "positive_findings": [
+    "07 — Aucun bloc de 100 lignes dans les deux rapports JSCPD ; les taux sont des mesures de contexte, pas du diff."
+  ],
+  "scope_mode": "diff"
+}

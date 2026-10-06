@@ -5,6 +5,27 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## Non publié — 2026-10-06
+
+### Ajouté et modifié
+
+- Sous-agents internes T3 attestés : annuaire et envoi par MCP seulement, provenance visible,
+  réponses routées au parent. Aucun agent enfant durable ni droit d'administration ajouté (133).
+- Messages et lots : nom humain avec UUID complet ; le routage et l'historique ne changent pas (134).
+- Contrôleur Agent Loop extérieur : prise en charge, progrès vérifiable, rappels regroupés et
+  décision de suite. Une file vide ou une fin de tour n'est pas une clôture de mission (135).
+- Fils partagés : preuves `kind:history` silencieuses, consignes courtes et remplacement explicite
+  `supersedes_seq`, sans effacer ni rejouer l'histoire (136).
+- Le code et l'aperçu T3 des en-têtes discrets sont validés séparément ; cette note ne prouve pas
+  leur installation dans une application T3 déjà ouverte (137).
+- Annuaire du même projet par défaut, `who/agents --global` volontaire et motif interprojets
+  `--cross-project-reason` / `cross_project_reason`. Les projets inconnus restent explicitement
+  inconnus ; les envois legacy avertis restent compatibles. Les rappels Loop des UUID/rôles déjà
+  mandatés restent actifs, sans recrutement extérieur automatique (138).
+
+Voir la référence de communication et le guide d'installation. Aucun nouveau numéro de version
+ni déploiement n'est annoncé par cette section ; toutes les entrées publiées restent conservées.
+
 ## [0.1.3] - 2026-10-02
 
 ### Corrigé

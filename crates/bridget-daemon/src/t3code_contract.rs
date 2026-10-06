@@ -6,6 +6,7 @@
 //! n'est touchée que par la commande officielle `t3`.
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -192,6 +193,8 @@ pub struct SessionSummary {
 pub struct ThreadSummary {
     pub id: String,
     pub project_id: String,
+    /// Racine publiée du projet T3. Distincte du worktree et du domaine.
+    pub workspace_root: Option<String>,
     pub title: String,
     /// Présent même sur un fil jamais démarré : c'est la seule source du
     /// fournisseur tant qu'aucune session n'existe.
@@ -273,15 +276,21 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
         .and_then(Value::as_u64)
         .ok_or_else(|| shape(SRC, "snapshotSequence"))?;
     let mut projects = Vec::new();
+    let mut project_roots: HashMap<String, Option<String>> = HashMap::new();
     for project in value
         .get("projects")
         .and_then(Value::as_array)
         .ok_or_else(|| shape(SRC, "projects"))?
     {
-        projects.push(Project {
+        let project = Project {
             id: str_field(project, SRC, "projects[].id")?.to_string(),
             workspace_root: str_field(project, SRC, "projects[].workspaceRoot")?.to_string(),
-        });
+        };
+        project_roots
+            .entry(project.id.clone())
+            .and_modify(|root| *root = None)
+            .or_insert_with(|| Some(project.workspace_root.clone()));
+        projects.push(project);
     }
     let mut threads = Vec::new();
     for thread in value
@@ -299,9 +308,14 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
             }),
             None => None,
         };
+        let project_id = str_field(thread, SRC, "threads[].projectId")?.to_string();
+        // Une référence absente ou ambiguë ne devient pas une preuve depuis
+        // le chemin de travail, le titre ou le cwd de l'adaptateur.
+        let workspace_root = project_roots.get(&project_id).cloned().flatten();
         threads.push(ThreadSummary {
             id: str_field(thread, SRC, "threads[].id")?.to_string(),
-            project_id: str_field(thread, SRC, "threads[].projectId")?.to_string(),
+            project_id,
+            workspace_root,
             title: opt_str(thread, "title").unwrap_or_default(),
             provider_instance_id: thread
                 .get("modelSelection")
@@ -712,6 +726,7 @@ mod tests {
         assert_eq!(snapshot.snapshot_sequence, 374);
         assert_eq!(snapshot.projects[0].workspace_root, "/tmp/p1");
         let live = &snapshot.threads[0];
+        assert_eq!(live.workspace_root.as_deref(), Some("/tmp/p1"));
         assert!(live.is_live());
         assert_eq!(live.session.as_ref().unwrap().provider_name, "claudeAgent");
         assert_eq!(
@@ -728,6 +743,46 @@ mod tests {
         assert!(
             matches!(parse_snapshot(&sans_id), Err(ContractError::InvalidShape { field, .. }) if field == "threads[].id")
         );
+    }
+
+    #[test]
+    fn spec138_snapshot_uses_project_id_not_worktree_or_title() {
+        let value = serde_json::json!({
+            "snapshotSequence": 1,
+            "projects": [
+                {"id": "a", "workspaceRoot": "/tmp/project-a"},
+                {"id": "b", "workspaceRoot": "/tmp/project-b"}
+            ],
+            "threads": [{"id": "thread-a", "projectId": "a", "title": "project-b",
+                "worktreePath": "/tmp/project-b/foreign-worktree", "updatedAt": "date"}]
+        });
+        let snapshot = parse_snapshot(&value.to_string()).unwrap();
+        assert_eq!(
+            snapshot.threads[0].workspace_root.as_deref(),
+            Some("/tmp/project-a")
+        );
+        assert_eq!(
+            snapshot.threads[0].worktree_path.as_deref(),
+            Some("/tmp/project-b/foreign-worktree")
+        );
+    }
+
+    #[test]
+    fn spec138_snapshot_missing_or_ambiguous_project_stays_unknown() {
+        for projects in [
+            serde_json::json!([]),
+            serde_json::json!([
+                {"id": "a", "workspaceRoot": "/tmp/project-a"},
+                {"id": "a", "workspaceRoot": "/tmp/project-b"}
+            ]),
+        ] {
+            let value = serde_json::json!({"snapshotSequence": 1, "projects": projects,
+                "threads": [{"id": "thread-a", "projectId": "a", "worktreePath": "/tmp/project-a", "updatedAt": "date"}]});
+            assert_eq!(
+                parse_snapshot(&value.to_string()).unwrap().threads[0].workspace_root,
+                None
+            );
+        }
     }
 
     #[test]

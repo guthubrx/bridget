@@ -1,0 +1,8 @@
+{
+  "module": "12",
+  "findings": [],
+  "positive_findings": [
+    "12 — Cargo.toml/Cargo.lock et les manifests des crates restent inchangés ; aucun nouveau service, registre ou framework."
+  ],
+  "scope_mode": "diff"
+}

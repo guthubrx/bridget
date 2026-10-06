@@ -41,7 +41,7 @@ bridget_bin="$package_parent/source/target/release/bridget"
 
 Conserver les trois valeurs affichées/résolues par le shell (`bridget_bin`,
 `BRIDGET_HOME`, `BRIDGET_SOCKET`). Les reprendre **à l'identique** dans un autre
-terminal, puis `"$bridget_bin" status` et `"$bridget_bin" agents --json`.
+terminal, puis `"$bridget_bin" status` et `"$bridget_bin" agents --json --global`.
 Ne pas refaire `mktemp` pour un client : il interrogerait une autre instance.
 La racine doit être privée 0700, les fichiers privés 0600, sans lien symbolique.
 Le chemin socket est court pour rester compatible macOS/Linux.
@@ -50,6 +50,20 @@ L'identité et l'annuaire sont interrogés sur la socket avec des budgets borné
 Un inventaire inaccessible est une erreur explicite, pas une liste vide.
 `status` ne lit pas SQLite côté client et ne prétend pas connaître un total des
 messages absent du protocole ; `ledger --limit 20` consulte le maître.
+
+L'annuaire de communication est local au projet par défaut (138). Le diagnostic
+`agents --json --global` est volontaire et n'autorise aucun envoi extérieur.
+Depuis un client autonome, donner la racine explicite du projet à consulter :
+`"$bridget_bin" who --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget`.
+Sans racine attestée, le projet est inconnu : liste locale vide et avertissement,
+pas panne d'inventaire. Les agents T3/wrapper héritent de leur contexte.
+Pour envoyer vers un autre projet connu, porter `--cross-project-reason 'motif'`
+sur send/thread, ou `cross_project_reason` en MCP. Les clients vérifient
+`communication_projects_v1` ; mettre à jour les composants ensemble, sans
+retirer le motif ni contourner le refus d'un serveur ancien. Un envoi legacy
+inconnu reste possible avec avertissement. Aucun second accord humain obligatoire.
+Les fils mixtes exigent le motif même en silence : tous leurs membres lisent.
+Ces recettes ne prouvent pas qu'un daemon ou catalogue MCP déjà vivant est actualisé.
 
 ## 3. Fournisseurs et permissions
 

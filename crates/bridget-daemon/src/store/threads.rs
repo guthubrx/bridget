@@ -12,7 +12,7 @@
 //! l'index `(agent_id, thread_id)`. Aucune requête ne parcourt les corps.
 
 use super::{Store, StoreError};
-use bridget_transport::protocol::ThreadEntryKind;
+use bridget_transport::protocol::{ProjectWarning, ThreadEntryKind};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 
@@ -207,6 +207,7 @@ pub(crate) struct CreateThread<'a> {
     pub title: &'a str,
     /// Triés, dédupliqués, créateur inclus.
     pub members: &'a [String],
+    pub project_warnings: &'a [ProjectWarning],
     pub now: i64,
     pub limits: &'a ThreadLimits,
 }
@@ -221,6 +222,7 @@ pub(crate) struct PostEntry<'a> {
     pub body: &'a str,
     pub notify: &'a NotifySpec,
     pub notices: &'a [&'a str],
+    pub project_warnings: &'a [ProjectWarning],
     pub reply_to_seq: Option<u64>,
     pub ack_receipt: Option<&'a str>,
     pub kind: Option<ThreadEntryKind>,
@@ -564,7 +566,7 @@ fn load_wake(
 /// Rejeu d'une opération : `Ok(None)` clé neuve, `Ok(Some(Ok(json)))` rejeu
 /// exact, `Ok(Some(Err(())))` même clé pour une autre enveloppe.
 fn lookup_operation(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     actor: &str,
     operation_id: &str,
     canonical_hash: &str,
@@ -805,6 +807,24 @@ fn apply_ack(
 }
 
 impl Store {
+    /// Lecture seule du reçu existant avant toute garde de portée mutable.
+    /// La transaction d'écriture refait le même lookup pour couvrir la course.
+    pub(crate) fn thread_operation_replay(
+        &self,
+        actor: &str,
+        operation_id: &str,
+        canonical_hash: &str,
+    ) -> Result<Option<ThreadTxOutcome>, StoreError> {
+        Ok(
+            lookup_operation(&self.conn, actor, operation_id, canonical_hash)?.map(|outcome| {
+                match outcome {
+                    Ok(result) => ThreadTxOutcome::Replayed(result),
+                    Err(()) => ThreadTxOutcome::Refused(ThreadRefusal::EnvelopeMismatch),
+                }
+            }),
+        )
+    }
+
     pub(crate) fn thread_create(
         &self,
         request: CreateThread<'_>,
@@ -855,7 +875,7 @@ impl Store {
             )
             .map_err(sql)?;
         }
-        let result = json!({
+        let mut result = json!({
             "status": "created",
             "thread_id": request.thread_id,
             "title": request.title,
@@ -864,6 +884,9 @@ impl Store {
             "state": "open",
             "created_at": request.now,
         });
+        if !request.project_warnings.is_empty() {
+            result["project_warnings"] = json!(request.project_warnings);
+        }
         record_operation(
             &tx,
             &OperationRecord {
@@ -1063,7 +1086,7 @@ impl Store {
                 "reason": wake.reason,
             }));
         }
-        let result = json!({
+        let mut result = json!({
             "status": "posted",
             "thread_id": request.thread_id,
             "message_id": request.message_id,
@@ -1072,6 +1095,9 @@ impl Store {
             "notices": request.notices,
             "wakes": wakes,
         });
+        if !request.project_warnings.is_empty() {
+            result["project_warnings"] = json!(request.project_warnings);
+        }
         record_operation(
             &tx,
             &OperationRecord {
@@ -1606,6 +1632,7 @@ mod spec102_quota_tests {
         let members = vec![A.to_string(), B.to_string()];
         let outcome = store
             .thread_create(CreateThread {
+                project_warnings: &[],
                 actor: A,
                 operation_id: &uuid::Uuid::new_v4().hyphenated().to_string(),
                 canonical_hash: "h",
@@ -1622,6 +1649,7 @@ mod spec102_quota_tests {
     fn post(store: &Store, limits: &ThreadLimits, thread_id: &str, body: &str) -> ThreadTxOutcome {
         store
             .thread_post(PostEntry {
+                project_warnings: &[],
                 actor: A,
                 operation_id: &uuid::Uuid::new_v4().hyphenated().to_string(),
                 canonical_hash: &format!("h-{}", uuid::Uuid::new_v4().simple()),

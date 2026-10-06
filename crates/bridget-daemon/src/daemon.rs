@@ -684,6 +684,15 @@ impl Drop for FixtureRoot {
 }
 
 struct DaemonState {
+    /// Fait de communication de la connexion primaire (None = ambigu).
+    communication_projects: HashMap<
+        String,
+        (
+            Option<bridget_transport::protocol::CommunicationProject>,
+            Option<bridget_transport::protocol::CommunicationProject>,
+            bool,
+        ),
+    >,
     observations: crate::observation::Observations,
     observation_sequences: HashMap<String, u64>,
     /// Session 102 : version d'alerte de fil acceptée par connexion principale,
@@ -2943,6 +2952,7 @@ impl DaemonState {
             observations,
             observation_sequences: HashMap::new(),
             thread_notice_versions: HashMap::new(),
+            communication_projects: HashMap::new(),
             ledger_read_permits: crate::ledger::search::ReadPermits::default(),
             thread_wake_departures: VecDeque::new(),
             observation_tx,
@@ -3129,6 +3139,7 @@ impl DaemonState {
         self.conn_instances.remove(&old_conn);
         self.conn_names.remove(&old_conn);
         self.conn_hosts.remove(&old_conn);
+        self.communication_projects.remove(&old_conn);
         self.conn_operating_systems.remove(&old_conn);
         self.auxiliary_connections.remove(&old_conn);
         self.thread_notice_versions.remove(&old_conn);
@@ -3225,6 +3236,7 @@ impl DaemonState {
             self.conn_instances.remove(&conn_id);
             self.conn_names.remove(&conn_id);
             self.conn_hosts.remove(&conn_id);
+            self.communication_projects.remove(&conn_id);
             self.conn_operating_systems.remove(&conn_id);
             self.auxiliary_connections.remove(&conn_id);
         }
@@ -4977,6 +4989,7 @@ fn handle_connection(
         st.observation_sequences.remove(&conn_id);
         st.observations.remove_source(&conn_id, Instant::now());
         st.conn_hosts.remove(&conn_id);
+        st.communication_projects.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
         st.terminal_sessions.remove(&conn_id);
@@ -6307,6 +6320,7 @@ fn handle_runtime_for_instance(
     presence.touch_capacity();
 
     DaemonToWrapper::Ack {
+        project_warnings: Vec::new(),
         id: "runtime".to_string(),
     }
 }
@@ -6330,6 +6344,7 @@ fn handle_served_model(agent: &str, model: String, state: &mut DaemonState) -> D
     presence.served_model = Some(model);
     presence.touch_capacity();
     DaemonToWrapper::Ack {
+        project_warnings: Vec::new(),
         id: "served-model".to_string(),
     }
 }
@@ -6389,6 +6404,7 @@ fn handle_rate_limit(
     presence.touch_capacity();
     log::debug!("limite de '{}' mise à jour par {}", presence.name, source);
     DaemonToWrapper::Ack {
+        project_warnings: Vec::new(),
         id: "rate-limit".to_string(),
     }
 }
@@ -6499,6 +6515,7 @@ fn handle_usage(
         log::debug!("usage de {} enregistré par {}", presence.name, source);
     }
     DaemonToWrapper::Ack {
+        project_warnings: Vec::new(),
         id: "usage".to_string(),
     }
 }
@@ -6817,6 +6834,7 @@ fn handle_domain_for_instance(
     };
     log::debug!("domaine de '{}' : {:?}", presence.name, presence.domain);
     DaemonToWrapper::Ack {
+        project_warnings: Vec::new(),
         id: "domain".to_string(),
     }
 }
@@ -6892,6 +6910,7 @@ fn handle_availability_for_instance(
         presence.is_dnd()
     );
     DaemonToWrapper::Ack {
+        project_warnings: Vec::new(),
         id: "availability".to_string(),
     }
 }
@@ -7096,10 +7115,37 @@ fn next_delivery_generation() -> u64 {
 
 fn issue_response(key: &IdempotencyKey, issue: IdempotencyIssue) -> DaemonToWrapper {
     DaemonToWrapper::IdempotencyResult {
+        project_warnings: Vec::new(),
         operation_kind: key.operation_kind.as_str().to_string(),
         idempotency_key: key.idempotency_key.clone(),
         issue,
     }
+}
+
+fn issue_response_with_project(
+    st: &DaemonState,
+    key: &IdempotencyKey,
+    issue: IdempotencyIssue,
+) -> DaemonToWrapper {
+    let mut response = issue_response(key, issue);
+    if let DaemonToWrapper::IdempotencyResult {
+        project_warnings,
+        issue,
+        ..
+    } = &mut response
+        && matches!(
+            issue,
+            IdempotencyIssue::Accepted { .. }
+                | IdempotencyIssue::OutcomeUnknown { .. }
+                | IdempotencyIssue::Orphaned { .. }
+        )
+        && let Ok(Some(envelope)) = st.idempotency.stored_send_message(key)
+        && let Some(frozen) = envelope.get("_project_warnings")
+        && let Ok(warnings) = serde_json::from_value(frozen.clone())
+    {
+        *project_warnings = warnings;
+    }
+    response
 }
 
 fn replay_issue(
@@ -7160,6 +7206,7 @@ fn handle_idempotency_lookup(
                 command_id: idempotency_key,
                 execution_id: record.execution_id,
                 outcome: control_outcome_from_status(record.status),
+                project_warnings: record.project_warnings,
             },
             Ok(None) => DaemonToWrapper::Nack {
                 id: idempotency_key,
@@ -7192,7 +7239,7 @@ fn handle_idempotency_lookup(
     };
     match st.idempotency.lookup(&key, unix_now_secs()) {
         Ok(result) => match replay_issue(st, &key, result) {
-            Ok(issue) => issue_response(&key, issue),
+            Ok(issue) => issue_response_with_project(st, &key, issue),
             Err(error) => DaemonToWrapper::Nack {
                 id: key.idempotency_key,
                 reason: error,
@@ -7428,6 +7475,7 @@ fn reject_idempotent_send(
 /// leurs identités de déduplication propres, mais partagent les invariants de
 /// réponse, DND, sauts et routage.
 struct PreparedDispatch {
+    project_warnings: Vec<bridget_transport::protocol::ProjectWarning>,
     content_key: String,
     message_guard_id: String,
     target_conn: String,
@@ -7791,6 +7839,33 @@ struct DaemonDirectory<'a> {
 }
 
 impl crate::threads::Directory for DaemonDirectory<'_> {
+    fn communication_scope(
+        &self,
+        actor: &str,
+        members: &[String],
+        reason: Option<&str>,
+    ) -> Result<Vec<bridget_transport::protocol::ProjectWarning>, serde_json::Value> {
+        let sender = agent_communication_project(self.state, actor);
+        let mut warnings = Vec::new();
+        for member in members.iter().filter(|m| m.as_str() != actor) {
+            warnings.extend(
+                crate::communication::project_scope(
+                    sender.as_ref(),
+                    agent_communication_project(self.state, member).as_ref(),
+                    member,
+                    reason,
+                )
+                .map_err(|detail| {
+                    let code = detail
+                        .split(" : ")
+                        .next()
+                        .unwrap_or("invalid_cross_project_reason");
+                    crate::threads::error(code, detail.clone(), false)
+                })?,
+            );
+        }
+        Ok(warnings)
+    }
     fn known_agent(&self, agent_id: &str) -> bool {
         self.state.router.get_agent(agent_id).is_some()
             || self
@@ -7846,6 +7921,102 @@ fn live_connection_identity(st: &DaemonState, conn_id: &str) -> Option<(String, 
         return None;
     }
     Some((agent.clone(), instance.clone()))
+}
+
+fn connection_communication_project(
+    st: &DaemonState,
+    conn_id: &str,
+) -> Option<bridget_transport::protocol::CommunicationProject> {
+    let owner = if let Some((agent, _)) = live_connection_identity(st, conn_id) {
+        st.router.get_agent(&agent)?.connection_id.as_str()
+    } else if st.conn_names.contains_key(conn_id) {
+        return None;
+    } else {
+        conn_id
+    };
+    st.communication_projects
+        .get(owner)
+        .and_then(|fact| fact.0.clone())
+}
+
+fn agent_communication_project(
+    st: &DaemonState,
+    agent: &str,
+) -> Option<bridget_transport::protocol::CommunicationProject> {
+    let route = st.router.get_agent(routing_agent_id(agent))?;
+    if !st.connections.contains_key(&route.connection_id) {
+        return None;
+    }
+    live_connection_identity(st, &route.connection_id)?;
+    st.communication_projects
+        .get(&route.connection_id)
+        .and_then(|fact| fact.0.clone())
+}
+
+fn announce_communication_project(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    root: &str,
+    source: bridget_transport::protocol::CommunicationProjectSource,
+    host: &str,
+    worktree: Option<&str>,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::CommunicationProjectSource;
+    let (owner, local, generation) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let owner = live_connection_identity(&st, conn_id);
+        let bare = owner.is_none()
+            && !st.conn_names.contains_key(conn_id)
+            && st.client_negotiations.get(conn_id).is_some_and(|n| {
+                n.capabilities
+                    .contains(&ClientCapability::CommunicationProjectsV1)
+            });
+        if st.auxiliary_connections.contains(conn_id) || (owner.is_none() && !bare) {
+            return DaemonToWrapper::Nack { id: "communication-project".into(), reason: "communication_project_owner_required : une connexion auxiliaire hérite du projet".into() };
+        }
+        let t3 = st
+            .conn_instances
+            .get(conn_id)
+            .and_then(|instance| st.presences.get(instance))
+            .is_some_and(|presence| presence.transport == "t3code");
+        let host_ok = bridget_core::host_is_attested(&st.host)
+            && host == st.host
+            && (bare || st.conn_hosts.get(conn_id).is_some_and(|v| v == host));
+        (
+            owner,
+            host_ok && (source == CommunicationProjectSource::Git || t3),
+            st.instance_id.clone(),
+        )
+    };
+    let resolved = local
+        .then(|| crate::communication::resolve_communication_project(root, host, source, worktree))
+        .flatten();
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner;
+    let previous = st
+        .communication_projects
+        .get(conn_id)
+        .cloned()
+        .unwrap_or_default();
+    let conflicting =
+        previous.2 || matches!((&previous.1, &resolved), (Some(a), Some(b)) if a != b);
+    let project = if unchanged && !conflicting {
+        resolved
+    } else {
+        None
+    };
+    let last_known = previous.1.or_else(|| project.clone());
+    st.communication_projects
+        .insert(conn_id.into(), (project.clone(), last_known, conflicting));
+    let warnings = if project.is_none() {
+        crate::communication::project_scope(None, None, "", None).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    DaemonToWrapper::ProjectContextResult {
+        project,
+        project_warnings: warnings,
+    }
 }
 
 /// Session 104 : sous verrou bref, identité attestée, chemin de base
@@ -8007,6 +8178,37 @@ fn prepare_dispatch(
             })
     });
 
+    let explicit_reason = crate::communication::validate_cross_project_reason(
+        message.cross_project_reason.as_deref(),
+    )
+    .map_err(|reason| ("invalid_cross_project_reason", reason))?;
+    let inherited_reason = if explicit_reason.is_none() && valid_tracked_reply {
+        message.in_reply_to.as_deref().and_then(|id| {
+            st.idempotency
+                .correlated_project_reason(id, &message.to, &message.from)
+                .ok()
+                .flatten()
+        })
+    } else {
+        None
+    };
+    let scope_reason = explicit_reason.or(inherited_reason);
+    let project_warnings = crate::communication::project_scope(
+        connection_communication_project(st, conn_id).as_ref(),
+        agent_communication_project(st, &routing_to).as_ref(),
+        &message.to,
+        scope_reason.as_deref(),
+    )
+    .map_err(|reason| {
+        let category = if reason.starts_with("cross_project_reason_required") {
+            "cross_project_reason_required"
+        } else {
+            "invalid_cross_project_reason"
+        };
+        (category, reason)
+    })?;
+    message.cross_project_reason = scope_reason;
+
     if !st.circuit_breaker.check(&logical_sender, &message.to) {
         return Err((
             "circuit_breaker",
@@ -8051,6 +8253,7 @@ fn prepare_dispatch(
         RouterAction::Reject(error) => return Err(("routing", error.to_string())),
     };
     Ok(PreparedDispatch {
+        project_warnings,
         content_key,
         message_guard_id,
         target_conn,
@@ -8150,6 +8353,17 @@ fn handle_idempotent_send(
             };
         }
     };
+    message.cross_project_reason = match crate::communication::validate_cross_project_reason(
+        message.cross_project_reason.as_deref(),
+    ) {
+        Ok(reason) => reason,
+        Err(reason) => {
+            return DaemonToWrapper::Nack {
+                id: key.idempotency_key.clone(),
+                reason,
+            };
+        }
+    };
     let canonical = canonical_send(&key.issuer_scope, &key.idempotency_key, &message, issued_at);
     let now = unix_now_secs();
     #[cfg(feature = "test-support")]
@@ -8180,7 +8394,8 @@ fn handle_idempotent_send(
             match st.idempotency.prepared_expiry(&key, now) {
                 Ok(Some(expires_at)) => expires_at,
                 Ok(None) => {
-                    return issue_response(
+                    return issue_response_with_project(
+                        st,
                         &key,
                         IdempotencyIssue::OutcomeUnknown {
                             expires_at,
@@ -8203,7 +8418,7 @@ fn handle_idempotent_send(
             }
         }
         Reservation::Replayed(result) => match replay_issue(st, &key, result) {
-            Ok(issue) => return issue_response(&key, issue),
+            Ok(issue) => return issue_response_with_project(st, &key, issue),
             Err(error) => {
                 error!("idempotence replay: {error}");
                 return DaemonToWrapper::Nack {
@@ -8262,7 +8477,12 @@ fn handle_idempotent_send(
         recipient_instance_id,
         delivery_generation: next_delivery_generation(),
         expires_at,
-        message_bytes: match serde_json::to_vec(&message) {
+        message_bytes: match serde_json::to_value(&message).and_then(|mut envelope| {
+            if !prepared.project_warnings.is_empty() {
+                envelope["_project_warnings"] = serde_json::to_value(&prepared.project_warnings)?;
+            }
+            serde_json::to_vec(&envelope)
+        }) {
             Ok(message_bytes) => message_bytes,
             Err(error) => {
                 return DaemonToWrapper::Nack {
@@ -8384,7 +8604,8 @@ fn handle_idempotent_send(
     }
     #[cfg(feature = "test-support")]
     crate::test_sync::checkpoint("after_delivery_before_issue");
-    let response = issue_response(
+    let response = issue_response_with_project(
+        st,
         &key,
         IdempotencyIssue::OutcomeUnknown {
             expires_at,
@@ -8400,10 +8621,19 @@ fn control_result(
     command: &ExecutionControlCommand,
     outcome: ExecutionControlOutcome,
 ) -> DaemonToWrapper {
+    control_result_with_project(command, outcome, Vec::new())
+}
+
+fn control_result_with_project(
+    command: &ExecutionControlCommand,
+    outcome: ExecutionControlOutcome,
+    project_warnings: Vec<bridget_transport::protocol::ProjectWarning>,
+) -> DaemonToWrapper {
     DaemonToWrapper::ControlExecutionResult {
         command_id: command.command_id.clone(),
         execution_id: command.execution_id.clone(),
         outcome,
+        project_warnings,
     }
 }
 
@@ -8416,6 +8646,8 @@ fn control_refusal_from_reason(reason: &str) -> ExecutionControlRefusal {
         "terminal_execution" => ExecutionControlRefusal::TerminalExecution,
         "target_unavailable" => ExecutionControlRefusal::TargetUnavailable,
         "message_required" => ExecutionControlRefusal::MessageRequired,
+        "cross_project_reason_required" => ExecutionControlRefusal::CrossProjectReasonRequired,
+        "invalid_cross_project_reason" => ExecutionControlRefusal::InvalidCrossProjectReason,
         _ => ExecutionControlRefusal::InvalidCommand,
     }
 }
@@ -8435,8 +8667,9 @@ fn control_outcome_from_status(status: ControlCommandStatus) -> ExecutionControl
 /// Valide et remet un contrôle sans jamais transformer une intention en prompt
 /// implicite. Les opérations non implémentées sont refusées avant toute E/S.
 fn handle_execution_control(
+    conn_id: Option<&str>,
     issuer_scope: &str,
-    command: ExecutionControlCommand,
+    mut command: ExecutionControlCommand,
     st: &mut DaemonState,
 ) -> DaemonToWrapper {
     if command.version != 1 || command.command_id.is_empty() || command.command_id.len() > 256 {
@@ -8503,6 +8736,19 @@ fn handle_execution_control(
             ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
         );
     }
+    let invalid_reason = if let Some(message) = command.message.as_mut() {
+        match crate::communication::validate_cross_project_reason(
+            message.cross_project_reason.as_deref(),
+        ) {
+            Ok(reason) => {
+                message.cross_project_reason = reason;
+                false
+            }
+            Err(_) => true,
+        }
+    } else {
+        false
+    };
     let canonical = match encode(&command) {
         Ok(canonical) => canonical.into_bytes(),
         Err(_) => {
@@ -8529,7 +8775,11 @@ fn handle_execution_control(
     };
     match reservation {
         ControlReservation::Replayed(record) => {
-            return control_result(&command, control_outcome_from_status(record.status));
+            return control_result_with_project(
+                &command,
+                control_outcome_from_status(record.status),
+                record.project_warnings,
+            );
         }
         ControlReservation::EnvelopeMismatch => {
             return control_result(
@@ -8542,6 +8792,55 @@ fn handle_execution_control(
         }
         ControlReservation::New => {}
     }
+    // Le reçu durable est rendu avant toute réévaluation du contexte projet.
+    // L'identité source vient de la connexion, jamais du champ from du message.
+    let scope_result = if invalid_reason {
+        Err("invalid_cross_project_reason")
+    } else if let Some(message) = command.message.as_ref() {
+        match conn_id {
+            Some(conn_id) => {
+                if live_connection_identity(st, conn_id)
+                    .is_some_and(|(name, _)| name != message.from)
+                    || (st.conn_names.contains_key(conn_id)
+                        && live_connection_identity(st, conn_id).is_none())
+                {
+                    Err("invalid_command")
+                } else {
+                    crate::communication::project_scope(
+                        connection_communication_project(st, conn_id).as_ref(),
+                        agent_communication_project(st, &target.target_agent).as_ref(),
+                        &target.target_agent,
+                        message.cross_project_reason.as_deref(),
+                    )
+                    .map_err(|error| {
+                        if error.starts_with("cross_project_reason_required") {
+                            "cross_project_reason_required"
+                        } else {
+                            "invalid_cross_project_reason"
+                        }
+                    })
+                }
+            }
+            None => Err("invalid_command"),
+        }
+    } else {
+        Ok(Vec::new())
+    };
+    let project_warnings = match scope_result {
+        Ok(warnings) => warnings,
+        Err(reason) => {
+            let _ = st.execution_store.refuse_control_command(
+                issuer_scope,
+                &command.command_id,
+                reason,
+                now,
+            );
+            return control_result(
+                &command,
+                ExecutionControlOutcome::Refused(control_refusal_from_reason(reason)),
+            );
+        }
+    };
     let refusal = if target.snapshot.generation != command.generation {
         Some("generation_mismatch")
     } else if target.snapshot.revision != command.revision {
@@ -8600,7 +8899,7 @@ fn handle_execution_control(
     };
     if !st
         .execution_store
-        .mark_control_dispatched(issuer_scope, &command.command_id, now)
+        .mark_control_dispatched(issuer_scope, &command.command_id, now, &project_warnings)
         .unwrap_or(false)
     {
         return control_result(&command, ExecutionControlOutcome::OutcomeUnknown);
@@ -8619,12 +8918,17 @@ fn handle_execution_control(
             Some("target_unavailable"),
             now,
         );
-        return control_result(
+        return control_result_with_project(
             &command,
             ExecutionControlOutcome::Refused(ExecutionControlRefusal::TargetUnavailable),
+            project_warnings,
         );
     }
-    control_result(&command, ExecutionControlOutcome::OutcomeUnknown)
+    control_result_with_project(
+        &command,
+        ExecutionControlOutcome::OutcomeUnknown,
+        project_warnings,
+    )
 }
 
 fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedStopTarget {
@@ -9041,7 +9345,7 @@ fn interrupt_executions_for_pause(st: &mut DaemonState, control_generation: u64)
             operation: ExecutionControlOperation::Interrupt,
             message: None,
         };
-        let outcome = handle_execution_control(&issuer_scope, command, st);
+        let outcome = handle_execution_control(None, &issuer_scope, command, st);
         info!("interruption de pause demandée: {outcome:?}");
     }
 }
@@ -9424,6 +9728,435 @@ mod spec099_classic_delivery_tests {
             peers.push(peer);
         }
         (Arc::new(Mutex::new(state)), root, peers)
+    }
+
+    #[test]
+    fn spec138_direct_guard_and_scoped_directory_precede_delivery() {
+        use bridget_transport::protocol::{CommunicationDirectoryScope, CommunicationProject};
+        let (state, root, peers) = fixture();
+        let _cleanup = FixtureRoot(root);
+        {
+            let mut st = state.lock().unwrap();
+            for (conn, root) in [("sender", "/a/.git"), ("target", "/b/.git")] {
+                let project = CommunicationProject {
+                    host: "audit".into(),
+                    root: root.into(),
+                };
+                st.communication_projects
+                    .insert(conn.into(), (Some(project.clone()), Some(project), false));
+            }
+        }
+        let local = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::DirectoryScoped {
+                scope: CommunicationDirectoryScope::SameProject,
+            },
+            &state,
+        )
+        .unwrap();
+        assert!(
+            matches!(local, DaemonToWrapper::CommunicationDirectory { agents, .. } if agents.len() == 1 && agents[0].agent.agent_id == SENDER)
+        );
+        let global = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::DirectoryScoped {
+                scope: CommunicationDirectoryScope::Global,
+            },
+            &state,
+        )
+        .unwrap();
+        assert!(
+            matches!(global, DaemonToWrapper::CommunicationDirectory { agents, .. } if agents.len() == 3)
+        );
+        let message = BridgetMessage::new(SENDER, TARGET, "PRIVATE_BODY_exact");
+        let denied =
+            handle_wrapper_message("sender", WrapperToDaemon::Send(message.clone()), &state)
+                .unwrap();
+        assert!(
+            matches!(denied, DaemonToWrapper::Nack {reason,..} if reason.starts_with("cross_project_reason_required"))
+        );
+        peers[1]
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut reader = BufReader::new(peers[1].try_clone().unwrap());
+        assert!(
+            reader.read_line(&mut String::new()).is_err(),
+            "aucune notification avant motif"
+        );
+        let mut accepted = message;
+        accepted.cross_project_reason = Some("shared review".into());
+        let response =
+            handle_wrapper_message("sender", WrapperToDaemon::Send(accepted), &state).unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Ack {project_warnings,..} if project_warnings.len() == 1 && project_warnings[0].code == "cross_project")
+        );
+        let delivered = presence_tests::read_control(&mut reader);
+        assert!(
+            matches!(delivered, DaemonToWrapper::Deliver(message) if message.body == "PRIVATE_BODY_exact")
+        );
+    }
+
+    #[test]
+    fn spec138_project_announcement_recovers_absence_but_not_conflict_and_aux_inherits() {
+        use bridget_transport::protocol::{
+            CommunicationDirectoryScope, CommunicationProjectSource,
+        };
+        let (state, root, _peers) = fixture();
+        let _cleanup = FixtureRoot(root.clone());
+        state.lock().unwrap().host = "audit".into();
+        let report = |root: String| WrapperToDaemon::CommunicationProjectFact {
+            root,
+            source: CommunicationProjectSource::Git,
+            host: "audit".into(),
+            worktree_root: None,
+        };
+        assert!(matches!(
+            handle_wrapper_message("sender", report(String::new()), &state),
+            Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
+        ));
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(matches!(
+            handle_wrapper_message("sender", report(workspace.clone()), &state),
+            Some(DaemonToWrapper::ProjectContextResult {
+                project: Some(_),
+                ..
+            })
+        ));
+        let registration = {
+            let st = state.lock().unwrap();
+            WrapperToDaemon::RegisterAuxiliary {
+                agent_id: SENDER.into(),
+                instance_id: st.conn_instances["sender"].clone(),
+                credential: st.identity_credentials["sender"].clone(),
+            }
+        };
+        assert!(matches!(
+            handle_wrapper_message("aux", registration, &state),
+            Some(DaemonToWrapper::Registered { .. })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("aux", WrapperToDaemon::ClientHello {contract_version: CLIENT_CONTRACT_VERSION,issuer_scope:"scope138_auxiliary_namespace".into(),capabilities:vec![ClientCapability::CommunicationProjectsV1,ClientCapability::ExecutionControlV1]}, &state), Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities == vec![ClientCapability::CommunicationProjectsV1])
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "aux",
+                WrapperToDaemon::DirectoryScoped {
+                    scope: CommunicationDirectoryScope::SameProject
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::CommunicationDirectory {
+                project: Some(_),
+                ..
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("aux", report(workspace.clone()), &state),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        let other = root.join("other-repository");
+        assert!(
+            std::process::Command::new("git")
+                .arg("init")
+                .arg(&other)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "sender",
+                report(other.to_string_lossy().into_owned()),
+                &state
+            ),
+            Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("sender", report(workspace), &state),
+            Some(DaemonToWrapper::ProjectContextResult { project: None, .. })
+        ));
+    }
+
+    #[test]
+    fn spec138_reply_grant_and_warning_survive_replay_after_closed_request() {
+        use bridget_transport::protocol::CommunicationProject;
+        let (state, root, _peers) = fixture();
+        let _cleanup = FixtureRoot(root);
+        let mut st = state.lock().unwrap();
+        for (conn, root, scope) in [
+            ("sender", "/a/.git", "scope138_sender_namespace"),
+            ("target", "/b/.git", "scope138_target_namespace"),
+        ] {
+            let project = CommunicationProject {
+                host: "audit".into(),
+                root: root.into(),
+            };
+            st.communication_projects
+                .insert(conn.into(), (Some(project.clone()), Some(project), false));
+            st.client_negotiations.insert(
+                conn.into(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: scope.into(),
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+        }
+        let mut request = BridgetMessage::new(SENDER, TARGET, "request exact");
+        request.reply = true;
+        request.cross_project_reason = Some(" shared review ".into());
+        let issued_at = unix_now_secs();
+        let mut controls = Vec::new();
+        let response = handle_idempotent_send(
+            "sender",
+            request,
+            "request138".into(),
+            issued_at,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        );
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult {project_warnings,..} if project_warnings[0].reason.as_deref() == Some("shared review"))
+        );
+        assert_eq!(controls.len(), 1);
+        let witness_project = CommunicationProject {
+            host: "audit".into(),
+            root: "/c/.git".into(),
+        };
+        st.communication_projects.insert(
+            "witness".into(),
+            (Some(witness_project.clone()), Some(witness_project), false),
+        );
+        st.client_negotiations.insert(
+            "witness".into(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "scope138_witness_namespace".into(),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+        );
+        let mut forged_reply = BridgetMessage::new(WITNESS, SENDER, "third participant");
+        forged_reply.in_reply_to = Some("request138".into());
+        controls.clear();
+        let forged = handle_idempotent_send(
+            "witness",
+            forged_reply,
+            "forged138".into(),
+            issued_at,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut st,
+            &mut controls,
+        );
+        assert!(
+            matches!(&forged, DaemonToWrapper::IdempotencyResult {issue: IdempotencyIssue::Rejected {category,..},..} if category == "cross_project_reason_required"),
+            "{forged:?}"
+        );
+        assert!(controls.is_empty());
+        let mut reply = BridgetMessage::new(TARGET, SENDER, "answer exact");
+        reply.in_reply_to = Some("request138".into());
+        let admission = || IdempotentSendAdmission {
+            project: None,
+            issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+        };
+        controls.clear();
+        let first = handle_idempotent_send(
+            "target",
+            reply.clone(),
+            "reply138".into(),
+            issued_at,
+            admission(),
+            &mut st,
+            &mut controls,
+        );
+        assert!(
+            matches!(&first, DaemonToWrapper::IdempotencyResult {project_warnings,..} if project_warnings[0].reason.as_deref() == Some("shared review")),
+            "{first:?}"
+        );
+        assert_eq!(controls.len(), 1);
+        assert!(
+            st.store
+                .mark_answered("request138", TARGET, SENDER)
+                .unwrap()
+        );
+        controls.clear();
+        let closed_request = handle_idempotent_send(
+            "target",
+            reply.clone(),
+            "afterclose138".into(),
+            issued_at,
+            admission(),
+            &mut st,
+            &mut controls,
+        );
+        assert!(
+            matches!(&closed_request, DaemonToWrapper::IdempotencyResult {issue: IdempotencyIssue::Rejected {category,..},..} if category == "cross_project_reason_required"),
+            "{closed_request:?}"
+        );
+        assert!(controls.is_empty());
+        st.communication_projects.clear();
+        controls.clear();
+        let replay = handle_idempotent_send(
+            "target",
+            reply.clone(),
+            "reply138".into(),
+            issued_at,
+            admission(),
+            &mut st,
+            &mut controls,
+        );
+        assert_eq!(
+            serde_json::to_value(&replay).unwrap(),
+            serde_json::to_value(&first).unwrap()
+        );
+        assert!(controls.is_empty());
+        let key = IdempotencyKey::new("scope138_target_namespace", OperationKind::Send, "reply138")
+            .unwrap();
+        let delivery = st.idempotency.send_delivery(&key).unwrap().unwrap();
+        st.idempotency
+            .acknowledge_send_delivery(
+                &delivery.delivery_id,
+                &delivery.recipient_instance_id,
+                delivery.delivery_generation,
+            )
+            .unwrap();
+        let accepted_replay = handle_idempotent_send(
+            "target",
+            reply,
+            "reply138".into(),
+            issued_at,
+            admission(),
+            &mut st,
+            &mut controls,
+        );
+        assert!(
+            matches!(accepted_replay, DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Accepted {..},project_warnings,..} if project_warnings[0].code == "cross_project")
+        );
+        assert!(controls.is_empty());
+    }
+
+    #[test]
+    fn spec138_steer_guard_refuses_crossproject_before_provider() {
+        use bridget_transport::protocol::CommunicationProject;
+        let (state, root, mut peers) = fixture();
+        let _cleanup = FixtureRoot(root);
+        {
+            let mut st = state.lock().unwrap();
+            for (conn, root) in [("sender", "/a/.git"), ("target", "/b/.git")] {
+                let project = CommunicationProject {
+                    host: "audit".into(),
+                    root: root.into(),
+                };
+                st.communication_projects
+                    .insert(conn.into(), (Some(project.clone()), Some(project), false));
+            }
+            st.execution_store
+                .record_starting("submission138", "execution138", TARGET, 10)
+                .unwrap();
+            assert!(matches!(
+                st.execution_store
+                    .transition_if_current(
+                        "execution138",
+                        "starting",
+                        0,
+                        1,
+                        "running",
+                        "provider_accepted",
+                        11
+                    )
+                    .unwrap(),
+                crate::execution_store::ConditionalTransition::Applied(_)
+            ));
+            st.client_negotiations.insert(
+                "sender".into(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "scope138_control_namespace".into(),
+                    capabilities: vec![ClientCapability::ExecutionControlV1],
+                },
+            );
+            st.connection_roles
+                .insert("sender".into(), ConnectionRole::Client);
+        }
+        let mut message = BridgetMessage::new(SENDER, TARGET, "steer exact");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "control138-denied".into(),
+            execution_id: "execution138".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::SteerCurrent,
+            message: Some(message),
+        };
+        let response = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ControlExecution {
+                command: command.clone(),
+            },
+            &state,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response).unwrap()["outcome"]["refused"],
+            "cross_project_reason_required",
+            "{response:?}"
+        );
+        let mut forged = command;
+        forged.command_id = "control138-forged".into();
+        forged.message.as_mut().unwrap().from = TARGET.into();
+        forged.message.as_mut().unwrap().cross_project_reason = Some("shared review".into());
+        let refusal = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ControlExecution {
+                command: forged.clone(),
+            },
+            &state,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                &refusal,
+                DaemonToWrapper::ControlExecutionResult {
+                    outcome: ExecutionControlOutcome::Refused(
+                        ExecutionControlRefusal::InvalidCommand
+                    ),
+                    ..
+                }
+            ),
+            "{refusal:?}"
+        );
+        let replay = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ControlExecution { command: forged },
+            &state,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(replay).unwrap(),
+            serde_json::to_value(refusal).unwrap()
+        );
+        peers[1]
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut byte = [0];
+        assert!(
+            std::io::Read::read(&mut peers[1], &mut byte).is_err(),
+            "provider received a refused control"
+        );
     }
 
     #[test]
@@ -9946,6 +10679,7 @@ mod spec099_classic_delivery_tests {
                 DeferredControl {
                     writer: writer.clone(),
                     message: DaemonToWrapper::Ack {
+                        project_warnings: Vec::new(),
                         id: "queue-test".into(),
                     },
                 },
@@ -9966,7 +10700,7 @@ mod spec099_classic_delivery_tests {
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             assert!(
-                matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(), DaemonToWrapper::Ack { id } if id == "queue-test")
+                matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(), DaemonToWrapper::Ack { id , ..} if id == "queue-test")
             );
         }
         assert_eq!(lost.load(std::sync::atomic::Ordering::Relaxed), 0);
@@ -9985,7 +10719,10 @@ mod spec099_classic_delivery_tests {
                 deadline,
                 DeferredControl {
                     writer: writer.clone(),
-                    message: DaemonToWrapper::Ack { id: id.into() },
+                    message: DaemonToWrapper::Ack {
+                        project_warnings: Vec::new(),
+                        id: id.into(),
+                    },
                 },
             ))
             .unwrap();
@@ -9995,7 +10732,7 @@ mod spec099_classic_delivery_tests {
         let mut line = String::new();
         BufReader::new(peer).read_line(&mut line).unwrap();
         assert!(
-            matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(), DaemonToWrapper::Ack { id } if id == "fresh")
+            matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(), DaemonToWrapper::Ack { id , ..} if id == "fresh")
         );
         assert_eq!(lost.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
@@ -10429,6 +11166,8 @@ fn handle_wrapper_message(
                 // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::CommunicationProjectFact { .. }
+                | WrapperToDaemon::DirectoryScoped { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
@@ -10518,6 +11257,8 @@ fn handle_wrapper_message(
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::CommunicationProjectFact { .. } | WrapperToDaemon::DirectoryScoped { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::CommunicationProjectsV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
+                WrapperToDaemon::CommunicationProjectFact { .. } | WrapperToDaemon::DirectoryScoped { .. } => None,
                 WrapperToDaemon::RegisterAuxiliary { .. } => None,
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::ClientHello { .. }
@@ -10726,6 +11467,12 @@ fn handle_wrapper_message(
                 }
             },
             Some(ConnectionRole::Wrapper) | None
+                if matches!(msg, WrapperToDaemon::ClientHello { .. })
+                    && st.auxiliary_connections.contains(conn_id) =>
+            {
+                None
+            }
+            Some(ConnectionRole::Wrapper) | None
                 if matches!(
                     msg,
                     WrapperToDaemon::ClientHello { .. }
@@ -10752,6 +11499,54 @@ fn handle_wrapper_message(
     }
 
     match msg {
+        WrapperToDaemon::CommunicationProjectFact {
+            root,
+            source,
+            host,
+            worktree_root,
+        } => Some(announce_communication_project(
+            state,
+            conn_id,
+            &root,
+            source,
+            &host,
+            worktree_root.as_deref(),
+        )),
+        WrapperToDaemon::DirectoryScoped { scope } => {
+            use bridget_transport::protocol::{
+                CommunicationDirectoryScope, ProjectRelation, ScopedAgentInfo,
+            };
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let project = connection_communication_project(&st, conn_id);
+            let all = st.agent_infos();
+            let agents = all
+                .into_iter()
+                .filter_map(|agent| {
+                    let communication_project = agent_communication_project(&st, &agent.agent_id);
+                    let project_relation = crate::communication::project_relation(
+                        project.as_ref(),
+                        communication_project.as_ref(),
+                    );
+                    (scope == CommunicationDirectoryScope::Global
+                        || project_relation == ProjectRelation::Same)
+                        .then_some(ScopedAgentInfo {
+                            agent,
+                            communication_project,
+                            project_relation,
+                        })
+                })
+                .collect();
+            let project_warnings = if project.is_none() {
+                crate::communication::project_scope(None, None, "", None).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            Some(DaemonToWrapper::CommunicationDirectory {
+                agents,
+                project,
+                project_warnings,
+            })
+        }
         WrapperToDaemon::ObservationGap { dropped } => {
             use bridget_transport::protocol::ObservationKind;
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -11311,7 +12106,10 @@ fn handle_wrapper_message(
                 (parent_instance_id, Arc::clone(&st.fleet))
             };
             match fleet.acknowledge_delegated_runtime_event(&event_id, &parent_instance_id) {
-                Ok(_) => Some(DaemonToWrapper::Ack { id: event_id }),
+                Ok(_) => Some(DaemonToWrapper::Ack {
+                    project_warnings: Vec::new(),
+                    id: event_id,
+                }),
                 Err(_) => Some(DaemonToWrapper::Nack {
                     id: event_id,
                     reason: "accusé runtime délégué refusé".to_string(),
@@ -12042,9 +12840,15 @@ fn handle_wrapper_message(
             let capabilities: Vec<ClientCapability> = capabilities
                 .into_iter()
                 .filter(|capability| {
+                    if st.auxiliary_connections.contains(conn_id)
+                        && st.connection_roles.get(conn_id) == Some(&ConnectionRole::Wrapper)
+                    {
+                        return *capability == ClientCapability::CommunicationProjectsV1;
+                    }
                     matches!(
                         capability,
                         ClientCapability::SendIdempotent
+                            | ClientCapability::CommunicationProjectsV1
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1
                             | ClientCapability::ProjectRoundPolicyV1
@@ -12130,7 +12934,12 @@ fn handle_wrapper_message(
                     reason: ClientRefusal::NegotiationRequired,
                 });
             };
-            Some(handle_execution_control(&issuer_scope, command, &mut st))
+            Some(handle_execution_control(
+                Some(conn_id),
+                &issuer_scope,
+                command,
+                &mut st,
+            ))
         }
         WrapperToDaemon::ControlExecutionReported {
             issuer_scope,
@@ -12233,6 +13042,7 @@ fn handle_wrapper_message(
                                 command_id: command_id.clone(),
                                 execution_id: execution_id.clone(),
                                 outcome: outcome.clone(),
+                                project_warnings: stored.project_warnings.clone(),
                             },
                             &mut controls,
                         );
@@ -12463,6 +13273,7 @@ fn handle_wrapper_message(
                     Some(DaemonToWrapper::SpawnRejected { command_id, reason })
                 }
                 Ok(SpawnDecision::EnvelopeMismatch) => Some(DaemonToWrapper::IdempotencyResult {
+                    project_warnings: Vec::new(),
                     operation_kind: "spawn".to_string(),
                     idempotency_key: command_id,
                     issue: IdempotencyIssue::EnvelopeMismatch,
@@ -13323,6 +14134,7 @@ fn handle_wrapper_message(
                 st.observation_sequences.remove(conn_id);
                 st.observations.remove_source(conn_id, Instant::now());
                 st.conn_hosts.remove(conn_id);
+                st.communication_projects.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
                 st.service_negotiations.remove(conn_id);
                 st.terminal_sessions.remove(conn_id);
@@ -13464,6 +14276,7 @@ fn handle_wrapper_message(
                                 get_metrics().record_execution_admitted();
                             }
                             return Some(DaemonToWrapper::Ack {
+                                project_warnings: Vec::new(),
                                 id: bridge_msg.id.clone(),
                             });
                         }
@@ -13491,6 +14304,7 @@ fn handle_wrapper_message(
                         }
                         Ok(false) => {
                             return Some(DaemonToWrapper::Ack {
+                                project_warnings: Vec::new(),
                                 id: bridge_msg.id.clone(),
                             });
                         }
@@ -13611,6 +14425,7 @@ fn handle_wrapper_message(
             }
             Some(DaemonToWrapper::Ack {
                 id: bridge_msg.id.clone(),
+                project_warnings: prepared.project_warnings,
             })
         }
 
@@ -21534,6 +22349,7 @@ mod presence_tests {
                     writer: control_writer.clone(),
                     message: DaemonToWrapper::Ack {
                         id: format!("ack-{number}"),
+                        project_warnings: Vec::new(),
                     },
                 })
                 .chain(std::iter::once(DeferredControl {
@@ -21573,6 +22389,7 @@ mod presence_tests {
         while push_control_message(
             &writer,
             &DaemonToWrapper::Ack {
+                project_warnings: Vec::new(),
                 id: payload.clone(),
             },
         ) {}
@@ -26225,6 +27042,7 @@ fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
             command_id,
             execution_id,
             outcome: ExecutionControlOutcome::Refused(ExecutionControlRefusal::CapabilityUnavailable),
+            ..
         } if command_id == "control-1" && execution_id == "execution-control"
     ));
     assert!(matches!(
@@ -26304,7 +27122,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     queued_expected.hops -= 1;
     assert!(matches!(
         handle_wrapper_message("conn-sender", WrapperToDaemon::Send(queue.clone()), &shared),
-        Some(DaemonToWrapper::Ack { id }) if id == "queue-us1"
+        Some(DaemonToWrapper::Ack { id , ..}) if id == "queue-us1"
     ));
     assert_eq!(
         shared
@@ -26329,7 +27147,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     trigger_expected.hops -= 1;
     assert!(matches!(
         handle_wrapper_message("conn-sender", WrapperToDaemon::Send(trigger), &shared),
-        Some(DaemonToWrapper::Ack { id }) if id == "trigger-us1"
+        Some(DaemonToWrapper::Ack { id , ..}) if id == "trigger-us1"
     ));
     assert!(matches!(
         presence_tests::read_control(&mut target_reader),
@@ -26357,7 +27175,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     steer.intent = Some(bridget_core::MessageIntent::SteerCurrent);
     assert!(matches!(
         handle_wrapper_message("conn-sender", WrapperToDaemon::Send(steer), &shared),
-        Some(DaemonToWrapper::Ack { id }) if id == "steer-us1"
+        Some(DaemonToWrapper::Ack { id , ..}) if id == "steer-us1"
     ));
     assert!(matches!(
         presence_tests::read_control(&mut target_reader),
@@ -26375,7 +27193,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     interrupt.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
     assert!(matches!(
         handle_wrapper_message("conn-sender", WrapperToDaemon::Send(interrupt), &shared),
-        Some(DaemonToWrapper::Ack { id }) if id == "interrupt-us1"
+        Some(DaemonToWrapper::Ack { id , ..}) if id == "interrupt-us1"
     ));
     assert!(matches!(
         presence_tests::read_control(&mut target_reader),

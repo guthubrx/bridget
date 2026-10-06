@@ -13,8 +13,8 @@ use crate::store::threads::{
 };
 use crate::store::{Store, StoreError};
 use bridget_transport::protocol::{
-    THREAD_CONTRACT_VERSION, ThreadAction, ThreadEntryKind, ThreadNotify, ThreadRequest,
-    ThreadResult,
+    ProjectWarning, THREAD_CONTRACT_VERSION, ThreadAction, ThreadEntryKind, ThreadNotify,
+    ThreadRequest, ThreadResult,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -60,6 +60,21 @@ pub(crate) struct MemberFacts {
 pub(crate) trait Directory {
     fn known_agent(&self, agent_id: &str) -> bool;
     fn member_facts(&self, agent_id: &str) -> MemberFacts;
+    fn communication_scope(
+        &self,
+        actor: &str,
+        members: &[String],
+        reason: Option<&str>,
+    ) -> Result<Vec<ProjectWarning>, Value> {
+        let mut warnings = Vec::new();
+        for member in members.iter().filter(|member| member.as_str() != actor) {
+            warnings.extend(
+                crate::communication::project_scope(None, None, member, reason)
+                    .map_err(|detail| error("invalid_cross_project_reason", detail, false))?,
+            );
+        }
+        Ok(warnings)
+    }
 }
 
 pub(crate) fn error(code: &str, detail: impl Into<String>, retryable: bool) -> Value {
@@ -288,6 +303,12 @@ pub(crate) fn handle(
             false,
         ));
     }
+    let reason = match crate::communication::validate_cross_project_reason(
+        request.cross_project_reason.as_deref(),
+    ) {
+        Ok(reason) => reason,
+        Err(detail) => return result(error("invalid_cross_project_reason", detail, false)),
+    };
     let outcome = match request.request {
         ThreadAction::Create {
             title,
@@ -300,6 +321,7 @@ pub(crate) fn handle(
             &title,
             &members,
             &operation_id,
+            reason.as_deref(),
             now,
         ),
         ThreadAction::List {
@@ -318,6 +340,7 @@ pub(crate) fn handle(
             supersedes_seq,
         } => post(
             store,
+            directory,
             actor,
             &thread_id,
             &body,
@@ -327,6 +350,7 @@ pub(crate) fn handle(
             ack_receipt.as_deref(),
             kind,
             supersedes_seq,
+            reason.as_deref(),
             now,
         ),
         ThreadAction::Read { thread_id, limit } => read(store, actor, &thread_id, limit, now),
@@ -345,6 +369,7 @@ pub(crate) fn handle(
     result(outcome.unwrap_or_else(|refused| refused))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create(
     store: &Store,
     directory: &dyn Directory,
@@ -352,6 +377,7 @@ fn create(
     title: &str,
     members: &[String],
     operation_id: &str,
+    reason: Option<&str>,
     now: i64,
 ) -> Result<Value, Value> {
     let title = validate_title(title)?;
@@ -369,6 +395,22 @@ fn create(
             format!("Un fil compte de {MIN_MEMBERS} à {MAX_MEMBERS} membres, créateur inclus."),
             false,
         ));
+    }
+    let mut parts: Vec<&[u8]> = vec![b"create", b"v1", title.as_bytes()];
+    for member in &set {
+        parts.push(member.as_bytes());
+    }
+    if let Some(reason) = reason {
+        parts.extend([b"communication-project-v1".as_slice(), reason.as_bytes()]);
+    }
+    let canonical_hash = digest(&parts);
+    // Le reçu durable précède les faits vivants : un changement de projet ou
+    // une déconnexion ne retire jamais une opération déjà acceptée.
+    if let Some(replay) = store
+        .thread_operation_replay(actor, &operation_id, &canonical_hash)
+        .map_err(storage_error)?
+    {
+        return tx_result(replay);
     }
     let unknown: Vec<&String> = set
         .iter()
@@ -388,11 +430,7 @@ fn create(
             false,
         ));
     }
-    let mut parts: Vec<&[u8]> = vec![b"create", b"v1", title.as_bytes()];
-    for member in &set {
-        parts.push(member.as_bytes());
-    }
-    let canonical_hash = digest(&parts);
+    let warnings = directory.communication_scope(actor, &set, reason)?;
     let thread_id = uuid::Uuid::new_v4().hyphenated().to_string();
     let outcome = store
         .thread_create(CreateThread {
@@ -402,6 +440,7 @@ fn create(
             thread_id: &thread_id,
             title: &title,
             members: &set,
+            project_warnings: &warnings,
             now,
             limits: &LIMITS,
         })
@@ -484,6 +523,7 @@ fn show(
 #[allow(clippy::too_many_arguments)]
 fn post(
     store: &Store,
+    directory: &dyn Directory,
     actor: &str,
     thread_id: &str,
     body: &str,
@@ -493,6 +533,7 @@ fn post(
     ack_receipt: Option<&str>,
     kind: Option<ThreadEntryKind>,
     supersedes_seq: Option<u64>,
+    reason: Option<&str>,
     now: i64,
 ) -> Result<Value, Value> {
     let thread_id = require_uuid(thread_id, "thread_id")?;
@@ -594,7 +635,23 @@ fn post(
             parts.push(bytes);
         }
     }
+    if let Some(reason) = reason {
+        parts.extend([b"communication-project-v1".as_slice(), reason.as_bytes()]);
+    }
     let canonical_hash = digest(&parts);
+    if let Some(replay) = store
+        .thread_operation_replay(actor, &operation_id, &canonical_hash)
+        .map_err(storage_error)?
+    {
+        return tx_result(replay);
+    }
+    // Le fil conserve ses lecteurs, même quand notify est vide. Vérifier
+    // l'accès avant la portée pour ne rien révéler à un non-membre.
+    let view = store
+        .thread_show(actor, &thread_id)
+        .map_err(storage_error)?
+        .map_err(refusal_result)?;
+    let warnings = directory.communication_scope(actor, &view.members, reason)?;
     let outcome = store
         .thread_post(PostEntry {
             actor,
@@ -605,6 +662,7 @@ fn post(
             body,
             notify: &spec,
             notices: &notices,
+            project_warnings: &warnings,
             reply_to_seq,
             ack_receipt: ack_receipt.as_deref(),
             kind,
@@ -792,6 +850,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spec138_thread_reason_absence_is_legacy_but_null_is_invalid() {
+        let legacy =
+            json!({"version":1,"request":{"action":"list","limit":null,"after_thread_id":null}});
+        let parsed: ThreadRequest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+        let mut invalid = legacy;
+        invalid["cross_project_reason"] = Value::Null;
+        assert!(serde_json::from_value::<ThreadRequest>(invalid).is_err());
+    }
+
+    #[test]
     fn spec102_v05_uuid_canonique_et_bornes_de_page() {
         assert!(canonical_uuid("10200000-0000-4000-8000-00000000000a").is_some());
         assert!(
@@ -886,6 +955,7 @@ mod tests {
             &NoDirectory,
             "10200000-0000-4000-8000-00000000000a",
             ThreadRequest {
+                cross_project_reason: None,
                 version: 2,
                 request: ThreadAction::List {
                     limit: None,
@@ -900,6 +970,7 @@ mod tests {
             &NoDirectory,
             "10200000-0000-4000-8000-00000000000a",
             ThreadRequest {
+                cross_project_reason: None,
                 version: 1,
                 request: ThreadAction::Show {
                     thread_id: "pas-un-uuid".into(),

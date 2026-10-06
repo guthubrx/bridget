@@ -1,0 +1,44 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon)
+   Compiling bridget-core v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-core)
+   Compiling bridget-transport v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-transport)
+error[E0063]: missing field `project_warnings` in initializer of `protocol::DaemonToWrapper`
+    --> crates/bridget-transport/src/protocol.rs:5533:22
+     |
+5533 |         let result = DaemonToWrapper::IdempotencyResult {
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `project_warnings`
+
+error[E0027]: pattern does not mention field `project_warnings`
+    --> crates/bridget-transport/src/protocol.rs:5543:13
+     |
+5543 | /             DaemonToWrapper::IdempotencyResult {
+5544 | |                 operation_kind,
+5545 | |                 idempotency_key,
+5546 | |                 issue: IdempotencyIssue::OutcomeUnknown {
+...    |
+5549 | |                 },
+5550 | |             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+     | |_____________^ missing field `project_warnings`
+     |
+help: include the missing field in the pattern
+     |
+5549 -                 },
+5550 -             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+5549 +                 }, project_warnings } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+     |
+help: if you don't care about this missing field, you can explicitly ignore it
+     |
+5549 -                 },
+5550 -             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+5549 +                 }, project_warnings: _ } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+     |
+help: or always ignore missing fields here
+     |
+5549 -                 },
+5550 -             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+5549 +                 }, .. } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
+     |
+
+Some errors have detailed explanations: E0027, E0063.
+For more information about an error, try `rustc --explain E0027`.
+error: could not compile `bridget-transport` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

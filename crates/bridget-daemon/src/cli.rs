@@ -37,10 +37,10 @@ fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
 const MAX_MESSAGE_LENGTH: usize = 10000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct IdempotentSendOptions {
-    id: String,
-    issued_at: i64,
-    issuer_scope: String,
+pub(crate) struct IdempotentSendOptions {
+    pub(crate) id: String,
+    pub(crate) issued_at: i64,
+    pub(crate) issuer_scope: String,
 }
 
 /// Délai maximal d'attente d'une réponse du daemon pour une observation de
@@ -666,8 +666,8 @@ fn print_usage() {
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
            install-hooks          Installe la détection auto du modèle (Claude)\n  \
-           who [--domain <D>]     Agents connectés\n  \
-           agents [--json]        Idem, format machine [--domain <D>]\n  \
+           who [--domain <D>]     Même projet ; --global explicite [--project-root RACINE]\n  \
+           agents [--json]        Idem, format machine [--domain <D>] [--global] [--project-root RACINE]\n  \
            status                 Santé du daemon\n  \
            ledger [--limit N]     Historique des messages (défaut : maximum lisible)\n  \
            ledger search --query Q  Cherche dans ses échanges ou un fil [--cursor HEX] [--json]\n  \
@@ -686,6 +686,8 @@ fn print_usage() {
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
            --hops <N>             Sauts restants (défaut: 4)\n  \
+           --project-root <P>     Projet du client de fond, sans emprunter une identité\n  \
+           --cross-project-reason <M> Choix interprojets volontaire, motif 1–512 octets UTF-8\n  \
            --                      Fin des options ; le reste est le message\n\n\
            --id <clé>             Clé de rejeu (avec --issued-at)\n  \
            --issued-at <unix>     Instant d'émission du rejeu\n  \
@@ -718,6 +720,7 @@ fn cmd_journal(args: &[String]) {
                 "--from-seq" => "from_seq",
                 "--to" => "to",
                 "--reply" => "reply",
+                "--cross-project-reason" => "cross_project_reason",
                 other => return Err(unknown_argument("journal", other)),
             };
             if request.get(key).is_some() {
@@ -728,7 +731,7 @@ fn cmd_journal(args: &[String]) {
             } else {
                 i += 1;
                 let value = args.get(i).ok_or("journal : valeur manquante")?;
-                request[key] = if key == "to" {
+                request[key] = if key == "to" || key == "cross_project_reason" {
                     serde_json::json!(value)
                 } else {
                     serde_json::json!(
@@ -751,6 +754,9 @@ fn cmd_journal(args: &[String]) {
         let mut send = vec!["--to".into(), to];
         if result.reply {
             send.push("--reply".into());
+        }
+        if let Some(reason) = result.cross_project_reason {
+            send.extend(["--cross-project-reason".into(), reason]);
         }
         send.extend(["--".into(), excerpt.shared_body()]);
         cmd_send(&send);
@@ -885,15 +891,16 @@ fn thread_notice_marker(previous: &str) -> Option<String> {
 }
 
 const THREAD_USAGE: &str = "usage :\n  \
-  bridget thread create --title TITRE --member UUID|NOM [--member …] --id UUID\n  \
+  bridget thread create --title TITRE --member UUID|NOM [--member …] --id UUID [--cross-project-reason MOTIF]\n  \
   bridget thread list [--limit N] [--after UUID]\n  \
   bridget thread show THREAD\n  \
-  bridget thread post THREAD (--silent | --notify UUID|NOM [--notify …] | --all) --id UUID [--kind history|action|blocker|decision] [--supersedes N] [--reply-to N] [--ack RECU] -- TEXTE\n  \
+  bridget thread post THREAD (--silent | --notify UUID|NOM [--notify …] | --all) --id UUID [--kind history|action|blocker|decision] [--supersedes N] [--reply-to N] [--ack RECU] [--cross-project-reason MOTIF] -- TEXTE\n  \
   bridget thread read THREAD [--limit N]\n  \
   bridget thread ack THREAD RECU\n  \
   bridget thread history THREAD [--from-seq N] [--to-seq N] [--limit N]\n  \
   bridget thread close THREAD --id UUID\n\n\
 Un dépôt --silent ne réveille personne ; --notify vise des membres, --all tous les autres membres.\n\
+Un fil hors projet exige --cross-project-reason MOTIF pour tous ses lecteurs, même avec --silent.\n\
 Recevoir une alerte n'est pas lire ; lire (read) n'est pas confirmer (ack) : confirmer chaque page reçue.\n\
 --id est une clé de rejeu à préparer avant l'appel (uuidgen) et à réutiliser à l'identique après une coupure.\n\
 Sorties JSON ; code de sortie 0 succès, 2 validation ou refus, 1 panne technique.";
@@ -912,6 +919,15 @@ fn cmd_thread(args: &[String]) {
         eprintln!("erreur: {error}");
         std::process::exit(2);
     });
+    let parsed =
+        collect_thread_args(&args[1..]).unwrap_or_else(|error| exit_argument_error(&error));
+    let cross_project_reason = crate::communication::validate_cross_project_reason(
+        parsed
+            .single
+            .get("--cross-project-reason")
+            .map(String::as_str),
+    )
+    .unwrap_or_else(|error| exit_argument_error(&error));
     let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
         eprintln!(
             "bridget thread : {} : {}",
@@ -927,6 +943,7 @@ fn cmd_thread(args: &[String]) {
         bridget_transport::protocol::ThreadRequest {
             version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
             request: action,
+            cross_project_reason,
         },
     )
     .unwrap_or_else(|error| {
@@ -993,7 +1010,7 @@ struct ThreadArgs {
     text: Option<String>,
 }
 
-const THREAD_SINGLE_OPTIONS: [&str; 10] = [
+const THREAD_SINGLE_OPTIONS: [&str; 11] = [
     "--title",
     "--id",
     "--limit",
@@ -1004,6 +1021,7 @@ const THREAD_SINGLE_OPTIONS: [&str; 10] = [
     "--to-seq",
     "--kind",
     "--supersedes",
+    "--cross-project-reason",
 ];
 const THREAD_MULTI_OPTIONS: [&str; 2] = ["--member", "--notify"];
 const THREAD_FLAGS: [&str; 2] = ["--silent", "--all"];
@@ -1083,7 +1101,7 @@ fn parse_thread_args(
     let (subcommand, rest) = args.split_first().ok_or("thread : sous-commande requise")?;
     let parsed = collect_thread_args(rest)?;
     let allowed: &[&str] = match subcommand.as_str() {
-        "create" => &["--title", "--member", "--id"],
+        "create" => &["--title", "--member", "--id", "--cross-project-reason"],
         "list" => &["--limit", "--after"],
         "show" | "ack" => &[],
         "post" => &[
@@ -1095,6 +1113,7 @@ fn parse_thread_args(
             "--ack",
             "--kind",
             "--supersedes",
+            "--cross-project-reason",
         ],
         "read" => &["--limit"],
         "history" => &["--from-seq", "--to-seq", "--limit"],
@@ -1111,6 +1130,12 @@ fn parse_thread_args(
             return Err(format!("thread {subcommand} : option {used} non admise"));
         }
     }
+    crate::communication::validate_cross_project_reason(
+        parsed
+            .single
+            .get("--cross-project-reason")
+            .map(String::as_str),
+    )?;
     if parsed.text.is_some() && subcommand != "post" {
         return Err(format!("thread {subcommand} : texte après -- non admis"));
     }
@@ -1515,6 +1540,26 @@ mod spec102_cli_thread_tests {
             );
         }
     }
+
+    #[test]
+    fn spec138_thread_accepts_explicit_reason_outside_exact_body() {
+        let parsed = parse_thread_args(
+            &args(&[
+                "post",
+                T,
+                "--silent",
+                "--id",
+                OP,
+                "--cross-project-reason",
+                "Comparer",
+                "--",
+                "exact body",
+            ]),
+            &resolver,
+        )
+        .unwrap();
+        assert!(matches!(parsed, ThreadAction::Post { body, .. } if body == "exact body"));
+    }
 }
 
 const HANDOFF_USAGE: &str = "usage :\n  \
@@ -1652,14 +1697,23 @@ fn cmd_handoff(args: &[String]) {
     message.reply = transport.reply;
     message.reply_timeout = transport.reply_timeout;
     message.in_reply_to = transport.in_reply_to.clone();
+    message.cross_project_reason = transport.cross_project_reason.clone();
     let options = IdempotentSendOptions {
         id: id.clone(),
         issued_at,
         issuer_scope: crate::communication::issuer_scope(&identity.instance_id),
     };
     let receipt = match send_idempotent_to_daemon(&message, &options) {
-        Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
-            crate::mcp::send_issue_result(&id, issued_at, issue)
+        Ok(DaemonToWrapper::IdempotencyResult {
+            issue,
+            project_warnings,
+            ..
+        }) => {
+            let mut result = crate::mcp::send_issue_result(&id, issued_at, issue);
+            if !project_warnings.is_empty() {
+                result["project_warnings"] = serde_json::json!(project_warnings);
+            }
+            result
         }
         Ok(DaemonToWrapper::ClientRejected { reason }) => {
             eprintln!("REJET: {reason:?}");
@@ -2728,11 +2782,26 @@ fn cmd_send(args: &[String]) {
     let mut issued_at: Option<String> = None;
     let mut issuer_scope: Option<String> = None;
     let mut in_reply_to: Option<String> = None;
+    let mut cross_project_reason: Option<String> = None;
+    let mut project_root: Option<String> = None;
     let mut body_parts: Vec<String> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--cross-project-reason" if cross_project_reason.is_none() => {
+                let value = option_value(args, &mut i, "--cross-project-reason")
+                    .unwrap_or_else(|error| send_usage_error(&error));
+                cross_project_reason =
+                    crate::communication::validate_cross_project_reason(Some(&value))
+                        .unwrap_or_else(|error| send_usage_error(&error));
+            }
+            "--project-root" if project_root.is_none() => {
+                project_root = Some(
+                    option_value(args, &mut i, "--project-root")
+                        .unwrap_or_else(|error| send_usage_error(&error)),
+                );
+            }
             "--to" => match option_value(args, &mut i, "--to") {
                 Ok(value) => to = Some(value),
                 Err(error) => send_usage_error(&error),
@@ -2786,7 +2855,7 @@ fn cmd_send(args: &[String]) {
         Some(t) => t,
         None => {
             eprintln!(
-                "usage: bridget send --to <agent_id> [--from <agent_id>] [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
+                "usage: bridget send --to <agent_id> [--from <agent_id>] [--in-reply-to ID] [--reply] [--hops N] [--project-root RACINE] [--cross-project-reason MOTIF] [--] <message>"
             );
             std::process::exit(2);
         }
@@ -2839,6 +2908,7 @@ fn cmd_send(args: &[String]) {
     msg.in_reply_to = in_reply_to;
     msg.reply = reply;
     msg.hops = hops;
+    msg.cross_project_reason = cross_project_reason;
     if reply {
         msg.reply_timeout = Some(timeout_secs.unwrap_or(60));
     }
@@ -2854,13 +2924,30 @@ fn cmd_send(args: &[String]) {
         Err(error) => send_usage_error(&error),
     };
 
-    if send_idempotent_if_requested(&mut msg, idempotent) {
+    let idempotent = idempotent.or_else(|| {
+        (msg.cross_project_reason.is_some() || project_root.is_some()).then(|| {
+            IdempotentSendOptions {
+                id: msg.id.clone(),
+                issued_at: unix_timestamp(),
+                issuer_scope: crate::communication::issuer_scope(&msg.id),
+            }
+        })
+    });
+    if send_idempotent_if_requested(
+        &mut msg,
+        idempotent,
+        project_root.as_deref().map(std::path::Path::new),
+    ) {
         return;
     }
 
     match send_to_daemon(&msg) {
         Ok(response) => match response {
-            DaemonToWrapper::Ack { id } => {
+            DaemonToWrapper::Ack {
+                id,
+                project_warnings,
+            } => {
+                emit_project_warnings(&project_warnings);
                 // Écho du destinataire résolu : l'expéditeur vérifie immédiatement
                 // qu'il a visé la bonne cible (anti aiguillage).
                 let reply_str = if reply { " [réponse attendue]" } else { "" };
@@ -3355,7 +3442,7 @@ fn resolved_idempotent_options(
 fn send_usage_error(error: &str) -> ! {
     eprintln!("erreur: {error}");
     eprintln!(
-        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] [--] <message>"
+        "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] [--project-root RACINE] [--cross-project-reason MOTIF] [--] <message>"
     );
     std::process::exit(2);
 }
@@ -3457,13 +3544,19 @@ pub(crate) fn send_deposited(issue: &IdempotencyIssue) -> bool {
 fn send_idempotent_if_requested(
     message: &mut BridgetMessage,
     options: Option<IdempotentSendOptions>,
+    project_root: Option<&std::path::Path>,
 ) -> bool {
     let Some(options) = options else {
         return false;
     };
     message.id = options.id.clone();
-    match send_idempotent_to_daemon(message, &options) {
-        Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
+    match send_idempotent_to_daemon_with_project(message, &options, project_root) {
+        Ok(DaemonToWrapper::IdempotencyResult {
+            issue,
+            project_warnings,
+            ..
+        }) => {
+            emit_project_warnings(&project_warnings);
             print_idempotency_issue(&issue, &options);
             if !send_deposited(&issue) {
                 std::process::exit(1);
@@ -3493,6 +3586,14 @@ fn send_idempotent_to_daemon(
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
 ) -> Result<DaemonToWrapper, String> {
+    send_idempotent_to_daemon_with_project(message, options, None)
+}
+
+fn send_idempotent_to_daemon_with_project(
+    message: &BridgetMessage,
+    options: &IdempotentSendOptions,
+    project_root: Option<&std::path::Path>,
+) -> Result<DaemonToWrapper, String> {
     let identity = match crate::mcp_identity::resolve_current_identity() {
         Ok(identity) => Some(identity),
         // Un humain au clavier n'a pas d'identité d'agent à prouver : il parle
@@ -3505,14 +3606,31 @@ fn send_idempotent_to_daemon(
             );
         }
     };
-    send_idempotent_to_daemon_at(&socket_path(), message, options, identity.as_ref())
+    send_idempotent_to_daemon_at_with_project(
+        &socket_path(),
+        message,
+        options,
+        identity.as_ref(),
+        project_root,
+    )
 }
 
+#[cfg(test)]
 fn send_idempotent_to_daemon_at(
     path: &std::path::Path,
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
     identity: Option<&crate::mcp_identity::ResolvedIdentity>,
+) -> Result<DaemonToWrapper, String> {
+    send_idempotent_to_daemon_at_with_project(path, message, options, identity, None)
+}
+
+pub(crate) fn send_idempotent_to_daemon_at_with_project(
+    path: &std::path::Path,
+    message: &BridgetMessage,
+    options: &IdempotentSendOptions,
+    identity: Option<&crate::mcp_identity::ResolvedIdentity>,
+    project_root: Option<&std::path::Path>,
 ) -> Result<DaemonToWrapper, String> {
     let mut connection = DaemonConnection::connect(path).map_err(|error| error.to_string())?;
     match connection
@@ -3544,7 +3662,14 @@ fn send_idempotent_to_daemon_at(
         .exchange(&WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
             issuer_scope: options.issuer_scope.clone(),
-            capabilities: vec![ClientCapability::SendIdempotent],
+            capabilities: if message.cross_project_reason.is_some() || project_root.is_some() {
+                vec![
+                    ClientCapability::SendIdempotent,
+                    ClientCapability::CommunicationProjectsV1,
+                ]
+            } else {
+                vec![ClientCapability::SendIdempotent]
+            },
         })
         .map_err(|error| error.to_string())?
     {
@@ -3553,6 +3678,11 @@ fn send_idempotent_to_daemon_at(
             build_id,
             ..
         } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if (message.cross_project_reason.is_some() || project_root.is_some())
+                && !capabilities.contains(&ClientCapability::CommunicationProjectsV1)
+            {
+                return Err("communication_projects_unsupported : le daemon ne négocie pas la portée projet ; aucun envoi".into());
+            }
             if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
                 eprintln!("{warning}");
             }
@@ -3561,6 +3691,13 @@ fn send_idempotent_to_daemon_at(
             return Ok(DaemonToWrapper::ClientRejected { reason });
         }
         response => return Err(format!("négociation client refusée: {response:?}")),
+    }
+
+    if identity.is_none()
+        && let Some(root) = project_root
+    {
+        crate::communication::client::announce_client_project(&mut connection, root)
+            .map_err(|error| error.to_string())?;
     }
 
     connection
@@ -4647,6 +4784,7 @@ fn cmd_reply(args: &[String]) {
     let mut hops: i32 = 4;
     let mut timeout_secs: Option<u64> = None;
     let mut explicit_in_reply_to: Option<String> = None;
+    let mut cross_project_reason: Option<String> = None;
     let mut id: Option<String> = None;
     let mut issued_at: Option<String> = None;
     let mut issuer_scope: Option<String> = None;
@@ -4654,6 +4792,13 @@ fn cmd_reply(args: &[String]) {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--cross-project-reason" if cross_project_reason.is_none() => {
+                let value = option_value(args, &mut i, "--cross-project-reason")
+                    .unwrap_or_else(|error| send_usage_error(&error));
+                cross_project_reason =
+                    crate::communication::validate_cross_project_reason(Some(&value))
+                        .unwrap_or_else(|error| send_usage_error(&error));
+            }
             "--reply" => {
                 reply_flag = true;
             }
@@ -4755,6 +4900,7 @@ fn cmd_reply(args: &[String]) {
 
     let mut msg = BridgetMessage::new(&sender, &to, &body);
     msg.in_reply_to = explicit_in_reply_to.or(implicit_in_reply_to);
+    msg.cross_project_reason = cross_project_reason;
     msg.reply = reply_flag;
     msg.hops = hops;
     if reply_flag {
@@ -4771,13 +4917,26 @@ fn cmd_reply(args: &[String]) {
         Ok(options) => options,
         Err(error) => send_usage_error(&error),
     };
-    if send_idempotent_if_requested(&mut msg, idempotent) {
+    let idempotent = idempotent.or_else(|| {
+        msg.cross_project_reason
+            .is_some()
+            .then(|| IdempotentSendOptions {
+                id: msg.id.clone(),
+                issued_at: unix_timestamp(),
+                issuer_scope: crate::communication::issuer_scope(&msg.id),
+            })
+    });
+    if send_idempotent_if_requested(&mut msg, idempotent, None) {
         return;
     }
 
     match send_to_daemon(&msg) {
         Ok(response) => match response {
-            DaemonToWrapper::Ack { id } => {
+            DaemonToWrapper::Ack {
+                id,
+                project_warnings,
+            } => {
+                emit_project_warnings(&project_warnings);
                 println!("OK: reply a {} (id={}, hops={})", to, id, hops);
             }
             DaemonToWrapper::Nack { id: _, reason } => {
@@ -4807,6 +4966,8 @@ fn cmd_reply(args: &[String]) {
 struct DirectoryArgs {
     json: bool,
     domain: Option<String>,
+    global: bool,
+    project_root: Option<String>,
 }
 
 fn parse_directory_args(
@@ -4817,6 +4978,8 @@ fn parse_directory_args(
     let mut parsed = DirectoryArgs {
         json: false,
         domain: None,
+        global: false,
+        project_root: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -4835,6 +4998,12 @@ fn parse_directory_args(
                 parsed.domain = Some(domain);
             }
             "--domain" => return Err(format!("{command}: option dupliquée: --domain")),
+            "--global" if !parsed.global => parsed.global = true,
+            "--global" => return Err(format!("{command}: option dupliquée: --global")),
+            "--project-root" if parsed.project_root.is_none() => {
+                parsed.project_root = Some(option_value(args, &mut index, "--project-root")?);
+            }
+            "--project-root" => return Err(format!("{command}: option dupliquée: --project-root")),
             argument => return Err(unknown_argument(command, argument)),
         }
         index += 1;
@@ -4859,17 +5028,14 @@ fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::Daemon
 fn cmd_agents(args: &[String]) {
     let parsed = parse_directory_args("agents", args, true).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
-        eprintln!("usage: bridget agents [--json] [--domain <nom>]");
+        eprintln!(
+            "usage: bridget agents [--json] [--domain <nom>] [--global] [--project-root <racine>]"
+        );
         std::process::exit(2);
     });
 
     let config = DaemonConfig::default();
-    let mut status = daemon_status_or_exit("agents", &config);
-    if let Some(domain) = &parsed.domain {
-        status
-            .agents
-            .retain(|agent| agent.domain.as_deref() == Some(domain.as_str()));
-    }
+    let status = daemon_status_or_exit("agents", &config);
     if !status.running {
         if parsed.json {
             println!("[]");
@@ -4879,16 +5045,19 @@ fn cmd_agents(args: &[String]) {
         std::process::exit(1);
     }
 
+    let agents = scoped_directory_or_exit("agents", &parsed, &config.socket_path);
+
     if parsed.json {
         println!(
             "{}",
-            serde_json::to_string(&status.agents).unwrap_or_else(|_| "[]".to_string())
+            serde_json::to_string(&agents).unwrap_or_else(|_| "[]".to_string())
         );
-    } else if status.agents.is_empty() {
-        println!("Aucun agent connecte.");
+    } else if agents.is_empty() {
+        println!("Aucun agent dans la portée demandée ; aucun repli extérieur.");
     } else {
         println!("Agents connectes :");
-        for agent in &status.agents {
+        for scoped in &agents {
+            let agent = &scoped.agent;
             println!(
                 "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}] — persiste {}",
                 agent.display_name,
@@ -4903,6 +5072,61 @@ fn cmd_agents(args: &[String]) {
                 agent.state,
                 format_persistent(agent)
             );
+            println!(
+                "    projet : {} ; relation : {:?}",
+                scoped
+                    .communication_project
+                    .as_ref()
+                    .map(|project| project.root.as_str())
+                    .unwrap_or("inconnu"),
+                scoped.project_relation
+            );
+        }
+    }
+}
+
+fn scoped_directory_or_exit(
+    command: &str,
+    parsed: &DirectoryArgs,
+    socket: &std::path::Path,
+) -> Vec<bridget_transport::protocol::ScopedAgentInfo> {
+    let identity = crate::mcp_identity::resolve_current_identity().ok();
+    let scope = if parsed.global {
+        bridget_transport::protocol::CommunicationDirectoryScope::Global
+    } else {
+        bridget_transport::protocol::CommunicationDirectoryScope::SameProject
+    };
+    let result = crate::communication::client::directory_request(
+        identity
+            .as_ref()
+            .map(|identity| (identity.name.as_str(), identity.instance_id.as_str())),
+        socket,
+        scope,
+        parsed.project_root.as_deref().map(std::path::Path::new),
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("bridget {command}: {error}");
+        std::process::exit(1);
+    });
+    let DaemonToWrapper::CommunicationDirectory {
+        mut agents,
+        project_warnings,
+        ..
+    } = result
+    else {
+        unreachable!("réponse validée par le client")
+    };
+    emit_project_warnings(&project_warnings);
+    if let Some(domain) = &parsed.domain {
+        agents.retain(|agent| agent.agent.domain.as_deref() == Some(domain.as_str()));
+    }
+    agents
+}
+
+fn emit_project_warnings(warnings: &[bridget_transport::protocol::ProjectWarning]) {
+    for warning in warnings {
+        if let Ok(warning) = serde_json::to_string(warning) {
+            eprintln!("AVERTISSEMENT PROJET: {warning}");
         }
     }
 }
@@ -5252,7 +5476,7 @@ fn cmd_inbox(args: &[String]) {
 fn cmd_who(args: &[String]) {
     let parsed = parse_directory_args("who", args, false).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
-        eprintln!("usage: bridget who [--domain <nom>]");
+        eprintln!("usage: bridget who [--domain <nom>] [--global] [--project-root <racine>]");
         std::process::exit(2);
     });
     let config = DaemonConfig::default();
@@ -5263,16 +5487,24 @@ fn cmd_who(args: &[String]) {
     }
 
     let build_id = status.build_id.as_deref().unwrap_or("inconnu");
-    let agents: Vec<_> = match &parsed.domain {
-        Some(domain) => status
-            .agents
-            .into_iter()
-            .filter(|agent| agent.domain.as_deref() == Some(domain.as_str()))
-            .collect(),
-        None => status.agents,
-    };
+    let scoped = scoped_directory_or_exit("who", &parsed, &config.socket_path);
+    let agents: Vec<_> = scoped.iter().map(|agent| agent.agent.clone()).collect();
 
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
+    if parsed.global {
+        for agent in &scoped {
+            println!(
+                "Projet de {} : {} ; relation {:?}",
+                agent.agent.display_name,
+                agent
+                    .communication_project
+                    .as_ref()
+                    .map(|project| project.root.as_str())
+                    .unwrap_or("inconnu"),
+                agent.project_relation
+            );
+        }
+    }
     println!("Daemon build-id: {build_id}");
     emit_control_footer();
     emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
@@ -6396,8 +6628,25 @@ mod hook_tests {
             DirectoryArgs {
                 json: true,
                 domain: Some("revue".to_string()),
+                global: false,
+                project_root: None,
             }
         );
+    }
+
+    #[test]
+    fn spec138_directory_accepts_explicit_global_and_project_root() {
+        assert!(
+            parse_directory_args(
+                "agents",
+                &argv(&["--json", "--global", "--project-root", "/tmp/project"]),
+                true
+            )
+            .is_ok()
+        );
+        assert!(parse_directory_args("who", &argv(&["--global"]), false).is_ok());
+        assert!(parse_directory_args("who", &argv(&["--global", "--global"]), false).is_err());
+        assert!(parse_directory_args("agents", &argv(&["--project-root"]), true).is_err());
     }
 
     #[test]
@@ -7465,6 +7714,7 @@ mod hook_tests {
                 journal.lock().unwrap().push(line);
                 let ack = DaemonToWrapper::Ack {
                     id: "rate-limit".to_string(),
+                    project_warnings: Vec::new(),
                 };
                 if writeln!(writer, "{}", encode(&ack).unwrap()).is_err() || writer.flush().is_err()
                 {
@@ -7647,7 +7897,7 @@ mod hook_tests {
 }
 
 #[cfg(test)]
-mod idempotency_projection_tests {
+pub(crate) mod idempotency_projection_tests {
     use super::*;
     use bridget_transport::protocol::{REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION};
     use rusqlite::params;
@@ -7657,7 +7907,7 @@ mod idempotency_projection_tests {
         crate::mcp_identity::mock_socket("cli-canon")
     }
 
-    fn caller_identity() -> crate::mcp_identity::ResolvedIdentity {
+    pub(crate) fn caller_identity() -> crate::mcp_identity::ResolvedIdentity {
         crate::mcp_identity::ResolvedIdentity {
             name: "89000000-0000-4000-8000-000000000200".into(),
             instance_id: "test-cli-instance".into(),
@@ -7665,7 +7915,7 @@ mod idempotency_projection_tests {
         }
     }
 
-    fn owner_connection(path: &Path) -> DaemonConnection {
+    pub(crate) fn owner_connection(path: &Path) -> DaemonConnection {
         let identity = caller_identity();
         let mut owner = DaemonConnection::connect(path).unwrap();
         let mut registration = cli_register("fixture");
@@ -7697,7 +7947,7 @@ mod idempotency_projection_tests {
         owner
     }
 
-    fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
+    pub(crate) fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
         // Le namespace du daemon est privé : ne jamais valider/réutiliser
         // l'ensemble du répertoire temporaire partagé comme son état.
         let root = PathBuf::from("/tmp").join(format!("bgcanon-{}", uuid::Uuid::new_v4().simple()));
@@ -7848,6 +8098,7 @@ mod idempotency_projection_tests {
                         operation_kind: "send".to_string(),
                         idempotency_key: "message-t1208".to_string(),
                         issue,
+                        project_warnings: Vec::new(),
                     },
                 );
             }

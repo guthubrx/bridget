@@ -204,7 +204,7 @@ def main():
         os.kill(pid, sig)
 
     def presence():
-        return [a for a in json.loads(cli("agents", "--json").stdout) if a.get("agent_id") == AGENT_ID]
+        return [a for a in json.loads(cli("agents", "--json", "--global").stdout) if a.get("agent_id") == AGENT_ID]
 
     def query(sql, *params):
         with sqlite3.connect(state / "bridget.db") as database:
@@ -236,8 +236,8 @@ def main():
         if live:
             # Recette réelle : présence, remise dans la vraie TUI, réponse lue au
             # journal (transcript), sortie propre, terminal restauré.
-            until(lambda: any(a.get("agent_id") == AGENT_ID for a in json.loads(cli("agents", "--json").stdout)), "présence enregistrée")
-            agent = next(a for a in json.loads(cli("agents", "--json").stdout) if a.get("agent_id") == AGENT_ID)
+            until(lambda: any(a.get("agent_id") == AGENT_ID for a in json.loads(cli("agents", "--json", "--global").stdout)), "présence enregistrée")
+            agent = next(a for a in json.loads(cli("agents", "--json", "--global").stdout) if a.get("agent_id") == AGENT_ID)
             report["presence"] = {k: agent.get(k) for k in ("agent_type", "transport", "mode", "location", "state")}
             assert agent["transport"] == "claude_pty" and agent["mode"] == "cli", agent
             # Le transcript Claude Code naît au premier message : l'invite doit
@@ -265,15 +265,15 @@ def main():
             report["terminal"] = status
             assert status["restored"], status
             until(lambda: not any(a.get("agent_id") == AGENT_ID and a.get("state") == "connected"
-                for a in json.loads(cli("agents", "--json").stdout)), "présence retirée", allow_exit=True)
+                for a in json.loads(cli("agents", "--json", "--global").stdout)), "présence retirée", allow_exit=True)
             print(json.dumps(report, ensure_ascii=False))
             failed = False
             return
         # 1. Sortie de l'enfant relayée jusqu'au terminal de l'humain.
         until(lambda: b"FAKE-CLAUDE-READY" in transcript, "sortie du fournisseur relayée au terminal")
         # 2. Présence honnête : canal réel, jamais tmux.
-        until(lambda: any(a.get("agent_id") == AGENT_ID for a in json.loads(cli("agents", "--json").stdout)), "présence enregistrée")
-        agent = next(a for a in json.loads(cli("agents", "--json").stdout) if a.get("agent_id") == AGENT_ID)
+        until(lambda: any(a.get("agent_id") == AGENT_ID for a in json.loads(cli("agents", "--json", "--global").stdout)), "présence enregistrée")
+        agent = next(a for a in json.loads(cli("agents", "--json", "--global").stdout) if a.get("agent_id") == AGENT_ID)
         report["presence"] = {k: agent.get(k) for k in ("agent_type", "transport", "mode", "location", "state")}
         assert agent["agent_type"] == "claude", agent
         assert agent["transport"] == "claude_pty", f"transport réel attendu claude_pty : {agent}"
@@ -375,7 +375,7 @@ def main():
         expected_exit = 7 if mode == "--exit-code" else 0
         assert status["exit_code"] == expected_exit, status
         until(lambda: not any(a.get("agent_id") == AGENT_ID and a.get("state") == "connected"
-            for a in json.loads(cli("agents", "--json").stdout)), "présence retirée", allow_exit=True)
+            for a in json.loads(cli("agents", "--json", "--global").stdout)), "présence retirée", allow_exit=True)
         assert not subprocess.run(["/usr/bin/pgrep", "-f", f"BRIDGET_FAKE_CLAUDE_LOG={fake_log}"], capture_output=True).stdout.strip(), "faux fournisseur survivant"
         print(json.dumps(report, ensure_ascii=False))
         failed = False

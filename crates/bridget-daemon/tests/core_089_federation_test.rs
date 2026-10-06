@@ -522,7 +522,7 @@ fn charge_locale_distante_600_evenements_en_soixante_secondes() {
             &format!("load-who-{n}"),
             ACTOR,
             "load-actor",
-            &["who"],
+            &["who", "--global"],
         );
         if result.status.success() {
             break;
@@ -773,7 +773,7 @@ fn remote_exchange(reconnect: bool) {
             &format!("who-{attempt}"),
             ACTOR,
             "shared-cli-mcp-instance",
-            &["who"],
+            &["who", "--global"],
         );
         if who.status.success() {
             assert!(String::from_utf8_lossy(&who.stdout).contains("fixture-acp"));
@@ -791,7 +791,7 @@ fn remote_exchange(reconnect: bool) {
         "agents",
         ACTOR,
         "shared-cli-mcp-instance",
-        &["agents", "--json"],
+        &["agents", "--json", "--global"],
     );
     assert!(directory.status.success(), "{}", output_text(&directory));
     let directory: serde_json::Value = serde_json::from_slice(&directory.stdout).unwrap();
@@ -1058,7 +1058,7 @@ s.close(); m=os.lstat(p); assert [m.st_dev,m.st_ino]==wanted; os.unlink(p)
                 &format!("resumed-who-{attempt}"),
                 ACTOR,
                 "shared-cli-mcp-instance",
-                &["who"],
+                &["who", "--global"],
             );
             if probe.status.success() {
                 break;

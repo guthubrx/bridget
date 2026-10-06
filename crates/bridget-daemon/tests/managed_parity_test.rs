@@ -708,7 +708,7 @@ fn send_tracked_with_timeout(peer: &mut Peer, to: &str, body: &str, timeout: u64
     let id = message.id.clone();
     peer.send(&WrapperToDaemon::Send(message));
     match peer.recv() {
-        DaemonToWrapper::Ack { id: acked } => assert_eq!(acked, id),
+        DaemonToWrapper::Ack { id: acked, .. } => assert_eq!(acked, id),
         other => panic!("accusé inattendu: {other:?}"),
     }
     id
@@ -790,7 +790,12 @@ fn normalized_entry(bytes: &[u8]) -> String {
     }
 }
 
-fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
+fn collect_journal(
+    socket: &Path,
+    agent: &str,
+    sender: &str,
+    corpus_ids: &BTreeSet<String>,
+) -> Vec<String> {
     let mut attach = Peer::attach(socket);
     attach.send(&WrapperToDaemon::Subscribe {
         agent: agent_id_for(agent),
@@ -842,15 +847,89 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
                 .flatten()
         })
         .collect::<BTreeSet<_>>();
+    // Un rappel ne devient pas un cinquième message métier. Sa provenance
+    // doit toutefois être attestée : ni le nom « bridget » ni son texte seul
+    // ne suffisent à l'exclure de l'oracle.
+    let database = socket.parent().unwrap().join("bridget.db");
+    let connection = bridget_daemon::store::Store::open_read_only(&database).unwrap();
+    let recipient = agent_id_for(agent);
+    let mut statement = connection
+        .prepare(
+            "SELECT reminder_message_id, request_id, generation
+             FROM guichet_coordination_events
+             WHERE kind = 'reminder_sent' AND recipient = ?1",
+        )
+        .unwrap();
+    let receipts = statement
+        .query_map([&recipient], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let reminder_message_ids = complete
+        .values()
+        .filter_map(|bytes| {
+            let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            if value["event"] != "turn_start"
+                || value["payload"]["from"] != "bridget"
+                || value["payload"]["reply"] != false
+            {
+                return None;
+            }
+            let message_id = value["message_id"].as_str()?;
+            let (_, request_id, generation) = receipts
+                .iter()
+                .find(|(id, request, _)| id == message_id && corpus_ids.contains(request))?;
+            let short_id = &request_id[..request_id.len().min(8)];
+            let expected = match generation {
+                1 => format!(
+                    "Rappel : {sender} attend ta reponse au message #{short_id}.\nReponds avec: bridget reply \"ta reponse\""
+                ),
+                2 => format!(
+                    "URGENT : {sender} attend toujours ta reponse au message #{short_id}.\nTu DOIS repondre maintenant avec: bridget reply \"ta reponse\"\nSi tu ne peux pas repondre, notifie-le : bridget reply \"impossible de repondre : <raison>\""
+                ),
+                _ => return None,
+            };
+            (value["payload"]["body"].as_str() == Some(expected.as_str()))
+                .then(|| message_id.to_string())
+        })
+        .collect::<BTreeSet<_>>();
+    let mut system_journal = BTreeMap::<String, Vec<serde_json::Value>>::new();
     let business: Vec<Vec<u8>> = complete
         .into_values()
         .filter(|bytes| {
             let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-            !value["message_id"]
-                .as_str()
-                .is_some_and(|message_id| bootstrap_message_ids.contains(message_id))
+            let message_id = value["message_id"].as_str().unwrap();
+            if reminder_message_ids.contains(message_id) {
+                system_journal
+                    .entry(message_id.to_string())
+                    .or_default()
+                    .push(value);
+                return false;
+            }
+            !bootstrap_message_ids.contains(message_id)
         })
         .collect();
+    for (message_id, entries) in &system_journal {
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry["event"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["turn_start", "update", "reasoning", "turn_end"],
+            "journal de rappel incomplet ou rejoué: {message_id}"
+        );
+        assert_eq!(
+            entries[2]["payload"],
+            serde_json::json!({"available": false})
+        );
+        assert_eq!(entries[3]["payload"]["stop_reason"], "end_turn");
+    }
     if business.len() != MATRIX_EXPECTED_TURNS * MATRIX_EVENTS_PER_TURN {
         // Diagnostic : en cas d'écart, inventorier les tours métier reçus pour
         // situer un tour manquant ou rejoué (sous charge, un tour en trop a été vu).
@@ -873,7 +952,23 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
     assert_eq!(
         business.len(),
         MATRIX_EXPECTED_TURNS * MATRIX_EVENTS_PER_TURN,
-        "la fixture doit produire {MATRIX_EVENTS_PER_TURN} événements par tour métier (start+text+reasoning+end), hors carte de reprise"
+        "la fixture doit produire {MATRIX_EVENTS_PER_TURN} événements par tour métier (start+text+reasoning+end), hors reprise et rappels attestés du corpus"
+    );
+    let business_starts = business
+        .iter()
+        .filter_map(|bytes| {
+            let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            if value["event"] != "turn_start" {
+                return None;
+            }
+            assert_eq!(value["payload"]["from"], sender);
+            assert_eq!(value["payload"]["reply"], true);
+            Some(value["message_id"].as_str().unwrap().to_string())
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        &business_starts, corpus_ids,
+        "IDs métier perdus ou étrangers"
     );
     // Preuve d'unicité : exactement un event=reasoning par message_id, available=false
     // (fixture parity sans thought_chunk — cas Gemini).
@@ -920,11 +1015,11 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
     // Quickstart 007 §2 : une demande suivie reçoit sa réponse et se clôt.
     let first =
         send_tracked_with_timeout(&mut peer, agent, "TRACKED", MATRIX_FAST_REPLY_TIMEOUT_SECS);
-    let mut replies = receive_replies(&mut peer, &[first]);
+    let mut replies = receive_replies(&mut peer, &[first.clone()]);
     // Quickstart 007 §3 : le corps riche traverse le transport octet pour octet.
     let exact = "l'apostrophe d'usage, \"guillemets\", $VAR, `backticks`,\net ce saut de ligne.";
     let second = send_tracked_with_timeout(&mut peer, agent, exact, MATRIX_FAST_REPLY_TIMEOUT_SECS);
-    replies.extend(receive_replies(&mut peer, &[second]));
+    replies.extend(receive_replies(&mut peer, &[second.clone()]));
 
     // Quickstart 007 §4 : FIFO pendant un tour, relance différée et
     // reconnexion conservant l'état busy.
@@ -947,7 +1042,7 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
     proxy.cut_wrapper_and_wait_for_reconnect();
     let reconnected = wait_busy_reconnected(&mut peer, agent);
     assert_eq!(reconnected.transport, "acp");
-    replies.extend(receive_replies(&mut peer, &[slow.clone(), next]));
+    replies.extend(receive_replies(&mut peer, &[slow.clone(), next.clone()]));
     let final_agent = wait_agent_state(&mut peer, agent, "connected");
     assert_eq!(
         replies,
@@ -980,7 +1075,8 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
     };
     assert!(request_states.iter().all(|state| state == "answered"));
 
-    let journal = collect_journal(socket, agent);
+    let corpus_ids = BTreeSet::from([first, second, slow, next]);
+    let journal = collect_journal(socket, agent, &peer.name, &corpus_ids);
     let turn_starts = journal
         .iter()
         .filter(|entry| entry.starts_with("turn_start|"))

@@ -7,9 +7,9 @@ use bridget_transport::journal::{
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
 use bridget_transport::protocol::{
-    DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind, DiskSpaceFact, ExecutionControlCommand,
-    ExecutionControlOperation, ExecutionDeliveryContext, ExecutionProviderContext, PresenceMode,
-    ProviderOperation, decode, encode,
+    CommunicationProjectSource, DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind,
+    DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation, ExecutionDeliveryContext,
+    ExecutionProviderContext, PresenceMode, ProviderOperation, decode, encode,
 };
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
@@ -1568,7 +1568,7 @@ pub(crate) fn connect_and_register_with_domain_at(
     let Some(identity) =
         agent_id.filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
     else {
-        return connect_and_register_at(
+        let mut connection = connect_and_register_at(
             socket,
             agent_type,
             agent_id,
@@ -1581,7 +1581,9 @@ pub(crate) fn connect_and_register_with_domain_at(
             instance_id,
             derived_domain.as_deref(),
             turn_in_progress,
-        );
+        )?;
+        announce_wrapper_project(&mut connection.1, host)?;
+        return Ok(connection);
     };
     let domain_lock = crate::communication::client::acquire_domain_lock(
         socket,
@@ -1591,7 +1593,7 @@ pub(crate) fn connect_and_register_with_domain_at(
     .map_err(|error| error.to_string())?;
     let domain_override = crate::communication::client::read_domain_override(&domain_lock)
         .map_err(|error| error.to_string())?;
-    let connection = connect_and_register_at(
+    let mut connection = connect_and_register_at(
         socket,
         agent_type,
         Some(identity),
@@ -1608,6 +1610,7 @@ pub(crate) fn connect_and_register_with_domain_at(
     if connection.2 != identity {
         return Err("enregistrement sous une identité inattendue".to_string());
     }
+    announce_wrapper_project(&mut connection.1, host)?;
     if let Some(domain) = domain_override {
         match crate::communication::client::set_domain_with_lock(
             &domain_lock,
@@ -1626,6 +1629,28 @@ pub(crate) fn connect_and_register_with_domain_at(
         }
     }
     Ok(connection)
+}
+
+/// Le propriétaire annonce son cwd constaté, jamais son domaine modifiable.
+/// Le daemon résout la racine commune Git. Une absence efface le fait ancien.
+/// La réponse reste dans le lecteur normal : aucune livraison n'est consommée.
+fn announce_wrapper_project(writer: &mut BufWriter<UnixStream>, host: &str) -> Result<(), String> {
+    let fact = WrapperToDaemon::CommunicationProjectFact {
+        root: std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        source: CommunicationProjectSource::Git,
+        host: host.to_string(),
+        worktree_root: None,
+    };
+    writeln!(
+        writer,
+        "{}",
+        encode(&fact).map_err(|error| error.to_string())?
+    )
+    .and_then(|_| writer.flush())
+    .map_err(|error| format!("annonce du projet impossible: {error}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2361,6 +2386,7 @@ pub fn launch(
             };
 
             match msg {
+                DaemonToWrapper::ProjectContextResult { .. } => {}
                 DaemonToWrapper::Deliver(bm) => {
                     info!(
                         "reçu de « {} »: {}",
@@ -4241,6 +4267,7 @@ fn launch_session_with_status(
                         );
                     }
                 }
+                Ok(DaemonToWrapper::ProjectContextResult { .. }) => {}
                 Ok(DaemonToWrapper::Unsubscribe { subscription_id }) => {
                     relay.unsubscribe(subscription_id);
                 }
@@ -6811,6 +6838,85 @@ mod reconnect_tests {
     use super::*;
 
     #[test]
+    fn spec138_owner_announces_git_cwd_on_each_registration_without_consuming_frames() {
+        let root = std::env::temp_dir().join(format!("s138-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let socket = root.join("daemon.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let expected_root = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let expected_host = host_name();
+        let host = expected_host.clone();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let identity = match decode::<WrapperToDaemon>(line.trim()).unwrap() {
+                    WrapperToDaemon::Register { agent_id, .. } => agent_id,
+                    _ => panic!("Register attendu"),
+                };
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        agent_id: identity,
+                        credential: None,
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writeln!(stream, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+                stream.flush().unwrap();
+                let mut fact = None;
+                for _ in 0..3 {
+                    line.clear();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                    if value["type"] == "CommunicationProjectFact" {
+                        fact = Some(value);
+                    }
+                }
+                let fact = fact.expect("fait Git propriétaire absent");
+                assert_eq!(fact["root"], expected_root);
+                assert_eq!(fact["host"], expected_host);
+                assert_eq!(fact["source"], "git");
+                assert!(fact["worktree_root"].is_null());
+            }
+        });
+        for _ in 0..2 {
+            let (mut reader, _writer, _) = connect_and_register_with_domain_at(
+                &socket,
+                "codex",
+                None,
+                &host,
+                INTERACTIVE_AGENT_PROTOCOL,
+                None,
+                PresenceMode::Cli,
+                None,
+                "Linux",
+                "instance138",
+                false,
+            )
+            .unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<DaemonToWrapper>(line.trim()).unwrap(),
+                DaemonToWrapper::Disconnect
+            ));
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn spec_067_redaction_precede_le_sink_durable_des_sorties_structurees() {
         let secret = "S067_SYNTHETIC_SECRET";
         let root = mcp_test_root("redaction-structured");
@@ -8442,6 +8548,7 @@ mod reconnect_tests {
                 auxiliary,
                 "{}",
                 encode(&DaemonToWrapper::Ack {
+                    project_warnings: Vec::new(),
                     id: "domain".to_string(),
                 })
                 .unwrap()
@@ -8529,6 +8636,7 @@ mod reconnect_tests {
                 setter,
                 "{}",
                 encode(&DaemonToWrapper::Ack {
+                    project_warnings: Vec::new(),
                     id: "domain".to_string(),
                 })
                 .unwrap()
@@ -8591,6 +8699,7 @@ mod reconnect_tests {
                 auxiliary,
                 "{}",
                 encode(&DaemonToWrapper::Ack {
+                    project_warnings: Vec::new(),
                     id: "domain".to_string(),
                 })
                 .unwrap()

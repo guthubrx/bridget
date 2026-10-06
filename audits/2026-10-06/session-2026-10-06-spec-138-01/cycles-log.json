@@ -1,0 +1,32 @@
+{
+  "version": "v14.0",
+  "cycles": [
+    {
+      "cycle": "cycle-1",
+      "audit_mode": "fix",
+      "findings": {
+        "critical": 0,
+        "high": 0,
+        "medium": 5,
+        "low": 0
+      },
+      "corrections_entered": false,
+      "fixed": 0,
+      "reason": "Worktrees WIP et baseline historique rouge ; aucun candidat CRITICAL/HIGH. Les cinq MED restent recommandations ouvertes."
+    },
+    {
+      "cycle": "cycle-scoring",
+      "audit_mode": "readonly",
+      "findings": {
+        "critical": 0,
+        "high": 0,
+        "medium": 5,
+        "low": 0
+      },
+      "grade": "A",
+      "numeric": 98.33333333333333,
+      "release_blocked": false
+    }
+  ],
+  "auto_commit": false
+}

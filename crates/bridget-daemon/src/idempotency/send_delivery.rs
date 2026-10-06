@@ -10,6 +10,43 @@ use super::{
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl IdempotencyStore {
+    /// Métadonnées figées dans l'enveloppe existante, toutes phases.
+    pub(crate) fn stored_send_message(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<serde_json::Value>, IdempotencyError> {
+        self.stored_send_delivery(key)?
+            .and_then(|delivery| delivery.message_bytes)
+            .map(|bytes| {
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| IdempotencyError::CorruptRecord("enveloppe de remise illisible"))
+            })
+            .transpose()
+    }
+
+    /// Index existant idx_send_deliveries_kind_key : deux lignes au maximum.
+    pub(crate) fn correlated_project_reason(
+        &self,
+        request_id: &str,
+        sender: &str,
+        target: &str,
+    ) -> Result<Option<String>, IdempotencyError> {
+        let mut stmt = self.conn.prepare("SELECT message_bytes FROM send_deliveries WHERE operation_kind = 'send' AND idempotency_key = ?1 AND phase IN ('dispatching','acked') LIMIT 2")?;
+        let mut rows = stmt.query([request_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let bytes: Option<Vec<u8>> = row.get(0)?;
+        let message = bytes
+            .as_deref()
+            .and_then(|bytes| serde_json::from_slice::<bridget_core::BridgetMessage>(bytes).ok());
+        if rows.next()?.is_some() {
+            return Ok(None);
+        }
+        Ok(message
+            .filter(|m| m.reply && m.from == sender && m.to == target)
+            .and_then(|m| m.cross_project_reason))
+    }
     /// Fige la remise d'un envoi. Le changement d'état du socle, l'entrée
     /// `send_deliveries` et la **visibilité ledger** (fait d'émission) partagent
     /// une transaction SQLite. L'accusé (`acked`) reste un fait distinct :

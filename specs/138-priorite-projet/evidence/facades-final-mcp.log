@@ -1,0 +1,61 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.53s
+     Running unittests src/lib.rs (/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG/debug/deps/bridget_daemon-54d50906404159c8)
+
+running 53 tests
+test mcp::tests::la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon ... ok
+test mcp::tests::la_remise_en_vol_et_le_sort_inconnu_ne_partagent_pas_leur_statut ... ok
+test mcp::tests::issues_idempotentes_deterministes_restent_metier_et_inconnues_sont_preservees ... ok
+test mcp::tests::le_statut_mcp_et_le_depot_du_binaire_ne_peuvent_pas_se_contredire ... ok
+test mcp::tests::dto_ledger_respectent_le_contrat_outil ... ok
+test mcp::tests::connexion_non_bloquante_refuse_un_budget_expire_avant_toute_attente ... ok
+test mcp::tests::limite_d_appels_simultanes_refuse_avant_toute_connexion ... ok
+test mcp::tests::ledger_requests_scope_mine_par_defaut_et_all_accepte ... ok
+test mcp::tests::mutation_mcp_refuse_toute_seconde_source_de_principal_ou_de_registre ... ok
+test mcp::tests::daemon_coupe_est_un_is_error_technique_immediat ... ok
+test mcp::tests::identite_mcp_unicode_est_refusee_avant_toute_execution ... ok
+test mcp::tests::publication_html_est_annoncee_comme_un_contenu_inerte ... ok
+test mcp::tests::publication_d_artefact_refuse_les_champs_non_contractuels_avant_connexion ... ok
+test mcp::tests::lecture_de_contenu_refuse_l_elargissement_de_portee_avant_connexion ... ok
+test mcp::tests::catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe ... ok
+test mcp::tests::deux_appels_outil_ne_partagent_pas_l_identite_resolue ... ok
+test mcp::tests::identite_mcp_ascii_declenche_exactement_une_execution ... ok
+test mcp::tests::matrice_fr009_couvre_les_quinze_cas ... ok
+test mcp::tests::resultat_mcp_duplique_le_payload_dans_textcontent ... ok
+test mcp::tests::mutation_mcp_declare_l_identite_une_fois_et_ne_vend_pas_queued_comme_un_effet ... ok
+test mcp::tests::huit_connexions_simultanees_gardent_le_principal_resolu_et_la_neuvieme_est_busy ... ok
+test mcp::tests::resultats_metier_conservent_les_categories_de_refus_fermees ... ok
+test mcp::tests::la_coupure_apres_ecriture_rend_les_cles_de_rejeu_et_les_trois_invariants ... ok
+test mcp::tests::coupure_apres_depot_mcp_reste_outcome_unknown_sans_succes_invente ... ok
+test mcp::tests::publication_d_artefact_transporte_un_contrat_canonique_et_un_recu_atteste ... ok
+test mcp::tests::delegate_mcp_transporte_atomiquement_la_cible_de_revue_en_v2 ... ok
+test mcp::tests::schema_send_expose_in_reply_to_non_vide ... ok
+test mcp::tests::seul_le_diagnostic_de_remise_en_vol_atteste_quelque_chose ... ok
+test mcp::tests::spec094_catalogue_expose_les_six_outils_sans_cible_libre ... ok
+test mcp::tests::spec094_inventaire_documente_toutes_les_commandes_du_repartiteur ... ok
+test mcp::tests::accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_dupliquer ... ok
+test mcp::tests::request_status_relit_les_identifiants_terminaux_du_maitre ... ok
+test mcp::tests::spec094_parametres_invalides_sont_refuses_avant_connexion ... ok
+test mcp::tests::coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identique ... ok
+test mcp::tests::spec133_identite_deleguee_limite_les_outils_avant_execution ... ok
+test mcp::tests::send_transmet_in_reply_to_dans_l_enveloppe_idempotente ... ok
+test mcp::tests::spec138_real_agent_loop_cli_daemon_scoped_replay ... ignored, requiert un script Agent Loop et un binaire local explicites, jamais la production
+test mcp::tests::spec138_invalid_reasons_and_scope_are_rejected_before_transport ... ok
+test mcp::tests::send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client ... ok
+test mcp::tests::spec138_valid_send_reason_reaches_transport_without_rewriting_body ... ok
+test mcp::tests::statut_orphelin_distinct_de_in_flight_et_outcome_unknown ... ok
+test mcp::tests::stdout_ne_contient_que_des_reponses_json_rpc ... ok
+test mcp::tests::spec133_send_signe_par_le_parent_et_transporte_la_provenance ... ok
+test mcp::tests::tools_call_resout_l_identite_a_chaque_appel ... ok
+test mcp::tests::un_sort_indetermine_ne_promet_pas_une_remise ... ok
+test mcp::tests::une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu ... ok
+test mcp::tests::spec138_old_server_without_capability_receives_no_message ... ok
+test mcp::tests::spec138_send_returns_structured_warning_outside_exact_body ... ok
+test mcp::tests::spec138_who_inherits_project_and_defaults_to_local_directory ... ok
+test mcp::tests::spec100_mcp_shares_exact_excerpt_with_reply_and_closed_events_contract ... ok
+test mcp::tests::spec102_v33_bridget_thread_transmet_le_contrat_et_refuse_les_champs_inconnus ... ok
+test mcp::tests::spec138_real_daemon_mcp_directory_and_cross_project_send_share_guard ... ok
+test mcp::tests::retry_rejoue_scope_et_horodatage_malgre_rename ... ok
+
+test result: ok. 52 passed; 0 failed; 1 ignored; 0 measured; 993 filtered out; finished in 1.12s
+

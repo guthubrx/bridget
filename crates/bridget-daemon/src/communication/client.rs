@@ -16,6 +16,92 @@ use std::time::{Duration, Instant};
 
 pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
+pub(crate) fn deserialize_project_reason<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let reason = <String as serde::Deserialize>::deserialize(deserializer)?;
+    crate::communication::validate_cross_project_reason(Some(&reason))
+        .map_err(serde::de::Error::custom)
+}
+
+/// Session 138 : négociation obligatoire avant un champ ou une portée nouvelle.
+/// Aucun repli vers l'annuaire global ni motif ignoré par un ancien serveur.
+pub(crate) fn negotiate_projects(
+    connection: &mut DaemonConnection,
+    issuer_scope: &str,
+) -> Result<(), ClientError> {
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: issuer_scope.into(),
+        capabilities: vec![ClientCapability::CommunicationProjectsV1],
+    })? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::CommunicationProjectsV1) =>
+        {
+            Ok(())
+        }
+        _ => Err(ClientError::Technical {
+            code: "communication_projects_unsupported",
+            message: "le daemon ne négocie pas la portée projet ; aucun envoi ni repli global"
+                .into(),
+        }),
+    }
+}
+
+/// Contexte du client de fond, sans fabriquer un agent et sans emprunter T3.
+pub(crate) fn announce_client_project(
+    connection: &mut DaemonConnection,
+    root: &Path,
+) -> Result<(), ClientError> {
+    match connection.exchange(&WrapperToDaemon::CommunicationProjectFact {
+        root: root.to_string_lossy().into_owned(),
+        source: bridget_transport::protocol::CommunicationProjectSource::Git,
+        host: crate::wrapper::host_name(),
+        worktree_root: None,
+    })? {
+        DaemonToWrapper::ProjectContextResult { .. } => Ok(()),
+        other => unexpected_response(other),
+    }
+}
+
+/// Annuaire de communication : l'auxiliaire hérite du parent ; seul un client
+/// autonome fournit son propre contexte. ListAgents de diagnostic reste séparé.
+pub(crate) fn directory_request(
+    identity: Option<(&str, &str)>,
+    socket: &Path,
+    scope: bridget_transport::protocol::CommunicationDirectoryScope,
+    project_root: Option<&Path>,
+) -> Result<DaemonToWrapper, ClientError> {
+    let mut connection = DaemonConnection::connect(socket)?;
+    let issuer = match identity {
+        Some((identity, instance)) => {
+            authenticate_auxiliary(&mut connection, identity, instance, socket)?;
+            crate::communication::issuer_scope(instance)
+        }
+        None => {
+            match connection.exchange(&WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            })? {
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                } => {}
+                other => return unexpected_response(other),
+            }
+            crate::communication::issuer_scope("public-communication-directory")
+        }
+    };
+    negotiate_projects(&mut connection, &issuer)?;
+    if identity.is_none()
+        && let Some(root) = project_root
+    {
+        announce_client_project(&mut connection, root)?;
+    }
+    match connection.exchange(&WrapperToDaemon::DirectoryScoped { scope })? {
+        result @ DaemonToWrapper::CommunicationDirectory { .. } => Ok(result),
+        other => unexpected_response(other),
+    }
+}
+
 pub(crate) fn observation_request(
     identity: &str,
     instance_id: &str,
@@ -41,6 +127,12 @@ pub(crate) fn thread_request(
     request: bridget_transport::protocol::ThreadRequest,
 ) -> Result<bridget_transport::protocol::ThreadResult, ClientError> {
     let mut connection = registered_connection(identity, instance_id, socket)?;
+    if request.cross_project_reason.is_some() {
+        negotiate_projects(
+            &mut connection,
+            &crate::communication::issuer_scope(instance_id),
+        )?;
+    }
     match connection.send_then_wait(&WrapperToDaemon::ThreadRequest { request })? {
         DaemonToWrapper::ThreadResult { result } => Ok(result),
         DaemonToWrapper::Nack { reason, .. } => Err(ClientError::Technical {
@@ -205,7 +297,7 @@ fn self_mutation_until(
     let mut connection = registered_connection_until(identity, instance_id, socket, deadline)?;
     let response = connection.send_then_wait(&command)?;
     match &response {
-        DaemonToWrapper::Ack { id } | DaemonToWrapper::Nack { id, .. } if id == expected_id => {
+        DaemonToWrapper::Ack { id, .. } | DaemonToWrapper::Nack { id, .. } if id == expected_id => {
             Ok(response)
         }
         _ => unexpected_response(response),
@@ -972,6 +1064,7 @@ mod security_tests {
             &path,
             DaemonToWrapper::Ack {
                 id: "domain".to_string(),
+                project_warnings: Vec::new(),
             },
         );
         let identity = "89000000-0000-4000-8000-000000000194";
@@ -1059,6 +1152,7 @@ mod security_tests {
                     "{}",
                     encode(&DaemonToWrapper::Ack {
                         id: "domain".to_string(),
+                        project_warnings: Vec::new(),
                     })
                     .unwrap()
                 )

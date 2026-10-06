@@ -1,7 +1,7 @@
-# Commandes Bridget et accès 094–101
+# Commandes Bridget et accès 094–138
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
-réponse liée de base. Elle décrit le contrat étendu à la session 101 ; elle ne prouve
+réponse liée de base. Elle décrit le contrat étendu à la session 138 ; elle ne prouve
 ni que le binaire installé correspond à cette version, ni qu'un serveur MCP déjà
 ouvert a rechargé son catalogue.
 
@@ -10,6 +10,19 @@ couverture et les limites, **Actions propres** pour DND/nom/domaine, **Artefacts
 inertes** pour les contenus publiés. L'inventaire reste la référence CLI/MCP.
 
 ## Inventaire stable des commandes
+
+Portée138 : `who`/`agents` privilégient le même projet. `--global` est une vue
+volontaire, pas un mandat d'envoi. MCP `bridget_who` utilise `scope:same_project`
+par défaut ou `scope:global`. Le domaine n'est qu'un filtre d'affichage.
+Un client autonome porte `--project-root /chemin/absolu/du/projet` sur
+who/agents/send ; sans preuve, UNKNOWN donne zéro suggestion et un warning.
+T3/wrapper transmettent le fait attesté sans option supplémentaire.
+Send/thread acceptent `--cross-project-reason`; MCP, handoff et journal transmis
+portent `cross_project_reason`. Motif trimé 1–512 octets UTF-8 sans contrôles ; null
+ou blanc refusés. La capacité `communication_projects_v1` est requise : pas de
+repli global ni motif ignoré par serveur ancien. `project_warnings` revient au
+caller hors corps, sans deuxième accord humain bloquant. Legacy inconnu averti
+reste possible. Retry conserve exactement clé, motif, racine, cible et corps.
 
 Décisions possibles : **MCP exposé**, **Équivalence MCP**, **CLI humain** ou
 **Interne**. Une équivalence réutilise un outil existant au lieu de créer un
@@ -32,7 +45,7 @@ de couverture.
 | `thread` | MCP exposé (102) | `bridget_thread` | create/list/show/post/read/ack/history/close : fil partagé à membres fixes ; dépôt silencieux (`notify:[]`) par défaut, sollicitations ciblées structurées (UUID ou `all`), lecture paginée avec reçu puis confirmation, `history` relit sans déplacer le repère ; identité attestée par la connexion, aucun paramètre d'acteur ; `--id` clé de rejeu obligatoire pour create/post/close. |
 | `handoff` | MCP exposé (103) | `bridget_handoff` | `preview` valide et rend le dossier de passation v1 sans rien envoyer ; `send` transmet le corps exact à un UUID par l'envoi idempotent 099 (mêmes `id`/`issued_at` pour rejouer). Objet JSON sur stdin (`--json-stdin`, 64 Kio), `--json` pour le même reçu que MCP ; aucune source lue, conservation du journal, aucun secret. |
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
-| `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par rang FIFO ; t3code n'est jamais modifié. |
+| `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par origine de tour attestée avec repli FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
 | `spawn` | CLI (humain ou agent) | Aucun outil MCP de supervision | Crée un équipier géré avec persistance et répertoire explicites. Un agent peut lancer en lecture seule (posture globale `discovery`, sans terminal) ; `--posture development` exige un terminal humain. |
 | `stop` | CLI (humain ou agent) | Aucun outil MCP de supervision | Arrête un équipier géré désigné ; un agent n'arrête que les équipiers qu'il a lancés lui-même. |
@@ -77,6 +90,10 @@ le registre : ne jamais déduire leur disponibilité d'un nom de fournisseur.
 
 ## Catalogue MCP Bridget fermé
 
+Exception133 : un sous-agent interne T3 attesté ne peut utiliser que
+`bridget_who` et `bridget_send`, avec provenance enfant et routage du parent.
+Il n'a ni boîte de réception ni identité durable ; la réponse revient au parent.
+
 La politique fournisseur étendue en 100 autorise exactement les seize outils Bridget
 ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
@@ -105,6 +122,20 @@ connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
 
 ## Fils partagés (102)
+
+La136 ajoute `kind:history` avec `notify:[]` : preuve conservée, aucune sollicitation.
+`action`, `blocker`, `decision` portent des consignes de 2048 octets UTF-8 au plus.
+`supersedes_seq` (`--supersedes` en CLI) remplace explicitement une consigne courante
+du même auteur et des mêmes cibles. `read` présente des références aux preuves et
+aux consignes remplacées ; `history` relit les corps exacts sans déplacer le repère.
+Tous les membres peuvent lire, même avec notify[] : aucun secret entre membres.
+Selon138, création et dépôt mixtes exigent un motif par opération, même silencieuse.
+Les anciens historiques/reçus restent exacts, sans rejeu ni notification rétroactive.
+
+```sh
+bridget thread post '<FIL>' --kind history --silent --id '<UUID>' -- 'Preuve exacte'
+bridget thread post '<FIL>' --kind action --notify '<UUID>' --id '<UUID>' -- 'Action et référence'
+```
 
 `bridget_thread` accepte `action` parmi `create`, `list`, `show`, `post`, `read`,
 `ack`, `history`, `close` ; les champs inconnus sont refusés. Même contrat en CLI :
@@ -583,6 +614,13 @@ place de l'utilisateur ni affirmer que l'agent est toujours bloqué.
 
 ### Recevoir et expliquer la notification
 
+`[Bridget observation]` rapporte un fait, jamais une mission actionnable ni une
+demande de réponse inter-agent. La fin d'un tour ne ferme pas une mission.
+Le contrôleur135 est Agent Loop, séparé du daemon : progrès vérifiable, décision
+de suite et clôture explicite. Son annuaire138 ne recrute pas ailleurs par défaut.
+Les mandats worker/coordinateur/ROOT sont liés à l'UUID, au rôle et au motif ; leurs
+rappels restent actifs. ROOT extérieur sans mandat produit une décision visible.
+
 Rattacher `subscription_id` au reçu pour retrouver le nom humain. Rapporter
 le fait et ses limites : « A vient de terminer un tour », ou le chemin et les
 deux auteurs d'un risque de collision. Pas de réponse inter-agent requise,
@@ -716,11 +754,13 @@ n'écrit dans les fichiers de t3code.
 Le pont présente chaque fil vivant doté d'une session fournisseur comme un
 agent : identité stable dérivée de l'identifiant du fil, type = fournisseur
 (`claude`, `codex`, …), transport `t3code`, mode `cli`, nom humain = titre du
-fil (refusé si le nom existe déjà). Une remise attend un fil sans tour actif
-(borne `BRIDGET_T3_TURN_WAIT_SECS`, 120 s), envoie `thread.turn.start` avec
-`commandId` = identifiant du message Bridget (t3code déduplique), puis, uniquement
-si `reply=true`, renvoie
-comme réponse liée le texte du tour de même rang que le message, une fois le
+fil (refusé si le nom existe déjà). L'attente d'un fil occupé n'expire pas seule ;
+la file est bornée à64 remises. Échéance explicite, annulation et demande close
+restent applicables. Le pont envoie `thread.turn.start` avec `commandId` égal à
+l'identifiant Bridget (déduplication T3). Les messages non suivis Claude/Cursor
+peuvent rejoindre le tour occupé ; demandes suivies et notifications attendent.
+Avec `reply=true`, la réponse du tour est appariée par origine attestée, avec
+repli par rang si l'origine n'a pas été observée, puis relayée une fois le
 tour clos. Un 401 déclenche un renouvellement unique ; un second 401 est un
 échec explicite (`auth_failed`) visible par `status`. Le journal du fil est
 projeté pour `attach` sans rejouer l'historique antérieur à l'installation.

@@ -1,0 +1,8 @@
+{
+  "module": "03",
+  "findings": [],
+  "positive_findings": [
+    "03 — Le projet source est issu du fait de connexion ; from et domain ne font pas autorité (daemon.rs / communication.rs)."
+  ],
+  "scope_mode": "diff"
+}

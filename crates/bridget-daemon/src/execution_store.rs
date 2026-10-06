@@ -1,7 +1,7 @@
 //! Persistance durable des soumissions et exécutions Bridget.
 
 use bridget_transport::protocol::{
-    ExecutionProviderContext, ProjectReference, UsageAggregate, UsageTokens,
+    ExecutionProviderContext, ProjectReference, ProjectWarning, UsageAggregate, UsageTokens,
 };
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::Type,
@@ -91,6 +91,7 @@ pub struct StoredControlCommand {
     pub execution_id: String,
     pub status: ControlCommandStatus,
     pub expires_at: i64,
+    pub project_warnings: Vec<ProjectWarning>,
 }
 
 /// Résultat fermé de l'enregistrement d'une référence fournisseur. L'absence
@@ -1081,7 +1082,7 @@ impl ExecutionStore {
         let tx = self.conn.unchecked_transaction()?;
         let existing = tx
             .query_row(
-                "SELECT canonical_bytes, execution_id, state, refusal_reason, expires_at FROM execution_control_commands WHERE issuer_scope = ?1 AND command_id = ?2",
+                "SELECT canonical_bytes, execution_id, state, refusal_reason, expires_at, project_warnings FROM execution_control_commands WHERE issuer_scope = ?1 AND command_id = ?2",
                 params![issuer_scope, command_id],
                 |row| {
                     Ok((
@@ -1090,20 +1091,19 @@ impl ExecutionStore {
                         row.get::<_, String>(2)?,
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
                     ))
                 },
             )
             .optional()?;
         let reservation = match existing {
-            Some((canonical, execution_id, state, refusal_reason, expires_at))
-                if expires_at <= observed_at =>
-            {
+            Some((_, _, _, _, expires_at, _)) if expires_at <= observed_at => {
                 ControlReservation::Expired
             }
-            Some((canonical, _, _, _, _)) if canonical != canonical_bytes => {
+            Some((canonical, _, _, _, _, _)) if canonical != canonical_bytes => {
                 ControlReservation::EnvelopeMismatch
             }
-            Some((_, execution_id, state, refusal_reason, expires_at)) => {
+            Some((_, execution_id, state, refusal_reason, expires_at, project_warnings)) => {
                 let status = match state.as_str() {
                     "prepared" => ControlCommandStatus::Prepared,
                     "dispatched" => ControlCommandStatus::Dispatched,
@@ -1119,6 +1119,9 @@ impl ExecutionStore {
                     execution_id,
                     status,
                     expires_at,
+                    project_warnings: serde_json::from_str(&project_warnings).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(error))
+                    })?,
                 })
             }
             None => {
@@ -1136,15 +1139,20 @@ impl ExecutionStore {
     /// Marque l'ordre comme écrit vers le wrapper avant l'E/S. Une panne après
     /// cette écriture reste donc `dispatched` et devient inconnue, jamais un
     /// second contrôle invisible au rejeu.
+    /// Les avertissements prévalidés sont figés dans la même écriture.
+    /// Coût supplémentaire O(W), W étant le volume des avertissements.
     pub fn mark_control_dispatched(
         &self,
         issuer_scope: &str,
         command_id: &str,
         observed_at: i64,
+        project_warnings: &[ProjectWarning],
     ) -> rusqlite::Result<bool> {
+        let project_warnings = serde_json::to_string(project_warnings)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(self.conn.execute(
-            "UPDATE execution_control_commands SET state = 'dispatched', updated_at = ?3 WHERE issuer_scope = ?1 AND command_id = ?2 AND state = 'prepared'",
-            params![issuer_scope, command_id, observed_at],
+            "UPDATE execution_control_commands SET state = 'dispatched', updated_at = ?3, project_warnings = ?4 WHERE issuer_scope = ?1 AND command_id = ?2 AND state = 'prepared'",
+            params![issuer_scope, command_id, observed_at, project_warnings],
         )? == 1)
     }
 
@@ -1185,7 +1193,7 @@ impl ExecutionStore {
         observed_at: i64,
     ) -> rusqlite::Result<Option<StoredControlCommand>> {
         self.conn.query_row(
-            "SELECT execution_id, state, refusal_reason, expires_at FROM execution_control_commands WHERE issuer_scope = ?1 AND command_id = ?2 AND expires_at > ?3",
+            "SELECT execution_id, state, refusal_reason, expires_at, project_warnings FROM execution_control_commands WHERE issuer_scope = ?1 AND command_id = ?2 AND expires_at > ?3",
             params![issuer_scope, command_id, observed_at],
             |row| {
                 let state: String = row.get(1)?;
@@ -1205,6 +1213,9 @@ impl ExecutionStore {
                     execution_id: row.get(0)?,
                     status,
                     expires_at: row.get(3)?,
+                    project_warnings: serde_json::from_str(&row.get::<_, String>(4)?).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(error))
+                    })?,
                 })
             },
         ).optional()
@@ -1594,6 +1605,18 @@ impl ExecutionStore {
         tx.execute_batch(r#"CREATE TABLE IF NOT EXISTS control_pause_interruptions (execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id), target_agent TEXT NOT NULL, control_generation INTEGER NOT NULL, requested_at INTEGER NOT NULL, resumed_at INTEGER, resume_execution_id TEXT); CREATE INDEX IF NOT EXISTS idx_control_pause_interruptions_pending ON control_pause_interruptions(target_agent) WHERE resumed_at IS NULL;"#)?;
         tx.execute(
             "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (10)",
+            [],
+        )?;
+        let has_control_project_warnings: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('execution_control_commands') WHERE name = ?1)",
+            ["project_warnings"],
+            |row| row.get(0),
+        )?;
+        if !has_control_project_warnings {
+            tx.execute_batch("ALTER TABLE execution_control_commands ADD COLUMN project_warnings TEXT NOT NULL DEFAULT '[]';")?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (11)",
             [],
         )?;
         tx.commit()?;
