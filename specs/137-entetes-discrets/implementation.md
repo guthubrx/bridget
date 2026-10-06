@@ -60,3 +60,10 @@ Pas de revue adverse externe sollicitée pour cette retouche isolée.
 L'application installée n'a pas été remplacée. L'installation du paquet T3 se
 fait avec une fenêtre de maintenance, après arrêt volontaire de l'application,
 car une fermeture couperait les agents. Aucun merge/push/cleanup revendiqué.
+
+## 2026-10-06 — Livraison des sources
+
+Recette fraîche : 200 tests PASS sur les deux fichiers MessagesTimeline.
+Le commit T3 `3d30a4836b` est fusionné dans `local/v0.0.45` et poussé au fork.
+La version installée de T3 reste inchangée. Aucun arrêt des conversations ni
+des agents : l'installation nécessite toujours une fenêtre de maintenance.
