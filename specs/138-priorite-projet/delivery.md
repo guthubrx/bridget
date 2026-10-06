@@ -96,7 +96,7 @@ Cette copie reste sur la branche `104-bridge-role-auth`. Cette branche n'est
 ni fusionnée ni poussée, car elle contient d'autres travaux. Le code SPEC138
 est bien publié sur main. Les travaux étrangers de l'index main-merge restent
 préservés, avec l'empreinte 6588fe2ba33bdec78a96fa2cb48d52a419df3c1e3f8ab31347030aeead9521d5.
-Dans la racine Bridget, les changements déjà indexés et les changements non
+Dans la copie active /Users/moi/dotfiles, les changements déjà indexés et les changements non
 indexés restent préservés. Leurs empreintes respectives sont
 `1923c77ad2130ed3c9818f85fcebb58d0d974063b3353a9715534d11c001be67` et
 `ddf55123868e8fdefe04c50537f1df1a40a6290f2da7872807a418905b260ee8`.
