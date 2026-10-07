@@ -1,0 +1,7 @@
+{
+  "module": "12",
+  "findings": [],
+  "positive_findings": [
+    "buildToolCallExpandedBody:4595 conserve la sérialisation native des toolData ; aucun nouvel état de données ou dispatch."
+  ]
+}

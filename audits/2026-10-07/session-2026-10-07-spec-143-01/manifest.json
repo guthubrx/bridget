@@ -1,0 +1,108 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-07T07:15:55Z",
+    "scope": "/Users/moi/11.Repositories/t3code-local/.worktrees/143-bridget-discreet",
+    "scope_mode": "diff",
+    "diff": {
+      "base": "5724eb7f12e4556327efa14f51f43b9caf404e25",
+      "files_count": 4,
+      "added_lines": 403,
+      "removed_lines": 24
+    },
+    "mode": "DEEP-SAMPLED",
+    "grid": "pre-merge +08"
+  },
+  "repo": {
+    "files_count": 4040,
+    "languages": [
+      "typescript",
+      "javascript",
+      "rust"
+    ],
+    "frameworks": [
+      "react",
+      "vite-plus",
+      "vitest",
+      "effect"
+    ],
+    "type": "desktop-web-agent-client",
+    "has_ui": true,
+    "has_llm_integration": true,
+    "db_type": "sqlite",
+    "ci_system": "github-actions",
+    "container": false
+  },
+  "sampling": {
+    "method": "explicit diff and selected caller context; no whole-repository grade",
+    "files_in_sample": 4,
+    "files_total": 4040,
+    "coverage_estimate_percent": 0.0990099,
+    "regions": "all modified regions in four files; selected surrounding call sites"
+  },
+  "hot_paths": [
+    {
+      "type": "outgoing_projection",
+      "path": "apps/web/src/components/chat/MessagesTimeline.logic.ts:129",
+      "trigger": "MCP work entry render"
+    },
+    {
+      "type": "outgoing_native_disclosure",
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx:4909",
+      "trigger": "PlainWorkEntryRow Enter/Space/click"
+    },
+    {
+      "type": "incoming_projection",
+      "path": "apps/web/src/components/chat/MessagesTimeline.logic.ts:254",
+      "trigger": "Bridget message entry render; logic unchanged"
+    },
+    {
+      "type": "incoming_disclosure",
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx:4033",
+      "trigger": "BridgetMessageBody toggles"
+    },
+    {
+      "type": "native_tool_details",
+      "path": "apps/web/src/components/chat/MessagesTimeline.tsx:4595",
+      "trigger": "buildToolCallExpandedBody; unchanged"
+    }
+  ],
+  "threat_model": {
+    "assets": [
+      "complete message data",
+      "honest recipient and lifecycle labels",
+      "existing clipboard behavior",
+      "active conversations"
+    ],
+    "attackers": [
+      "a malformed or ambiguous provider event",
+      "a pasted envelope-looking text"
+    ],
+    "surface": "presentation only; no new dispatch, endpoint, authorization, migration or provider call",
+    "origin_warning": "Presentation never proves origin or message delivery"
+  },
+  "slos": {
+    "defined": false,
+    "proposed": {},
+    "note": "No service SLO inferred from UI-only scope"
+  },
+  "modules_actifs": [
+    "00",
+    "01",
+    "02",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12"
+  ],
+  "warnings": [
+    "Modified regions and caller context only, not all lines of the four large files",
+    "No instrumented coverage, mutation, CVE, provider or Lighthouse benchmark",
+    "Phase09 source fixes delegated to implementation owner; no direct patch or commit by auditor"
+  ]
+}

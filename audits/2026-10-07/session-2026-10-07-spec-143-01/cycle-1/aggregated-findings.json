@@ -1,0 +1,220 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-07T07:17:18Z",
+    "start_timestamp": "2026-10-07T07:08:49Z",
+    "end_timestamp": "2026-10-07T07:17:18Z",
+    "duration_ms": 509000,
+    "audit_scope": "/Users/moi/11.Repositories/t3code-local/.worktrees/143-bridget-discreet",
+    "audit_mode": "fix",
+    "audit_grid": "pre-merge +08",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "release_blocked": false,
+    "scores": {
+      "security": "N/A",
+      "quality": "A",
+      "architecture": "A",
+      "tests": "A",
+      "performance": "A",
+      "reliability": "A",
+      "observability": "N/A",
+      "supply_chain": "N/A",
+      "ai_hygiene": "A",
+      "llm_security": "N/A",
+      "duplication": "A",
+      "complexity": "A",
+      "minimalism": "A",
+      "ux": "A"
+    },
+    "repository": {
+      "files_count": 4040,
+      "languages": [
+        "typescript",
+        "javascript",
+        "rust"
+      ],
+      "frameworks": [
+        "react",
+        "vite-plus",
+        "vitest",
+        "effect"
+      ],
+      "type": "desktop-web-agent-client",
+      "has_ui": true,
+      "has_llm_integration": true,
+      "db_type": "sqlite",
+      "ci_system": "github-actions",
+      "container": false
+    }
+  },
+  "execution_metrics": {
+    "files_scanned": 4,
+    "files_total": 4040,
+    "lines_analyzed": 427,
+    "lines_analyzed_definition": "403 added and24 removed diff lines, plus selected caller context; not all legacy lines",
+    "tools_used": [
+      "git diff",
+      "ripgrep",
+      "jscpd native",
+      "vp test",
+      "shasum",
+      "fingerprint.py",
+      "validate_session.py"
+    ],
+    "coverage_estimate_percent": 0.0990099,
+    "sampling_method": "explicit diff and selected caller context",
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "phases_skipped": [
+      "03"
+    ],
+    "warnings": [
+      "Note du diff SPEC143 uniquement ; quatre fichiers =0,0990099% des4040 sources, pas une note globale du dépôt.",
+      "Toutes régions modifiées relues et contexte sélectionné ; aucune revendication de lecture intégrale des fichiers historiques.",
+      "Pas de couverture instrumentée, mutation testing, analyse cyclomatique automatisée, CVE, Lighthouse ou mesure Core Web Vitals.",
+      "Observabilité, dépendances, gouvernance fournisseur et module03 hors périmètre ; scores N/A explicites.",
+      "Code non committé : phase09 directe non exécutée, corrections remises au propriétaire selon override ; aucun commit.",
+      "22 warnings lint préexistants d’après comparaison du principal ; types/format/build PASS annoncés par le principal.",
+      "Recette navigateur exécutée par le principal, pas par cet auditeur : deux formes fournisseurs, fond transparent, clavier, corps complet.",
+      "Baseline de suppressions absente ; aucune suppression ni écriture de baseline.",
+      "Aucun finding CRITICAL/HIGH à contre-auditer ; revue indépendante de la feature pilotée par le principal."
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 0,
+    "total": 2,
+    "by_category": {
+      "performance": 1,
+      "quality": 1
+    }
+  },
+  "duplicated_code": {
+    "jscpd_percentage": 3.845347129972733,
+    "duplicated_lines": 550,
+    "max_block_lines": 22,
+    "total_occurrences": 42,
+    "critical_blocks": [],
+    "baseline_percentage": 3.66274059178397,
+    "baseline_duplicated_lines": 510,
+    "baseline_occurrences": 37,
+    "new_fragment_count": 7,
+    "new_production_clone_count": 0,
+    "note": "Net +5 clones;7 changed normalized fragments, all9–11line React test setup/mounting blocks; keep independent regression paths rather than introducing a test framework"
+  },
+  "findings": [
+    {
+      "id": "PERF-143-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "MEDIUM",
+      "file": "apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "line": 85,
+      "title": "Projection publique non triviale sans annotation de complexité",
+      "description": "La projection valide deux formes de données MCP et lit un reçu JSON. Sa complexité temporelle et sa borne de statuts n’étaient pas documentées sur le premier gel.",
+      "evidence": "// Presentation only. An executed MCP call is not proof of message delivery.\nexport function projectBridgetSend(\n  entry: Pick<WorkLogEntry, \"itemType\" | \"toolData\" | \"tone\" | \"toolLifecycleStatus\">,\n): { recipient: string; recipientLabel: string } | null {",
+      "exploitability": "N/A",
+      "impact": "Le lecteur ne dispose pas de la borne explicite du coût au rendu.",
+      "path_type": "hot",
+      "remediation": "Documenter O(s+r), avec s la taille du destinataire et r celle du reçu, et la liste de statuts bornée à deux.",
+      "verification": "Relire la fonction gelée et rejouer les tests de projection.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "references": [
+        "audit-v14 module04 Documentation obligatoire"
+      ],
+      "status": "fixed",
+      "fingerprint": "f92bb123fa30"
+    },
+    {
+      "id": "QUAL-143-001",
+      "category": "quality",
+      "subcategory": "function_length",
+      "severity": "MEDIUM",
+      "file": "apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "line": 85,
+      "title": "Projection de 88 lignes au-dessus du seuil de lisibilité",
+      "description": "Au premier gel, la fonction publique projectBridgetSend occupait 88 lignes, de85 à172. Le protocole fixe un seuil de50 lignes par fonction. La validation du reçu formait un bloc indépendant sans besoin de framework.",
+      "evidence": "export function projectBridgetSend(\n  entry: Pick<WorkLogEntry, \"itemType\" | \"toolData\" | \"tone\" | \"toolLifecycleStatus\">,\n): { recipient: string; recipientLabel: string } | null {",
+      "exploitability": "N/A",
+      "impact": "La lecture mélangeait identification du fournisseur, validation des paramètres et validation du reçu.",
+      "path_type": "hot",
+      "remediation": "Extraire uniquement la validation fermée du reçu dans un helper local privé, sans parseur générique.",
+      "verification": "Mesurer moins de51 lignes par fonction ajoutée et rejouer les tests existants.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "audit-v14 module05 checklist2"
+      ],
+      "status": "fixed",
+      "fingerprint": "96990848157c"
+    }
+  ],
+  "suppressed": [],
+  "positive_findings": [
+    "projectBridgetSend:129 traite seulement les deux identités MCP attestées et retourne null pour toute contradiction.",
+    "bridgetHasError:84 accepte uniquement l’absence ou false pour les drapeaux d’erreur ; les valeurs ambiguës restent natives.",
+    "bridgetSendReceiptValid:91 limite le reçu à deux représentations cohérentes et ne confond pas accepted/in_flight avec livraison.",
+    "PlainWorkEntryRow:5013 réutilise rôle button, tabulation, Entrée/Espace et état aria-expanded ; le nom complet reste accessible.",
+    "buildToolCallExpandedBody:4595 conserve la sérialisation native des toolData ; aucun nouvel état de données ou dispatch.",
+    "Le corps fermé n’est pas monté ; les tests ouvrent le vrai composant et vérifient le JSON entier.",
+    "UserMessageBody:4185 conserve parseRawHtml=false et la projection entrante reste inchangée.",
+    "346 tests réellement rejoués par cet audit, exit0 en2,97s.",
+    "JSCPD n’identifie aucun nouveau clone de production dans les quatre fichiers."
+  ],
+  "resolved_before_final_scoring": [
+    {
+      "id": "PERF-143-001",
+      "fingerprint": "f92bb123fa30",
+      "status": "fixed by implementation owner",
+      "verification": "Time and space O(s+r) annotation at127; status list bound2."
+    },
+    {
+      "id": "QUAL-143-001",
+      "fingerprint": "96990848157c",
+      "status": "fixed by implementation owner",
+      "verification": "projectBridgetSend42lines and bridgetSendReceiptValid35lines."
+    },
+    {
+      "id": "PRE143-AMBIGUITY",
+      "status": "fixed by implementation owner",
+      "verification": "Ambiguous Claude/Codex identities and nonboolean error flags rejected; actual component and logic regression tests in346PASS."
+    }
+  ],
+  "roadmap": {
+    "immediate": [],
+    "short_term": [],
+    "medium_term": [],
+    "long_term": []
+  },
+  "phase_note": "Cycle1 preserves findings from initial freeze, then externally corrected under auditor source-write restriction. Final residual findings are in cycle-scoring."
+}

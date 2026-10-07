@@ -1,0 +1,28 @@
+{
+  "feature": "143-echanges-discrets",
+  "revision": "US4_final_392_frozen",
+  "date": "2026-10-07",
+  "observed_by": "principal",
+  "at": "2026-10-07 11:33-11:35 CEST",
+  "status": "PASS_with_explicit_limits",
+  "browser": "native_T3_isolated_preview",
+  "isolation": { "base_dir": "/Users/moi/.cache/t3-spec143-preview.FVsC8y", "projection_thread_sessions": 0, "provider_session_runtime": 0, "sqlite_quick_check": "ok", "active_T3_not_restarted": true },
+  "observations": {
+    "compact_replies": { "count": 3, "collapsed": true, "alignment": "left", "height_px": 32, "background": "transparent", "border": 0, "recipient_labels": "attested_names_or_short_UUID" },
+    "user_notes_visible": 2,
+    "ordinary_and_streaming": "native",
+    "keyboard": { "click": "opens", "Enter": "closes", "Space": "opens", "focus_after_two_animation_frames": "exact_same_toggle", "aria_expanded_after_Enter": false, "aria_expanded_after_Space": true },
+    "link": { "visible_text": "Voir", "href": "https://example.com/", "preserved": true },
+    "citation_DOM": { "selected_text": "Quote", "start": 120, "end": 125, "prefix": "r toi : Quote Résumé pour toi : ", "resolved_text": "Quote", "resolved_location": "last_visible_user_note", "mixed_agent_body_closed_display": "none", "navigation_E2E": false },
+    "narrow_container": { "width_px": 320, "toggle_width_px": 233.65625, "toggle_height_px": 32, "overflow": 0, "temporary_style_restored": true, "is_mobile_viewport": false },
+    "viewport": { "resize_requested_width": 1280, "resize_applied": false, "actual_width": 2212, "actual_height": 1382 },
+    "preview_reconnection": "transient_disconnect_resolved_with_preview_open_without_app_restart"
+  },
+  "screenshots_inspected_by_principal": [
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/browser-screenshot-127-0-0-1-muxwuher-0b5908b2.png",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/browser-screenshot-127-0-0-1-muxwv6nx-a9a5b1d8.png"
+  ],
+  "screenshot_origin_files_preserved": true,
+  "cleanup": { "at": "2026-10-07 11:35:22 CEST", "own_services_stopped": [83544, 83608], "ports_without_listeners": [5876, 13916], "preview_tab": "preserved_hidden", "fixtures": "preserved" },
+  "limits": ["No production installation or active T3 restart.", "No mobile viewport claim; only a 320px container was tested.", "No host clipboard E2E, citation navigation E2E, live provider or delivery E2E.", "Native preview actual viewport stayed 2212x1382 despite a requested resize."]
+}

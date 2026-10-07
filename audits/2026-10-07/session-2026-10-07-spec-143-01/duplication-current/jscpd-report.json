@@ -1,0 +1,1557 @@
+{
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 718,
+        "endLoc": {
+          "column": 21,
+          "line": 718,
+          "position": 30913
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 713,
+        "startLoc": {
+          "column": 51,
+          "line": 713,
+          "position": 30673
+        }
+      },
+      "format": "typescript",
+      "fragment": "      expect(nextMessages[0]).toBe(firstMessages[0]);\n      expect(next.rows).toEqual(deriveMessagesTimelineRows(nextInput));\n      for (const [index, row] of previous.rows.entries()) {\n        if (\n          (row.kind === \"message\" || row.kind === \"assistant-meta\") &&\n          row.message.id === source.at(-1)?.id",
+      "lines": 6,
+      "secondFile": {
+        "end": 795,
+        "endLoc": {
+          "column": 82,
+          "line": 795,
+          "position": 33949
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 792,
+        "startLoc": {
+          "column": 40,
+          "line": 792,
+          "position": 33736
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 1332,
+        "endLoc": {
+          "column": 8,
+          "line": 1332,
+          "position": 53869
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1317,
+        "startLoc": {
+          "column": 71,
+          "line": 1317,
+          "position": 53468
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"uses the user message createdAt for the first assistant response\", () => {\n    const result = computeMessageDurationStart([\n      {\n        id: \"u1\",\n        role: \"user\",\n        createdAt: \"2026-01-01T00:00:00Z\",\n        updatedAt: \"2026-01-01T00:00:00Z\",\n        streaming: false,\n      },\n      {\n        id: \"a1\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:30Z\",\n        updatedAt: \"2026-01-01T00:00:30Z\",\n        streaming: false,\n      },",
+      "lines": 16,
+      "secondFile": {
+        "end": 1358,
+        "endLoc": {
+          "column": 8,
+          "line": 1358,
+          "position": 54517
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1343,
+        "startLoc": {
+          "column": 89,
+          "line": 1343,
+          "position": 54116
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 1333,
+        "endLoc": {
+          "column": 7,
+          "line": 1333,
+          "position": 53877
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1317,
+        "startLoc": {
+          "column": 71,
+          "line": 1317,
+          "position": 53468
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"uses the user message createdAt for the first assistant response\", () => {\n    const result = computeMessageDurationStart([\n      {\n        id: \"u1\",\n        role: \"user\",\n        createdAt: \"2026-01-01T00:00:00Z\",\n        updatedAt: \"2026-01-01T00:00:00Z\",\n        streaming: false,\n      },\n      {\n        id: \"a1\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:30Z\",\n        updatedAt: \"2026-01-01T00:00:30Z\",\n        streaming: false,\n      },\n    ]);",
+      "lines": 17,
+      "secondFile": {
+        "end": 1428,
+        "endLoc": {
+          "column": 11,
+          "line": 1428,
+          "position": 56190
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1411,
+        "startLoc": {
+          "column": 48,
+          "line": 1411,
+          "position": 55769
+        }
+      },
+      "tokens": 60
+    },
+    {
+      "firstFile": {
+        "end": 1338,
+        "endLoc": {
+          "column": 9,
+          "line": 1338,
+          "position": 53972
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1323,
+        "startLoc": {
+          "column": 41,
+          "line": 1323,
+          "position": 53659
+        }
+      },
+      "format": "typescript",
+      "fragment": "        updatedAt: \"2026-01-01T00:00:00Z\",\n        streaming: false,\n      },\n      {\n        id: \"a1\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:30Z\",\n        updatedAt: \"2026-01-01T00:00:30Z\",\n        streaming: false,\n      },\n    ]);\n\n    expect(result).toEqual(\n      new Map([\n        [\"u1\", \"2026-01-01T00:00:00Z\"],\n        [\"a1\", \"2026-01-01T00:00:00Z\"],",
+      "lines": 16,
+      "secondFile": {
+        "end": 1481,
+        "endLoc": {
+          "column": 9,
+          "line": 1481,
+          "position": 57487
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1466,
+        "startLoc": {
+          "column": 41,
+          "line": 1466,
+          "position": 57174
+        }
+      },
+      "tokens": 51
+    },
+    {
+      "firstFile": {
+        "end": 1372,
+        "endLoc": {
+          "column": 14,
+          "line": 1372,
+          "position": 54839
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1357,
+        "startLoc": {
+          "column": 24,
+          "line": 1357,
+          "position": 54507
+        }
+      },
+      "format": "typescript",
+      "fragment": "        streaming: false,\n      },\n      {\n        id: \"a2\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:55Z\",\n        updatedAt: \"2026-01-01T00:00:55Z\",\n        streaming: false,\n      },\n    ]);\n\n    expect(result).toEqual(\n      new Map([\n        [\"u1\", \"2026-01-01T00:00:00Z\"],\n        [\"a1\", \"2026-01-01T00:00:00Z\"],\n        [\"a2\", \"2026-01-01T00:00:30Z\"],",
+      "lines": 16,
+      "secondFile": {
+        "end": 1406,
+        "endLoc": {
+          "column": 14,
+          "line": 1406,
+          "position": 55671
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1391,
+        "startLoc": {
+          "column": 23,
+          "line": 1391,
+          "position": 55339
+        }
+      },
+      "tokens": 55
+    },
+    {
+      "firstFile": {
+        "end": 2010,
+        "endLoc": {
+          "column": 17,
+          "line": 2010,
+          "position": 75006
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1996,
+        "startLoc": {
+          "column": 47,
+          "line": 1996,
+          "position": 74583
+        }
+      },
+      "format": "typescript",
+      "fragment": "            text: \"I should ground this first.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:10Z\",\n            updatedAt: \"2026-01-01T00:00:11Z\",\n            streaming: false,\n          },\n        },\n        {\n          id: \"assistant-final-entry\",\n          kind: \"message\",\n          createdAt: \"2026-01-01T00:00:20Z\",\n          message: {\n            id: \"assistant-final\" as never,\n            role: \"assistant\",\n            text: \"Here is the poem.\",",
+      "lines": 15,
+      "secondFile": {
+        "end": 3708,
+        "endLoc": {
+          "column": 17,
+          "line": 3708,
+          "position": 132135
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3694,
+        "startLoc": {
+          "column": 35,
+          "line": 3694,
+          "position": 131712
+        }
+      },
+      "tokens": 51
+    },
+    {
+      "firstFile": {
+        "end": 2030,
+        "endLoc": {
+          "column": 24,
+          "line": 2030,
+          "position": 75629
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2010,
+        "startLoc": {
+          "column": 37,
+          "line": 2010,
+          "position": 75026
+        }
+      },
+      "format": "typescript",
+      "fragment": "            text: \"Here is the poem.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:20Z\",\n            updatedAt: \"2026-01-01T00:00:30Z\",\n            streaming: false,\n          },\n        },\n      ],\n      expandedTurnIds: new Set([\"turn-1\" as never]),\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    const assistantRows = rows.filter(\n      (row): row is Extract<(typeof rows)[number], { kind: \"message\" }> =>\n        row.kind === \"message\" && row.message.role === \"assistant\",\n    );\n\n    expect(assistantRows).toHaveLength(2);",
+      "lines": 21,
+      "secondFile": {
+        "end": 3728,
+        "endLoc": {
+          "column": 24,
+          "line": 3728,
+          "position": 132746
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3708,
+        "startLoc": {
+          "column": 25,
+          "line": 3708,
+          "position": 132143
+        }
+      },
+      "tokens": 106
+    },
+    {
+      "firstFile": {
+        "end": 2030,
+        "endLoc": {
+          "column": 24,
+          "line": 2030,
+          "position": 75629
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2018,
+        "startLoc": {
+          "column": 51,
+          "line": 2018,
+          "position": 75275
+        }
+      },
+      "format": "typescript",
+      "fragment": "      expandedTurnIds: new Set([\"turn-1\" as never]),\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    const assistantRows = rows.filter(\n      (row): row is Extract<(typeof rows)[number], { kind: \"message\" }> =>\n        row.kind === \"message\" && row.message.role === \"assistant\",\n    );\n\n    expect(assistantRows).toHaveLength(2);",
+      "lines": 13,
+      "secondFile": {
+        "end": 2084,
+        "endLoc": {
+          "column": 24,
+          "line": 2084,
+          "position": 77341
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2072,
+        "startLoc": {
+          "column": 7,
+          "line": 2072,
+          "position": 76987
+        }
+      },
+      "tokens": 70
+    },
+    {
+      "firstFile": {
+        "end": 2145,
+        "endLoc": {
+          "column": 11,
+          "line": 2145,
+          "position": 79354
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2139,
+        "startLoc": {
+          "column": 4,
+          "line": 2139,
+          "position": 79153
+        }
+      },
+      "format": "typescript",
+      "fragment": "    );\n    const assistantRow = rows.find(\n      (row): row is Extract<(typeof rows)[number], { kind: \"message\" }> =>\n        row.kind === \"message\" && row.message.role === \"assistant\",\n    );\n\n    expect(userRow?.revertTurnCount).toBe(1);",
+      "lines": 7,
+      "secondFile": {
+        "end": 3766,
+        "endLoc": {
+          "column": 11,
+          "line": 3766,
+          "position": 133940
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3759,
+        "startLoc": {
+          "column": 5,
+          "line": 3759,
+          "position": 133738
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 2524,
+        "endLoc": {
+          "column": 15,
+          "line": 2524,
+          "position": 91750
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2513,
+        "startLoc": {
+          "column": 32,
+          "line": 2513,
+          "position": 91254
+        }
+      },
+      "format": "typescript",
+      "fragment": "        timelineEntries: entries,\n        runningTurnId: TurnId.make(\"turn-1\"),\n        isWorking: true,\n        activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n        turnDiffSummaries: [],\n        supportsConversationRollback: false,\n      } satisfies Parameters<typeof deriveMessagesTimelineRows>[0];\n      const rows = deriveMessagesTimelineRows(input);\n      expect(rows.map((row) => row.kind)).toEqual([\"working\", \"activity-group\"]);\n      expect(rows.at(-1)).toMatchObject({\n        id: \"live-activity-row\",\n        entries,",
+      "lines": 12,
+      "secondFile": {
+        "end": 2651,
+        "endLoc": {
+          "column": 13,
+          "line": 2651,
+          "position": 96744
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2640,
+        "startLoc": {
+          "column": 42,
+          "line": 2640,
+          "position": 96270
+        }
+      },
+      "tokens": 90
+    },
+    {
+      "firstFile": {
+        "end": 2895,
+        "endLoc": {
+          "column": 10,
+          "line": 2895,
+          "position": 105374
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2881,
+        "startLoc": {
+          "column": 84,
+          "line": 2881,
+          "position": 104961
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"uses latest-turn timings and the stopped label for an interrupted latest turn\", () => {\n    const rows = deriveMessagesTimelineRows({\n      timelineEntries: [\n        {\n          id: \"work-entry-1\",\n          kind: \"work\",\n          createdAt: \"2026-01-01T00:00:05Z\",\n          entry: {\n            id: \"work-1\",\n            createdAt: \"2026-01-01T00:00:05Z\",\n            turnId: \"turn-1\" as never,\n            label: \"Ran command\",\n            tone: \"tool\" as const,\n          },\n        },",
+      "lines": 15,
+      "secondFile": {
+        "end": 2935,
+        "endLoc": {
+          "column": 10,
+          "line": 2935,
+          "position": 106552
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2919,
+        "startLoc": {
+          "column": 80,
+          "line": 2919,
+          "position": 105986
+        }
+      },
+      "tokens": 58
+    },
+    {
+      "firstFile": {
+        "end": 3031,
+        "endLoc": {
+          "column": 16,
+          "line": 3031,
+          "position": 109409
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3015,
+        "startLoc": {
+          "column": 25,
+          "line": 3015,
+          "position": 109035
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.some((row) => row.kind === \"turn-fold\")).toBe(false);",
+      "lines": 17,
+      "secondFile": {
+        "end": 3205,
+        "endLoc": {
+          "column": 16,
+          "line": 3205,
+          "position": 115152
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3189,
+        "startLoc": {
+          "column": 45,
+          "line": 3189,
+          "position": 114778
+        }
+      },
+      "tokens": 56
+    },
+    {
+      "firstFile": {
+        "end": 3031,
+        "endLoc": {
+          "column": 67,
+          "line": 3031,
+          "position": 109460
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3015,
+        "startLoc": {
+          "column": 25,
+          "line": 3015,
+          "position": 109035
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.some((row) => row.kind === \"turn-fold\")).toBe(false);",
+      "lines": 17,
+      "secondFile": {
+        "end": 3278,
+        "endLoc": {
+          "column": 59,
+          "line": 3278,
+          "position": 117500
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3262,
+        "startLoc": {
+          "column": 46,
+          "line": 3262,
+          "position": 117083
+        }
+      },
+      "tokens": 73
+    },
+    {
+      "firstFile": {
+        "end": 3029,
+        "endLoc": {
+          "column": 7,
+          "line": 3029,
+          "position": 109391
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3015,
+        "startLoc": {
+          "column": 33,
+          "line": 3015,
+          "position": 109043
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });",
+      "lines": 15,
+      "secondFile": {
+        "end": 3598,
+        "endLoc": {
+          "column": 9,
+          "line": 3598,
+          "position": 127901
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3584,
+        "startLoc": {
+          "column": 94,
+          "line": 3584,
+          "position": 127507
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 3031,
+        "endLoc": {
+          "column": 10,
+          "line": 3031,
+          "position": 109403
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3015,
+        "startLoc": {
+          "column": 33,
+          "line": 3015,
+          "position": 109043
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.some((row) => row.kind === \"turn-fold\")).toBe(false);",
+      "lines": 17,
+      "secondFile": {
+        "end": 3761,
+        "endLoc": {
+          "column": 9,
+          "line": 3761,
+          "position": 133751
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3745,
+        "startLoc": {
+          "column": 28,
+          "line": 3745,
+          "position": 133392
+        }
+      },
+      "tokens": 51
+    },
+    {
+      "firstFile": {
+        "end": 3258,
+        "endLoc": {
+          "column": 18,
+          "line": 3258,
+          "position": 116912
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3243,
+        "startLoc": {
+          "column": 43,
+          "line": 3243,
+          "position": 116447
+        }
+      },
+      "format": "typescript",
+      "fragment": "            text: \"Checking another thing.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:06Z\",\n            updatedAt: \"2026-01-01T00:00:06Z\",\n            streaming: false,\n          },\n        },\n        {\n          id: \"running-command-entry\",\n          kind: \"work\",\n          createdAt: \"2026-01-01T00:00:07Z\",\n          entry: {\n            id: \"running-command\",\n            createdAt: \"2026-01-01T00:00:07Z\",\n            turnId: \"turn-1\" as never,\n            label: \"Running tests\",",
+      "lines": 16,
+      "secondFile": {
+        "end": 3486,
+        "endLoc": {
+          "column": 18,
+          "line": 3486,
+          "position": 124218
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3471,
+        "startLoc": {
+          "column": 45,
+          "line": 3471,
+          "position": 123753
+        }
+      },
+      "tokens": 55
+    },
+    {
+      "firstFile": {
+        "end": 3278,
+        "endLoc": {
+          "column": 66,
+          "line": 3278,
+          "position": 117507
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3259,
+        "startLoc": {
+          "column": 34,
+          "line": 3259,
+          "position": 116964
+        }
+      },
+      "format": "typescript",
+      "fragment": "            command: \"vp test run\",\n            requestKind: \"command\",\n            tone: \"tool\" as const,\n            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.map((row) => row.kind)).toEqual([\"working\", \"work\", \"message\", \"work-live\"]);",
+      "lines": 20,
+      "secondFile": {
+        "end": 3398,
+        "endLoc": {
+          "column": 71,
+          "line": 3398,
+          "position": 121425
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3379,
+        "startLoc": {
+          "column": 32,
+          "line": 3379,
+          "position": 120877
+        }
+      },
+      "tokens": 88
+    },
+    {
+      "firstFile": {
+        "end": 3278,
+        "endLoc": {
+          "column": 16,
+          "line": 3278,
+          "position": 117457
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3259,
+        "startLoc": {
+          "column": 34,
+          "line": 3259,
+          "position": 116964
+        }
+      },
+      "format": "typescript",
+      "fragment": "            command: \"vp test run\",\n            requestKind: \"command\",\n            tone: \"tool\" as const,\n            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.map((row) => row.kind)).toEqual([\"working\", \"work\", \"message\", \"work-live\"]);",
+      "lines": 20,
+      "secondFile": {
+        "end": 3506,
+        "endLoc": {
+          "column": 16,
+          "line": 3506,
+          "position": 124764
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3487,
+        "startLoc": {
+          "column": 33,
+          "line": 3487,
+          "position": 124271
+        }
+      },
+      "tokens": 70
+    },
+    {
+      "firstFile": {
+        "end": 3371,
+        "endLoc": {
+          "column": 13,
+          "line": 3371,
+          "position": 120567
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3353,
+        "startLoc": {
+          "column": 46,
+          "line": 3353,
+          "position": 120049
+        }
+      },
+      "format": "typescript",
+      "fragment": "            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n        {\n          id: \"assistant-commentary-entry\",\n          kind: \"message\",\n          createdAt: \"2026-01-01T00:00:06Z\",\n          message: {\n            id: \"assistant-commentary\" as never,\n            role: \"assistant\",\n            text: \"Starting another command.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:06Z\",\n            updatedAt: \"2026-01-01T00:00:06Z\",\n            streaming: false,\n          },\n        },\n        {\n          id: \"second-running-entry\",",
+      "lines": 19,
+      "secondFile": {
+        "end": 3479,
+        "endLoc": {
+          "column": 13,
+          "line": 3479,
+          "position": 123965
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3461,
+        "startLoc": {
+          "column": 48,
+          "line": 3461,
+          "position": 123447
+        }
+      },
+      "tokens": 62
+    },
+    {
+      "firstFile": {
+        "end": 3436,
+        "endLoc": {
+          "column": 10,
+          "line": 3436,
+          "position": 122665
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3420,
+        "startLoc": {
+          "column": 46,
+          "line": 3420,
+          "position": 122220
+        }
+      },
+      "format": "typescript",
+      "fragment": "            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n        {\n          id: \"user-followup-entry\",\n          kind: \"message\",\n          createdAt: \"2026-01-01T00:01:00Z\",\n          message: {\n            id: \"user-followup\" as never,\n            role: \"user\",\n            text: \"continue\",\n            turnId: null,\n            createdAt: \"2026-01-01T00:01:00Z\",\n            updatedAt: \"2026-01-01T00:01:00Z\",\n            streaming: false,\n          },\n        },",
+      "lines": 17,
+      "secondFile": {
+        "end": 3651,
+        "endLoc": {
+          "column": 10,
+          "line": 3651,
+          "position": 130377
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3635,
+        "startLoc": {
+          "column": 25,
+          "line": 3635,
+          "position": 129932
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 4080,
+        "endLoc": {
+          "column": 18,
+          "line": 4080,
+          "position": 144600
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4069,
+        "startLoc": {
+          "column": 6,
+          "line": 4069,
+          "position": 144296
+        }
+      },
+      "format": "typescript",
+      "fragment": "    }));\n\n    const rows = deriveMessagesTimelineRows({\n      timelineEntries,\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.find((row) => row.kind === \"work-toggle\")).toMatchObject({\n      hiddenCount: 2,",
+      "lines": 12,
+      "secondFile": {
+        "end": 4127,
+        "endLoc": {
+          "column": 20,
+          "line": 4127,
+          "position": 146305
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4116,
+        "startLoc": {
+          "column": 7,
+          "line": 4116,
+          "position": 145983
+        }
+      },
+      "tokens": 53
+    },
+    {
+      "firstFile": {
+        "end": 4240,
+        "endLoc": {
+          "column": 9,
+          "line": 4240,
+          "position": 149817
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4220,
+        "startLoc": {
+          "column": 75,
+          "line": 4220,
+          "position": 149309
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"returns the previous result when row order and content are unchanged\", () => {\n    const firstUserMessage = {\n      id: \"user-1\" as never,\n      role: \"user\" as const,\n      text: \"First\",\n      turnId: null,\n      createdAt: \"2026-01-01T00:00:00Z\",\n      updatedAt: \"2026-01-01T00:00:00Z\",\n      streaming: false,\n    };\n    const secondUserMessage = {\n      id: \"user-2\" as never,\n      role: \"user\" as const,\n      text: \"Second\",\n      turnId: null,\n      createdAt: \"2026-01-01T00:00:10Z\",\n      updatedAt: \"2026-01-01T00:00:10Z\",\n      streaming: false,\n    };\n\n    const rows = deriveMessagesTimelineRows({",
+      "lines": 21,
+      "secondFile": {
+        "end": 4345,
+        "endLoc": {
+          "column": 9,
+          "line": 4345,
+          "position": 152702
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4325,
+        "startLoc": {
+          "column": 74,
+          "line": 4325,
+          "position": 152194
+        }
+      },
+      "tokens": 82
+    },
+    {
+      "firstFile": {
+        "end": 4261,
+        "endLoc": {
+          "column": 54,
+          "line": 4261,
+          "position": 150410
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4240,
+        "startLoc": {
+          "column": 15,
+          "line": 4240,
+          "position": 149823
+        }
+      },
+      "format": "typescript",
+      "fragment": "    const rows = deriveMessagesTimelineRows({\n      timelineEntries: [\n        {\n          id: \"entry-user-1\",\n          kind: \"message\",\n          createdAt: firstUserMessage.createdAt,\n          message: firstUserMessage,\n        },\n        {\n          id: \"entry-user-2\",\n          kind: \"message\",\n          createdAt: secondUserMessage.createdAt,\n          message: secondUserMessage,\n        },\n      ],\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    const initial = computeStableMessagesTimelineRows(rows, {",
+      "lines": 22,
+      "secondFile": {
+        "end": 4366,
+        "endLoc": {
+          "column": 54,
+          "line": 4366,
+          "position": 153300
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4345,
+        "startLoc": {
+          "column": 20,
+          "line": 4345,
+          "position": 152713
+        }
+      },
+      "tokens": 76
+    },
+    {
+      "firstFile": {
+        "end": 330,
+        "endLoc": {
+          "column": 64,
+          "line": 330,
+          "position": 10615
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 322,
+        "startLoc": {
+          "column": 87,
+          "line": 322,
+          "position": 10275
+        }
+      },
+      "format": "tsx",
+      "fragment": "  ])(\"SPEC143 removes entry frames and preserves actual disclosure for %s\", async (text) => {\n    vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n    vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,",
+      "lines": 9,
+      "secondFile": {
+        "end": 376,
+        "endLoc": {
+          "column": 66,
+          "line": 376,
+          "position": 12485
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 368,
+        "startLoc": {
+          "column": 30,
+          "line": 368,
+          "position": 12129
+        }
+      },
+      "tokens": 69
+    },
+    {
+      "firstFile": {
+        "end": 330,
+        "endLoc": {
+          "column": 64,
+          "line": 330,
+          "position": 10615
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 322,
+        "startLoc": {
+          "column": 87,
+          "line": 322,
+          "position": 10275
+        }
+      },
+      "format": "tsx",
+      "fragment": "  ])(\"SPEC143 removes entry frames and preserves actual disclosure for %s\", async (text) => {\n    vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n    vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,",
+      "lines": 9,
+      "secondFile": {
+        "end": 794,
+        "endLoc": {
+          "column": 32,
+          "line": 794,
+          "position": 30186
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 784,
+        "startLoc": {
+          "column": 18,
+          "line": 784,
+          "position": 29802
+        }
+      },
+      "tokens": 69
+    },
+    {
+      "firstFile": {
+        "end": 330,
+        "endLoc": {
+          "column": 91,
+          "line": 330,
+          "position": 10642
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 322,
+        "startLoc": {
+          "column": 87,
+          "line": 322,
+          "position": 10275
+        }
+      },
+      "format": "tsx",
+      "fragment": "  ])(\"SPEC143 removes entry frames and preserves actual disclosure for %s\", async (text) => {\n    vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n    vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,",
+      "lines": 9,
+      "secondFile": {
+        "end": 875,
+        "endLoc": {
+          "column": 19,
+          "line": 875,
+          "position": 33494
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 863,
+        "startLoc": {
+          "column": 71,
+          "line": 863,
+          "position": 33094
+        }
+      },
+      "tokens": 72
+    },
+    {
+      "firstFile": {
+        "end": 333,
+        "endLoc": {
+          "column": 89,
+          "line": 333,
+          "position": 10760
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 325,
+        "startLoc": {
+          "column": 51,
+          "line": 325,
+          "position": 10439
+        }
+      },
+      "format": "tsx",
+      "fragment": "    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,\n        );\n      });\n      const toggle = () => renderer!.root.findByProps({ \"data-bridget-toggle\": \"true\" });",
+      "lines": 9,
+      "secondFile": {
+        "end": 668,
+        "endLoc": {
+          "column": 89,
+          "line": 668,
+          "position": 25243
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 660,
+        "startLoc": {
+          "column": 40,
+          "line": 660,
+          "position": 24922
+        }
+      },
+      "tokens": 67
+    },
+    {
+      "firstFile": {
+        "end": 333,
+        "endLoc": {
+          "column": 89,
+          "line": 333,
+          "position": 10760
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 325,
+        "startLoc": {
+          "column": 51,
+          "line": 325,
+          "position": 10439
+        }
+      },
+      "format": "tsx",
+      "fragment": "    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,\n        );\n      });\n      const toggle = () => renderer!.root.findByProps({ \"data-bridget-toggle\": \"true\" });",
+      "lines": 9,
+      "secondFile": {
+        "end": 730,
+        "endLoc": {
+          "column": 89,
+          "line": 730,
+          "position": 27915
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 722,
+        "startLoc": {
+          "column": 101,
+          "line": 722,
+          "position": 27594
+        }
+      },
+      "tokens": 67
+    },
+    {
+      "firstFile": {
+        "end": 378,
+        "endLoc": {
+          "column": 11,
+          "line": 378,
+          "position": 12542
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 368,
+        "startLoc": {
+          "column": 22,
+          "line": 368,
+          "position": 12121
+        }
+      },
+      "format": "tsx",
+      "fragment": "    async (_provider, toolData) => {\n      vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n      vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n      vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n      let renderer: ReactTestRenderer | undefined;\n      try {\n        await act(() => {\n          renderer = create(\n            <MessagesTimeline {...buildProps()} timelineEntries={[outgoingEntry143(toolData)]} />,\n          );\n        });",
+      "lines": 11,
+      "secondFile": {
+        "end": 457,
+        "endLoc": {
+          "column": 9,
+          "line": 457,
+          "position": 16030
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 447,
+        "startLoc": {
+          "column": 77,
+          "line": 447,
+          "position": 15629
+        }
+      },
+      "tokens": 84
+    },
+    {
+      "firstFile": {
+        "end": 425,
+        "endLoc": {
+          "column": 77,
+          "line": 425,
+          "position": 14933
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 415,
+        "startLoc": {
+          "column": 84,
+          "line": 415,
+          "position": 14419
+        }
+      },
+      "format": "tsx",
+      "fragment": "      const toolData = { ...outgoing143, result: { structuredContent: { status } } };\n      let renderer: ReactTestRenderer | undefined;\n      try {\n        await act(() => {\n          renderer = create(\n            <MessagesTimeline {...buildProps()} timelineEntries={[outgoingEntry143(toolData)]} />,\n          );\n        });\n        expect(renderer!.root.findAllByProps({ \"data-bridget-send\": \"true\" })).toHaveLength(0);\n        await act(() => renderer!.root.findByProps({ \"aria-expanded\": false }).props.onClick());\n        expect(renderer!.root.findByType(\"pre\").children.join(\"\")).toContain(status);",
+      "lines": 11,
+      "secondFile": {
+        "end": 460,
+        "endLoc": {
+          "column": 75,
+          "line": 460,
+          "position": 16295
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 450,
+        "startLoc": {
+          "column": 51,
+          "line": 450,
+          "position": 15801
+        }
+      },
+      "tokens": 118
+    },
+    {
+      "firstFile": {
+        "end": 555,
+        "endLoc": {
+          "column": 97,
+          "line": 555,
+          "position": 20252
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 549,
+        "startLoc": {
+          "column": 73,
+          "line": 549,
+          "position": 20011
+        }
+      },
+      "format": "tsx",
+      "fragment": "            timelineEntries={[buildUserTimelineEntry(directBatch(bodies))]}\n          />,\n        );\n      });\n      expect(outer().props[\"aria-expanded\"]).toBe(false);\n      await act(() => outer().props.onClick());\n      expect(members().map((node) => node.props[\"aria-expanded\"])).toEqual([true, false, false]);",
+      "lines": 7,
+      "secondFile": {
+        "end": 569,
+        "endLoc": {
+          "column": 97,
+          "line": 569,
+          "position": 20817
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 563,
+        "startLoc": {
+          "column": 34,
+          "line": 563,
+          "position": 20576
+        }
+      },
+      "tokens": 76
+    },
+    {
+      "firstFile": {
+        "end": 615,
+        "endLoc": {
+          "column": 64,
+          "line": 615,
+          "position": 22663
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 609,
+        "startLoc": {
+          "column": 9,
+          "line": 609,
+          "position": 22388
+        }
+      },
+      "format": "tsx",
+      "fragment": "        });\n        await act(() =>\n          renderer!.root\n            .find((node) => node.type === \"button\" && node.props[\"aria-label\"] === \"Copy message\")\n            .props.onClick({ nativeEvent: {} }),\n        );\n        expect(writeText).toHaveBeenCalledExactlyOnceWith(text);",
+      "lines": 7,
+      "secondFile": {
+        "end": 676,
+        "endLoc": {
+          "column": 62,
+          "line": 676,
+          "position": 25633
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 670,
+        "startLoc": {
+          "column": 67,
+          "line": 670,
+          "position": 25370
+        }
+      },
+      "tokens": 59
+    },
+    {
+      "firstFile": {
+        "end": 686,
+        "endLoc": {
+          "column": 18,
+          "line": 686,
+          "position": 25987
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 678,
+        "startLoc": {
+          "column": 55,
+          "line": 678,
+          "position": 25738
+        }
+      },
+      "format": "tsx",
+      "fragment": "      expect(toggle().props[\"aria-expanded\"]).toBe(true);\n      expect(\n        renderer!.root\n          .findAllByType(\"strong\")[0]!\n          .findAll(() => true)\n          .flatMap((node) => node.children)\n          .filter((child) => typeof child === \"string\")\n          .join(\"\"),\n      ).toContain(\"Preuve visible après ouverture\");",
+      "lines": 9,
+      "secondFile": {
+        "end": 711,
+        "endLoc": {
+          "column": 18,
+          "line": 711,
+          "position": 27094
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 703,
+        "startLoc": {
+          "column": 93,
+          "line": 703,
+          "position": 26845
+        }
+      },
+      "tokens": 58
+    },
+    {
+      "firstFile": {
+        "end": 875,
+        "endLoc": {
+          "column": 19,
+          "line": 875,
+          "position": 33494
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 863,
+        "startLoc": {
+          "column": 62,
+          "line": 863,
+          "position": 33085
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"leads an unanswered question row with the question text\", async () => {\n    vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n    vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline\n            {...buildProps()}\n            timelineEntries={[\n              {\n                id: \"question-entry\",",
+      "lines": 13,
+      "secondFile": {
+        "end": 2720,
+        "endLoc": {
+          "column": 19,
+          "line": 2720,
+          "position": 96562
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2708,
+        "startLoc": {
+          "column": 78,
+          "line": 2708,
+          "position": 96153
+        }
+      },
+      "tokens": 75
+    },
+    {
+      "firstFile": {
+        "end": 932,
+        "endLoc": {
+          "column": 11,
+          "line": 932,
+          "position": 35802
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 917,
+        "startLoc": {
+          "column": 43,
+          "line": 917,
+          "position": 35199
+        }
+      },
+      "format": "tsx",
+      "fragment": "    async ({ toolLifecycleStatus, isAtEnd }) => {\n      const frames = new Map<number, FrameRequestCallback>();\n      let nextFrame = 0;\n      vi.stubGlobal(\"requestAnimationFrame\", (callback: FrameRequestCallback) => {\n        frames.set(++nextFrame, callback);\n        return nextFrame;\n      });\n      vi.stubGlobal(\"cancelAnimationFrame\", (frame: number) => frames.delete(frame));\n      vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n      const flushFrame = () =>\n        act(() => {\n          const callbacks = [...frames.values()];\n          frames.clear();\n          callbacks.forEach((callback) => callback(0));\n        });\n      const props = buildProps();",
+      "lines": 16,
+      "secondFile": {
+        "end": 1486,
+        "endLoc": {
+          "column": 9,
+          "line": 1486,
+          "position": 55825
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1469,
+        "startLoc": {
+          "column": 77,
+          "line": 1469,
+          "position": 55143
+        }
+      },
+      "tokens": 127
+    },
+    {
+      "firstFile": {
+        "end": 1167,
+        "endLoc": {
+          "column": 18,
+          "line": 1167,
+          "position": 43496
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1157,
+        "startLoc": {
+          "column": 25,
+          "line": 1157,
+          "position": 43256
+        }
+      },
+      "format": "tsx",
+      "fragment": "        scrollBottom: 500,\n        itemBounds: [\n          { top: 80, height: 20 },\n          { top: 120, height: 20 },\n          { top: 220, height: 20 },\n        ],\n      }),\n    ).toBe(1);\n    expect(\n      resolveTimelineMinimapCurrentIndex({\n        scrollTop: 150,",
+      "lines": 11,
+      "secondFile": {
+        "end": 1178,
+        "endLoc": {
+          "column": 18,
+          "line": 1178,
+          "position": 43767
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1168,
+        "startLoc": {
+          "column": 25,
+          "line": 1168,
+          "position": 43527
+        }
+      },
+      "tokens": 53
+    },
+    {
+      "firstFile": {
+        "end": 1938,
+        "endLoc": {
+          "column": 15,
+          "line": 1938,
+          "position": 70998
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1919,
+        "startLoc": {
+          "column": 46,
+          "line": 1919,
+          "position": 70434
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"keeps mixed-success tool groups neutral\", () => {\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        timelineEntries={[\n          {\n            id: \"entry-failed\",\n            kind: \"work\",\n            createdAt: \"2026-03-17T19:12:28.000Z\",\n            entry: {\n              id: \"work-failed\",\n              createdAt: \"2026-03-17T19:12:28.000Z\",\n              label: \"Run search\",\n              tone: \"tool\",\n              itemType: \"command_execution\",\n              toolLifecycleStatus: \"failed\",\n            },\n          },\n          {\n            id: \"entry-completed\",",
+      "lines": 20,
+      "secondFile": {
+        "end": 2076,
+        "endLoc": {
+          "column": 15,
+          "line": 2076,
+          "position": 75486
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2057,
+        "startLoc": {
+          "column": 69,
+          "line": 2057,
+          "position": 74922
+        }
+      },
+      "tokens": 69
+    },
+    {
+      "firstFile": {
+        "end": 2123,
+        "endLoc": {
+          "column": 15,
+          "line": 2123,
+          "position": 76882
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2107,
+        "startLoc": {
+          "column": 53,
+          "line": 2107,
+          "position": 76435
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"shows the one-line label for a live tool group\", () => {\n    const turnId = TurnId.make(\"turn-live\");\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        isWorking\n        activeTurnStartedAt={MESSAGE_CREATED_AT}\n        latestTurn={{\n          turnId,\n          state: \"running\",\n          startedAt: MESSAGE_CREATED_AT,\n          completedAt: null,\n        }}\n        runningTurnId={turnId}\n        timelineEntries={[\n          {\n            id: \"entry-live\",",
+      "lines": 17,
+      "secondFile": {
+        "end": 2162,
+        "endLoc": {
+          "column": 15,
+          "line": 2162,
+          "position": 77979
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2146,
+        "startLoc": {
+          "column": 61,
+          "line": 2146,
+          "position": 77532
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 2121,
+        "endLoc": {
+          "column": 26,
+          "line": 2121,
+          "position": 76854
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2107,
+        "startLoc": {
+          "column": 53,
+          "line": 2107,
+          "position": 76435
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"shows the one-line label for a live tool group\", () => {\n    const turnId = TurnId.make(\"turn-live\");\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        isWorking\n        activeTurnStartedAt={MESSAGE_CREATED_AT}\n        latestTurn={{\n          turnId,\n          state: \"running\",\n          startedAt: MESSAGE_CREATED_AT,\n          completedAt: null,\n        }}\n        runningTurnId={turnId}\n        timelineEntries={[",
+      "lines": 15,
+      "secondFile": {
+        "end": 2307,
+        "endLoc": {
+          "column": 26,
+          "line": 2307,
+          "position": 82862
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2293,
+        "startLoc": {
+          "column": 63,
+          "line": 2293,
+          "position": 82443
+        }
+      },
+      "tokens": 63
+    },
+    {
+      "firstFile": {
+        "end": 2123,
+        "endLoc": {
+          "column": 15,
+          "line": 2123,
+          "position": 76882
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2107,
+        "startLoc": {
+          "column": 53,
+          "line": 2107,
+          "position": 76435
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"shows the one-line label for a live tool group\", () => {\n    const turnId = TurnId.make(\"turn-live\");\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        isWorking\n        activeTurnStartedAt={MESSAGE_CREATED_AT}\n        latestTurn={{\n          turnId,\n          state: \"running\",\n          startedAt: MESSAGE_CREATED_AT,\n          completedAt: null,\n        }}\n        runningTurnId={turnId}\n        timelineEntries={[\n          {\n            id: \"entry-live\",",
+      "lines": 17,
+      "secondFile": {
+        "end": 2332,
+        "endLoc": {
+          "column": 15,
+          "line": 2332,
+          "position": 83587
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2316,
+        "startLoc": {
+          "column": 88,
+          "line": 2316,
+          "position": 83140
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 2651,
+        "endLoc": {
+          "column": 15,
+          "line": 2651,
+          "position": 94400
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2634,
+        "startLoc": {
+          "column": 78,
+          "line": 2634,
+          "position": 93926
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"keeps failed lifecycle entries discoverable in mixed activity summaries\", () => {\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        timelineEntries={[\n          {\n            id: \"entry-info\",\n            kind: \"work\",\n            createdAt: \"2026-03-17T19:12:27.000Z\",\n            entry: {\n              id: \"work-info\",\n              createdAt: \"2026-03-17T19:12:27.000Z\",\n              label: \"Status updated\",\n              tone: \"info\",\n            },\n          },\n          {\n            id: \"entry-1\",",
+      "lines": 18,
+      "secondFile": {
+        "end": 2689,
+        "endLoc": {
+          "column": 15,
+          "line": 2689,
+          "position": 95553
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2672,
+        "startLoc": {
+          "column": 64,
+          "line": 2672,
+          "position": 95079
+        }
+      },
+      "tokens": 61
+    },
+    {
+      "firstFile": {
+        "end": 4887,
+        "endLoc": {
+          "column": 85,
+          "line": 4887,
+          "position": 177666
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.tsx",
+        "start": 4880,
+        "startLoc": {
+          "column": 59,
+          "line": 4880,
+          "position": 177361
+        }
+      },
+      "format": "tsx",
+      "fragment": "const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {\n  workEntry: TimelineWorkEntry;\n  workspaceRoot: string | undefined;\n  isExpandedToolGroupEntry: boolean;\n  displayLabel?: string | undefined;\n  onToggleEntry?: ((collapsed: boolean) => void) | undefined;\n}) {\n  const { workEntry, workspaceRoot, isExpandedToolGroupEntry, displayLabel } = props;",
+      "lines": 8,
+      "secondFile": {
+        "end": 4916,
+        "endLoc": {
+          "column": 85,
+          "line": 4916,
+          "position": 178541
+        },
+        "name": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/src/components/chat/MessagesTimeline.tsx",
+        "start": 4909,
+        "startLoc": {
+          "column": 57,
+          "line": 4909,
+          "position": 178236
+        }
+      },
+      "tokens": 56
+    }
+  ],
+  "statistics": {
+    "detectionDate": "2026-10-07T07:14:41.435Z",
+    "formats": {
+      "tsx": {
+        "clones": 19,
+        "duplicatedLines": 206,
+        "duplicatedTokens": 1375,
+        "lines": 7963,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 2.5869647117920382,
+        "percentageTokens": 3.199236836594616,
+        "sources": 2,
+        "tokens": 42979
+      },
+      "typescript": {
+        "clones": 23,
+        "duplicatedLines": 344,
+        "duplicatedTokens": 1475,
+        "lines": 6340,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 5.425867507886435,
+        "percentageTokens": 4.144539042962713,
+        "sources": 2,
+        "tokens": 35589
+      }
+    },
+    "total": {
+      "clones": 42,
+      "duplicatedLines": 550,
+      "duplicatedTokens": 2850,
+      "lines": 14303,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 3.845347129972733,
+      "percentageTokens": 3.627431015171571,
+      "sources": 4,
+      "tokens": 78568
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "module": "07",
+  "findings": [],
+  "positive_findings": [
+    "JSCPD n’identifie aucun nouveau clone de production dans les quatre fichiers."
+  ]
+}

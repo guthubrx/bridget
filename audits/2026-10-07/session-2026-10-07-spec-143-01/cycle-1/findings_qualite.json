@@ -1,0 +1,31 @@
+{
+  "module": "05",
+  "findings": [
+    {
+      "id": "QUAL-143-001",
+      "category": "quality",
+      "subcategory": "function_length",
+      "severity": "MEDIUM",
+      "file": "apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "line": 85,
+      "title": "Projection de 88 lignes au-dessus du seuil de lisibilité",
+      "description": "Au premier gel, la fonction publique projectBridgetSend occupait 88 lignes, de85 à172. Le protocole fixe un seuil de50 lignes par fonction. La validation du reçu formait un bloc indépendant sans besoin de framework.",
+      "evidence": "export function projectBridgetSend(\n  entry: Pick<WorkLogEntry, \"itemType\" | \"toolData\" | \"tone\" | \"toolLifecycleStatus\">,\n): { recipient: string; recipientLabel: string } | null {",
+      "exploitability": "N/A",
+      "impact": "La lecture mélangeait identification du fournisseur, validation des paramètres et validation du reçu.",
+      "path_type": "hot",
+      "remediation": "Extraire uniquement la validation fermée du reçu dans un helper local privé, sans parseur générique.",
+      "verification": "Mesurer moins de51 lignes par fonction ajoutée et rejouer les tests existants.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "audit-v14 module05 checklist2"
+      ],
+      "status": "fixed",
+      "fingerprint": "96990848157c"
+    }
+  ],
+  "positive_findings": [
+    "projectBridgetSend:129 traite seulement les deux identités MCP attestées et retourne null pour toute contradiction."
+  ]
+}

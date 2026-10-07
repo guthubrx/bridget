@@ -1,0 +1,31 @@
+{
+  "module": "04",
+  "findings": [
+    {
+      "id": "PERF-143-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "MEDIUM",
+      "file": "apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "line": 85,
+      "title": "Projection publique non triviale sans annotation de complexité",
+      "description": "La projection valide deux formes de données MCP et lit un reçu JSON. Sa complexité temporelle et sa borne de statuts n’étaient pas documentées sur le premier gel.",
+      "evidence": "// Presentation only. An executed MCP call is not proof of message delivery.\nexport function projectBridgetSend(\n  entry: Pick<WorkLogEntry, \"itemType\" | \"toolData\" | \"tone\" | \"toolLifecycleStatus\">,\n): { recipient: string; recipientLabel: string } | null {",
+      "exploitability": "N/A",
+      "impact": "Le lecteur ne dispose pas de la borne explicite du coût au rendu.",
+      "path_type": "hot",
+      "remediation": "Documenter O(s+r), avec s la taille du destinataire et r celle du reçu, et la liste de statuts bornée à deux.",
+      "verification": "Relire la fonction gelée et rejouer les tests de projection.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "references": [
+        "audit-v14 module04 Documentation obligatoire"
+      ],
+      "status": "fixed",
+      "fingerprint": "f92bb123fa30"
+    }
+  ],
+  "positive_findings": [
+    "bridgetSendReceiptValid:91 limite le reçu à deux représentations cohérentes et ne confond pas accepted/in_flight avec livraison."
+  ]
+}

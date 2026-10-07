@@ -1,0 +1,7 @@
+{
+  "module": "08",
+  "findings": [],
+  "positive_findings": [
+    "PlainWorkEntryRow:5013 réutilise rôle button, tabulation, Entrée/Espace et état aria-expanded ; le nom complet reste accessible."
+  ]
+}

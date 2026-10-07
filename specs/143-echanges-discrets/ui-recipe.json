@@ -1,0 +1,35 @@
+{
+  "feature": "143-echanges-discrets",
+  "status": "PASS_isolated_browser_recipe",
+  "executor": "principal",
+  "native_preview_available": false,
+  "fallback": "browser_on_isolated_T3_clone",
+  "url": "http://127.0.0.1:5876",
+  "clone": "/Users/moi/.cache/t3-spec143-preview.FVsC8y",
+  "environment_id": "34f5965e-48b1-408c-bcf8-2ae9c29c04d8",
+  "checks": {
+    "incoming": { "background": "transparent", "border_px": 0, "header_height_px": 32, "thread_notice_label": "Fil partagé Nouveautés", "thread_body_accessible": true },
+    "outgoing": { "providers_in_fixtures": ["Codex", "Claude"], "technical_state": "completed", "receipt_state": "in_flight", "label": "Envoi", "uuid_short_visible": true, "uuid_full_aria": true, "group_height_px": 24, "body_and_receipt_json_accessible": true, "delivery_claim": false },
+    "keyboard": { "Enter": "collapsed", "Space": "expanded", "focus_preserved": true },
+    "viewport": { "width_css_px": 320, "document_scroll_width_css_px": 320, "overflow": false, "themes": ["light", "dark"] },
+    "native_fallbacks": { "permission_required": "native", "outcome_unknown": "native_with_actual_payload_and_status_accessible", "ordinary_tools_and_messages": "unchanged" },
+    "copy": { "real_copy_button_clicked": true, "browser_clipboard_sink_mocked": true, "complete_incoming_text_exact": true, "host_clipboard_modified": false },
+    "group_anchor": { "before": 76, "after": 76 },
+    "console": { "errors_after_clear_and_stable_reload": 0 },
+    "captures_visually_inspected_by_principal": true,
+    "unknown_fixture": { "content_and_structured_content_match_real_Codex_shape": true, "outcome_unknown_payload_and_status_native": true },
+    "clipboard_interception_restored": true,
+    "browser_cache": { "only_clone_environment_key_touched": true, "environment_id": "34f5965e-48b1-408c-bcf8-2ae9c29c04d8", "other_environments_modified": false }
+  },
+  "captures": [
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/codex-expanded.png",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/codex-320.png",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/codex-dark-320.png",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/claude-expanded.png",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/validation/unknown-native.png"
+  ],
+  "limits": ["No active provider or delivery E2E was exercised.", "The in_progress state is covered by unit tests, not visually rendered in these historical fixtures.", "Only the isolated clone server was reloaded for fixtures; active T3 was not restarted.", "Copy checks intercept the browser clipboard sink; they do not exercise the host clipboard.", "Native JSON values are accessible; serialized JSON byte identity is not promised."],
+  "cleanup": { "isolated_tab_closed": true, "backend_pid": 93227, "backend_exec_session": 81143, "frontend_pid": 61090, "frontend_exec_session": 15374, "method": "Ctrl-C_after_PID_identification", "ports_without_listener": [13916, 5876], "clone_and_captures_preserved": true, "active_T3_pid": 85017, "active_T3_start_time": "2026-10-07 07:21:41 CEST", "active_T3_unchanged": true },
+  "production_deployment": false,
+  "active_T3_restart": false
+}

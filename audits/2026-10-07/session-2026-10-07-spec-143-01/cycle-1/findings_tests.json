@@ -1,0 +1,8 @@
+{
+  "module": "06",
+  "findings": [],
+  "positive_findings": [
+    "Le corps fermé n’est pas monté ; les tests ouvrent le vrai composant et vérifient le JSON entier.",
+    "346 tests réellement rejoués par cet audit, exit0 en2,97s."
+  ]
+}
