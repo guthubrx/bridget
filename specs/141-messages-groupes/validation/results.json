@@ -1,7 +1,7 @@
 {
   "feature": "141-messages-groupes",
   "date": "2026-10-07",
-  "status": "implemented_not_activated",
+  "status": "implemented_installed_activation_deferred",
   "source_freeze_cest": "07:50:41",
   "tests": {
     "run_cest": "07:51:37",
@@ -74,7 +74,8 @@
     "exact_copy_and_attachments_verified_by_real_component_tests",
     "native_context_link_fixture_copy_not_tested_but_covered_by_component_tests",
     "no_end_to_end_provider_session",
-    "no_production_installation_or_restart",
+    "recipe_was_isolated_before_delivery",
+    "no_running_t3_activation_or_restart",
     "same_provider_review"
   ],
   "converge_pass_2": {
@@ -96,12 +97,14 @@
     "validator_errors": 0,
     "validator_warnings": 0,
     "validator_exit_code": 0,
-    "validator_executed_by": "principal"
+    "validator_executed_by": "principal",
+    "historical_scope": "frozen_source_diff_before_packaging",
+    "delivery_verification_recorded_separately": true
   },
   "tasks": {"completed": 10, "total": 10, "T008_checked_after_readonly_converge_and_audit": true},
   "delivery": {
-    "status": "t3_git_delivered_packaging_in_progress",
-    "installed": false,
+    "status": "installed_activation_deferred",
+    "installed": true,
     "activated": false,
     "explicit_session_141_authorization": true,
     "git_commit_merge_push_install_authorized": true,
@@ -122,7 +125,34 @@
     "active_application_archive_sha256": "dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1",
     "active_application_codesign_strict": "pass",
     "active_pids_start_time_unchanged": "07:21",
-    "packaging_directory": "/Users/moi/.cache/t3-spec141-package.OaEnOF"
+    "packaging_directory": "/Users/moi/.cache/t3-spec141-package.OaEnOF",
+    "bridget_preparation_commit": "7f4d65fb04261c09f420a2c907b6eeeecd1e9eaf",
+    "bridget_main_fast_forward_confirmed": true,
+    "bridget_github_main_and_session_pushes_confirmed": true,
+    "bridget_remote_refs_verified_with_ls_remote": true,
+    "fresh_tests_passed": 294,
+    "fresh_tests_failed": 0,
+    "package_version": "0.0.45-local.141",
+    "packaging_target": "zip",
+    "packaging_exit_code": 0,
+    "packaging_duration_seconds_approximate": 89,
+    "installed_asar_sha256": "f4fd81f645b81c65bd8a0471022931c9e2e789df837d1b42c9ffa693151c90da",
+    "application_signature": "ad_hoc_applied_after_packaging",
+    "staging_codesign_strict_deep_exit_code": 0,
+    "installed_codesign_strict_deep_exit_code": 0,
+    "installed_frontend_chunk_name": "_chat-DqlgvoJO.js",
+    "installed_frontend_chunk_sha256": "53aa48551495f867385170d4e5a490aac82004ce5932bff1a291295533b32505",
+    "installed_frontend_chunk_comparison": "pass",
+    "installed_frontend_markers": ["data-bridget-member-toggle", "Messages groupés"],
+    "packaging_archive": "/Users/moi/.cache/t3-spec141-package.OaEnOF/T3-Code-0.0.45-local.141-arm64.zip",
+    "packaging_archive_sha256": "f38ae9b8322061d6d762e6b3fbe6dfd2b4d67dc330a167b230befa00beb53c9c",
+    "packaging_archive_signed": false,
+    "active_environment_id_prefix": "3b1ba3d1",
+    "active_endpoint_http_valid_after_install": true,
+    "quit_open_restart_performed": false,
+    "daemon_or_agent_loop_changed": false,
+    "activation_instruction": "Quand l'utilisateur quittera volontairement /Applications/T3 Code (Local).app, ouvrir /Applications/T3 Code (Local SPEC141).app. Relancer l'ancienne application ne charge pas SPEC141.",
+    "post_install_journal_commit_reference": "git_history_of_delivery_document"
   },
   "pending": []
 }

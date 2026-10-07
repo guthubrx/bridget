@@ -1,8 +1,8 @@
 # Tâches141 — Messages Bridget groupés
 
-Date : 2026-10-07. Statut : Implemented, non activé.
+Date : 2026-10-07. Statut : Implemented, installé, activation différée.
 Gate de réutilisation PASS lu et validé par le principal avant génération.
-Suites ciblées : passage final 294 PASS (215 logique, 79 rendu), 2,84 secondes, sur le code gelé. Baseline existante : 269 PASS dans deux suites. Dix tâches sur dix validées. T008 cochée après Converge passe 2 et le verdict d'audit, dans une phase documentaire distincte de la lecture seule. Aucune installation de production.
+Suites ciblées : passage final 294 PASS (215 logique, 79 rendu), 2,84 secondes, sur le code gelé, puis 294/294 fraîchement rejoués avant livraison. Baseline existante : 269 PASS dans deux suites. Dix tâches sur dix validées. T008 cochée après Converge passe 2 et le verdict d'audit, dans une phase documentaire distincte de la lecture seule. Application adjacente installée et vérifiée ; aucune activation ni relance de T3.
 
 ## Préparation et fondations
 
@@ -52,3 +52,4 @@ Ces deux tâches complètent le périmètre existant. Elles ont suivi RED puis G
 - [x] T010 [US3] Préserver la copie row.message.text originale quand l'en-tête canonique d'un lot direct dépasse 1024 caractères dans /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx et les tests /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.test.tsx, avec le prédicat de reconnaissance nécessaire dans /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts. Écrire le test RED : en-tête canonique long, projection null et référence [x](t3-context://v1/skill/ctx_1) sans contexte structuré ; la copie ne doit pas devenir x. Utiliser un prédicat canonique ancré O(n) pour la seule décision de copie. Garder la reconnaissance d'affichage bornée et le rendu historique intégral inchangés. Obtenir GREEN sur ce cas et les copies des autres familles ; ne pas modifier le helper partagé.
 
 Clôture après Converge : l'empreinte des tâches est restée identique pendant la passe 2. T008 a été cochée ensuite, après réception de l'audit A/100, sans critique/majeur ouvert et avec validateur sortie 0. La session est implémentée et non installée. La livraison reste distincte et non engagée.
+Cette clôture décrit l'état avant autorisation de livraison. État courant après livraison : /Applications/T3 Code (Local SPEC141).app installée à côté et vérifiée ; /Applications/T3 Code (Local).app reste active et intacte. Activation différée, aucune relance effectuée. Le journal post-installation reste à committer par le principal ; aucun identifiant final n'est inventé.

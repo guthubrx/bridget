@@ -1,7 +1,7 @@
 # Journal141 — Préparation et implémentation
 
 Date : 2026-10-07. Début : 07:30 CEST. Estimation totale : 20–35 minutes.
-Statut : Implemented, non activé. Code gelé à 07:50:41 CEST. Dix tâches validées sur preuves ; T008 cochée après Converge passe 2 et audit final dans la phase de clôture documentaire.
+Statut : Implemented, installé, activation différée. Code gelé à 07:50:41 CEST. Dix tâches validées sur preuves. Installation adjacente vérifiée sans relance ni activation de T3.
 
 Session validée explicitement. Deux worktrees isolés déjà disponibles. Synchronisation SpecKit effectuée. Scripts et modèles locaux absents ; protocole appliqué manuellement. Format réel et composants SPEC140 vérifiés. La demande complémentaire exclut Sources et détails techniques pour les lots directs.
 
@@ -91,3 +91,17 @@ Preuves transmises par le principal : commit T3 5724eb7f12e4556327efa14f51f43b9c
 Le paquet adjacent /Applications/T3 Code (Local SPEC141).app est en préparation dans /Users/moi/.cache/t3-spec141-package.OaEnOF. L'application active /Applications/T3 Code (Local).app reste en place. Les PID 85017 et 85080 ont les mêmes dates de démarrage à 07:21 ; son archive a pour SHA256 dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1 et son contrôle codesign strict passe. La sauvegarde privée /Users/moi/.cache/t3-adoptions/spec141-20261007.llKRu1/state-before-install.sqlite a suivi VACUUM depuis la source en lecture seule puis quick_check=ok, sortie 0. Aucune installation, activation ou relance n'est déclarée terminée.
 
 Le principal coordonne le commit Bridget, l'installation et un second commit de preuves. Les écritures documentaires s'arrêtent après transmission de cette préparation, jusqu'à sa prochaine consigne.
+
+## Journal post-installation — preuves transmises par le principal
+
+Artefacts préparatoires Bridget : commit 7f4d65fb04261c09f420a2c907b6eeeecd1e9eaf, avance rapide vers main, pushes github main et session141 confirmés, valeurs distantes ls-remote identiques. Code T3 : 5724eb7f12e4556327efa14f51f43b9caf404e25 ; commit portable : cf0bd9903181327a793be06ccc23b2d402090abd, déjà poussés. Tests fraîchement rejoués : 294/294 PASS.
+
+Packaging normal --target zip : sortie 0, environ 89 secondes, source 5724eb7f12e4, version 0.0.45-local.141. L'application /Applications/T3 Code (Local SPEC141).app est installée à côté. Signature ad hoc appliquée par le principal après packaging. Vérification codesign stricte et profonde : sortie 0 sur l'application de staging et sur l'application installée. SHA256 ASAR installé : f4fd81f645b81c65bd8a0471022931c9e2e789df837d1b42c9ffa693151c90da.
+
+Le principal a extrait le chunk _chat-DqlgvoJO.js de l'application installée et comparé son SHA256 53aa48551495f867385170d4e5a490aac82004ce5932bff1a291295533b32505. Comparaison et présence des marqueurs data-bridget-member-toggle / Messages groupés : PASS. L'archive zip non signée reste conservée dans /Users/moi/.cache/t3-spec141-package.OaEnOF/T3-Code-0.0.45-local.141-arm64.zip, SHA256 f38ae9b8322061d6d762e6b3fbe6dfd2b4d67dc330a167b230befa00beb53c9c. La signature porte sur l'application après packaging ; elle n'est pas revendiquée pour le zip.
+
+L'application active /Applications/T3 Code (Local).app reste intacte, archive SHA256 dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1 et signature stricte PASS. PID 85017/85080 et dates de démarrage à 07:21 inchangés. L'endpoint public de l'environnement dont l'identifiant commence par 3b1ba3d1 répond en HTTP après installation. La sauvegarde d'état a un quick_check=ok. Aucun quit, open ou restart. Aucun changement du daemon ni d'Agent Loop.
+
+La présentation141 n'est pas activée. Quand l'utilisateur choisira de quitter l'ancienne application, il devra ouvrir /Applications/T3 Code (Local SPEC141).app. Relancer /Applications/T3 Code (Local).app ne charge pas141. L'audit et les rapports précédents restent les preuves historiques de la source validée ; la livraison est prouvée séparément ici.
+
+Le commit du présent journal post-installation n'est pas encore connu. Il sera consigné par le principal après son exécution. Aucun commit ni lancement d'application effectué par l'agent documentaire.

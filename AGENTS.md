@@ -12,6 +12,12 @@ autorisés explicitement le 2026-10-07. Préparer une sauvegarde et vérifier su
 Interdiction explicite de relancer T3 : ne pas quitter ni redémarrer l'application.
 Conserver les conversations et processus T3 en cours. Installation distincte de
 l'activation : ne pas annoncer la nouvelle présentation active sans preuve.
+Session141 installée à côté dans /Applications/T3 Code (Local SPEC141).app,
+signatures et assets vérifiés. L'application active /Applications/T3 Code (Local).app
+reste intacte ; aucune relance ni activation141. Activation future uniquement
+après fermeture volontaire de l'ancienne application par l'utilisateur, puis
+ouverture explicite de la nouvelle application adjacente. Relancer l'ancienne
+application ne charge pas la session141.
 Aucun cleanup d'autres travaux sans autorisation.
 Sélection SpecKit : SPECIFY_FEATURE=141-messages-groupes ; branche session-141-messages-groupes.
 <!-- SPECKIT END -->

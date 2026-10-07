@@ -1,6 +1,6 @@
 # Plan141 — Présentation des lots directs
 
-Date : 2026-10-07. Statut : Implemented, non activé. Gate de réutilisation, Converge passe 2 et audit final validés.
+Date : 2026-10-07. Statut : Implemented, installé, activation différée. Gate de réutilisation, Converge passe 2 et audit final validés.
 Début de préparation : 07:30 CEST. Estimation totale : 20–35 minutes, hors livraison de production.
 Branche Bridget : session-141-messages-groupes.
 Artefacts : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes
@@ -77,4 +77,4 @@ Dix tâches validées sur preuves. Converge passe 2 : CONVERGED, 22 exigences/cr
 Audit : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01
 Résultats : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/validation/results.json
 
-Le statut Implemented ne signifie pas activé dans l'application de production. Le 2026-10-07, l'utilisateur a autorisé commit, fusion, push et installation de la session141, avec interdiction explicite de relancer T3. Le principal réalise la livraison avec sauvegarde et vérification. Ce document ne revendique pas encore d'installation ni d'activation ; les preuves seront consignées dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/livraison.md.
+Le statut Implemented ne signifie pas activé dans l'application en cours. La session141 a suivi commit, fusion, push et installation autorisés, sans relancer T3. Le principal a installé et vérifié /Applications/T3 Code (Local SPEC141).app à côté de /Applications/T3 Code (Local).app, restée active et intacte. Les preuves sont consignées dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/livraison.md. L'utilisateur devra fermer volontairement l'ancienne application puis ouvrir la nouvelle pour activer141. Relancer l'ancienne ne charge pas ces changements.
