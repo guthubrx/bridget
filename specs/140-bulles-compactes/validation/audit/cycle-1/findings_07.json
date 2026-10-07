@@ -1,0 +1,8 @@
+{
+  "module": "07",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "07 — Intersection des41 clones de contexte Rust avec les nouvelles lignes : zéro ; deux fichiers production T3 sans clone détecté."
+  ]
+}

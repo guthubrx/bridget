@@ -1,0 +1,8 @@
+{
+  "module": "06",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "06 — Remise et replay ne changent ni canon ni journal durable (crates/bridget-daemon/src/daemon.rs:16366 ; communication.rs:449)."
+  ]
+}

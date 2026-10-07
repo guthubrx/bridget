@@ -1,0 +1,95 @@
+{
+  "grade": "A",
+  "numeric": 100,
+  "date": "2026-10-07",
+  "spec": "140",
+  "scope": "Diff SPEC140 :8 sources et1 SVG, racines Bridget et T3 ; pas le dépôt entier",
+  "coverage_percent": 100,
+  "justification": "Après correction de QUAL-001, zéro finding restant dans le diff. Moyenne pondérée des14 axes actifs :100/100. Note bornée à la revue et aux contrôles décrits ; pas une garantie globale.",
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 3
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "ux": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    }
+  }
+}

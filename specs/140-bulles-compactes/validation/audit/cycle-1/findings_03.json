@@ -1,0 +1,8 @@
+{
+  "module": "03",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "03 — Titre résolu par Store.thread_show pour le destinataire, sans autorité provenant du champ déclaratif (crates/bridget-daemon/src/daemon.rs:7515)."
+  ]
+}

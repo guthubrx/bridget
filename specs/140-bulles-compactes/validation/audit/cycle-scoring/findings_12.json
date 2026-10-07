@@ -1,0 +1,8 @@
+{
+  "module": "12",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "12 — Aucun service, API, migration ou dépendance ; logo officiel importé localement."
+  ]
+}

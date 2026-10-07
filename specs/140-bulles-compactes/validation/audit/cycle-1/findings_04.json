@@ -1,0 +1,8 @@
+{
+  "module": "04",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "04 — En-tête et ligne de métadonnée limités à1024 caractères, titre200 et aucune consultation réseau (t3/apps/web/src/components/chat/MessagesTimeline.logic.ts:100)."
+  ]
+}

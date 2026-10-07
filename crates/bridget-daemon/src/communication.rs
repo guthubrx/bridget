@@ -448,6 +448,14 @@ mod tests {
             bytes,
             canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &message, 123000)
         );
+        let mut titled = serde_json::to_value(&message).unwrap();
+        titled["thread_display_title"] = serde_json::json!("Titre de présentation");
+        let titled: bridget_core::BridgetMessage = serde_json::from_value(titled).unwrap();
+        assert_eq!(
+            bytes,
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &titled, 123000)
+        );
+        assert_eq!(message.content_key(), titled.content_key());
         message.in_reply_to = Some("request-other".into());
         assert_ne!(
             bytes,

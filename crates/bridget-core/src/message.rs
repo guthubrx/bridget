@@ -89,6 +89,10 @@ pub struct BridgetMessage {
     /// l'emploie seulement pour construire le prompt fournisseur.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_display_name: Option<String>,
+    /// Titre facultatif de présentation d'un fil, résolu pour son membre à la
+    /// remise seulement. Sans rôle dans le routage, le journal ou le canon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_display_title: Option<String>,
     /// Nom du destinataire (ex: "codex-2").
     pub to: String,
     /// Texte du message.
@@ -166,6 +170,7 @@ impl BridgetMessage {
             id,
             from: from.into(),
             from_display_name: None,
+            thread_display_title: None,
             to: to.into(),
             body: body.into(),
             reply: false,
@@ -232,6 +237,35 @@ fn deserialize_present_reason<'de, D: serde::Deserializer<'de>>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec140_titre_facultatif_racine_et_ancien_lecteur_compatibles() {
+        let old: super::BridgetMessage =
+            serde_json::from_str(r#"{"id":"m","from":"a","to":"b","body":"x"}"#).unwrap();
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("thread_display_title")
+                .is_none()
+        );
+        let mut wire = serde_json::to_value(&old).unwrap();
+        wire["thread_display_title"] = serde_json::json!("Politique");
+        let current: super::BridgetMessage = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(current).unwrap()["thread_display_title"],
+            "Politique"
+        );
+        #[derive(serde::Deserialize)]
+        struct OldRoot {
+            id: String,
+        }
+        assert_eq!(
+            serde_json::from_value::<OldRoot>(wire.clone()).unwrap().id,
+            "m"
+        );
+        wire["thread_notice"] = serde_json::json!({"version":1,"thread_id":"f","through_seq":1,"generation":1,"title":"forgé"});
+        assert!(serde_json::from_value::<super::BridgetMessage>(wire).is_err());
+    }
+
     #[test]
     fn spec134_libelle_associe_nom_humain_et_uuid_complet() {
         let agent_id = "cbd8d228-62ef-494b-80b7-bf08333591d6";

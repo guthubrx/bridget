@@ -1,0 +1,174 @@
+{
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-07T04:28:41Z",
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes",
+    "external_scope": "/Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact",
+    "external_path_mapping": {
+      "t3/": "/Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/"
+    },
+    "audit_mode": "readonly",
+    "audit_grid": "pre-merge",
+    "scope_mode": "diff",
+    "requested_audit_mode": "fix",
+    "executed_audit_mode": "readonly",
+    "module_selection": "MODULES_ACTIFS explicit override: all modules00-12",
+    "phase09_executed": false,
+    "historical_cycle": "cycle-1 reconstructs verified Implement/counter-review evidence; not a dated pre-fix audit",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "numeric_score": 100,
+    "release_blocked": false,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "complexity": "A",
+      "quality": "A",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "performance": "A",
+      "ux": "A"
+    },
+    "repository": {
+      "files_count": 9,
+      "files_count_definition": "8 sources et1 SVG dans le périmètre diff ; pas un nombre total de fichiers du dépôt.",
+      "languages": [
+        "rust",
+        "typescript",
+        "tsx",
+        "svg"
+      ],
+      "frameworks": [
+        "React19",
+        "Vite"
+      ],
+      "libraries": [
+        "serde",
+        "rusqlite",
+        "Tailwind"
+      ],
+      "type": "local-daemon-and-desktop-web-ui",
+      "has_ui": true,
+      "has_llm_integration": true,
+      "db_type": "sqlite",
+      "ci_system": "not_audited",
+      "container": false
+    },
+    "coverage_definition": "diff_hunks_plus_context_and_new_asset",
+    "cycle": "cycle-scoring"
+  },
+  "execution_metrics": {
+    "files_scanned": 9,
+    "files_total": 9,
+    "source_files_scanned": 8,
+    "source_files_total": 8,
+    "coverage_estimate_percent": 100,
+    "repository_coverage_percent": null,
+    "lines_analyzed": null,
+    "lines_analyzed_reason": "100% du diff lu ; pas les fichiers entiers ni une couverture de tests mesurée.",
+    "tools_used": [
+      "git",
+      "rg",
+      "cargo",
+      "vp",
+      "tsc",
+      "jscpd",
+      "Browser T3",
+      "fingerprint.py"
+    ],
+    "sampling_method": null,
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "phases_skipped": ["09"],
+    "skip_reasons": {"09":"No current open finding; dirty uncommitted SPEC140 worktrees fail the clean-tree correction gate. No audit code fix applied or automatic commit permitted."},
+    "warnings": [
+      "Audit du diff seulement, pas audit global des dépôts.",
+      "Aucun autre fournisseur connecté lors du contrôle bridget who ; revue indépendante locale au même fournisseur.",
+      "22 warnings lint préexistants identiques à la baseline ; pas de warning nouveau confirmé.",
+      "Build web : avertissement non bloquant sur les chunks de plus de500ko.",
+      "Message10ko testé automatiquement et message7ko testé en vrai DOM ; aucun benchmark DOM de charge revendiqué.",
+      "API32 messages ;16 cartes desktop et12 mobile montées, pas32 simultanément ; aucun benchmark de recyclage complet.",
+      "Changement de fil browser PASS et isolation fil/message automatisée PASS.",
+      "Preview native resize ignoré puis timeout10s ; largeur320 vérifiée dans iframe même origine avec Browser T3 uniquement.",
+      "Aucun build desktop, installation, commit, push ou redémarrage production.",
+      "Capture PNG finale non validée : deux erreurs client snapshot/save, mesures DOM réelles conservées."
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "total": 0,
+    "by_category": {}
+  },
+  "findings": [],
+  "suppressed": [],
+  "positive_findings": [
+    "03 — Titre résolu par Store.thread_show pour le destinataire, sans autorité provenant du champ déclaratif (crates/bridget-daemon/src/daemon.rs:7515).",
+    "04 — En-tête et ligne de métadonnée limités à1024 caractères, titre200 et aucune consultation réseau (t3/apps/web/src/components/chat/MessagesTimeline.logic.ts:100).",
+    "05 — La branche du composant existant et la copie originale restent les chemins de référence (t3/apps/web/src/components/chat/MessagesTimeline.tsx:3973).",
+    "06 — Remise et replay ne changent ni canon ni journal durable (crates/bridget-daemon/src/daemon.rs:16366 ; communication.rs:449).",
+    "07 — Intersection des41 clones de contexte Rust avec les nouvelles lignes : zéro ; deux fichiers production T3 sans clone détecté.",
+    "08 — Bouton natif et état aria-expanded, focus, Enter/Space, ancrage et largeur320 réellement contrôlés (t3/apps/web/src/components/chat/MessagesTimeline.tsx:4056).",
+    "12 — Aucun service, API, migration ou dépendance ; logo officiel importé localement."
+  ],
+  "duplicated_code": {
+    "rust": {
+      "measurement_scope": "4 fichiers de contexte entiers ; pas taux du diff",
+      "lines": 35416,
+      "clones": 41,
+      "duplicated_lines": 734,
+      "percentage": 2.0725,
+      "modified_line_intersections": 0
+    },
+    "web": {
+      "measurement_scope": "2 fichiers production entiers",
+      "lines": 6936,
+      "clones": 0
+    },
+    "baseline_limitation": "Aucune baseline ; le résultat repose sur l'intersection réelle des intervalles git diff -U0 avec les clones, pas sur newClones/isNew.",
+    "reports": [
+      "/Users/moi/.cache/t3-spec140-preview.9yd2HW/jscpd-rust-full/jscpd-report.json",
+      "/Users/moi/.cache/t3-spec140-preview.9yd2HW/jscpd-web/jscpd-report.json"
+    ]
+  },
+  "roadmap": {
+    "immediate": [],
+    "short_term": [],
+    "medium_term": [],
+    "long_term": []
+  }
+}

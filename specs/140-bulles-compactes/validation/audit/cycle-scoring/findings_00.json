@@ -1,0 +1,8 @@
+{
+  "module": "00",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "Paramètres et scope diff chargés ; aucun commit automatique."
+  ]
+}

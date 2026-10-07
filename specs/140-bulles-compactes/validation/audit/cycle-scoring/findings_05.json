@@ -1,0 +1,8 @@
+{
+  "module": "05",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "05 — La branche du composant existant et la copie originale restent les chemins de référence (t3/apps/web/src/components/chat/MessagesTimeline.tsx:3973)."
+  ]
+}

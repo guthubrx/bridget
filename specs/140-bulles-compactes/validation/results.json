@@ -1,0 +1,170 @@
+{
+  "spec": "140",
+  "date": "2026-10-07",
+  "status": "Implemented",
+  "tasks": {"completed":14,"total":14,"first_unchecked":null},
+  "timing": {"started":"2026-10-07T05:56:00+02:00","verified":"2026-10-07T06:36:00+02:00","elapsed_minutes":40,"initial_eta_minutes":[47,90],"expanded_title_eta_minutes":[55,105],"post_tasks_remaining_eta_minutes":[35,70],"variance_percent_vs_initial_midpoint":-41.6,"cause":"Two independent implementation axes in parallel and verified existing components reused","bookkeeping_minutes_not_exactly_measured":true},
+  "scope": {
+    "bridget": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes",
+    "t3": "/Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact",
+    "production_changed": false
+  },
+  "tests": {
+    "frontend": {
+      "baseline": 211,
+      "passed": 269,
+      "failed": 0,
+      "logic": 194,
+      "ui": 75,
+      "duration_seconds": 7.13,
+      "new_delegated_red_then_green": 12,
+      "unknown_suffix_variants": 6,
+      "ui_exact_raw_copy": 1,
+      "coverage_percent": null
+    },
+    "rust": {
+      "passed_distinct": 67,
+      "failed": 0,
+      "suites": {
+        "core": 45,
+        "spec140_daemon": 6,
+        "communication": 11,
+        "spec102": 1,
+        "spec114": 4
+      },
+      "bridget_home": "/tmp/b140.uk4wWV",
+      "cargo_target_dir": "shared_root_target",
+      "global_suite_run": false
+    }
+  },
+  "checks": {
+    "lint": {
+      "exit_code": 0,
+      "duration_seconds": 2.33,
+      "warnings": 22,
+      "baseline_warnings": 22,
+      "baseline_duration_seconds": 3.06,
+      "new_warnings_confirmed": 0
+    },
+    "types": {
+      "exit_code": 0,
+      "duration_seconds": 18.42
+    },
+    "build_web": {
+      "exit_code": 0,
+      "duration_seconds": 43.71,
+      "warning": "chunks >500ko non bloquant"
+    },
+    "format_web": {
+      "exit_code": 0,
+      "duration_seconds": 1.19
+    },
+    "rustfmt": {
+      "status": "PASS",
+      "files": 4
+    },
+    "diff_check": "PASS",
+    "cargo_check_all_targets_offline": {
+      "exit_code": 0,
+      "duration_seconds": 19.17,
+      "command": "cargo check --workspace --all-targets --offline",
+      "crates": 3
+    },
+    "logo_official_cmp": "IDENTICAL"
+  },
+  "browser": {
+    "real_component": true,
+    "isolated": true,
+    "keyboard": [
+      "Enter PASS",
+      "Space PASS",
+      "focus preserved"
+    ],
+    "raw_details": "PASS",
+    "title": "Coordination politique",
+    "legacy_title": "Fil partagé",
+    "mobile": {
+      "width": 320,
+      "method": "same-origin iframe through Browser T3",
+      "cards_observed": 12,
+      "collapsed_height_px": 44,
+      "horizontal_overflow_px": 0
+    },
+    "anchor": {
+      "before_top": 623,
+      "opened_top": 623,
+      "closed_top": 623,
+      "scroll_top": 1795,
+      "body_opened_height_px": 5963,
+      "collapsed_context_height_px": 3125
+    },
+    "themes": {
+      "light_background": "oklab(0.93948...)",
+      "dark_mobile_background": "oklab(0.741779... / 0.1168)"
+    },
+    "thread_switch": "PASS second thread only Psychologie deux closed",
+    "virtualization_32_real": "API32, desktop16 and mobile12 mounted; active virtualization, no full32 recycle benchmark",
+    "long_body_10kb": "automated React PASS",
+    "long_body_real_dom": {"raw_length":7357,"readable_length":7154,"last_line":80,"status":"PASS"},
+    "native_copy_closed": {"length":7357,"exact_source_comparison":"PASS","clipboard_mock":"scoped and restored"},
+    "raw_7kb_dom": "PASS recovered after Browser reopen, exact7357 compared to GET source",
+    "final_screenshot": "NOT_VERIFIED tool snapshot/save client failed twice",
+    "synthetic_cache_refresh": "one identified IndexedDB snapshot key removed, no global reset or active userdata"
+  },
+  "review": {
+    "other_provider": "none connected",
+    "local_agent": "/root/spec140_review",
+    "finding": "QUAL-001 MEDIUM corrected",
+    "final_verdict": "APPROVE",
+    "memory_cases": 32
+  },
+  "audit": {
+    "requested_mode": "fix",
+    "executed_mode": "readonly",
+    "phase09": "SKIPPED no current open finding and clean-tree correction gate unmet; historical fix during Implement/counter-review",
+    "cycle1": "reconstructed verified historical evidence, not a dated pre-fix audit",
+    "grade": "A",
+    "numeric": 100,
+    "remaining_findings": 0,
+    "baseline_written": false,
+    "validator": "PASS principal official validate_session.py exit0, 0 errors and0 warnings; final gate accepted"
+  },
+  "analyze": {
+    "passes": 2,
+    "status": "DONE",
+    "mode": "manual local primitive unavailable"
+  },
+  "converge": {
+    "status": "CONVERGED",
+    "passes": 2,
+    "requirements": 11,
+    "tasks_sha256_before": "cc8a04c49f743637360a96daa59478920056c751121520d97a9039ca8ad65238",
+    "tasks_sha256_after": "cc8a04c49f743637360a96daa59478920056c751121520d97a9039ca8ad65238",
+    "final_post_audit_pass": "CONVERGED at06:36 after final audit gate, sources unchanged",
+    "final_tasks_sha256_before":"ee8836218d9d227d79700dab06e89ef59afc19689edd636114437585bd04056a",
+    "final_tasks_sha256_after":"ee8836218d9d227d79700dab06e89ef59afc19689edd636114437585bd04056a"
+  },
+  "delivery": {
+    "commit": false,
+    "merge": false,
+    "push": false,
+    "desktop_build": false,
+    "installation": false,
+    "production_restart": false
+  },
+  "source_freeze": {"files":9,"manifest_sha256":"450f753a86d0df510cc7ee002d575d4043d95556018ef18a43c1df9f5ce76594","definition":"SHA256 of ordered JSON path/SHA entries as verified by principal","unchanged_since_final_checks":true},
+  "artifact_retention":{"audit_directory_git_ignored":true,"durable_copy":"specs/140-bulles-compactes/validation/audit/","durable_copy_reports":34,"byte_identical_to_original":true,"durable_copy_validator":"PASS zero errors/warnings","commit_not_claimed":true,"cleanup_performed":false},
+  "delivery_authorization":{"date":"2026-10-07","explicit":true,"operations":["commit","merge","push","installation"],"status":"PREPARATION no deployment claimed"},
+  "limitations": [
+    "Audit du diff seulement, pas audit global des dépôts.",
+    "Aucun autre fournisseur connecté lors du contrôle bridget who ; revue indépendante locale au même fournisseur.",
+    "22 warnings lint préexistants identiques à la baseline ; pas de warning nouveau confirmé.",
+    "Build web : avertissement non bloquant sur les chunks de plus de500ko.",
+      "Message10ko testé automatiquement et message7ko testé en vrai DOM ; aucun benchmark DOM de charge revendiqué.",
+      "API32 messages ;16 cartes desktop et12 mobile montées, pas32 simultanément ; aucun benchmark de recyclage complet.",
+      "Changement de fil browser PASS et isolation fil/message automatisée PASS.",
+    "Preview native resize ignoré puis timeout10s ; largeur320 vérifiée dans iframe même origine avec Browser T3 uniquement.",
+      "Aucun build desktop, installation, commit, push ou redémarrage production.",
+      "Capture PNG finale non validée : deux erreurs client snapshot/save, mesures DOM réelles conservées."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "module": "10",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "Schémas JSON et fingerprint officiel ; validation finale à faire."
+  ]
+}

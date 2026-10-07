@@ -1,0 +1,30 @@
+{
+  "module": "05",
+  "scope_mode": "diff",
+  "findings": [
+    {
+      "id": "QUAL-001",
+      "fingerprint": "8ffe6b69ad36",
+      "category": "quality",
+      "severity": "MEDIUM",
+      "file": "t3/apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "line": 113,
+      "title": "Étiquette d'un expéditeur délégué conserve les identifiants techniques",
+      "description": "Avant le correctif, le suffixe via sous-agent fermé empêchait l'extraction de l'UUID terminal et de la notice de réponse. La bulle conservait UUID/référence16hex et le corps lisible conservait le suffixe technique.",
+      "evidence": "const sender = direct[1]!;\nconst identity = new RegExp(`(?:^|\\\\()(${BRIDGET_UUID})\\\\)?$`, \"i\").exec(sender)?.[1];\nconst label = new RegExp(`^${BRIDGET_UUID}$`, \"i\").test(sender) ? \"Bridget\" : sender.replace(new RegExp(` \\\\(${BRIDGET_UUID}\\\\)$`, \"i\"), \"\");",
+      "exploitability": "N/A",
+      "impact": "Lisibilité dégradée de la carte et charge de contexte visuelle ; aucune perte de mission ou fuite d'autorité démontrée.",
+      "path_type": "hot",
+      "remediation": "Retirer uniquement le suffixe final fermé via sous-agent avec fournisseur codex, claude ou cursor et référence16hex, puis appliquer l'extraction UUID existante. Conserver les variantes inconnues.",
+      "verification": "Reproduction en mémoire,12 tests RED puis GREEN ; six variantes inconnues conservées ; une preuve UI de copie brute exacte ; revue finale32 cas mémoire APPROVE.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "open",
+      "fixed_at": null,
+      "commit_sha": null
+    }
+  ],
+  "positive_findings": [
+    "05 — La branche du composant existant et la copie originale restent les chemins de référence (t3/apps/web/src/components/chat/MessagesTimeline.tsx:3973)."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "module": "08",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "08 — Bouton natif et état aria-expanded, focus, Enter/Space, ancrage et largeur320 réellement contrôlés (t3/apps/web/src/components/chat/MessagesTimeline.tsx:4056)."
+  ]
+}

@@ -3092,9 +3092,50 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     if let Some(notice) = &message.thread_notice {
         // Session 102 : sollicitation de fil. Aucun relais de la réponse finale,
         // aucun accusé : le destinataire lit et publie par bridget_thread.
+        // Présentation seulement : O(n) au plus sur le titre source, mémoire
+        // et sortie bornées à 200 scalaires ; le corps reste byte-identique.
+        let mut title = String::new();
+        let mut title_chars = 0;
+        let mut separator = false;
+        for character in message
+            .thread_display_title
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+        {
+            if character.is_whitespace() || bridget_core::is_disallowed_control(character) {
+                separator = !title.is_empty();
+                continue;
+            }
+            if title_chars == 200 {
+                break;
+            }
+            if separator {
+                title.push(' ');
+                title_chars += 1;
+                separator = false;
+            }
+            if title_chars == 200 {
+                break;
+            }
+            title.push(character);
+            title_chars += 1;
+        }
+        let title = title.trim_end();
+        let title_line = if title.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Titre du fil Bridget : {}\n\n",
+                serde_json::to_string(title).expect("une chaîne JSON est sérialisable")
+            )
+        };
         return format!(
             "🧵 Sollicitation Bridget dans le fil {} (nouveautés jusqu'à {}, id {}) :\n\n{}\n\nConsulte ce fil avec l'outil bridget_thread (read, puis ack) ; publie dans le fil si utile (post). Ne fais pas de réponse directe à cette alerte : le pont ne relaie pas ta réponse finale.",
-            notice.thread_id, notice.through_seq, message.id, message.body
+            notice.thread_id,
+            notice.through_seq,
+            message.id,
+            format_args!("{title_line}{}", message.body)
         );
     }
     if message.id.starts_with("bridget-observation:") {
@@ -3425,6 +3466,45 @@ mod tests {
             }
         }
         replies
+    }
+
+    #[test]
+    fn spec140_titre_json_borne_et_entete_historique_inchange() {
+        let mut message = bridget_core::BridgetMessage::new("bridget", "bob", "corps intact");
+        message.id = "notice-140".into();
+        message.thread_notice = Some(bridget_core::ThreadNotice {
+            version: 1,
+            thread_id: "fil-140".into(),
+            through_seq: 2,
+            generation: 1,
+        });
+        let historical = envelope(&message);
+        let mut wire = serde_json::to_value(&message).unwrap();
+        wire["thread_display_title"] =
+            serde_json::json!("  Projet\n\t\"politique\" \\ suite\u{202e}\u{0007} ");
+        let enriched: bridget_core::BridgetMessage = serde_json::from_value(wire.clone()).unwrap();
+        let actual = envelope(&enriched);
+        let heading = historical.split_once("\n\n").unwrap().0;
+        assert!(actual.starts_with(&format!("{heading}\n\nTitre du fil Bridget : \"Projet \\\"politique\\\" \\\\ suite\"\n\ncorps intact")), "{actual}");
+        wire["thread_display_title"] = serde_json::json!("界".repeat(500));
+        let bounded = envelope(&serde_json::from_value(wire.clone()).unwrap());
+        let title_json = bounded
+            .split_once("Titre du fil Bridget : ")
+            .unwrap()
+            .1
+            .split_once('\n')
+            .unwrap()
+            .0;
+        assert_eq!(
+            serde_json::from_str::<String>(title_json)
+                .unwrap()
+                .chars()
+                .count(),
+            200
+        );
+        wire["thread_display_title"] = serde_json::json!(" \n\u{202e}\u{0007}");
+        assert_eq!(envelope(&serde_json::from_value(wire).unwrap()), historical);
+        assert_eq!(message.body, "corps intact");
     }
 
     /// Message ordinaire sans réponse attendue : le cas groupable.

@@ -1,0 +1,8 @@
+{
+  "module": "01",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "Tous les défauts retenus ont une preuve ; pas d'inférence de provenance."
+  ]
+}

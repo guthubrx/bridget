@@ -1,0 +1,145 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-07T04:28:41Z",
+    "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes",
+    "external_scope": "/Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact",
+    "scope_mode": "diff",
+    "diff": {
+      "base": "2ff83091",
+      "external_base": "9905d9cbc2",
+      "source_files": 8,
+      "assets": 1,
+      "definition": "Nouveaux blocs des8 sources et logo neuf, plus contexte nécessaire ; docs comme preuves. Pas de scan global."
+    },
+    "mode": "fix",
+    "requested_mode": "fix",
+    "executed_mode": "readonly",
+    "phase09_executed": false,
+    "phase09_skip_reason": "No current open finding and clean-tree correction gate unmet: SPEC140 diff is uncommitted. Historical fix was during Implement/counter-review, not audit Phase09.",
+    "grid": "pre-merge"
+  },
+  "repo": {
+    "files_count": 9,
+    "files_count_definition": "8 sources et1 SVG dans le périmètre diff ; pas un nombre total de fichiers du dépôt.",
+    "languages": [
+      "rust",
+      "typescript",
+      "tsx",
+      "svg"
+    ],
+    "frameworks": [
+      "React19",
+      "Vite"
+    ],
+    "libraries": [
+      "serde",
+      "rusqlite",
+      "Tailwind"
+    ],
+    "type": "local-daemon-and-desktop-web-ui",
+    "has_ui": true,
+    "has_llm_integration": true,
+    "db_type": "sqlite",
+    "ci_system": "not_audited",
+    "container": false
+  },
+  "sampling": null,
+  "coverage": {
+    "percent": 100,
+    "unit": "diff_hunks_plus_context_and_new_asset",
+    "repository_percent": null,
+    "scope_files": [
+      "crates/bridget-core/src/message.rs",
+      "crates/bridget-daemon/src/communication.rs",
+      "crates/bridget-daemon/src/daemon.rs",
+      "crates/bridget-daemon/src/t3code.rs",
+      "t3/apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "t3/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+      "t3/apps/web/src/components/chat/MessagesTimeline.tsx",
+      "t3/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+      "t3/apps/web/src/assets/bridget-logo.svg"
+    ]
+  },
+  "external_path_mapping": {
+    "t3/": "/Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/"
+  },
+  "modules_actifs": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12"
+  ],
+  "module_selection": "MODULES_ACTIFS explicit override: all modules00-12; active configuration does not imply all phases executed",
+  "parameters": {
+    "AUTO_COMMIT": false,
+    "MAX_CYCLES": 1,
+    "final_scoring_mode": "readonly",
+    "baseline_write": false
+  },
+  "hot_paths": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 3964,
+      "trigger": "projection de remise idempotente"
+    },
+    {
+      "file": "t3/apps/web/src/components/chat/MessagesTimeline.logic.ts",
+      "line": 109,
+      "trigger": "projection pure de l'enveloppe"
+    },
+    {
+      "file": "t3/apps/web/src/components/chat/MessagesTimeline.tsx",
+      "line": 4034,
+      "trigger": "disclosure et ancrage de carte"
+    }
+  ],
+  "threat_model": {
+    "assets": [
+      "titre du fil autorisé",
+      "texte original",
+      "identité visuelle non attestée",
+      "canon et journal"
+    ],
+    "surfaces": [
+      "champ facultatif root BridgetMessage",
+      "enveloppe texte",
+      "rendu React"
+    ],
+    "controls": [
+      "membership Store.thread_show",
+      "titre client effacé avant persistance",
+      "projection uniquement à remise",
+      "JSON échappé et titre borné",
+      "en-tête borné",
+      "brut rendu en texte et copy original"
+    ]
+  },
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/audits/baseline.json",
+    "modified": false,
+    "written": false,
+    "comparison_performed": false
+  },
+  "limitations": [
+    "Audit du diff seulement, pas audit global des dépôts.",
+    "Aucun autre fournisseur connecté lors du contrôle bridget who ; revue indépendante locale au même fournisseur.",
+    "22 warnings lint préexistants identiques à la baseline ; pas de warning nouveau confirmé.",
+    "Build web : avertissement non bloquant sur les chunks de plus de500ko.",
+      "Message10ko testé automatiquement et message7ko testé en vrai DOM ; aucun benchmark DOM de charge revendiqué.",
+      "API32 messages ;16 cartes desktop et12 mobile montées, pas32 simultanément ; aucun benchmark de recyclage complet.",
+      "Changement de fil browser PASS et isolation fil/message automatisée PASS.",
+    "Preview native resize ignoré puis timeout10s ; largeur320 vérifiée dans iframe même origine avec Browser T3 uniquement.",
+      "Aucun build desktop, installation, commit, push ou redémarrage production.",
+      "Capture PNG finale non validée : deux erreurs client snapshot/save, mesures DOM réelles conservées."
+  ]
+}

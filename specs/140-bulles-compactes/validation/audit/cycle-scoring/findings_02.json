@@ -1,0 +1,8 @@
+{
+  "module": "02",
+  "scope_mode": "diff",
+  "findings": [],
+  "positive_findings": [
+    "Deux racines et huit sources plus logo ; dépendances existantes."
+  ]
+}
