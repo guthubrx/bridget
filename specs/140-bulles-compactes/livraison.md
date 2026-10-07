@@ -16,7 +16,7 @@ Sauvegarde privée : /Users/moi/.cache/bridget-adoptions/spec140-20261007.lQLkje
 
 Source9706acbde6 fusionnée dans local/v0.0.45 et poussée sur le remote fork, avec la branche de session. La branche durable local-patch/bridget-headings-v0.0.45 est étendue par cherry-pickcc8fe08686 et poussée. Les cinq fichiers de correction sont identiques entre les deux branches :le correctif est conservé pour la reconstruction.
 
-Paquet version0.0.45-local.140, commit source9706acbde648. Signature ad hoc validée ; il ne s'agit pas d'une notarisation Apple. SHA256 du paquet prêt :dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1.
+Paquet version0.0.45-local.140, commit source9706acbde648. Signature ad hoc validée ; il ne s'agit pas d'une notarisation Apple. SHA256 de son app.asar :dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1.
 
 À ce point de rédaction, le paquet T3 n'est pas installé. Aucune activation frontend ou santé après redémarrage n'est revendiquée.
 
@@ -26,7 +26,7 @@ Le principal prépare un job externe pour terminer la livraison même si le red�
 
 Répertoire privé d'adoption : /Users/moi/.cache/t3-adoptions/spec140-20261007.jSfUyE. Sauvegarde de base :quick_check déjà PASS. Reçu final attendu : /Users/moi/.cache/t3-adoptions/spec140-20261007.jSfUyE/result.json.
 
-Le lancement du job, l'installation et son résultat doivent être confirmés par ce reçu et les contrôles réels du principal. Ce document ne transforme pas une préparation en succès de déploiement. Aucun cleanup de sauvegarde, données ou autres travaux n'est effectué par cette rédaction.
+Le job com.t3.spec140.delivery est lancé par launchctl bootstrap, puis confirmé actif. Le reçu porte scheduled : installation engagée, pas encore vérifiée. Le programme vérifiera le JSON public de l'environnement et l'empreinte du JavaScript servi, puis écrira deployed_health_ok ou un état d'échec. /health est une page HTML de repli, pas un endpoint de santé. Aucun succès d'installation n'est présumé. Aucun cleanup de sauvegarde, données ou autres travaux n'est effectué.
 
 ## Preuves conservées
 
