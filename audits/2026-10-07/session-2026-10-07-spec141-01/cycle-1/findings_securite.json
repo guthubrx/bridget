@@ -1,0 +1,1 @@
+{"module":"03","findings":[],"positive_findings":["UserMessageBody keeps parseRawHtml=false at MessagesTimeline.tsx:4213; HTML-like input does not become script markup","Parser fallback and exact copy do not authorize a sender or change provider input"],"limits":["UI diff only; authentication, CVE and provider governance excluded"]}

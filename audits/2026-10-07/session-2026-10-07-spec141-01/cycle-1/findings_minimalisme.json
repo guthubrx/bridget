@@ -1,0 +1,1 @@
+{"module":"12","findings":[],"positive_findings":["Existing envelope projection, renderer, copy button and scroll anchoring are reused","The local sender-label helper carries the same compatibility rule at two call sites rather than creating another abstraction layer"],"removable_lines_estimate":0,"limits":["No claim about dead code in unchanged monorepo regions"]}

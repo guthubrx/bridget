@@ -1,0 +1,1 @@
+{"module":"08","findings":[],"positive_findings":["Closed group and closed members do not mount their Markdown bodies","Buttons retain accessible names, aria-expanded, aria-controls and a visible focus ring; each height change calls the existing scroll-anchor hook"],"limits":["No Lighthouse, Core Web Vitals, contrast instrumentation or complete bundle regression benchmark"]}

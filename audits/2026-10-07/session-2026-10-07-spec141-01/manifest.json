@@ -1,0 +1,51 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-07T05:52:49Z",
+    "scope": "/Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped",
+    "scope_mode": "diff",
+    "diff": {"base": "9706acbde648e581d4c41302a0f4ce8e4ac20a9d", "files_count": 4, "added_lines": 489, "removed_lines": 43},
+    "mode": "DEEP-SAMPLED",
+    "grid": "pre-merge"
+  },
+  "repo": {
+    "files_count": 4040,
+    "languages": ["typescript", "javascript", "rust"],
+    "frameworks": ["react", "vite-plus", "vitest", "effect"],
+    "type": "desktop-web-agent-client",
+    "has_ui": true,
+    "has_llm_integration": true,
+    "db_type": "sqlite",
+    "ci_system": "github-actions",
+    "container": false
+  },
+  "sampling": {
+    "method": "explicit diff scope and caller context; not a whole-repository audit",
+    "files_in_sample": 4,
+    "files_total": 4040,
+    "coverage_estimate_percent": 0.0990099,
+    "regions": "all modified regions in four files; selected surrounding call sites",
+    "source_files_count_command": "git ls-files source extensions, excluding .repos, .worktrees, dependencies, builds and audits"
+  },
+  "hot_paths": [
+    {"type": "presentation_projection", "path": "apps/web/src/components/chat/MessagesTimeline.logic.ts:160", "trigger": "user timeline text changes"},
+    {"type": "clipboard", "path": "apps/web/src/components/chat/MessagesTimeline.tsx:2265", "trigger": "Copy message"},
+    {"type": "react_component", "path": "apps/web/src/components/chat/MessagesTimeline.tsx:4037", "trigger": "Bridget card and member expansion"},
+    {"type": "markdown_render", "path": "apps/web/src/components/chat/MessagesTimeline.tsx:4191", "trigger": "open member body or safe fallback"}
+  ],
+  "threat_model": {
+    "assets": ["original message integrity", "clipboard text integrity", "sender attribution", "active conversations"],
+    "attackers": ["a sender supplying ambiguous separators or HTML-like content", "a local user pasting an envelope-looking text"],
+    "surface": "presentation parser and Markdown render; no new endpoint, provider dispatch, authorization or database operation",
+    "origin_warning": "Presentation never proves a sender identity or message origin"
+  },
+  "slos": {"defined": false, "proposed": {}, "note": "No service SLO inferred from this UI-only scope"},
+  "modules_actifs": ["00", "01", "02", "03", "04", "05", "06", "07", "08", "10", "11", "12"],
+  "warnings": [
+    "Modified regions and caller context only; not all lines of the monorepo or the four large files",
+    "No CVE scan, provider call, production restart or storage migration",
+    "No instrumented coverage, mutation testing or Lighthouse/Core Web Vitals measurement",
+    "Cumulative lint warnings pre-exist the diff according to the principal's baseline comparison",
+    "Initial freeze was lifted for confirmed boundary and long-header copy defects; final audit uses the corrected freeze"
+  ]
+}

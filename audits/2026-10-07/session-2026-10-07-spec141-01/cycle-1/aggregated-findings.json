@@ -1,0 +1,60 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-07T05:56:47Z",
+    "start_timestamp": "2026-10-07T05:47:55Z",
+    "end_timestamp": "2026-10-07T05:56:47Z",
+    "duration_ms": 532000,
+    "audit_scope": "/Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped",
+    "audit_mode": "readonly",
+    "audit_grid": "pre-merge",
+    "modules_actifs": ["00", "01", "02", "03", "04", "05", "06", "07", "08", "10", "11", "12"],
+    "score_global": "A",
+    "release_blocked": false,
+    "scores": {"security":"A","quality":"A","architecture":"A","tests":"A","performance":"A","reliability":"A","observability":"N/A","supply_chain":"N/A","ai_hygiene":"A","llm_security":"N/A","duplication":"A","complexity":"A","minimalism":"A","ux":"A"},
+    "repository": {"files_count":4040,"languages":["typescript","javascript","rust"],"frameworks":["react","vite-plus","vitest","effect"],"type":"desktop-web-agent-client","has_ui":true,"has_llm_integration":true,"db_type":"sqlite","ci_system":"github-actions","container":false}
+  },
+  "execution_metrics": {
+    "files_scanned": 4,
+    "files_total": 4040,
+    "lines_analyzed": 532,
+    "lines_analyzed_definition": "489 added and 43 removed lines of the diff, plus selected caller context; not all legacy lines",
+    "tools_used": ["git diff", "ripgrep", "jscpd native", "vp test", "shasum", "fingerprint.py", "validate_session.py"],
+    "coverage_estimate_percent": 0.0990099,
+    "sampling_method": "explicit diff scope and selected caller context",
+    "phases_completed": ["00","01","02","03","04","05","06","07","08","10","11","12"],
+    "phases_skipped": ["09"],
+    "warnings": [
+      "A grade applies to the corrected SPEC141 diff only, not the monorepo; four files represent 0.0990099 percent of 4040 source files",
+      "Only modified regions and selected caller context were read; no full-file claim for the large legacy timeline files",
+      "No instrumented test coverage, mutation testing, CVE scan, Lighthouse, Core Web Vitals or global bundle benchmark",
+      "Observability, supply chain and provider/LLM governance are unchanged and out of scope; N/A scores are explicit scope exclusions",
+      "Module 09 is inapplicable in readonly mode; sources were fixed by the implementation workflow before final freeze, not by this audit",
+      "Principal reports format/types/web build PASS and 22 lint warnings identical to baseline; audit independently reran 294 tests PASS",
+      "Native browser checks are reported by the principal; this audit inspected both final screenshots but did not execute their browser actions",
+      "Native preview resize timed out twice; the principal checked real 320 CSS pixels in an iframe inside the same T3 preview, not an alternative browser",
+      "No independent alternative provider was available; local independent reviewer returned APPROVE on the corrected source",
+      "No CRITICAL/HIGH finding remains, so adversarial finding refutation is not applicable",
+      "Baseline suppression file absent; no findings dismissed and no baseline written"
+    ]
+  },
+  "summary": {"critical":0,"high":0,"medium":0,"low":0,"total":0,"by_category":{}},
+  "duplicated_code": {"jscpd_percentage":3.66274059178397,"duplicated_lines":510,"max_block_lines":22,"total_occurrences":37,"critical_blocks":[],"baseline_percentage":3.694910224068853,"baseline_duplicated_lines":498,"baseline_occurrences":35,"new_clone_count":2,"new_production_clone_count":0,"note":"The two new clones are seven-line React test fragments, retained intentionally rather than abstracting separate regression paths"},
+  "findings": [],
+  "suppressed": [],
+  "positive_findings": [
+    "Exact structural newline slices preserve terminal CR in message bodies; LF/CRLF boundary tests pass",
+    "Canonical long-header copy keeps original context links without opting the text into compact rendering",
+    "Missing or ambiguous members fall back to the complete readable body without invented senders",
+    "UserMessageBody retains parseRawHtml=false and closed bodies are not mounted",
+    "Independent audit run passed 294 tests in 2.95 s, exit 0",
+    "The corrected freeze is unchanged across source hash checks",
+    "Existing projection, Markdown, clipboard, per-thread key and scroll-anchor mechanisms are reused"
+  ],
+  "resolved_before_final_audit": [
+    {"id":"PRE141-CR","task":"T009","status":"fixed before final freeze","description":"Optional-CR delimiter trimming could consume a CR belonging to a body; exact structural newline slices now preserve it","verification":"MessagesTimeline.logic.test.ts:334 tests A\\r and B\\r under LF andCRLF; passed in the audit rerun"},
+    {"id":"PRE141-COPY","task":"T010","status":"fixed before final freeze","description":"A canonical heading longer than1024characters used the historical link-to-label copy path; copy now recognizes the canonical direct batch independently of compact projection","verification":"MessagesTimeline.test.tsx:396 includes overlong heading and exact raw context-link copy; passed in the audit rerun"}
+  ],
+  "roadmap": {"immediate":[],"short_term":[],"medium_term":[],"long_term":[]}
+}

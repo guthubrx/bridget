@@ -59,7 +59,7 @@ champ `--from` ne permet pas d'usurper cette identité.
 
 ### Noms et relais de sous-agents — sessions 133–134
 
-Les messages simples et chaque élément d'un lot affichent le nom humain puis
+Les enveloppes de transport des messages simples et de chaque élément d'un lot portent le nom humain puis
 l'UUID complet, si le nom est exploitable ; sinon, l'UUID seul. Le nom n'est
 jamais une autorité. Le prochain enregistrement répare un profil manquant sans
 réécrire les messages anciens ni créer une seconde identité.
@@ -70,10 +70,16 @@ une provenance enfant. La réponse revient au parent. Le sous-agent n'a ni boît
 de réception ni inscription durable, et la délégation ne lui ouvre pas la CLI.
 Une filiation ambiguë ou périmée est refusée, sans identité devinée.
 
-Les en-têtes T3 discrets137 concernent la présentation : nom et UUID complets,
-corps, copie et historique restent inchangés. Leur code et l'aperçu isolé sont
-validés ; vérifier séparément la version réellement chargée dans T3 avant
-d'affirmer que le rendu est installé. Aucun changement du protocole de transport.
+Le rendu T3 compact139–141 concerne la présentation. Un lot de messages directs
+reste fermé sur une ligne. À sa première ouverture, le premier message est
+ouvert et les autres sont repliés. Chaque section affiche le nom reçu et les
+120 premiers caractères du corps au maximum, sans sujet inventé. Un UUID seul reste visible.
+Les sections s'ouvrent séparément. Le lot n'affiche ni Sources ni Détails techniques,
+même quand un format ambigu impose le corps entier. La copie conserve le texte
+original du lot. Les autres enveloppes, pièces jointes et actions gardent leur
+comportement. Aucun changement du protocole de transport ni de l'historique.
+Ce rendu est validé en recette isolée ; vérifier séparément la version réellement
+chargée dans T3 avant d'affirmer qu'il est actif dans une application déjà ouverte.
 
 ### Priorité au projet — session 138
 

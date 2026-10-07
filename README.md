@@ -89,9 +89,11 @@ inconnu, sans suggestion locale. Le domaine d'affichage ne prouve pas l'apparten
 **Se parler sans se perdre.** Envoi idempotent avec reçu, réponses liées à leur question, demandes suivies
 avec rappels et escalade, annulation propre. Un disjoncteur coupe les échanges qui s'emballent et le pont
 T3 ne relaie que les réponses attendues : deux agents ne peuvent plus se répondre en boucle.
-Les en-têtes montrent le nom humain et l'UUID complet ; le nom ne change ni le routage ni les droits.
-Le code et l'aperçu T3 des en-têtes discrets ont été validés séparément (137).
-Cette documentation ne prouve pas leur installation dans une application T3 déjà ouverte.
+Les en-têtes de transport conservent le nom humain et l'UUID complet ; le nom ne change ni le routage ni les droits.
+Le rendu T3 compact (139–141) conserve le texte reçu. Les lots de messages directs affichent
+les noms et un début de corps littéral dans des sections repliables, sans panneau source.
+La copie garde le lot original. Les notifications conservent leur présentation.
+Ce rendu est validé ; cette documentation ne prouve pas son activation dans une application T3 déjà ouverte.
 Un sous-agent interne T3 attesté utilise seulement MCP `bridget_who` et `bridget_send`, avec la
 provenance du sous-agent et l'identité du parent. La réponse revient au parent, pas au sous-agent.
 Pour un autre projet connu, ajouter `--cross-project-reason 'motif volontaire'` ; MCP utilise

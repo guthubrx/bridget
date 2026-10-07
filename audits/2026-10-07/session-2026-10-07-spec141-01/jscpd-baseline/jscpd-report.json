@@ -1,0 +1,1305 @@
+{
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 485,
+        "endLoc": {
+          "column": 21,
+          "line": 485,
+          "position": 20881
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 480,
+        "startLoc": {
+          "column": 51,
+          "line": 480,
+          "position": 20641
+        }
+      },
+      "format": "typescript",
+      "fragment": "      expect(nextMessages[0]).toBe(firstMessages[0]);\n      expect(next.rows).toEqual(deriveMessagesTimelineRows(nextInput));\n      for (const [index, row] of previous.rows.entries()) {\n        if (\n          (row.kind === \"message\" || row.kind === \"assistant-meta\") &&\n          row.message.id === source.at(-1)?.id",
+      "lines": 6,
+      "secondFile": {
+        "end": 562,
+        "endLoc": {
+          "column": 82,
+          "line": 562,
+          "position": 23917
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 559,
+        "startLoc": {
+          "column": 40,
+          "line": 559,
+          "position": 23704
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 1099,
+        "endLoc": {
+          "column": 8,
+          "line": 1099,
+          "position": 43837
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1084,
+        "startLoc": {
+          "column": 71,
+          "line": 1084,
+          "position": 43436
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"uses the user message createdAt for the first assistant response\", () => {\n    const result = computeMessageDurationStart([\n      {\n        id: \"u1\",\n        role: \"user\",\n        createdAt: \"2026-01-01T00:00:00Z\",\n        updatedAt: \"2026-01-01T00:00:00Z\",\n        streaming: false,\n      },\n      {\n        id: \"a1\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:30Z\",\n        updatedAt: \"2026-01-01T00:00:30Z\",\n        streaming: false,\n      },",
+      "lines": 16,
+      "secondFile": {
+        "end": 1125,
+        "endLoc": {
+          "column": 8,
+          "line": 1125,
+          "position": 44485
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1110,
+        "startLoc": {
+          "column": 89,
+          "line": 1110,
+          "position": 44084
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 1100,
+        "endLoc": {
+          "column": 7,
+          "line": 1100,
+          "position": 43845
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1084,
+        "startLoc": {
+          "column": 71,
+          "line": 1084,
+          "position": 43436
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"uses the user message createdAt for the first assistant response\", () => {\n    const result = computeMessageDurationStart([\n      {\n        id: \"u1\",\n        role: \"user\",\n        createdAt: \"2026-01-01T00:00:00Z\",\n        updatedAt: \"2026-01-01T00:00:00Z\",\n        streaming: false,\n      },\n      {\n        id: \"a1\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:30Z\",\n        updatedAt: \"2026-01-01T00:00:30Z\",\n        streaming: false,\n      },\n    ]);",
+      "lines": 17,
+      "secondFile": {
+        "end": 1195,
+        "endLoc": {
+          "column": 11,
+          "line": 1195,
+          "position": 46158
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1178,
+        "startLoc": {
+          "column": 48,
+          "line": 1178,
+          "position": 45737
+        }
+      },
+      "tokens": 60
+    },
+    {
+      "firstFile": {
+        "end": 1105,
+        "endLoc": {
+          "column": 9,
+          "line": 1105,
+          "position": 43940
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1090,
+        "startLoc": {
+          "column": 41,
+          "line": 1090,
+          "position": 43627
+        }
+      },
+      "format": "typescript",
+      "fragment": "        updatedAt: \"2026-01-01T00:00:00Z\",\n        streaming: false,\n      },\n      {\n        id: \"a1\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:30Z\",\n        updatedAt: \"2026-01-01T00:00:30Z\",\n        streaming: false,\n      },\n    ]);\n\n    expect(result).toEqual(\n      new Map([\n        [\"u1\", \"2026-01-01T00:00:00Z\"],\n        [\"a1\", \"2026-01-01T00:00:00Z\"],",
+      "lines": 16,
+      "secondFile": {
+        "end": 1248,
+        "endLoc": {
+          "column": 9,
+          "line": 1248,
+          "position": 47455
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1233,
+        "startLoc": {
+          "column": 41,
+          "line": 1233,
+          "position": 47142
+        }
+      },
+      "tokens": 51
+    },
+    {
+      "firstFile": {
+        "end": 1139,
+        "endLoc": {
+          "column": 14,
+          "line": 1139,
+          "position": 44807
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1124,
+        "startLoc": {
+          "column": 24,
+          "line": 1124,
+          "position": 44475
+        }
+      },
+      "format": "typescript",
+      "fragment": "        streaming: false,\n      },\n      {\n        id: \"a2\",\n        role: \"assistant\",\n        createdAt: \"2026-01-01T00:00:55Z\",\n        updatedAt: \"2026-01-01T00:00:55Z\",\n        streaming: false,\n      },\n    ]);\n\n    expect(result).toEqual(\n      new Map([\n        [\"u1\", \"2026-01-01T00:00:00Z\"],\n        [\"a1\", \"2026-01-01T00:00:00Z\"],\n        [\"a2\", \"2026-01-01T00:00:30Z\"],",
+      "lines": 16,
+      "secondFile": {
+        "end": 1173,
+        "endLoc": {
+          "column": 14,
+          "line": 1173,
+          "position": 45639
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1158,
+        "startLoc": {
+          "column": 23,
+          "line": 1158,
+          "position": 45307
+        }
+      },
+      "tokens": 55
+    },
+    {
+      "firstFile": {
+        "end": 1777,
+        "endLoc": {
+          "column": 17,
+          "line": 1777,
+          "position": 64974
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1763,
+        "startLoc": {
+          "column": 47,
+          "line": 1763,
+          "position": 64551
+        }
+      },
+      "format": "typescript",
+      "fragment": "            text: \"I should ground this first.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:10Z\",\n            updatedAt: \"2026-01-01T00:00:11Z\",\n            streaming: false,\n          },\n        },\n        {\n          id: \"assistant-final-entry\",\n          kind: \"message\",\n          createdAt: \"2026-01-01T00:00:20Z\",\n          message: {\n            id: \"assistant-final\" as never,\n            role: \"assistant\",\n            text: \"Here is the poem.\",",
+      "lines": 15,
+      "secondFile": {
+        "end": 3475,
+        "endLoc": {
+          "column": 17,
+          "line": 3475,
+          "position": 122103
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3461,
+        "startLoc": {
+          "column": 35,
+          "line": 3461,
+          "position": 121680
+        }
+      },
+      "tokens": 51
+    },
+    {
+      "firstFile": {
+        "end": 1797,
+        "endLoc": {
+          "column": 24,
+          "line": 1797,
+          "position": 65597
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1777,
+        "startLoc": {
+          "column": 37,
+          "line": 1777,
+          "position": 64994
+        }
+      },
+      "format": "typescript",
+      "fragment": "            text: \"Here is the poem.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:20Z\",\n            updatedAt: \"2026-01-01T00:00:30Z\",\n            streaming: false,\n          },\n        },\n      ],\n      expandedTurnIds: new Set([\"turn-1\" as never]),\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    const assistantRows = rows.filter(\n      (row): row is Extract<(typeof rows)[number], { kind: \"message\" }> =>\n        row.kind === \"message\" && row.message.role === \"assistant\",\n    );\n\n    expect(assistantRows).toHaveLength(2);",
+      "lines": 21,
+      "secondFile": {
+        "end": 3495,
+        "endLoc": {
+          "column": 24,
+          "line": 3495,
+          "position": 122714
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3475,
+        "startLoc": {
+          "column": 25,
+          "line": 3475,
+          "position": 122111
+        }
+      },
+      "tokens": 106
+    },
+    {
+      "firstFile": {
+        "end": 1797,
+        "endLoc": {
+          "column": 24,
+          "line": 1797,
+          "position": 65597
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1785,
+        "startLoc": {
+          "column": 51,
+          "line": 1785,
+          "position": 65243
+        }
+      },
+      "format": "typescript",
+      "fragment": "      expandedTurnIds: new Set([\"turn-1\" as never]),\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    const assistantRows = rows.filter(\n      (row): row is Extract<(typeof rows)[number], { kind: \"message\" }> =>\n        row.kind === \"message\" && row.message.role === \"assistant\",\n    );\n\n    expect(assistantRows).toHaveLength(2);",
+      "lines": 13,
+      "secondFile": {
+        "end": 1851,
+        "endLoc": {
+          "column": 24,
+          "line": 1851,
+          "position": 67309
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1839,
+        "startLoc": {
+          "column": 7,
+          "line": 1839,
+          "position": 66955
+        }
+      },
+      "tokens": 70
+    },
+    {
+      "firstFile": {
+        "end": 1912,
+        "endLoc": {
+          "column": 11,
+          "line": 1912,
+          "position": 69322
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 1906,
+        "startLoc": {
+          "column": 4,
+          "line": 1906,
+          "position": 69121
+        }
+      },
+      "format": "typescript",
+      "fragment": "    );\n    const assistantRow = rows.find(\n      (row): row is Extract<(typeof rows)[number], { kind: \"message\" }> =>\n        row.kind === \"message\" && row.message.role === \"assistant\",\n    );\n\n    expect(userRow?.revertTurnCount).toBe(1);",
+      "lines": 7,
+      "secondFile": {
+        "end": 3533,
+        "endLoc": {
+          "column": 11,
+          "line": 3533,
+          "position": 123908
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3526,
+        "startLoc": {
+          "column": 5,
+          "line": 3526,
+          "position": 123706
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 2291,
+        "endLoc": {
+          "column": 15,
+          "line": 2291,
+          "position": 81718
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2280,
+        "startLoc": {
+          "column": 32,
+          "line": 2280,
+          "position": 81222
+        }
+      },
+      "format": "typescript",
+      "fragment": "        timelineEntries: entries,\n        runningTurnId: TurnId.make(\"turn-1\"),\n        isWorking: true,\n        activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n        turnDiffSummaries: [],\n        supportsConversationRollback: false,\n      } satisfies Parameters<typeof deriveMessagesTimelineRows>[0];\n      const rows = deriveMessagesTimelineRows(input);\n      expect(rows.map((row) => row.kind)).toEqual([\"working\", \"activity-group\"]);\n      expect(rows.at(-1)).toMatchObject({\n        id: \"live-activity-row\",\n        entries,",
+      "lines": 12,
+      "secondFile": {
+        "end": 2418,
+        "endLoc": {
+          "column": 13,
+          "line": 2418,
+          "position": 86712
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2407,
+        "startLoc": {
+          "column": 42,
+          "line": 2407,
+          "position": 86238
+        }
+      },
+      "tokens": 90
+    },
+    {
+      "firstFile": {
+        "end": 2662,
+        "endLoc": {
+          "column": 10,
+          "line": 2662,
+          "position": 95342
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2648,
+        "startLoc": {
+          "column": 84,
+          "line": 2648,
+          "position": 94929
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"uses latest-turn timings and the stopped label for an interrupted latest turn\", () => {\n    const rows = deriveMessagesTimelineRows({\n      timelineEntries: [\n        {\n          id: \"work-entry-1\",\n          kind: \"work\",\n          createdAt: \"2026-01-01T00:00:05Z\",\n          entry: {\n            id: \"work-1\",\n            createdAt: \"2026-01-01T00:00:05Z\",\n            turnId: \"turn-1\" as never,\n            label: \"Ran command\",\n            tone: \"tool\" as const,\n          },\n        },",
+      "lines": 15,
+      "secondFile": {
+        "end": 2702,
+        "endLoc": {
+          "column": 10,
+          "line": 2702,
+          "position": 96520
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2686,
+        "startLoc": {
+          "column": 80,
+          "line": 2686,
+          "position": 95954
+        }
+      },
+      "tokens": 58
+    },
+    {
+      "firstFile": {
+        "end": 2798,
+        "endLoc": {
+          "column": 16,
+          "line": 2798,
+          "position": 99377
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2782,
+        "startLoc": {
+          "column": 25,
+          "line": 2782,
+          "position": 99003
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.some((row) => row.kind === \"turn-fold\")).toBe(false);",
+      "lines": 17,
+      "secondFile": {
+        "end": 2972,
+        "endLoc": {
+          "column": 16,
+          "line": 2972,
+          "position": 105120
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2956,
+        "startLoc": {
+          "column": 45,
+          "line": 2956,
+          "position": 104746
+        }
+      },
+      "tokens": 56
+    },
+    {
+      "firstFile": {
+        "end": 2798,
+        "endLoc": {
+          "column": 67,
+          "line": 2798,
+          "position": 99428
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2782,
+        "startLoc": {
+          "column": 25,
+          "line": 2782,
+          "position": 99003
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.some((row) => row.kind === \"turn-fold\")).toBe(false);",
+      "lines": 17,
+      "secondFile": {
+        "end": 3045,
+        "endLoc": {
+          "column": 59,
+          "line": 3045,
+          "position": 107468
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3029,
+        "startLoc": {
+          "column": 46,
+          "line": 3029,
+          "position": 107051
+        }
+      },
+      "tokens": 73
+    },
+    {
+      "firstFile": {
+        "end": 2796,
+        "endLoc": {
+          "column": 7,
+          "line": 2796,
+          "position": 99359
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2782,
+        "startLoc": {
+          "column": 33,
+          "line": 2782,
+          "position": 99011
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });",
+      "lines": 15,
+      "secondFile": {
+        "end": 3365,
+        "endLoc": {
+          "column": 9,
+          "line": 3365,
+          "position": 117869
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3351,
+        "startLoc": {
+          "column": 94,
+          "line": 3351,
+          "position": 117475
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 2798,
+        "endLoc": {
+          "column": 10,
+          "line": 2798,
+          "position": 99371
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 2782,
+        "startLoc": {
+          "column": 33,
+          "line": 2782,
+          "position": 99011
+        }
+      },
+      "format": "typescript",
+      "fragment": "            tone: \"tool\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.some((row) => row.kind === \"turn-fold\")).toBe(false);",
+      "lines": 17,
+      "secondFile": {
+        "end": 3528,
+        "endLoc": {
+          "column": 9,
+          "line": 3528,
+          "position": 123719
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3512,
+        "startLoc": {
+          "column": 28,
+          "line": 3512,
+          "position": 123360
+        }
+      },
+      "tokens": 51
+    },
+    {
+      "firstFile": {
+        "end": 3025,
+        "endLoc": {
+          "column": 18,
+          "line": 3025,
+          "position": 106880
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3010,
+        "startLoc": {
+          "column": 43,
+          "line": 3010,
+          "position": 106415
+        }
+      },
+      "format": "typescript",
+      "fragment": "            text: \"Checking another thing.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:06Z\",\n            updatedAt: \"2026-01-01T00:00:06Z\",\n            streaming: false,\n          },\n        },\n        {\n          id: \"running-command-entry\",\n          kind: \"work\",\n          createdAt: \"2026-01-01T00:00:07Z\",\n          entry: {\n            id: \"running-command\",\n            createdAt: \"2026-01-01T00:00:07Z\",\n            turnId: \"turn-1\" as never,\n            label: \"Running tests\",",
+      "lines": 16,
+      "secondFile": {
+        "end": 3253,
+        "endLoc": {
+          "column": 18,
+          "line": 3253,
+          "position": 114186
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3238,
+        "startLoc": {
+          "column": 45,
+          "line": 3238,
+          "position": 113721
+        }
+      },
+      "tokens": 55
+    },
+    {
+      "firstFile": {
+        "end": 3045,
+        "endLoc": {
+          "column": 66,
+          "line": 3045,
+          "position": 107475
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3026,
+        "startLoc": {
+          "column": 34,
+          "line": 3026,
+          "position": 106932
+        }
+      },
+      "format": "typescript",
+      "fragment": "            command: \"vp test run\",\n            requestKind: \"command\",\n            tone: \"tool\" as const,\n            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.map((row) => row.kind)).toEqual([\"working\", \"work\", \"message\", \"work-live\"]);",
+      "lines": 20,
+      "secondFile": {
+        "end": 3165,
+        "endLoc": {
+          "column": 71,
+          "line": 3165,
+          "position": 111393
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3146,
+        "startLoc": {
+          "column": 32,
+          "line": 3146,
+          "position": 110845
+        }
+      },
+      "tokens": 88
+    },
+    {
+      "firstFile": {
+        "end": 3045,
+        "endLoc": {
+          "column": 16,
+          "line": 3045,
+          "position": 107425
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3026,
+        "startLoc": {
+          "column": 34,
+          "line": 3026,
+          "position": 106932
+        }
+      },
+      "format": "typescript",
+      "fragment": "            command: \"vp test run\",\n            requestKind: \"command\",\n            tone: \"tool\" as const,\n            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n      ],\n      latestTurn: {\n        turnId: \"turn-1\" as never,\n        state: \"running\",\n        startedAt: \"2026-01-01T00:00:00Z\",\n        completedAt: null,\n      },\n      isWorking: true,\n      activeTurnStartedAt: \"2026-01-01T00:00:00Z\",\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.map((row) => row.kind)).toEqual([\"working\", \"work\", \"message\", \"work-live\"]);",
+      "lines": 20,
+      "secondFile": {
+        "end": 3273,
+        "endLoc": {
+          "column": 16,
+          "line": 3273,
+          "position": 114732
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3254,
+        "startLoc": {
+          "column": 33,
+          "line": 3254,
+          "position": 114239
+        }
+      },
+      "tokens": 70
+    },
+    {
+      "firstFile": {
+        "end": 3138,
+        "endLoc": {
+          "column": 13,
+          "line": 3138,
+          "position": 110535
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3120,
+        "startLoc": {
+          "column": 46,
+          "line": 3120,
+          "position": 110017
+        }
+      },
+      "format": "typescript",
+      "fragment": "            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n        {\n          id: \"assistant-commentary-entry\",\n          kind: \"message\",\n          createdAt: \"2026-01-01T00:00:06Z\",\n          message: {\n            id: \"assistant-commentary\" as never,\n            role: \"assistant\",\n            text: \"Starting another command.\",\n            turnId: \"turn-1\" as never,\n            createdAt: \"2026-01-01T00:00:06Z\",\n            updatedAt: \"2026-01-01T00:00:06Z\",\n            streaming: false,\n          },\n        },\n        {\n          id: \"second-running-entry\",",
+      "lines": 19,
+      "secondFile": {
+        "end": 3246,
+        "endLoc": {
+          "column": 13,
+          "line": 3246,
+          "position": 113933
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3228,
+        "startLoc": {
+          "column": 48,
+          "line": 3228,
+          "position": 113415
+        }
+      },
+      "tokens": 62
+    },
+    {
+      "firstFile": {
+        "end": 3203,
+        "endLoc": {
+          "column": 10,
+          "line": 3203,
+          "position": 112633
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3187,
+        "startLoc": {
+          "column": 46,
+          "line": 3187,
+          "position": 112188
+        }
+      },
+      "format": "typescript",
+      "fragment": "            toolLifecycleStatus: \"inProgress\" as const,\n          },\n        },\n        {\n          id: \"user-followup-entry\",\n          kind: \"message\",\n          createdAt: \"2026-01-01T00:01:00Z\",\n          message: {\n            id: \"user-followup\" as never,\n            role: \"user\",\n            text: \"continue\",\n            turnId: null,\n            createdAt: \"2026-01-01T00:01:00Z\",\n            updatedAt: \"2026-01-01T00:01:00Z\",\n            streaming: false,\n          },\n        },",
+      "lines": 17,
+      "secondFile": {
+        "end": 3418,
+        "endLoc": {
+          "column": 10,
+          "line": 3418,
+          "position": 120345
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3402,
+        "startLoc": {
+          "column": 25,
+          "line": 3402,
+          "position": 119900
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 3847,
+        "endLoc": {
+          "column": 18,
+          "line": 3847,
+          "position": 134568
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3836,
+        "startLoc": {
+          "column": 6,
+          "line": 3836,
+          "position": 134264
+        }
+      },
+      "format": "typescript",
+      "fragment": "    }));\n\n    const rows = deriveMessagesTimelineRows({\n      timelineEntries,\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    expect(rows.find((row) => row.kind === \"work-toggle\")).toMatchObject({\n      hiddenCount: 2,",
+      "lines": 12,
+      "secondFile": {
+        "end": 3894,
+        "endLoc": {
+          "column": 20,
+          "line": 3894,
+          "position": 136273
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3883,
+        "startLoc": {
+          "column": 7,
+          "line": 3883,
+          "position": 135951
+        }
+      },
+      "tokens": 53
+    },
+    {
+      "firstFile": {
+        "end": 4007,
+        "endLoc": {
+          "column": 9,
+          "line": 4007,
+          "position": 139785
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 3987,
+        "startLoc": {
+          "column": 75,
+          "line": 3987,
+          "position": 139277
+        }
+      },
+      "format": "typescript",
+      "fragment": "  it(\"returns the previous result when row order and content are unchanged\", () => {\n    const firstUserMessage = {\n      id: \"user-1\" as never,\n      role: \"user\" as const,\n      text: \"First\",\n      turnId: null,\n      createdAt: \"2026-01-01T00:00:00Z\",\n      updatedAt: \"2026-01-01T00:00:00Z\",\n      streaming: false,\n    };\n    const secondUserMessage = {\n      id: \"user-2\" as never,\n      role: \"user\" as const,\n      text: \"Second\",\n      turnId: null,\n      createdAt: \"2026-01-01T00:00:10Z\",\n      updatedAt: \"2026-01-01T00:00:10Z\",\n      streaming: false,\n    };\n\n    const rows = deriveMessagesTimelineRows({",
+      "lines": 21,
+      "secondFile": {
+        "end": 4112,
+        "endLoc": {
+          "column": 9,
+          "line": 4112,
+          "position": 142670
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4092,
+        "startLoc": {
+          "column": 74,
+          "line": 4092,
+          "position": 142162
+        }
+      },
+      "tokens": 82
+    },
+    {
+      "firstFile": {
+        "end": 4028,
+        "endLoc": {
+          "column": 54,
+          "line": 4028,
+          "position": 140378
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4007,
+        "startLoc": {
+          "column": 15,
+          "line": 4007,
+          "position": 139791
+        }
+      },
+      "format": "typescript",
+      "fragment": "    const rows = deriveMessagesTimelineRows({\n      timelineEntries: [\n        {\n          id: \"entry-user-1\",\n          kind: \"message\",\n          createdAt: firstUserMessage.createdAt,\n          message: firstUserMessage,\n        },\n        {\n          id: \"entry-user-2\",\n          kind: \"message\",\n          createdAt: secondUserMessage.createdAt,\n          message: secondUserMessage,\n        },\n      ],\n      isWorking: false,\n      activeTurnStartedAt: null,\n      turnDiffSummaries: [],\n      supportsConversationRollback: false,\n    });\n\n    const initial = computeStableMessagesTimelineRows(rows, {",
+      "lines": 22,
+      "secondFile": {
+        "end": 4133,
+        "endLoc": {
+          "column": 54,
+          "line": 4133,
+          "position": 143268
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.logic.test.ts",
+        "start": 4112,
+        "startLoc": {
+          "column": 20,
+          "line": 4112,
+          "position": 142681
+        }
+      },
+      "tokens": 76
+    },
+    {
+      "firstFile": {
+        "end": 311,
+        "endLoc": {
+          "column": 89,
+          "line": 311,
+          "position": 10303
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 303,
+        "startLoc": {
+          "column": 40,
+          "line": 303,
+          "position": 9982
+        }
+      },
+      "format": "tsx",
+      "fragment": "    const text = `${heading}\\n\\n${body}`;\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,\n        );\n      });\n      const toggle = () => renderer!.root.findByProps({ \"data-bridget-toggle\": \"true\" });",
+      "lines": 9,
+      "secondFile": {
+        "end": 373,
+        "endLoc": {
+          "column": 89,
+          "line": 373,
+          "position": 12975
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 365,
+        "startLoc": {
+          "column": 101,
+          "line": 365,
+          "position": 12654
+        }
+      },
+      "tokens": 67
+    },
+    {
+      "firstFile": {
+        "end": 329,
+        "endLoc": {
+          "column": 18,
+          "line": 329,
+          "position": 11047
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 321,
+        "startLoc": {
+          "column": 55,
+          "line": 321,
+          "position": 10798
+        }
+      },
+      "format": "tsx",
+      "fragment": "      expect(toggle().props[\"aria-expanded\"]).toBe(true);\n      expect(\n        renderer!.root\n          .findAllByType(\"strong\")[0]!\n          .findAll(() => true)\n          .flatMap((node) => node.children)\n          .filter((child) => typeof child === \"string\")\n          .join(\"\"),\n      ).toContain(\"Preuve visible après ouverture\");",
+      "lines": 9,
+      "secondFile": {
+        "end": 354,
+        "endLoc": {
+          "column": 18,
+          "line": 354,
+          "position": 12154
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 346,
+        "startLoc": {
+          "column": 93,
+          "line": 346,
+          "position": 11905
+        }
+      },
+      "tokens": 58
+    },
+    {
+      "firstFile": {
+        "end": 439,
+        "endLoc": {
+          "column": 21,
+          "line": 439,
+          "position": 15286
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 427,
+        "startLoc": {
+          "column": 18,
+          "line": 427,
+          "position": 14862
+        }
+      },
+      "format": "tsx",
+      "fragment": "    async (answers) => {\n      vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n      vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n      vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n      let renderer: ReactTestRenderer | undefined;\n      try {\n        await act(() => {\n          renderer = create(\n            <MessagesTimeline\n              {...buildProps()}\n              timelineEntries={[\n                {\n                  id: \"answer-entry\",",
+      "lines": 13,
+      "secondFile": {
+        "end": 518,
+        "endLoc": {
+          "column": 19,
+          "line": 518,
+          "position": 18554
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 506,
+        "startLoc": {
+          "column": 71,
+          "line": 506,
+          "position": 18154
+        }
+      },
+      "tokens": 72
+    },
+    {
+      "firstFile": {
+        "end": 518,
+        "endLoc": {
+          "column": 19,
+          "line": 518,
+          "position": 18554
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 506,
+        "startLoc": {
+          "column": 62,
+          "line": 506,
+          "position": 18145
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"leads an unanswered question row with the question text\", async () => {\n    vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n    vi.stubGlobal(\"requestAnimationFrame\", () => 0);\n    vi.stubGlobal(\"cancelAnimationFrame\", () => {});\n    let renderer: ReactTestRenderer | undefined;\n    try {\n      await act(() => {\n        renderer = create(\n          <MessagesTimeline\n            {...buildProps()}\n            timelineEntries={[\n              {\n                id: \"question-entry\",",
+      "lines": 13,
+      "secondFile": {
+        "end": 2363,
+        "endLoc": {
+          "column": 19,
+          "line": 2363,
+          "position": 81622
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2351,
+        "startLoc": {
+          "column": 78,
+          "line": 2351,
+          "position": 81213
+        }
+      },
+      "tokens": 75
+    },
+    {
+      "firstFile": {
+        "end": 575,
+        "endLoc": {
+          "column": 11,
+          "line": 575,
+          "position": 20862
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 560,
+        "startLoc": {
+          "column": 43,
+          "line": 560,
+          "position": 20259
+        }
+      },
+      "format": "tsx",
+      "fragment": "    async ({ toolLifecycleStatus, isAtEnd }) => {\n      const frames = new Map<number, FrameRequestCallback>();\n      let nextFrame = 0;\n      vi.stubGlobal(\"requestAnimationFrame\", (callback: FrameRequestCallback) => {\n        frames.set(++nextFrame, callback);\n        return nextFrame;\n      });\n      vi.stubGlobal(\"cancelAnimationFrame\", (frame: number) => frames.delete(frame));\n      vi.stubGlobal(\"IS_REACT_ACT_ENVIRONMENT\", true);\n      const flushFrame = () =>\n        act(() => {\n          const callbacks = [...frames.values()];\n          frames.clear();\n          callbacks.forEach((callback) => callback(0));\n        });\n      const props = buildProps();",
+      "lines": 16,
+      "secondFile": {
+        "end": 1129,
+        "endLoc": {
+          "column": 9,
+          "line": 1129,
+          "position": 40885
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1112,
+        "startLoc": {
+          "column": 77,
+          "line": 1112,
+          "position": 40203
+        }
+      },
+      "tokens": 127
+    },
+    {
+      "firstFile": {
+        "end": 810,
+        "endLoc": {
+          "column": 18,
+          "line": 810,
+          "position": 28556
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 800,
+        "startLoc": {
+          "column": 25,
+          "line": 800,
+          "position": 28316
+        }
+      },
+      "format": "tsx",
+      "fragment": "        scrollBottom: 500,\n        itemBounds: [\n          { top: 80, height: 20 },\n          { top: 120, height: 20 },\n          { top: 220, height: 20 },\n        ],\n      }),\n    ).toBe(1);\n    expect(\n      resolveTimelineMinimapCurrentIndex({\n        scrollTop: 150,",
+      "lines": 11,
+      "secondFile": {
+        "end": 821,
+        "endLoc": {
+          "column": 18,
+          "line": 821,
+          "position": 28827
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 811,
+        "startLoc": {
+          "column": 25,
+          "line": 811,
+          "position": 28587
+        }
+      },
+      "tokens": 53
+    },
+    {
+      "firstFile": {
+        "end": 1581,
+        "endLoc": {
+          "column": 15,
+          "line": 1581,
+          "position": 56058
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1562,
+        "startLoc": {
+          "column": 46,
+          "line": 1562,
+          "position": 55494
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"keeps mixed-success tool groups neutral\", () => {\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        timelineEntries={[\n          {\n            id: \"entry-failed\",\n            kind: \"work\",\n            createdAt: \"2026-03-17T19:12:28.000Z\",\n            entry: {\n              id: \"work-failed\",\n              createdAt: \"2026-03-17T19:12:28.000Z\",\n              label: \"Run search\",\n              tone: \"tool\",\n              itemType: \"command_execution\",\n              toolLifecycleStatus: \"failed\",\n            },\n          },\n          {\n            id: \"entry-completed\",",
+      "lines": 20,
+      "secondFile": {
+        "end": 1719,
+        "endLoc": {
+          "column": 15,
+          "line": 1719,
+          "position": 60546
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1700,
+        "startLoc": {
+          "column": 69,
+          "line": 1700,
+          "position": 59982
+        }
+      },
+      "tokens": 69
+    },
+    {
+      "firstFile": {
+        "end": 1766,
+        "endLoc": {
+          "column": 15,
+          "line": 1766,
+          "position": 61942
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1750,
+        "startLoc": {
+          "column": 53,
+          "line": 1750,
+          "position": 61495
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"shows the one-line label for a live tool group\", () => {\n    const turnId = TurnId.make(\"turn-live\");\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        isWorking\n        activeTurnStartedAt={MESSAGE_CREATED_AT}\n        latestTurn={{\n          turnId,\n          state: \"running\",\n          startedAt: MESSAGE_CREATED_AT,\n          completedAt: null,\n        }}\n        runningTurnId={turnId}\n        timelineEntries={[\n          {\n            id: \"entry-live\",",
+      "lines": 17,
+      "secondFile": {
+        "end": 1805,
+        "endLoc": {
+          "column": 15,
+          "line": 1805,
+          "position": 63039
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1789,
+        "startLoc": {
+          "column": 61,
+          "line": 1789,
+          "position": 62592
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 1764,
+        "endLoc": {
+          "column": 26,
+          "line": 1764,
+          "position": 61914
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1750,
+        "startLoc": {
+          "column": 53,
+          "line": 1750,
+          "position": 61495
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"shows the one-line label for a live tool group\", () => {\n    const turnId = TurnId.make(\"turn-live\");\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        isWorking\n        activeTurnStartedAt={MESSAGE_CREATED_AT}\n        latestTurn={{\n          turnId,\n          state: \"running\",\n          startedAt: MESSAGE_CREATED_AT,\n          completedAt: null,\n        }}\n        runningTurnId={turnId}\n        timelineEntries={[",
+      "lines": 15,
+      "secondFile": {
+        "end": 1950,
+        "endLoc": {
+          "column": 26,
+          "line": 1950,
+          "position": 67922
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1936,
+        "startLoc": {
+          "column": 63,
+          "line": 1936,
+          "position": 67503
+        }
+      },
+      "tokens": 63
+    },
+    {
+      "firstFile": {
+        "end": 1766,
+        "endLoc": {
+          "column": 15,
+          "line": 1766,
+          "position": 61942
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1750,
+        "startLoc": {
+          "column": 53,
+          "line": 1750,
+          "position": 61495
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"shows the one-line label for a live tool group\", () => {\n    const turnId = TurnId.make(\"turn-live\");\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        isWorking\n        activeTurnStartedAt={MESSAGE_CREATED_AT}\n        latestTurn={{\n          turnId,\n          state: \"running\",\n          startedAt: MESSAGE_CREATED_AT,\n          completedAt: null,\n        }}\n        runningTurnId={turnId}\n        timelineEntries={[\n          {\n            id: \"entry-live\",",
+      "lines": 17,
+      "secondFile": {
+        "end": 1975,
+        "endLoc": {
+          "column": 15,
+          "line": 1975,
+          "position": 68647
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 1959,
+        "startLoc": {
+          "column": 88,
+          "line": 1959,
+          "position": 68200
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 2294,
+        "endLoc": {
+          "column": 15,
+          "line": 2294,
+          "position": 79460
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2277,
+        "startLoc": {
+          "column": 78,
+          "line": 2277,
+          "position": 78986
+        }
+      },
+      "format": "tsx",
+      "fragment": "  it(\"keeps failed lifecycle entries discoverable in mixed activity summaries\", () => {\n    const markup = renderToStaticMarkup(\n      <MessagesTimeline\n        {...buildProps()}\n        timelineEntries={[\n          {\n            id: \"entry-info\",\n            kind: \"work\",\n            createdAt: \"2026-03-17T19:12:27.000Z\",\n            entry: {\n              id: \"work-info\",\n              createdAt: \"2026-03-17T19:12:27.000Z\",\n              label: \"Status updated\",\n              tone: \"info\",\n            },\n          },\n          {\n            id: \"entry-1\",",
+      "lines": 18,
+      "secondFile": {
+        "end": 2332,
+        "endLoc": {
+          "column": 15,
+          "line": 2332,
+          "position": 80613
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+        "start": 2315,
+        "startLoc": {
+          "column": 64,
+          "line": 2315,
+          "position": 80139
+        }
+      },
+      "tokens": 61
+    },
+    {
+      "firstFile": {
+        "end": 4819,
+        "endLoc": {
+          "column": 85,
+          "line": 4819,
+          "position": 174368
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.tsx",
+        "start": 4812,
+        "startLoc": {
+          "column": 59,
+          "line": 4812,
+          "position": 174063
+        }
+      },
+      "format": "tsx",
+      "fragment": "const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {\n  workEntry: TimelineWorkEntry;\n  workspaceRoot: string | undefined;\n  isExpandedToolGroupEntry: boolean;\n  displayLabel?: string | undefined;\n  onToggleEntry?: ((collapsed: boolean) => void) | undefined;\n}) {\n  const { workEntry, workspaceRoot, isExpandedToolGroupEntry, displayLabel } = props;",
+      "lines": 8,
+      "secondFile": {
+        "end": 4848,
+        "endLoc": {
+          "column": 85,
+          "line": 4848,
+          "position": 175243
+        },
+        "name": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01/baseline-snapshot/apps/web/src/components/chat/MessagesTimeline.tsx",
+        "start": 4841,
+        "startLoc": {
+          "column": 57,
+          "line": 4841,
+          "position": 174938
+        }
+      },
+      "tokens": 56
+    }
+  ],
+  "statistics": {
+    "detectionDate": "2026-10-07T05:49:22.907Z",
+    "formats": {
+      "tsx": {
+        "clones": 12,
+        "duplicatedLines": 154,
+        "duplicatedTokens": 833,
+        "lines": 7528,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 2.0456960680127523,
+        "percentageTokens": 2.111587112474334,
+        "sources": 2,
+        "tokens": 39449
+      },
+      "typescript": {
+        "clones": 23,
+        "duplicatedLines": 344,
+        "duplicatedTokens": 1475,
+        "lines": 5950,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 5.781512605042017,
+        "percentageTokens": 4.5548590309730415,
+        "sources": 2,
+        "tokens": 32383
+      }
+    },
+    "total": {
+      "clones": 35,
+      "duplicatedLines": 498,
+      "duplicatedTokens": 2308,
+      "lines": 13478,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 3.694910224068853,
+      "percentageTokens": 3.21305267847199,
+      "sources": 4,
+      "tokens": 71832
+    }
+  }
+}

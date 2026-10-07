@@ -1,15 +1,19 @@
 <!-- SPECKIT START -->
-Plan actif : specs/140-bulles-compactes/plan.md.
-Périmètre : bulles Bridget compactes dans T3 et titre réel des fils à la remise.
-Session140 autorisée le 2026-10-07 par « my-specify-all go ».
-Extension du titre du fil autorisée explicitement le 2026-10-07.
-Commit, fusion, push et installation autorisés explicitement par l'utilisateur
-le 2026-10-07. Livraison avec sauvegarde et vérification après installation.
-Préserver les textes, conversations, agents, relances et verdicts des missions.
-Essais frontend et transports isolés ; préserver les données actives pendant
-la livraison. Aucun cleanup d'autres travaux sans autorisation.
-Sélection SpecKit : SPECIFY_FEATURE=140-bulles-compactes ; branche
-session-140-bulles-compactes.
+Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/plan.md.
+Périmètre : présentation des lots de messages directs Bridget dans T3.
+Session141 autorisée explicitement le 2026-10-07 par « oui ».
+Un groupe compact, noms visibles, messages repliables et aperçu littéral du corps.
+Aucun panneau Sources ou détails techniques pour ces lots, même en repli sûr.
+Préserver textes, ordre, copie complète, pièces jointes, actions et missions.
+Les notifications et autres enveloppes SPEC140 gardent leur présentation.
+Aucun changement daemon, agent-loop, stockage, API ou migration.
+Essais frontend isolés. Commit, fusion, push et installation de la session141
+autorisés explicitement le 2026-10-07. Préparer une sauvegarde et vérifier sur preuves.
+Interdiction explicite de relancer T3 : ne pas quitter ni redémarrer l'application.
+Conserver les conversations et processus T3 en cours. Installation distincte de
+l'activation : ne pas annoncer la nouvelle présentation active sans preuve.
+Aucun cleanup d'autres travaux sans autorisation.
+Sélection SpecKit : SPECIFY_FEATURE=141-messages-groupes ; branche session-141-messages-groupes.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

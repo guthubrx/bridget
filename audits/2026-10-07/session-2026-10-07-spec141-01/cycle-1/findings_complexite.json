@@ -1,0 +1,1 @@
+{"module":"04","findings":[],"positive_findings":["projectBridgetBatchMembers scans separator candidates once and slices partitioned bodies at MessagesTimeline.logic.ts:120-157","Preview generation is bounded to 120 Unicode code points, not the entire body"],"limits":["No runtime CPU benchmark; complexity follows the inspected control flow"]}
