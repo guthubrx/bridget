@@ -1,12 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/138-priorite-projet/plan.md.
-Périmètre : priorité au même projet et exception inter-projets volontaire.
-Session autorisée le 2026-10-06 par my-specify-all. Aucun commit automatique.
-Ne pas réactiver le registre de projets retiré ni utiliser le domaine comme preuve.
-Préserver les échanges mandatés, les relances et les verdicts des missions.
-Tous les essais utilisent un BRIDGET_HOME et une socket isolés.
-Sélection SpecKit : SPECIFY_FEATURE=138-priorite-projet ; branche
-session-138-priorite-projet.
+Plan actif : specs/139-entetes-complets/plan.md.
+Périmètre : tous les en-têtes Bridget discrets dans T3.
+Session139 autorisée le 2026-10-07 par « go ».
+Commit, fusion, déploiement et push autorisés explicitement le 2026-10-07.
+Préserver les textes, conversations, agents, relances et verdicts des missions.
+Essais frontend isolés ; livraison avec sauvegarde et retour arrière du paquet.
+Sélection SpecKit : SPECIFY_FEATURE=139-entetes-complets ; branche
+session-139-entetes-complets.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->
