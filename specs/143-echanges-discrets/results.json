@@ -1,13 +1,14 @@
 {
   "feature": "143-echanges-discrets",
   "date": "2026-10-07",
-  "status": "implemented_delivery_in_progress",
+  "status": "installed_and_activated",
   "tasks": { "completed": ["T001", "T002", "T003", "T004", "T005", "T006", "T007", "T008", "T009", "T010", "T011", "T012", "T013"], "remaining": [], "total": 13 },
   "evidence_reporter": "principal",
   "historical_core_evidence": { "revision": "US1_US3_before_US4", "status": "implemented_not_installed_not_activated", "tasks_completed": ["T001", "T002", "T003", "T004", "T005", "T006", "T007", "T008"], "fields": ["tests", "checks", "frozen_source", "gates", "audit", "timing", "ui_recipe", "external_review", "limits"], "applies_to_extension": false, "source_hashes_are_historical_not_current": true },
   "extension_US4": {
     "started_at": "2026-10-07 11:05:59 CEST",
-    "status": "implemented_delivery_in_progress",
+    "status": "installed_and_activated",
+    "final_activation_proof": {"receipt_status":"deployed_health_ok","at":"2026-10-07T10:36:54Z","application":"/Applications/T3 Code (Local).app","version":"0.0.45-local.143","codesign_strict_deep":"PASS","ASAR_sha256":"99cacfda54554e6b9f1500ac88db5ed4038efdec49850b9a3cfaacd66e174f68","new_backend_pid":10491,"parent_pid":10378,"asset_url":"/assets/index-DgA9zaWk.js","served_asset_sha256":"2d8df3e24e9ab1394cda50a1a4eaa4917ad856c67d9890f813495a2f52b08602","receipt":"/Users/moi/.cache/t3-adoptions/spec143-20261007.KfjhE4/result.json","supersedes_pre_activation_delivery_fields":true},
     "tasks_completed": ["T009", "T010", "T011", "T012", "T013"],
     "tasks_remaining": [],
     "documentation_gate": "PASS",

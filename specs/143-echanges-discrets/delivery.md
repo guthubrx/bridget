@@ -1,6 +1,6 @@
 # Livraison — SPEC143
 
-Date : 2026-10-07. Statut : en cours. Le code est vérifié ; l'installation et l'activation ne sont pas encore prouvées.
+Date : 2026-10-07. Statut : installé et activé. Version143, signature, ASAR et asset servis vérifiés après redémarrage. Les sections suivantes conservent les étapes historiques avant activation ; la clôture ci-dessous les remplace pour l'état actuel.
 
 ## Autorisation distincte
 
@@ -60,3 +60,7 @@ Reçu durable exact : `/Users/moi/.cache/t3-adoptions/spec143-20261007.KfjhE4/re
 Le principal a committé les docs143 sous `19296c48`, fusionné main en fast-forward et confirmé le push de main/session143 vers github. Quatre fichiers locaux142 sont byte-identiques avant/après ; stash de conservation `5df30ff87e5401a09b60d34726f226ececdf7b7a` préservé. Le présent suivi sera committé et poussé avant lancement du superviseur ; cette publication suivante n'est pas encore déclarée faite. Aucun changement AGENTS, code, git ou runtime exécuté par l'agent documentaire.
 
 Mise à jour documentaire initiale :12:07 CEST, puis ajout des faits de push/build/sauvegarde. Aucun succès d'installation, activation ou publication documentaire n'est anticipé.
+
+## Clôture réelle après redémarrage
+
+Le reçu /Users/moi/.cache/t3-adoptions/spec143-20261007.KfjhE4/result.json confirme deployed_health_ok à2026-10-07T10:36:54Z. /Applications/T3 Code (Local).app contient0.0.45-local.143 ; codesign strict/deep PASS ; ASAR99cacfda54554e6b9f1500ac88db5ed4038efdec49850b9a3cfaacd66e174f68 ; nouveau backend10491/parent10378 et environnement conservé3b1ba3d1-3df7-4d49-a17f-45154959c3a9 ; asset /assets/index-DgA9zaWk.js SHA2d8df3e24e9ab1394cda50a1a4eaa4917ad856c67d9890f813495a2f52b08602. La première tentative s'était arrêtée avant remplacement : comparaison des dates ps sans retrait des espaces finaux. Fix et précontrôle réel ont précédé le second lancement ; script final2bb6b40b127764d83695704076a1bfc40757ab11a64daab16483423277e3656a. Aucun résultat anticipé ni restauration de SQLite. Suivi préactivation983e40ea committé, fusionné et poussé avant le lancement.
