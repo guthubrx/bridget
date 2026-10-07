@@ -102,3 +102,7 @@ Les34 rapports JSON/Markdown de l'audit ignoré ont été copiés mécaniquement
 Références durables pour la livraison :grade /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/specs/140-bulles-compactes/validation/audit/grade.json ; scoring /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/specs/140-bulles-compactes/validation/audit/scoring.md. L'audit d'origine reste conservé. Aucun worktree ou autre travail n'a été supprimé.
 
 Préserver les conversations et données actives, sauvegarder avant remplacement, vérifier le paquet et la santé après installation. Les résultats réels des commits, fusions, pushes et de la remise en service doivent être ajoutés par le principal après exécution, sans transformer cette autorisation en preuve d'installation.
+
+## Point de livraison après exécution
+
+Les faits de livraison vérifiés et le plan d'activation T3 sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/specs/140-bulles-compactes/livraison.md. Bridget est livré et activé ; les sources T3 sont fusionnées/poussées et le paquet signé est prêt. L'installation T3 reste à confirmer par le job et son reçu réel. Les sections antérieures décrivent les états historiques au moment de la validation et de la préparation, pas l'état de livraison courant.
