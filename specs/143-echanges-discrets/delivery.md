@@ -20,7 +20,7 @@ Après la clôture technique, l'utilisateur autorise commit, fusion, push, insta
 | Candidat | Version/commit embarqué, signature stricte et données frontend confirmés | Validé, non installé |
 | Installation | Job de promotion préparé après publication documentaire | Encore attendue |
 | Activation | Redémarrage autorisé, contrôle durable prévu | Non effectuée ou non prouvée à ce stade |
-| Docs Bridget143 | Commit/fusion/push par le principal après preuves | Encore attendus |
+| Docs Bridget143 | Commit `19296c48`, fusion fast-forward `main`, push `github` de `main` et `session-143-echanges-discrets` | Confirmés |
 
 Les quatre empreintes du code gelé392 restent inchangées après commit/fusion selon le principal. Aucun build, daemon, boucle ou restart exécuté par l'agent documentaire.
 
@@ -50,6 +50,13 @@ La validation d'un candidat dans le cache ne prouve ni son installation dans App
 
 Le principal prépare une remise en route supervisée et un reçu durable, car le redémarrage peut interrompre le tour actif. Ne pas confondre une demande de redémarrage avec une activation vérifiée. Les chemins du bundle installé, sa version, sa signature et le reçu de démarrage seront consignés uniquement après preuve.
 
-Superviseur `deploy.sh` et plist préparés mais non activés. Reçu durable prévu : `/Users/moi/.cache/t3-adoptions/spec143-20261007.KfjhE4/result.json`. Une contre-revue du job a trouvé un correctif de propagation du trap ERR (`set -E`), encore en cours. Candidat validé, installation et restart restent attendus après publication documentaire. Aucun restart ou activation effectué/prouvé à ce stade.
+Superviseur `deploy.sh` et plist préparés mais non activés. Revue finale APPROVE : les deux réserves sont corrigées, propagation du trap ERR avec `set -E` et attestation de sauvegarde contrôlant méthode, quick_check et taille.
+
+Script SHA256 : `3d8a9921eed43a29032b0ef3b089b6d072fe9cbe4e501278c87164bda48c18fd`.
+Plist SHA256 : `966ea16a40b555123b155a88965fa80d0248191fec72947e33793811ab1bc873`.
+
+Reçu durable exact : `/Users/moi/.cache/t3-adoptions/spec143-20261007.KfjhE4/result.json`. Il fait autorité pour le résultat réel après le redémarrage. Sa réussite n'est pas anticipée ici. Activation supervisée autorisée et préparée, non lancée à cet instant. Candidat validé ; installation et restart encore attendus.
+
+Le principal a committé les docs143 sous `19296c48`, fusionné main en fast-forward et confirmé le push de main/session143 vers github. Quatre fichiers locaux142 sont byte-identiques avant/après ; stash de conservation `5df30ff87e5401a09b60d34726f226ececdf7b7a` préservé. Le présent suivi sera committé et poussé avant lancement du superviseur ; cette publication suivante n'est pas encore déclarée faite. Aucun changement AGENTS, code, git ou runtime exécuté par l'agent documentaire.
 
 Mise à jour documentaire initiale :12:07 CEST, puis ajout des faits de push/build/sauvegarde. Aucun succès d'installation, activation ou publication documentaire n'est anticipé.
