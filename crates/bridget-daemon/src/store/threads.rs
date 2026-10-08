@@ -1233,6 +1233,52 @@ impl Store {
         }))
     }
 
+    /// O(L log T + L M), L ≤100, M ≤16. Une requête, noms durables nullable.
+    pub(crate) fn thread_members_with_names(
+        &self,
+        actor: &str,
+        thread_ids: &[String],
+    ) -> Result<
+        std::collections::HashMap<String, Vec<bridget_transport::protocol::HumanThreadMember>>,
+        StoreError,
+    > {
+        let mut grouped = std::collections::HashMap::new();
+        if thread_ids.is_empty() {
+            return Ok(grouped);
+        }
+        let placeholders = std::iter::repeat_n("?", thread_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let query=format!("SELECT m.thread_id,m.agent_id,p.display_name
+            FROM discussion_members m LEFT JOIN agent_profiles p ON p.agent_id=m.agent_id
+            WHERE m.thread_id IN ({placeholders})
+              AND EXISTS(SELECT 1 FROM discussion_members own WHERE own.thread_id=m.thread_id AND own.agent_id=?)
+            ORDER BY m.thread_id,m.agent_id");
+        let mut binds = thread_ids.to_vec();
+        binds.push(actor.into());
+        let mut stmt = self.conn.prepare(&query).map_err(sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(binds), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    bridget_transport::protocol::HumanThreadMember {
+                        agent_id: row.get(1)?,
+                        name: row.get(2)?,
+                    },
+                ))
+            })
+            .map_err(sql)?;
+        for row in rows {
+            let (thread, member) = row.map_err(sql)?;
+            let members = grouped.entry(thread).or_insert_with(Vec::new);
+            if members.len() >= crate::threads::MAX_MEMBERS {
+                return Err(StoreError::Sqlite(rusqlite::Error::InvalidQuery));
+            }
+            members.push(member);
+        }
+        Ok(grouped)
+    }
+
     /// Lecture bornée des nouveautés propres au membre, avec reçu.
     pub(crate) fn thread_read(&self, request: &ReadRequest<'_>) -> Result<ReadOutcome, StoreError> {
         let ReadRequest {

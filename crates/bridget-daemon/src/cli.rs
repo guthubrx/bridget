@@ -152,6 +152,12 @@ pub fn run() {
 
     let cmd = &args[1];
 
+    // Voie humaine froide : avant création d'état, registre et identité.
+    if cmd == "thread" && args.get(2).is_some_and(|arg| arg == "inspect") {
+        cmd_thread_inspect(&args[3..]);
+        return;
+    }
+
     // Avant namespace, résolution du registre et lancement : une invocation
     // conteneur historique ne devient jamais une commande hôte.
     if let Err(error) = validate_communication_entry(cmd, &args[2..]) {
@@ -891,6 +897,7 @@ fn thread_notice_marker(previous: &str) -> Option<String> {
 }
 
 const THREAD_USAGE: &str = "usage :\n  \
+  bridget thread inspect --t3-thread UUID --project-root ROOT --action list|show|history [--thread UUID] [--limit N] [--after UUID] [--from-seq N] [--to-seq N] --json\n  \
   bridget thread create --title TITRE --member UUID|NOM [--member …] --id UUID [--cross-project-reason MOTIF]\n  \
   bridget thread list [--limit N] [--after UUID]\n  \
   bridget thread show THREAD\n  \
@@ -953,6 +960,231 @@ fn cmd_thread(args: &[String]) {
     println!("{}", result.result);
     if result.result["status"] == "error" {
         std::process::exit(2);
+    }
+}
+
+fn parse_thread_inspect(
+    args: &[String],
+) -> Result<bridget_transport::protocol::HumanThreadViewV1, String> {
+    use bridget_transport::protocol::{
+        HUMAN_THREAD_VIEW_VERSION, HumanThreadViewAction as A, HumanThreadViewV1,
+    };
+    let mut fields = std::collections::BTreeMap::new();
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        let key = args[index].as_str();
+        if key == "--json" {
+            if json {
+                return Err("--json répété".into());
+            }
+            json = true;
+            index += 1;
+            continue;
+        }
+        if !matches!(
+            key,
+            "--t3-thread"
+                | "--project-root"
+                | "--action"
+                | "--thread"
+                | "--limit"
+                | "--after"
+                | "--from-seq"
+                | "--to-seq"
+        ) {
+            return Err("option de consultation inconnue".into());
+        }
+        let value = args
+            .get(index + 1)
+            .filter(|value| !value.starts_with("--"))
+            .ok_or("valeur d'option manquante")?;
+        if fields.insert(key, value.as_str()).is_some() {
+            return Err("option répétée".into());
+        }
+        index += 2;
+    }
+    let required = |key| {
+        fields
+            .get(key)
+            .copied()
+            .ok_or_else(|| format!("{key} requis"))
+    };
+    let uuid = |value: &str| {
+        crate::threads::canonical_uuid(value).ok_or_else(|| "UUID canonique requis".to_string())
+    };
+    if !json {
+        return Err("--json requis".into());
+    }
+    let t3_thread_id = uuid(required("--t3-thread")?)?;
+    let project_root = required("--project-root")?;
+    if !Path::new(project_root).is_absolute()
+        || project_root.len() > 4096
+        || project_root.chars().any(char::is_control)
+    {
+        return Err("racine projet absolue requise".into());
+    }
+    let limit = fields
+        .get("--limit")
+        .map(|value| value.parse::<u32>().map_err(|_| "limite invalide"))
+        .transpose()?;
+    let action = required("--action")?;
+    let allowed: &[&str] = match action {
+        "list" => &["--limit", "--after"],
+        "show" => &["--thread"],
+        "history" => &["--thread", "--limit", "--from-seq", "--to-seq"],
+        _ => return Err("action de consultation inconnue".into()),
+    };
+    if fields.keys().any(|key| {
+        !matches!(*key, "--t3-thread" | "--project-root" | "--action") && !allowed.contains(key)
+    }) {
+        return Err("option étrangère à cette action".into());
+    }
+    let request = match action {
+        "list" => {
+            if limit.is_some_and(|n| n == 0 || n > crate::threads::LIST_MAX) {
+                return Err("limite invalide".into());
+            }
+            A::List {
+                limit,
+                after_thread_id: fields.get("--after").map(|value| uuid(value)).transpose()?,
+            }
+        }
+        "show" => A::Show {
+            thread_id: uuid(required("--thread")?)?,
+        },
+        "history" => {
+            if limit.is_some_and(|n| n == 0 || n > crate::threads::PAGE_MAX) {
+                return Err("limite invalide".into());
+            }
+            let seq = |key| {
+                fields
+                    .get(key)
+                    .map(|value| value.parse::<u64>().map_err(|_| "séquence invalide"))
+                    .transpose()
+            };
+            let from_seq = seq("--from-seq")?;
+            let to_seq = seq("--to-seq")?;
+            if from_seq.is_some_and(|n| n == 0 || n > 9_007_199_254_740_991)
+                || to_seq.is_some_and(|n| {
+                    n > 9_007_199_254_740_991 || n.saturating_add(1) < from_seq.unwrap_or(1)
+                })
+            {
+                return Err("plage de séquences invalide".into());
+            }
+            A::History {
+                thread_id: uuid(required("--thread")?)?,
+                from_seq,
+                to_seq,
+                limit,
+            }
+        }
+        _ => unreachable!("action validée"),
+    };
+    Ok(HumanThreadViewV1 {
+        version: HUMAN_THREAD_VIEW_VERSION,
+        t3_thread_id,
+        project_root: project_root.into(),
+        request,
+    })
+}
+
+fn cmd_thread_inspect(args: &[String]) {
+    use bridget_transport::protocol::{
+        HumanThreadViewError, HumanThreadViewOutcome, HumanThreadViewResult,
+    };
+    let request = match parse_thread_inspect(args) {
+        Ok(request) => request,
+        Err(_) => {
+            println!(
+                "{}",
+                serde_json::to_string(&HumanThreadViewResult::error(
+                    HumanThreadViewError::InvalidRequest
+                ))
+                .unwrap()
+            );
+            std::process::exit(2);
+        }
+    };
+    let namespace = crate::environment::Namespace::from_environment().unwrap_or_else(|_| {
+        eprintln!("bridget thread inspect : daemon_unreachable : namespace indisponible");
+        std::process::exit(3);
+    });
+    let result = crate::communication::client::human_thread_view(&namespace.socket, request)
+        .unwrap_or_else(|error| {
+            let unavailable = matches!(
+                &error,
+                crate::communication::client::ClientError::Technical {
+                    code: "daemon_unreachable",
+                    ..
+                }
+            );
+            eprintln!("bridget thread inspect : {error}");
+            std::process::exit(if unavailable { 3 } else { 1 });
+        });
+    println!(
+        "{}",
+        serde_json::to_string(&result).expect("projection humaine sérialisable")
+    );
+    if matches!(result.result, HumanThreadViewOutcome::Error { .. }) {
+        std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod spec145_inspect_tests {
+    use super::*;
+
+    fn args(action: &str) -> Vec<String> {
+        [
+            "--t3-thread",
+            "89000000-0000-4000-8000-000000000145",
+            "--project-root",
+            "/fixture",
+            "--action",
+            action,
+            "--json",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn spec145_inspect_closed_options_and_action_specific_limits() {
+        assert!(parse_thread_inspect(&args("list")).is_ok());
+        for action in ["create", "post", "read", "ack", "close"] {
+            assert!(parse_thread_inspect(&args(action)).is_err());
+        }
+        for options in [
+            vec!["--agent", "forged"],
+            vec!["--credential", "secret"],
+            vec!["--limit", "0"],
+            vec!["--limit", "101"],
+            vec!["--from-seq", "1"],
+            vec!["--limit", "2", "--limit", "3"],
+            vec!["--json"],
+        ] {
+            let mut input = args("list");
+            input.extend(options.into_iter().map(str::to_string));
+            assert!(parse_thread_inspect(&input).is_err(), "{input:?}");
+        }
+        let mut input = args("history");
+        input.extend(
+            [
+                "--thread",
+                "14500000-0000-4000-8000-000000000001",
+                "--from-seq",
+                "1",
+                "--to-seq",
+                "7",
+                "--limit",
+                "3",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        );
+        assert!(parse_thread_inspect(&input).is_ok());
     }
 }
 

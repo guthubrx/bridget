@@ -1547,6 +1547,13 @@ impl LinkWorker {
             },
         );
         self.project_context = Some(context);
+        send_wrapper_message(
+            &self.writer,
+            WrapperToDaemon::T3ThreadBindingFact {
+                version: bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION,
+                t3_thread_id: summary.id.clone(),
+            },
+        );
     }
 
     fn run(mut self, inbox: Receiver<LinkEvent>) {
@@ -4282,6 +4289,41 @@ mod tests {
         assert_eq!(fact["root"], "");
         assert_eq!(fact["host"], crate::wrapper::host_name());
         assert!(fact["worktree_root"].is_null());
+        worker.relay.shutdown();
+        worker.journal.stop();
+    }
+
+    #[test]
+    fn spec145_t3_binding_follows_each_changed_project_fact() {
+        let (mut worker, peer) = worker099();
+        let mut changed = summary(None);
+        changed.workspace_root = Some("/new-project".into());
+        worker.report_project_context(&changed);
+        peer.set_nonblocking(true).unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut frames = Vec::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    frames.push(serde_json::from_str::<serde_json::Value>(line.trim()).unwrap())
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("lecture fixture: {e}"),
+            }
+        }
+        let bindings = frames
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f["type"] == "T3ThreadBindingFact")
+            .collect::<Vec<_>>();
+        assert_eq!(bindings.len(), 2);
+        for (index, binding) in bindings {
+            assert_eq!(frames[index - 1]["type"], "CommunicationProjectFact");
+            assert_eq!(binding["version"], 1);
+            assert_eq!(binding["t3_thread_id"], changed.id);
+        }
         worker.relay.shutdown();
         worker.journal.stop();
     }
