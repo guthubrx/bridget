@@ -343,6 +343,31 @@ Ne pas doubler les publications par des rafales de messages directs récapitulat
 Les messages directs sans classe restent inchangés ; Bridget ne devine pas lesquels
 sont obsolètes. Les anciens textes déjà livrés ne sont pas supprimés.
 
+Le panneau humain Bridget de T3 (sessions145–146) consulte les fils accessibles
+à la conversation ouverte, sous les contrôles du daemon. Il ne crée ni ACK,
+message, notification, tour fournisseur ou avance du repère de lecture d'un agent.
+Les fils sont triés par activité récente ; les messages, par séquence décroissante.
+Les auteurs et dates sont visibles. Les corps longs se déplient ; leur copie
+conserve le texte complet. La recherche est locale aux données chargées, même
+repliées. Les pages anciennes conservent l'instantané de la première page ;
+rafraîchir permet de consulter les échanges arrivés depuis.
+
+Le serveur T3 utilise `bridget thread inspect`, voie de consultation distincte
+de `bridget_thread/read`. Exemple de diagnostic dans le namespace vérifié :
+
+```sh
+/Users/moi/.local/bin/bridget thread inspect --t3-thread '<UUID_CONVERSATION_T3>' --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget --action list_recent --limit 50 --json
+/Users/moi/.local/bin/bridget thread inspect --t3-thread '<UUID_CONVERSATION_T3>' --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget --action history_recent --thread '<UUID_FIL_BRIDGET>' --limit 50 --json
+```
+
+Recopier le curseur reçu avec `list_recent --after '<CURSEUR>'`. Pour l'histoire,
+recopier `next_before_seq` avec `--before-seq` et conserver `snapshot_seq` avec
+`--to-seq`. Ces valeurs ne confèrent aucun accès. La capacité récente
+`human_thread_view_recent_v1` est requise ; un daemon ancien est refusé,
+sans repli vers un autre ordre ni présentation d'un historique vide.
+Installer les versions compatibles sur disque ne recharge pas T3 ni Bridget.
+Le nouveau panneau exige leur prochain redémarrage ; cette livraison ne le déclenche pas.
+
 La session 103 ajoute le dossier de passation : l'agent rédige objectif, résumé,
 résultats déclarés, décisions, questions, prochain pas, références et limites ;
 `bridget_handoff` (et `bridget handoff --json-stdin`) valide, rend un corps v1

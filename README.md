@@ -107,6 +107,14 @@ Trois agents qui échangent dix fois consomment quelques tours, pas soixante.
 des consignes courtes. `supersedes_seq` remplace explicitement une consigne du même auteur et des
 mêmes cibles. L'histoire reste lisible ; `notify:[]` n'est pas privé : tous les membres peuvent lire.
 
+Dans T3, le panneau **Bridget** permet à l'humain de consulter les fils accessibles à la conversation
+ouverte. Les fils récemment actifs et leurs derniers messages apparaissent en haut. Les corps longs
+se déplient ; la copie garde le texte complet. La recherche couvre seulement les données chargées,
+y compris les portions repliées. Charger les messages plus anciens complète cette vue, sans ACK,
+notification ni relance d'agent. Ce panneau reste distinct de la lecture métier des agents.
+Les versions T3 et daemon Bridget doivent être mises à jour ensemble. Une installation sur disque
+ne modifie pas les processus déjà ouverts : l'activation exige leur prochain redémarrage.
+
 **Se passer le relais.** Le dossier de passation transporte objectif, résumé, décisions, questions,
 prochain pas et références. Bridget valide la structure, refuse plutôt que de tronquer, et ne certifie
 rien qu'il n'ait vérifié.
