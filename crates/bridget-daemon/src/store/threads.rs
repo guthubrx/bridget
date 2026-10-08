@@ -157,6 +157,23 @@ pub(crate) struct ThreadSummary {
     pub last_seq: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecentThreadSummary {
+    pub summary: ThreadSummary,
+    pub last_activity_at: i64,
+}
+
+// Requête partagée avec sa preuve EXPLAIN ; aucune collecte de dates N+1.
+const RECENT_LIST_SQL: &str =
+    "SELECT t.thread_id,t.title,t.creator_id,t.closed_at IS NOT NULL,t.last_seq,
+    COALESCE(e.created_at,t.created_at) AS activity
+    FROM discussion_members m
+    JOIN discussion_threads t ON t.thread_id=m.thread_id
+    LEFT JOIN discussion_entries e ON e.thread_id=t.thread_id AND e.seq=t.last_seq
+    WHERE m.agent_id=?1 AND (?2 IS NULL OR COALESCE(e.created_at,t.created_at)<?2
+          OR (COALESCE(e.created_at,t.created_at)=?2 AND t.thread_id>?3))
+    ORDER BY activity DESC,t.thread_id ASC LIMIT ?4";
+
 /// Page relue depuis les entrées immuables.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Page {
@@ -657,11 +674,40 @@ fn read_range(
     byte_budget: usize,
     projection_snapshot: Option<u64>,
 ) -> Result<Vec<Value>, StoreError> {
+    read_range_ordered(
+        tx,
+        thread_id,
+        from_seq,
+        to_seq,
+        limit,
+        byte_budget,
+        projection_snapshot,
+        None,
+    )
+}
+
+/// Même projection indexée ; l'instantané récent reste indépendant de la
+/// borne de page et ne rend jamais les corps historiques compacts.
+fn read_range_ordered(
+    tx: &Transaction<'_>,
+    thread_id: &str,
+    from_seq: u64,
+    to_seq: u64,
+    limit: u32,
+    byte_budget: usize,
+    projection_snapshot: Option<u64>,
+    recent_snapshot: Option<u64>,
+) -> Result<Vec<Value>, StoreError> {
     if from_seq > to_seq || limit == 0 {
         return Ok(Vec::new());
     }
+    let order = if recent_snapshot.is_some() {
+        "DESC"
+    } else {
+        "ASC"
+    };
     let mut statement = tx
-        .prepare(
+        .prepare(&format!(
             "SELECT e.seq, e.message_id, e.author_id, e.created_at, e.body, e.notify_json,
                     e.reply_to_seq, e.kind, e.supersedes_seq, s.seq
              FROM discussion_entries e
@@ -669,8 +715,8 @@ fn read_range(
                ON s.thread_id = e.thread_id AND s.supersedes_seq = e.seq
               AND s.supersedes_seq IS NOT NULL AND s.seq <= COALESCE(?5, ?3)
              WHERE e.thread_id = ?1 AND e.seq >= ?2 AND e.seq <= ?3
-             ORDER BY e.seq ASC LIMIT ?4",
-        )
+             ORDER BY e.seq {order} LIMIT ?4"
+        ))
         .map_err(sql)?;
     let rows = statement
         .query_map(
@@ -679,7 +725,7 @@ fn read_range(
                 from_seq as i64,
                 to_seq as i64,
                 i64::from(limit),
-                projection_snapshot.map(|v| v as i64)
+                recent_snapshot.or(projection_snapshot).map(|v| v as i64)
             ],
             |row| {
                 let seq = u64_of(row.get(0)?);
@@ -1213,6 +1259,49 @@ impl Store {
         Ok((threads, next_after))
     }
 
+    /// O(T log T + T log E), T ≤256. Une jointure au dernier numéro,
+    /// pas de balayage des corps ni de requête par fil.
+    pub(crate) fn thread_list_recent(
+        &self,
+        actor: &str,
+        limit: u32,
+        after: Option<(i64, &str)>,
+    ) -> Result<(Vec<RecentThreadSummary>, Option<String>), StoreError> {
+        let mut statement = self.conn.prepare(RECENT_LIST_SQL).map_err(sql)?;
+        let rows = statement
+            .query_map(
+                params![
+                    actor,
+                    after.map(|v| v.0),
+                    after.map(|v| v.1),
+                    i64::from(limit) + 1
+                ],
+                |row| {
+                    Ok(RecentThreadSummary {
+                        summary: ThreadSummary {
+                            thread_id: row.get(0)?,
+                            title: row.get(1)?,
+                            creator_id: row.get(2)?,
+                            closed: row.get(3)?,
+                            last_seq: u64_of(row.get(4)?),
+                        },
+                        last_activity_at: row.get(5)?,
+                    })
+                },
+            )
+            .map_err(sql)?;
+        let mut threads = rows.collect::<Result<Vec<_>, _>>().map_err(sql)?;
+        let next_after = if threads.len() > limit as usize {
+            threads.truncate(limit as usize);
+            threads
+                .last()
+                .map(|t| format!("{}:{}", t.last_activity_at, t.summary.thread_id))
+        } else {
+            None
+        };
+        Ok((threads, next_after))
+    }
+
     pub(crate) fn thread_show(
         &self,
         actor: &str,
@@ -1469,6 +1558,59 @@ impl Store {
         }))
     }
 
+    /// O(log E + P log E), P ≤200. Instantané fixé, page décroissante ;
+    /// la sonde de suite utilise l'index (thread_id,seq), même avec des trous.
+    pub(crate) fn thread_history_recent(
+        &self,
+        actor: &str,
+        thread_id: &str,
+        before_seq: Option<u64>,
+        to_seq: Option<u64>,
+        limit: u32,
+        byte_budget: usize,
+    ) -> Result<HistoryOutcome, StoreError> {
+        let tx = self.conn.unchecked_transaction().map_err(sql)?;
+        let (thread, _) = match load_thread_for_member(&tx, thread_id, actor)? {
+            Ok(found) => found,
+            Err(refusal) => return Ok(HistoryOutcome::Refused(refusal)),
+        };
+        let snapshot_seq = match to_seq {
+            Some(n) if n > thread.last_seq => {
+                return Ok(HistoryOutcome::Refused(ThreadRefusal::RangeUnavailable));
+            }
+            Some(n) => n,
+            None => thread.last_seq,
+        };
+        let through_seq = before_seq.unwrap_or(snapshot_seq).min(snapshot_seq);
+        let entries = read_range_ordered(
+            &tx,
+            thread_id,
+            1,
+            through_seq,
+            limit,
+            byte_budget,
+            None,
+            Some(snapshot_seq),
+        )?;
+        let has_more = if let Some(min) = last_seq_of(&entries) {
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM discussion_entries WHERE thread_id=?1 AND seq<?2)",
+                params![thread_id, min as i64],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(sql)?
+        } else {
+            false
+        };
+        Ok(HistoryOutcome::Page(Page {
+            entries,
+            base_seq: 0,
+            through_seq,
+            snapshot_seq,
+            has_more,
+        }))
+    }
+
     pub(crate) fn thread_wake_by_delivery(
         &self,
         delivery_id: &str,
@@ -1712,6 +1854,235 @@ mod spec102_quota_tests {
                 limits,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn spec146_red_recent_list_is_global_not_uuid_order() {
+        let (store, root) = store();
+        let old = "14600000-0000-4000-8000-000000000001";
+        let recent = "14600000-0000-4000-8000-000000000002";
+        create(&store, &crate::threads::LIMITS, old);
+        create(&store, &crate::threads::LIMITS, recent);
+        post(&store, &crate::threads::LIMITS, recent, "dernier échange");
+        let before = store.conn.total_changes();
+        let (page, _) = store.thread_list_recent(B, 1, None).unwrap();
+        assert_eq!(page[0].summary.thread_id, recent);
+        assert_eq!(store.conn.total_changes(), before);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec146_red_history_opens_on_true_last_message() {
+        let (store, root) = store();
+        let id = "14600000-0000-4000-8000-000000000003";
+        create(&store, &crate::threads::LIMITS, id);
+        for n in 1..=7 {
+            post(&store, &crate::threads::LIMITS, id, &format!("message {n}"));
+        }
+        let before = store.conn.total_changes();
+        let HistoryOutcome::Page(page) = store
+            .thread_history_recent(B, id, None, None, 2, 60000)
+            .unwrap()
+        else {
+            panic!("page attendue");
+        };
+        assert_eq!(page.entries[0]["seq"], 7);
+        assert_eq!(store.conn.total_changes(), before);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec146_recent_list_cursor_ties_empty_closed_and_last_sequence_date() {
+        let (store, root) = store();
+        let plan = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_LIST_SQL}"))
+            .unwrap()
+            .query_map(
+                params![B, Option::<i64>::None, Option::<String>::None, 2],
+                |r| r.get::<_, String>(3),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("idx_discussion_members_agent")),
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|line| line.starts_with("SEARCH e USING INDEX")
+                    && line.contains("(thread_id=? AND seq=?)")),
+            "{plan:?}"
+        );
+        eprintln!("SPEC146 EXPLAIN {plan:?}");
+        let ids = (0..4)
+            .map(|n| format!("14600000-0000-4000-8000-{n:012}"))
+            .collect::<Vec<_>>();
+        for id in &ids {
+            create(&store, &crate::threads::LIMITS, id);
+        }
+        post(
+            &store,
+            &crate::threads::LIMITS,
+            &ids[0],
+            "first timestamp is not the last sequence",
+        );
+        post(&store, &crate::threads::LIMITS, &ids[0], "latest sequence");
+        store.conn.execute("UPDATE discussion_entries SET created_at=CASE seq WHEN 1 THEN 999 ELSE 50 END WHERE thread_id=?1",[&ids[0]]).unwrap();
+        for id in &ids[1..3] {
+            post(&store, &crate::threads::LIMITS, id, "equal activity");
+            store
+                .conn
+                .execute(
+                    "UPDATE discussion_entries SET created_at=70 WHERE thread_id=?1",
+                    [id],
+                )
+                .unwrap();
+        }
+        store
+            .conn
+            .execute(
+                "UPDATE discussion_threads SET created_at=60,closed_at=90 WHERE thread_id=?1",
+                [&ids[3]],
+            )
+            .unwrap();
+        let before = store.conn.total_changes();
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let parsed = cursor
+                .as_deref()
+                .map(crate::threads::parse_recent_cursor)
+                .transpose()
+                .unwrap();
+            let (page, next) = store
+                .thread_list_recent(B, 1, parsed.as_ref().map(|(date, id)| (*date, id.as_str())))
+                .unwrap();
+            seen.extend(
+                page.into_iter()
+                    .map(|t| (t.summary.thread_id, t.last_activity_at)),
+            );
+            cursor = next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (ids[1].clone(), 70),
+                (ids[2].clone(), 70),
+                (ids[3].clone(), 60),
+                (ids[0].clone(), 50)
+            ]
+        );
+        assert!(
+            store
+                .thread_list_recent("outsider", 100, None)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        assert_eq!(store.conn.total_changes(), before);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec146_recent_history_byte_cursor_global_correction_snapshot_and_gaps() {
+        let (store, root) = store();
+        let id = "14600000-0000-4000-8000-000000000004";
+        create(&store, &crate::threads::LIMITS, id);
+        for n in 1..=7 {
+            post(
+                &store,
+                &crate::threads::LIMITS,
+                id,
+                &format!("{n} é\r\n  {}", "🦀".repeat(200)),
+            );
+        }
+        store.conn.execute("UPDATE discussion_entries SET kind='action',supersedes_seq=1 WHERE thread_id=?1 AND seq=7",[id]).unwrap();
+        let before = store.conn.total_changes();
+        let HistoryOutcome::Page(first) = store
+            .thread_history_recent(B, id, None, None, 200, 1200)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.entries[0]["seq"], 7);
+        assert!(first.has_more);
+        assert_eq!(first.through_seq, 7);
+        assert_eq!(first.snapshot_seq, 7);
+        let HistoryOutcome::Page(old) = store
+            .thread_history_recent(B, id, Some(1), Some(7), 200, 60000)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(old.entries[0]["superseded_by_seq"], 7);
+        assert!(
+            old.entries[0]["body"]
+                .as_str()
+                .unwrap()
+                .starts_with("1 é\r\n  ")
+        );
+        let HistoryOutcome::Page(past) = store
+            .thread_history_recent(B, id, Some(1), Some(6), 200, 60000)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(past.entries[0].get("superseded_by_seq").is_none());
+        let HistoryOutcome::Page(empty) = store
+            .thread_history_recent(B, id, Some(0), Some(7), 200, 60000)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(empty.entries.is_empty());
+        assert!(!empty.has_more);
+        let HistoryOutcome::Page(clamped) = store
+            .thread_history_recent(B, id, Some(100), Some(7), 1, 60000)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(clamped.through_seq, 7);
+        assert!(matches!(
+            store
+                .thread_history_recent("outsider", id, None, None, 20, 60000)
+                .unwrap(),
+            HistoryOutcome::Refused(ThreadRefusal::ThreadUnavailable)
+        ));
+        assert!(matches!(
+            store
+                .thread_history_recent(B, id, None, Some(8), 20, 60000)
+                .unwrap(),
+            HistoryOutcome::Refused(ThreadRefusal::RangeUnavailable)
+        ));
+        assert_eq!(store.conn.total_changes(), before);
+        // Données anormales trouées : la continuation est une existence, pas min>1.
+        store
+            .conn
+            .execute(
+                "DELETE FROM discussion_entries WHERE thread_id=?1 AND seq<7",
+                [id],
+            )
+            .unwrap();
+        let HistoryOutcome::Page(gap) = store
+            .thread_history_recent(B, id, None, None, 1, 60000)
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(!gap.has_more);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

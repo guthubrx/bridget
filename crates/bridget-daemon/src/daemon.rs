@@ -11681,6 +11681,109 @@ mod spec145_human_view_tests {
             Some(DaemonToWrapper::ClientRejected { .. })
         ));
     }
+
+    #[test]
+    fn spec146_recent_singleton_negotiation_and_refusals_do_not_mutate() {
+        let (state, root, mut peer) = fixture("h146-cap");
+        let before = snapshot(&state);
+        assert_eq!(
+            call(&state, &root, json!({"action":"list_recent"}))["result"]["code"],
+            "unsupported_version"
+        );
+        // La fixture145 était déjà négociée : une nouvelle connexion humaine
+        // commence après RoleHandshake, avant son unique ClientHello.
+        state.lock().unwrap().client_negotiations.remove("human");
+        let hello = WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::communication::issuer_scope("spec146-human"),
+            capabilities: vec![ClientCapability::HumanThreadViewRecentV1],
+        };
+        let welcome = handle_wrapper_message("human", hello, &state).unwrap();
+        let observed = serde_json::to_value(&welcome).unwrap();
+        eprintln!("SPEC146 bienvenue réelle : {observed}");
+        assert!(
+            matches!(welcome,DaemonToWrapper::ClientWelcome {capabilities,..} if capabilities==[ClientCapability::HumanThreadViewRecentV1]),
+            "{observed}"
+        );
+        assert_eq!(
+            call(&state, &root, json!({"action":"list_recent"}))["result"]["status"],
+            "listed_recent"
+        );
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "unsupported_version"
+        );
+        assert_eq!(
+            call(&state, "/missing", json!({"action":"list_recent"}))["result"]["code"],
+            "project_mismatch"
+        );
+        assert_eq!(
+            call(
+                &state,
+                &root,
+                json!({"action":"history_recent","thread_id":"14600000-0000-4000-8000-000000000099"})
+            )["result"]["code"],
+            "thread_unavailable"
+        );
+        state
+            .lock()
+            .unwrap()
+            .client_negotiations
+            .get_mut("human")
+            .unwrap()
+            .capabilities
+            .push(ClientCapability::SendIdempotent);
+        assert_eq!(
+            call(&state, &root, json!({"action":"list_recent"}))["result"]["code"],
+            "unsupported_version"
+        );
+        assert_eq!(snapshot(&state), before);
+        peer.set_nonblocking(true).unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            std::io::Read::read(&mut peer, &mut byte)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn spec146_recent_hello_and_negotiated_client_skip_attach_maintenance() {
+        let (state, _, _peer) = fixture("h146-maintenance");
+        state.lock().unwrap().client_negotiations.remove("human");
+        state
+            .lock()
+            .unwrap()
+            .view_closed_tx
+            .send("pending-hello".into())
+            .unwrap();
+        handle_wrapper_message(
+            "human",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::communication::issuer_scope("spec146-human"),
+                capabilities: vec![ClientCapability::HumanThreadViewRecentV1],
+            },
+            &state,
+        )
+        .unwrap();
+        assert_eq!(
+            state.lock().unwrap().view_closed_rx.try_recv().unwrap(),
+            "pending-hello"
+        );
+        state
+            .lock()
+            .unwrap()
+            .view_closed_tx
+            .send("pending-negotiated".into())
+            .unwrap();
+        handle_wrapper_message("human", WrapperToDaemon::ListAgents, &state).unwrap();
+        assert_eq!(
+            state.lock().unwrap().view_closed_rx.try_recv().unwrap(),
+            "pending-negotiated"
+        );
+    }
 }
 
 /// O(C + log T + P), C connexions ; pas d'annuaire ni de maintenance.
@@ -11708,8 +11811,7 @@ fn handle_human_thread_view(
         }
         if !st.client_negotiations.get(conn_id).is_some_and(|n| {
             n.version == CLIENT_CONTRACT_VERSION
-                && n.capabilities
-                    .contains(&ClientCapability::HumanThreadViewV1)
+                && n.capabilities.as_slice() == [request.request.required_capability()]
         }) {
             return refusal(E::UnsupportedVersion);
         }
@@ -11779,14 +11881,15 @@ fn handle_wrapper_message(
             role: ConnectionRole::Client
         }
     ) || matches!(&msg,WrapperToDaemon::ClientHello{capabilities,..}
-            if capabilities.as_slice()==[ClientCapability::HumanThreadViewV1]);
+            if capabilities.as_slice()==[ClientCapability::HumanThreadViewV1]
+                || capabilities.as_slice()==[ClientCapability::HumanThreadViewRecentV1]);
     let human_client = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
-            && st
-                .client_negotiations
-                .get(conn_id)
-                .is_some_and(|n| n.capabilities.as_slice() == [ClientCapability::HumanThreadViewV1])
+            && st.client_negotiations.get(conn_id).is_some_and(|n| {
+                n.capabilities.as_slice() == [ClientCapability::HumanThreadViewV1]
+                    || n.capabilities.as_slice() == [ClientCapability::HumanThreadViewRecentV1]
+            })
     };
     if !human_client_handshake && !human_client {
         let (controls, views) = {
@@ -13757,6 +13860,7 @@ fn handle_wrapper_message(
                         capability,
                         ClientCapability::SendIdempotent
                             | ClientCapability::HumanThreadViewV1
+                            | ClientCapability::HumanThreadViewRecentV1
                             | ClientCapability::CommunicationProjectsV1
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1

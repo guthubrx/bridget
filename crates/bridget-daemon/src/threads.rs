@@ -100,9 +100,10 @@ pub(crate) fn human_view(
     action: &bridget_transport::protocol::HumanThreadViewAction,
 ) -> bridget_transport::protocol::HumanThreadViewResult {
     use bridget_transport::protocol::{
-        HUMAN_THREAD_VIEW_MAX_BYTES, HUMAN_THREAD_VIEW_VERSION, HumanThreadEntry,
-        HumanThreadMember, HumanThreadState as S, HumanThreadSummary, HumanThreadViewAction as A,
-        HumanThreadViewError as E, HumanThreadViewOutcome as O, HumanThreadViewResult as R,
+        HUMAN_THREAD_VIEW_MAX_BYTES, HUMAN_THREAD_VIEW_VERSION, HumanRecentThreadSummary,
+        HumanThreadEntry, HumanThreadMember, HumanThreadState as S, HumanThreadSummary,
+        HumanThreadViewAction as A, HumanThreadViewError as E, HumanThreadViewOutcome as O,
+        HumanThreadViewResult as R,
     };
     const MAX_SEQ: u64 = 9_007_199_254_740_991;
     let outcome = (|| -> Result<R, E> {
@@ -110,6 +111,52 @@ pub(crate) fn human_view(
         let limit = |value, default, max| page_limit(value, default, max).map_err(|_| invalid());
         let uuid = |value: &str| canonical_uuid(value).ok_or_else(invalid);
         let result = match action {
+            A::ListRecent {
+                limit: requested,
+                after,
+            } => {
+                let limit = limit(*requested, LIST_DEFAULT, LIST_MAX)?;
+                let cursor = after
+                    .as_deref()
+                    .map(parse_recent_cursor)
+                    .transpose()
+                    .map_err(|_| invalid())?;
+                let (threads, next_after) = store
+                    .thread_list_recent(
+                        actor,
+                        limit,
+                        cursor.as_ref().map(|(date, id)| (*date, id.as_str())),
+                    )
+                    .map_err(|_| E::StorageUnavailable)?;
+                let ids = threads
+                    .iter()
+                    .map(|t| t.summary.thread_id.clone())
+                    .collect::<Vec<_>>();
+                let mut members = store
+                    .thread_members_with_names(actor, &ids)
+                    .map_err(|_| E::StorageUnavailable)?;
+                let threads = threads
+                    .into_iter()
+                    .map(|t| {
+                        if t.last_activity_at < 0 || t.last_activity_at as u64 > MAX_SEQ {
+                            return Err(E::StorageUnavailable);
+                        }
+                        Ok(HumanRecentThreadSummary {
+                            members: members.remove(&t.summary.thread_id).unwrap_or_default(),
+                            thread_id: t.summary.thread_id,
+                            title: t.summary.title,
+                            creator_id: t.summary.creator_id,
+                            state: if t.summary.closed { S::Closed } else { S::Open },
+                            last_seq: t.summary.last_seq,
+                            last_activity_at: t.last_activity_at,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                O::ListedRecent {
+                    threads,
+                    next_after,
+                }
+            }
             A::List {
                 limit: requested,
                 after_thread_id,
@@ -167,30 +214,62 @@ pub(crate) fn human_view(
             }
             A::History {
                 thread_id,
-                from_seq,
-                to_seq,
                 limit: requested,
+                ..
+            }
+            | A::HistoryRecent {
+                thread_id,
+                limit: requested,
+                ..
             } => {
                 let thread_id = uuid(thread_id)?;
                 let limit = limit(*requested, PAGE_DEFAULT, PAGE_MAX)?;
-                let from = from_seq.unwrap_or(1);
-                if from == 0
-                    || from > MAX_SEQ
-                    || to_seq.is_some_and(|to| to > MAX_SEQ || to.saturating_add(1) < from)
-                {
-                    return Err(E::InvalidRequest);
-                }
-                let page = match store
-                    .thread_history(
-                        actor,
-                        &thread_id,
-                        from,
-                        *to_seq,
-                        limit,
-                        PAGE_MAX_BYTES - PAGE_METADATA_RESERVE_BYTES,
-                    )
-                    .map_err(|_| E::StorageUnavailable)?
-                {
+                let (from, page) = match action {
+                    A::History {
+                        from_seq, to_seq, ..
+                    } => {
+                        let from = from_seq.unwrap_or(1);
+                        if from == 0
+                            || from > MAX_SEQ
+                            || to_seq.is_some_and(|to| to > MAX_SEQ || to.saturating_add(1) < from)
+                        {
+                            return Err(invalid());
+                        }
+                        (
+                            from,
+                            store.thread_history(
+                                actor,
+                                &thread_id,
+                                from,
+                                *to_seq,
+                                limit,
+                                PAGE_MAX_BYTES - PAGE_METADATA_RESERVE_BYTES,
+                            ),
+                        )
+                    }
+                    A::HistoryRecent {
+                        before_seq, to_seq, ..
+                    } => {
+                        if before_seq.is_some_and(|n| n > MAX_SEQ)
+                            || to_seq.is_some_and(|n| n > MAX_SEQ)
+                        {
+                            return Err(invalid());
+                        }
+                        (
+                            0,
+                            store.thread_history_recent(
+                                actor,
+                                &thread_id,
+                                *before_seq,
+                                *to_seq,
+                                limit,
+                                PAGE_MAX_BYTES - PAGE_METADATA_RESERVE_BYTES,
+                            ),
+                        )
+                    }
+                    _ => unreachable!("variante historique"),
+                };
+                let page = match page.map_err(|_| E::StorageUnavailable)? {
                     HistoryOutcome::Page(page) => page,
                     HistoryOutcome::Refused(ThreadRefusal::RangeUnavailable) => {
                         return Err(E::InvalidRequest);
@@ -222,14 +301,29 @@ pub(crate) fn human_view(
                             .map_err(|_| E::StorageUnavailable)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                O::History {
-                    thread_id,
-                    from_seq: from,
-                    through_seq: page.through_seq,
-                    snapshot_seq: page.snapshot_seq,
-                    has_more: page.has_more,
-                    next_from_seq: page.has_more.then_some(page.through_seq + 1),
-                    entries,
+                if matches!(action, A::HistoryRecent { .. }) {
+                    O::HistoryRecent {
+                        thread_id,
+                        through_seq: page.through_seq,
+                        snapshot_seq: page.snapshot_seq,
+                        has_more: page.has_more,
+                        next_before_seq: if page.has_more {
+                            entries.last().map(|e| e.seq - 1)
+                        } else {
+                            None
+                        },
+                        entries,
+                    }
+                } else {
+                    O::History {
+                        thread_id,
+                        from_seq: from,
+                        through_seq: page.through_seq,
+                        snapshot_seq: page.snapshot_seq,
+                        has_more: page.has_more,
+                        next_from_seq: page.has_more.then_some(page.through_seq + 1),
+                        entries,
+                    }
                 }
             }
         };
@@ -257,6 +351,19 @@ pub(crate) fn canonical_uuid(value: &str) -> Option<String> {
     let parsed = uuid::Uuid::parse_str(value).ok()?;
     let canonical = parsed.hyphenated().to_string();
     (canonical == value).then_some(canonical)
+}
+
+/// O(128) au plus : format fermé partagé par le CLI et la projection.
+pub(crate) fn parse_recent_cursor(value: &str) -> Result<(i64, String), ()> {
+    if value.len() > 128 {
+        return Err(());
+    }
+    let (time, id) = value.split_once(':').ok_or(())?;
+    let timestamp = time.parse::<u64>().map_err(|_| ())?;
+    if timestamp > 9_007_199_254_740_991 || timestamp.to_string() != time {
+        return Err(());
+    }
+    Ok((timestamp as i64, canonical_uuid(id).ok_or(())?))
 }
 
 fn digest(parts: &[&[u8]]) -> String {
@@ -1009,6 +1116,240 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spec146_real_projection_descending_pages_exact_bodies_and_fixed_snapshot() {
+        use bridget_transport::protocol::HumanThreadViewAction as A;
+        let root =
+            std::env::temp_dir().join(format!("h146-export-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let db = root.join("db");
+        let store = Store::open(&db).unwrap();
+        let mut profiles = crate::agent_profile::AgentProfileStore::open(&db).unwrap();
+        let members = vec![
+            "14600000-0000-4000-8000-000000000001".to_string(),
+            "14600000-0000-4000-8000-000000000002".to_string(),
+        ];
+        profiles.ensure_agent_ids(members.iter().cloned()).unwrap();
+        for (n, id) in members.iter().enumerate() {
+            store.connection().execute("UPDATE agent_profiles SET display_name=?2,display_name_normalized=?2 WHERE agent_id=?1",rusqlite::params![id,format!("recette-{n}")]).unwrap();
+        }
+        let actor = &members[0];
+        let thread = "14600000-0000-4001-8000-000000000001";
+        for n in 1..=3 {
+            let id = format!("14600000-0000-4001-8000-{n:012}");
+            assert!(matches!(
+                store
+                    .thread_create(CreateThread {
+                        actor,
+                        operation_id: &uuid::Uuid::new_v4().to_string(),
+                        canonical_hash: &id,
+                        thread_id: &id,
+                        title: &format!("Recette {n}"),
+                        members: &members,
+                        project_warnings: &[],
+                        now: n,
+                        limits: &LIMITS
+                    })
+                    .unwrap(),
+                ThreadTxOutcome::Done(_)
+            ));
+        }
+        let mut bodies = serde_json::Map::new();
+        for n in 1..=137 {
+            let body = format!(
+                "Message {n} é 🦀\r\n  espaces conservés\n\n{}",
+                "0123456789 ".repeat(155)
+            );
+            bodies.insert(n.to_string(), json!(body));
+            assert!(matches!(
+                store
+                    .thread_post(PostEntry {
+                        project_warnings: &[],
+                        actor,
+                        operation_id: &uuid::Uuid::new_v4().to_string(),
+                        canonical_hash: &format!("entry-{n}"),
+                        thread_id: thread,
+                        message_id: &uuid::Uuid::new_v4().to_string(),
+                        body: &body,
+                        notify: &NotifySpec::None,
+                        notices: &[],
+                        reply_to_seq: None,
+                        ack_receipt: None,
+                        kind: Some(if n == 1 || n == 137 {
+                            ThreadEntryKind::Action
+                        } else {
+                            ThreadEntryKind::History
+                        }),
+                        supersedes_seq: (n == 137).then_some(1),
+                        now: 100 + n,
+                        limits: &LIMITS
+                    })
+                    .unwrap(),
+                ThreadTxOutcome::Done(_)
+            ));
+        }
+        let before = store.connection().total_changes();
+        let listed = human_view(
+            &store,
+            actor,
+            &A::ListRecent {
+                limit: Some(2),
+                after: None,
+            },
+        );
+        for action in [
+            A::ListRecent {
+                limit: Some(0),
+                after: None,
+            },
+            A::ListRecent {
+                limit: Some(101),
+                after: None,
+            },
+            A::ListRecent {
+                limit: Some(1),
+                after: Some("not-a-cursor".into()),
+            },
+            A::HistoryRecent {
+                thread_id: thread.into(),
+                before_seq: Some(9_007_199_254_740_992),
+                to_seq: None,
+                limit: Some(1),
+            },
+            A::HistoryRecent {
+                thread_id: thread.into(),
+                before_seq: None,
+                to_seq: Some(9_007_199_254_740_992),
+                limit: Some(1),
+            },
+            A::HistoryRecent {
+                thread_id: thread.into(),
+                before_seq: None,
+                to_seq: None,
+                limit: Some(201),
+            },
+        ] {
+            let refused = serde_json::to_value(human_view(&store, actor, &action)).unwrap();
+            assert_eq!(refused["result"]["code"], "invalid_request");
+            assert!(refused["subject"].is_null());
+        }
+        let shown = human_view(
+            &store,
+            actor,
+            &A::Show {
+                thread_id: thread.into(),
+            },
+        );
+        let mut pages = Vec::new();
+        let mut cursor = None;
+        let mut all = Vec::new();
+        loop {
+            let projected = human_view(
+                &store,
+                actor,
+                &A::HistoryRecent {
+                    thread_id: thread.into(),
+                    before_seq: cursor,
+                    to_seq: Some(137),
+                    limit: Some(100),
+                },
+            );
+            let value = serde_json::to_value(&projected).unwrap();
+            let result = &value["result"];
+            assert_eq!(result["status"], "history_recent");
+            assert_eq!(result["snapshot_seq"], 137);
+            for e in result["entries"].as_array().unwrap() {
+                let seq = e["seq"].as_u64().unwrap();
+                assert_eq!(e["body"], bodies[&seq.to_string()]);
+                all.push(seq);
+                if seq == 1 {
+                    assert_eq!(e["superseded_by_seq"], 137);
+                }
+            }
+            cursor = result["next_before_seq"].as_u64();
+            pages.push(value);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert!(pages.len() > 3);
+        assert_eq!(all, (1..=137).rev().collect::<Vec<_>>());
+        assert_eq!(store.connection().total_changes(), before);
+        let output = json!({"listed":listed,"shown":shown,"pages":pages,"body_by_seq":bodies});
+        if let Ok(directory) = std::env::var("BRIDGET_SPEC146_EXPORT_DIR") {
+            std::fs::write(
+                std::path::Path::new(&directory).join("interop-146.json"),
+                serde_json::to_vec_pretty(&output).unwrap(),
+            )
+            .unwrap();
+        }
+        // Publication après ouverture : la même borne ne voit pas138.
+        assert!(matches!(
+            store
+                .thread_post(PostEntry {
+                    project_warnings: &[],
+                    actor,
+                    operation_id: &uuid::Uuid::new_v4().to_string(),
+                    canonical_hash: "after-snapshot",
+                    thread_id: thread,
+                    message_id: &uuid::Uuid::new_v4().to_string(),
+                    body: "nouveau138",
+                    notify: &NotifySpec::None,
+                    notices: &[],
+                    reply_to_seq: None,
+                    ack_receipt: None,
+                    kind: Some(ThreadEntryKind::History),
+                    supersedes_seq: None,
+                    now: 300,
+                    limits: &LIMITS
+                })
+                .unwrap(),
+            ThreadTxOutcome::Done(_)
+        ));
+        let still = serde_json::to_value(human_view(
+            &store,
+            actor,
+            &A::HistoryRecent {
+                thread_id: thread.into(),
+                before_seq: None,
+                to_seq: Some(137),
+                limit: Some(1),
+            },
+        ))
+        .unwrap();
+        assert_eq!(still["result"]["entries"][0]["seq"], 137);
+        let fresh = serde_json::to_value(human_view(
+            &store,
+            actor,
+            &A::HistoryRecent {
+                thread_id: thread.into(),
+                before_seq: None,
+                to_seq: None,
+                limit: Some(1),
+            },
+        ))
+        .unwrap();
+        assert_eq!(fresh["result"]["entries"][0]["seq"], 138);
+        drop(profiles);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec146_recent_projection_limits_and_cursor_fail_closed() {
+        for input in [
+            "",
+            "-1:14600000-0000-4000-8000-000000000001",
+            "01:14600000-0000-4000-8000-000000000001",
+            "+1:14600000-0000-4000-8000-000000000001",
+            "9007199254740992:14600000-0000-4000-8000-000000000001",
+            "1:14600000-0000-4000-8000-000000000001:extra",
+        ] {
+            assert!(parse_recent_cursor(input).is_err(), "{input}");
+        }
+        assert!(parse_recent_cursor("0:14600000-0000-4000-8000-000000000001").is_ok());
+    }
+
+    #[test]
     fn spec145_projection_bound_and_member_revocation() {
         use bridget_transport::protocol::HumanThreadViewAction as A;
         let root =
@@ -1058,6 +1399,17 @@ mod tests {
         .unwrap();
         assert_eq!(refused["result"]["code"], "response_too_large");
         assert!(refused["subject"].is_null());
+        let recent_refused = serde_json::to_value(human_view(
+            &store,
+            actor,
+            &A::ListRecent {
+                limit: Some(100),
+                after: None,
+            },
+        ))
+        .unwrap();
+        assert_eq!(recent_refused["result"]["code"], "response_too_large");
+        assert!(recent_refused["subject"].is_null());
         assert_eq!(store.connection().total_changes(), before);
         let first = human_view(
             &store,

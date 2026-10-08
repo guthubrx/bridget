@@ -991,6 +991,7 @@ fn parse_thread_inspect(
                 | "--limit"
                 | "--after"
                 | "--from-seq"
+                | "--before-seq"
                 | "--to-seq"
         ) {
             return Err("option de consultation inconnue".into());
@@ -1031,8 +1032,10 @@ fn parse_thread_inspect(
     let action = required("--action")?;
     let allowed: &[&str] = match action {
         "list" => &["--limit", "--after"],
+        "list_recent" => &["--limit", "--after"],
         "show" => &["--thread"],
         "history" => &["--thread", "--limit", "--from-seq", "--to-seq"],
+        "history_recent" => &["--thread", "--limit", "--before-seq", "--to-seq"],
         _ => return Err("action de consultation inconnue".into()),
     };
     if fields.keys().any(|key| {
@@ -1041,6 +1044,44 @@ fn parse_thread_inspect(
         return Err("option étrangère à cette action".into());
     }
     let request = match action {
+        "list_recent" => {
+            if limit.is_some_and(|n| n == 0 || n > crate::threads::LIST_MAX) {
+                return Err("limite invalide".into());
+            }
+            let after = fields
+                .get("--after")
+                .map(|value| {
+                    crate::threads::parse_recent_cursor(value)
+                        .map_err(|_| "curseur récent invalide")?;
+                    Ok::<_, &str>((*value).to_string())
+                })
+                .transpose()?;
+            A::ListRecent { limit, after }
+        }
+        "history_recent" => {
+            if limit.is_some_and(|n| n == 0 || n > crate::threads::PAGE_MAX) {
+                return Err("limite invalide".into());
+            }
+            let seq = |key| {
+                fields
+                    .get(key)
+                    .map(|v| v.parse::<u64>().map_err(|_| "séquence invalide"))
+                    .transpose()
+            };
+            let before_seq = seq("--before-seq")?;
+            let to_seq = seq("--to-seq")?;
+            if before_seq.is_some_and(|n| n > 9_007_199_254_740_991)
+                || to_seq.is_some_and(|n| n > 9_007_199_254_740_991)
+            {
+                return Err("plage de séquences invalide".into());
+            }
+            A::HistoryRecent {
+                thread_id: uuid(required("--thread")?)?,
+                before_seq,
+                to_seq,
+                limit,
+            }
+        }
         "list" => {
             if limit.is_some_and(|n| n == 0 || n > crate::threads::LIST_MAX) {
                 return Err("limite invalide".into());
@@ -1185,6 +1226,40 @@ mod spec145_inspect_tests {
             .map(str::to_string),
         );
         assert!(parse_thread_inspect(&input).is_ok());
+    }
+
+    #[test]
+    fn spec146_inspect_recent_closed_ranges_and_cursor() {
+        assert!(parse_thread_inspect(&args("list_recent")).is_ok());
+        for value in [
+            "-1:14600000-0000-4000-8000-000000000001",
+            "01:14600000-0000-4000-8000-000000000001",
+            "9007199254740992:14600000-0000-4000-8000-000000000001",
+            "1:INVALID",
+            "1:14600000-0000-4000-8000-000000000001:extra",
+        ] {
+            let mut input = args("list_recent");
+            input.extend(["--after".into(), value.into()]);
+            assert!(parse_thread_inspect(&input).is_err(), "{value}");
+        }
+        let mut input = args("list_recent");
+        input.extend([
+            "--after".into(),
+            "0:14600000-0000-4000-8000-000000000001".into(),
+        ]);
+        assert!(parse_thread_inspect(&input).is_ok());
+        let mut input = args("history_recent");
+        input.extend([
+            "--thread".into(),
+            "14600000-0000-4000-8000-000000000001".into(),
+            "--before-seq".into(),
+            "0".into(),
+            "--to-seq".into(),
+            "0".into(),
+        ]);
+        assert!(parse_thread_inspect(&input).is_ok());
+        input.extend(["--from-seq".into(), "1".into()]);
+        assert!(parse_thread_inspect(&input).is_err());
     }
 }
 

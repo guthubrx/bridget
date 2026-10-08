@@ -1,0 +1,243 @@
+{
+  "spec": "146-bridget-panel-lisible",
+  "date": "2026-10-08",
+  "status": "Implemented",
+  "tasks": {
+    "total": 10,
+    "completed": 10
+  },
+  "design_gate": "PASS",
+  "analyze": "PASS, deux passes manuelles en lecture seule",
+  "implementation_authorized": true,
+  "tests": [
+    {
+      "scope": "T003/T004, contrats et Reader T3 avec régression runtime",
+      "receipt": "/Users/moi/.cache/bridget-data146.2WukXz/validation.md",
+      "red": [
+        {
+          "exit_code": 1,
+          "passed": 61,
+          "failed": 4
+        },
+        {
+          "exit_code": 1,
+          "passed": 22,
+          "failed": 2
+        }
+      ],
+      "green": {
+        "exit_code": 0,
+        "passed": 71,
+        "failed": 0,
+        "suites": 3
+      },
+      "types": {
+        "contracts_exit": 0,
+        "server_exit": 0,
+        "inherited_effect_suggestions": 8
+      },
+      "format_exit": 0,
+      "lint_exit": 0,
+      "diff_exit": 0
+    },
+    {
+      "scope": "T005/T006, panneau T3",
+      "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/146-bridget-panel-lisible/specs/146-bridget-panel-lisible/validation/ui-receipt.md",
+      "red": {
+        "passed": 18,
+        "failed": 2,
+        "tool_session": 32976,
+        "chunk": "fbb74b"
+      },
+      "green_intermediate": {
+        "exit_code": 0,
+        "passed": 26,
+        "failed": 0,
+        "tool_session": 96207,
+        "chunk": "236b4d"
+      },
+      "green": {
+        "exit_code": 0,
+        "passed": 27,
+        "failed": 0,
+        "tool_session": 16761,
+        "chunk": "c31842"
+      },
+      "types_exit": 0,
+      "format_exit": 0,
+      "lint_exit": 0,
+      "inherited_lint_warnings": 3,
+      "diff_exit": 0,
+      "source_sha256": "b77cb990970b7f521084a444642bec4179013c38b1409a243d0bbf384cbb92d8",
+      "test_sha256": "8c6a3cde1eed7d8a5477d35fc9de8385036065e7e0b81ad69dc4e4846ab06f98"
+    },
+    {
+      "scope": "T001/T002, Rust146",
+      "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/146-bridget-panel-lisible/specs/146-bridget-panel-lisible/validation/rust-receipt.md",
+      "red": {
+        "exit_code": 101,
+        "passed": 0,
+        "failed": 2,
+        "real_baseline145_methods": true
+      },
+      "green_unique_new_tests": {
+        "lib": 9,
+        "protocol": 1,
+        "cli146": 4,
+        "total": 14,
+        "failed": 0
+      },
+      "regression_filters": {
+        "spec145": 13,
+        "threads": 15,
+        "cli145": 4,
+        "overlap_present": true
+      },
+      "format_exit": 0,
+      "diff_exit": 0,
+      "normal_release_artifact_verified": true,
+      "release_receipt": "/Users/moi/.cache/bridget-build-146.EFWCYG/source-freeze-146.json",
+      "release_sha256": "eadffeeb9532bc9ddfbac7946e49c357a42de117cec9ab7f70fde481a902361d",
+      "release_test_support": false,
+      "final_cli_tests_on_normal_artifact": {
+        "cli145": 4,
+        "cli146": 4,
+        "failed": 0
+      },
+      "transport_regression": {
+        "passed": 296,
+        "ignored_preexisting": 1,
+        "failed": 0
+      }
+    },
+    {
+      "scope": "T007, intégration ciblée finale T3 et interop Rust",
+      "receipt": "/Users/moi/.cache/bridget-workspace146.nnyH61/validation-results146.json",
+      "selected_test_total": 603,
+      "failed": 0,
+      "parts": {
+        "contracts": 45,
+        "runtime": 2,
+        "reader_authorization": 34,
+        "rpc_filtered": 1,
+        "web": 521
+      },
+      "rpc_not_selected": 210,
+      "types_packages_passed": 4,
+      "inherited_effect_suggestions": 8,
+      "format_files_passed": 6,
+      "lint_errors": 0,
+      "lint_warnings_inherited145": 3,
+      "build": {
+        "receipt": "/Users/moi/.cache/bridget-workspace146.nnyH61/build-verification146.json",
+        "web": "PASS",
+        "server": "PASS",
+        "client_files_compared": 2219,
+        "client_mismatches": 0,
+        "final_source_checks": 6,
+        "desktop_packaged": false
+      },
+      "interop": {
+        "receipt": "/Users/moi/.cache/bridget-audit146-dup.7vITuQ/interop-final-gel.json",
+        "envelopes": 8,
+        "pages": 6,
+        "independent_body_comparisons": 137,
+        "snapshot_seq": 137,
+        "appended_seq138_excluded": true,
+        "status": "PASS",
+        "export_sha256": "d07638bd82a883b4eb8ce0f60c4751edda954f3a2959cf526aabb914bcea11c9"
+      }
+    }
+  ],
+  "preview": {
+    "performed": true,
+    "isolated": true,
+    "receipt": "/Users/moi/.cache/t3-spec146-preview.650MHJ/browser-receipt146.json",
+    "real_components": true,
+    "fixture_only": true,
+    "descending_unique_messages": 137,
+    "pages": [
+      50,
+      50,
+      37
+    ],
+    "snapshot_seq": 137,
+    "narrow_width_px": 360,
+    "horizontal_overflow": false,
+    "clamped_lines": 4,
+    "exact_copied_utf8_bytes": 1746,
+    "native_keyboard_focus": "PASS",
+    "capture_image_available": false,
+    "hidden_body_search_additional_request_count": 0,
+    "hidden_body_search_principal_complement": {
+      "message_seq": 137,
+      "request_count_before": 46,
+      "request_count_after": 46,
+      "aria_expanded": false,
+      "source": "Observation finale rapportée par le principal, distincte du reçu navigateur initial"
+    }
+  },
+  "audit": {
+    "performed": true,
+    "scope": "delta146 uniquement",
+    "findings": 0,
+    "grade": "A",
+    "read_delta_coverage_percent": 100,
+    "test_line_branch_coverage_claimed": false,
+    "strict_validation": [
+      {
+        "session": "session-2026-10-08-spec-146-bridget-01",
+        "exit_code": 0,
+        "errors": 0,
+        "warnings": 0
+      },
+      {
+        "session": "session-2026-10-08-spec-146-t3-01",
+        "exit_code": 0,
+        "errors": 0,
+        "warnings": 0
+      }
+    ],
+    "validated_by": "principal",
+    "scoring_readonly": true,
+    "post_converge_code_fixes": 0,
+    "review_verdict": "APPROVE",
+    "reviewer_same_provider": true,
+    "other_provider_available_same_project": false
+  },
+  "converge": {
+    "performed": true,
+    "passes": [
+      {
+        "pass": 1,
+        "status": "CONVERGED",
+        "manual_readonly": true,
+        "tasks_byte_identical": true,
+        "tasks_sha256": "343054f4c6109c00986b2811b80dad353f565c1b3057fa9157f7fc71a95da539",
+        "tasks_added": 0
+      }
+    ]
+  },
+  "delivery": {
+    "committed": false,
+    "merged": false,
+    "pushed": false,
+    "installed": false,
+    "restarted": false
+  },
+  "limits": [
+    "Contrôles ciblés du delta146, pas audit des dépôts entiers ni mesure de couverture lignes/branches.",
+    "210 tests RPC non sélectionnés ; filtres Rust partiellement recouvrants, totaux non additionnés.",
+    "Trois warnings lint et huit suggestions Effect hérités145, reproduits et consignés.",
+    "Aucune contre-revue inter-fournisseurs, capture image, paquet desktop ou intégration runtime en production revendiqués.",
+    "Les résultats145 sont historiques, non repris comme succès146."
+  ],
+  "timing": {
+    "start_at": "2026-10-08T04:10:15Z",
+    "end_at": "2026-10-08T04:57:11Z",
+    "elapsed_seconds": 2816,
+    "initial_estimate_minutes": [45, 75],
+    "midpoint_variance_percent": -21.8,
+    "source": "Horloge réelle du principal ; clôture documentaire avant son dernier contrôle"
+  }
+}

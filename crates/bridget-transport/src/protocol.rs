@@ -187,6 +187,8 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 pub enum ClientCapability {
     /// Consultation humaine bornée, sans identité ni action d'agent.
     HumanThreadViewV1,
+    /// Consultation humaine récente ; distincte de l'ordre technique145.
+    HumanThreadViewRecentV1,
     CommunicationProjectsV1,
     SendIdempotent,
     Lookup,
@@ -2164,6 +2166,21 @@ pub struct HumanThreadViewV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HumanThreadViewAction {
+    ListRecent {
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        after: Option<String>,
+    },
+    HistoryRecent {
+        thread_id: String,
+        #[serde(default)]
+        before_seq: Option<u64>,
+        #[serde(default)]
+        to_seq: Option<u64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
     List {
         #[serde(default)]
         limit: Option<u32>,
@@ -2182,6 +2199,18 @@ pub enum HumanThreadViewAction {
         #[serde(default)]
         limit: Option<u32>,
     },
+}
+
+impl HumanThreadViewAction {
+    /// O(1) : aucune action récente ne se replie sur le contrat145.
+    pub fn required_capability(&self) -> ClientCapability {
+        match self {
+            Self::ListRecent { .. } | Self::HistoryRecent { .. } => {
+                ClientCapability::HumanThreadViewRecentV1
+            }
+            _ => ClientCapability::HumanThreadViewV1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2207,6 +2236,18 @@ pub struct HumanThreadSummary {
     pub state: HumanThreadState,
     pub last_seq: u64,
     pub members: Vec<HumanThreadMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanRecentThreadSummary {
+    pub thread_id: String,
+    pub title: String,
+    pub creator_id: String,
+    pub state: HumanThreadState,
+    pub last_seq: u64,
+    pub members: Vec<HumanThreadMember>,
+    pub last_activity_at: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2272,6 +2313,18 @@ impl HumanThreadViewError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HumanThreadViewOutcome {
+    ListedRecent {
+        threads: Vec<HumanRecentThreadSummary>,
+        next_after: Option<String>,
+    },
+    HistoryRecent {
+        thread_id: String,
+        through_seq: u64,
+        snapshot_seq: u64,
+        has_more: bool,
+        next_before_seq: Option<u64>,
+        entries: Vec<HumanThreadEntry>,
+    },
     Listed {
         threads: Vec<HumanThreadSummary>,
         next_after: Option<String>,
@@ -2328,6 +2381,35 @@ impl HumanThreadViewResult {
 mod spec145_protocol_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn spec146_recent_requests_are_closed_and_require_distinct_capability() {
+        for action in [
+            json!({"action":"list_recent","limit":20,"after":null}),
+            json!({"action":"history_recent","thread_id":"14600000-0000-4000-8000-000000000001","before_seq":0,"to_seq":0,"limit":20}),
+        ] {
+            let parsed = serde_json::from_value::<HumanThreadViewAction>(action.clone()).unwrap();
+            assert_eq!(
+                parsed.required_capability(),
+                ClientCapability::HumanThreadViewRecentV1
+            );
+            let mut unknown = action;
+            unknown["credential"] = json!("forged");
+            assert!(serde_json::from_value::<HumanThreadViewAction>(unknown).is_err());
+        }
+        assert_eq!(
+            HumanThreadViewAction::List {
+                limit: None,
+                after_thread_id: None
+            }
+            .required_capability(),
+            ClientCapability::HumanThreadViewV1
+        );
+        assert_eq!(
+            serde_json::to_value(ClientCapability::HumanThreadViewRecentV1).unwrap(),
+            json!("human_thread_view_recent_v1")
+        );
+    }
 
     #[test]
     fn spec145_human_request_and_capability_are_closed() {

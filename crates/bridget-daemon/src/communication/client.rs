@@ -151,6 +151,7 @@ pub(crate) fn human_thread_view(
     use bridget_transport::protocol::{
         HUMAN_THREAD_VIEW_VERSION, HumanThreadViewError as E, HumanThreadViewResult as R,
     };
+    let capability = request.request.required_capability();
     let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -163,14 +164,13 @@ pub(crate) fn human_thread_view(
     match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
         issuer_scope: crate::communication::issuer_scope("human-thread-view"),
-        capabilities: vec![ClientCapability::HumanThreadViewV1],
+        capabilities: vec![capability],
     })? {
         DaemonToWrapper::ClientWelcome {
             version,
             capabilities,
             ..
-        } if version == CLIENT_CONTRACT_VERSION
-            && capabilities.contains(&ClientCapability::HumanThreadViewV1) => {}
+        } if version == CLIENT_CONTRACT_VERSION && capabilities.as_slice() == [capability] => {}
         _ => return Ok(R::error(E::UnsupportedVersion)),
     }
     match connection.exchange(&WrapperToDaemon::HumanThreadViewV1 { request })? {
