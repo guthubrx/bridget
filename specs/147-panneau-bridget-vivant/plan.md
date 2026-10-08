@@ -1,6 +1,6 @@
 # Plan technique — SPEC147
 
-Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développement : Implemented, Validé en environnement isolé,54/54 tâches ; deux passes Converge couvrent31FR/20SC/9US. Tests, builds, audits frais et recette native validés dans leurs périmètres distincts. Livraison : EN COURS, autorisation explicite de commit/fusion/push/installation et redémarrage T3 reçue ; installation/activation pas encore attestées. Sans PR T3 ni cleanup142/145.
+Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développement : Implemented, Validé,54/54 tâches ; deux passes Converge couvrent31FR/20SC/9US. Sources committées/fusionnées/poussées. Livraison EN COURS : Bridget installé/actif, T3 package signé prêt et activation pending. Sans PR T3 ; dirty142/145/146 conservés. Reçus runtime et cleanup détaillés dans validation/results.json.
 
 ## Résumé
 

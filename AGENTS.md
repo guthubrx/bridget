@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/specs/147-panneau-bridget-vivant/plan.md.
+Plan actif canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/147-panneau-bridget-vivant/plan.md.
 Session147 approuvée le 2026-10-08 : abonnement humain du panneau Bridget et
 sélection retenue par environnement/projet/conversation T3.
 Socle146 fusionné ; sessions142/145 non committées et autres travaux intacts.
@@ -31,9 +31,12 @@ Deux passes finales du principal :31FR/20SC/9US mappées, zéro finding actif,54
 Régressions Rust103PASS/2ignored, transport10PASS ; RPC US7294PASS/1SKIP et Web122PASS. Audits frais Rust A/T3 A99.86, validateurs RC0/0erreur/0warning, périmètres diff limités.
 Recette native avec données synthétiques distinguée de l’interop native réelle.
 US5 affiche les seuls destinataires sollicités dans la ligne auteur/date existante.
-Développement validé,54/54. Livraison EN COURS après autorisation utilisateur explicite de commit/fusion/push/installation et redémarrage T3. Ne pas déclarer installé/actif avant reçus réels.
+Développement validé,54/54. Sources147 committées/fusionnées/poussées : Bridget82f4abebea9a, T3f4354fb0d5be. Bridget installé/actif (daemon93353, pont93355,30agents/schema3). T3 package0.0.45-local.147 prêt, activation encore en attente.
+Le seul reçu d'activation T3 faisant foi après restart : /Users/moi/.cache/bridget-install147.VTg5jQ/t3-activation-result.json. Ne pas déduire un runtime actif du package2413PASS.
 Push Bridget vers github/guthubrx/bridget et T3 vers fork/guthubrx/t3code, sans PR T3 ni push upstream.
-Sauvegardes ciblées application/binaire/DB Bridget, pas DB T3 ; pas cleanup142/145 ou autres travaux.
+Sauvegardes ciblées146 et DB Bridget arrêtée/quickcheckok : /Users/moi/.cache/bridget-install147.VTg5jQ. Application146 rollback-ready vérifiée, pas DB T3.
+Cleanup attesté à01:56CEST :13 anciens builds/7,075,405,824octets alloués retirés,13branches locales/10distantes et WT T3147 supprimés ; mainf4354 conservé. WT/branche Bridget147 restent à retirer après commit documentaire, pas anticipés. Dirty142/145/146 préservés.
+Les chemins WT dans les preuves sont historiques. Audits archivés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-09, copie diff-qrRC0 ; archive complète /Users/moi/.cache/bridget-install147.VTg5jQ/audits147.tgz.
 Le principal exécute Git et livraison ; l'owner documentaire ne touche aucun code/service/production.
 Sélection SpecKit : SPECIFY_FEATURE=147-panneau-bridget-vivant ; branche session-147-panneau-bridget-vivant.
 <!-- SPECKIT END -->

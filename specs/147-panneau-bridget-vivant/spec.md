@@ -1,6 +1,6 @@
 # SPEC147 — Panneau Bridget vivant et sélection mémorisée
 
-Date : 2026-10-08 ; extensions approuvées le 2026-10-09. Développement : Implemented, Validé en environnement isolé,54/54 tâches,31FR/20SC, deux passes Converge et zéro finding actif. Livraison : EN COURS sur autorisation utilisateur explicite de commit/fusion/push/installation et redémarrage T3. Branche : `session-147-panneau-bridget-vivant`. Installation et activation pas encore attestées.
+Date : 2026-10-08 ; extensions approuvées le 2026-10-09. Développement : Implemented, Validé,54/54 tâches,31FR/20SC. Sources committées/fusionnées/poussées. Livraison EN COURS : Bridget installé et actif, T3 compilé/signé prêt mais activation encore en attente. Branche : `session-147-panneau-bridget-vivant`. Ne pas confondre package T3 vérifié et application active.
 
 ## Besoin et périmètre
 

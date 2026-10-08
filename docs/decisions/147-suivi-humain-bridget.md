@@ -1,6 +1,6 @@
 # ADR147 — Suivi humain Bridget par invalidation sans contenu
 
-Date : 2026-10-08 ; convergence finale le 2026-10-09. Statut : Accepté, implémenté et validé en environnement isolé après le gate du principal. Livraison autorisée et EN COURS ; installation et activation pas encore attestées.
+Date : 2026-10-08 ; convergence finale le 2026-10-09. Statut : Accepté, implémenté et validé. Sources fusionnées/poussées ; Bridget installé/actif. Livraison EN COURS : T3 package prêt, activation encore en attente du reçu runtime.
 
 ## Contexte
 

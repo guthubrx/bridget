@@ -1,6 +1,6 @@
 # Tâches — SPEC147 panneau Bridget vivant
 
-Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développement : Implemented, Validé en environnement isolé.54/54 tâches cochées sur preuves et GO final du principal après deux passes Converge, couverture31FR/20SC/9US. Livraison EN COURS sur autorisation explicite ; installation/activation pas encore attestées. Les54 tâches de développement restent closes, les reçus de livraison sont distincts.
+Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développement : Implemented, Validé,54/54 tâches après deux passes Converge et GO final,31FR/20SC/9US. Sources committées/fusionnées/poussées ; Bridget installé/actif, T3 package prêt et activation encore pending. Les54 tâches de développement restent closes ; reçus de livraison et cleanup distincts.
 
 Plan et gate de réutilisation validés par le principal. Les templates/helpers locaux sont absents ; génération manuelle selon l'outline de speckit-tasks. Les quatre corrections de revue sont contractuelles : ready premier protégé, nouveau snapshot S commun, refus métier sans retry infini et sélection effacée seulement sur refus confirmé du fil.
 

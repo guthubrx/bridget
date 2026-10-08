@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "spec": "147-panneau-bridget-vivant",
-  "status": "delivery_in_progress_development_54_of_54_validated_in_isolation",
+  "status": "source_merged_pushed_Bridget_installed_active_T3_activation_pending_54_of_54_development_validated",
   "recorded_at": "2026-10-08T21:41:23Z",
   "baselines": {
     "bridget": {
@@ -978,24 +978,30 @@
     }
   },
   "delivery": {
-    "status": "in_progress_authorized_receipts_pending",
+    "status": "sources_committed_merged_pushed_Bridget_active_T3_activation_pending",
+    "as_of": "2026-10-08T23:56:44Z",
+    "status_at_document_commit": "T3 activation pending only at this checkpoint; /Users/moi/.cache/bridget-install147.VTg5jQ/t3-activation-result.json is authoritative for later activation outcome",
+    "timing_receipt": {"delivery_start_approximate_local":"2026-10-09 01:37 CEST","preflight_local":"2026-10-09 01:49 CEST"},
     "development_tasks_completed": 54,
     "development_validation_preserved": true,
-    "commit": false,
-    "merge": false,
-    "push": false,
+    "commit": true,
+    "merge": true,
+    "push": true,
     "installed": false,
     "activated": false,
-    "production_restart": false,
+    "aggregate_flag_scope": "installed/activated refer to completion of both Bridget and T3; individual states are repositories.Bridget/T3",
+    "production_restart": "Bridget_done_T3_pending",
     "authorization": "User explicitly authorized commit/merge/push/install and T3 restart for147; principal coordinates execution. No delivered/active claim before actual receipts.",
     "repositories": {
-      "Bridget": {"worktree":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant","root":"/Users/moi/Nextcloud/10.Scripts/64.bridget","push_remote":"github","remote_URL":"https://github.com/guthubrx/bridget.git","commit_SHA":null,"merged_SHA":null,"push_receipt":null},
-      "T3": {"worktree":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant","root":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local","push_remote":"fork","remote_URL":"https://github.com/guthubrx/t3code.git","upstream_not_push_target":"https://github.com/pingdotgg/t3code.git","PR_created":false,"commit_SHA":null,"merged_SHA":null,"push_receipt":null}
+      "Bridget": {"worktree":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant","root":"/Users/moi/Nextcloud/10.Scripts/64.bridget","push_remote":"github","remote_URL":"https://github.com/guthubrx/bridget.git","commit_SHA":"82f4abebea9aca2b582a84c72d43c844f5e17cf9","merged_SHA":"82f4abebea9aca2b582a84c72d43c844f5e17cf9","push_receipt":"principal confirmed main and session147 pushed to github","installed":true,"active":true,"release_SHA256":"91cdc1e1d6c210c754cb5603011269a202a97474fb3c68351a518cbe6e7e37f5","build_id":"82f4abebea9a","dirty_build":false,"daemon_PID":93353,"bridge_PID":93355,"status":"online","agents_count":30,"schema_version":3,"SQLite_quick_check":"ok","human_inspect_list":"PASS","watch_ready_seq":0,"client_closed_without_wake":true},
+      "T3": {"worktree":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant","root":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local","push_remote":"fork","remote_URL":"https://github.com/guthubrx/t3code.git","upstream_not_push_target":"https://github.com/pingdotgg/t3code.git","PR_created":false,"commit_SHA":"f4354fb0d5bee925338304cf3101d0853244f64b","merged_SHA":"f4354fb0d5bee925338304cf3101d0853244f64b","merged_branch":"local/v0.0.45","push_receipt":"principal confirmed local/v0.0.45 and session147 pushed to fork","installed":false,"active":false,"activation_pending":true,"candidate":"/Users/moi/.cache/t3-spec147-package.LIkn22/staging/T3 Code (Local).app","version":"0.0.45-local.147","embedded_commit":"f4354fb0d5be","ASAR_SHA256":"a1ae5da6e46a3f8dca1f77dc6eefaf9fae2e9695e1b06850770500773808cee2","package_checks_passed":2413,"package_checks_failed":0,"codesign_verify_deep_strict_exit_code":0,"signature":"ad_hoc_not_notarized","preflight_exit_code":0,"macOS_runtime_smoke":false,"activation_receipt_authoritative":"/Users/moi/.cache/bridget-install147.VTg5jQ/t3-activation-result.json"}
     },
-    "planned_backups": {"T3_application":true,"Bridget_binary":true,"Bridget_SQLite_targeted_small":true,"T3_database":false,"exact_paths":null,"verified":false},
-    "planned_runtime_validation": {"installed_binary_hashes":null,"T3_restart_receipt":null,"Bridget_runtime_version_receipt":null,"production_smoke_receipt":null},
-    "cleanup": {"142":false,"145":false,"other_work":false},
+    "backups": {"directory":"/Users/moi/.cache/bridget-install147.VTg5jQ","Bridget146_CLI":true,"Bridget_SQLite_stopped_small":true,"Bridget_SQLite_quick_check":"ok","T3_database":false,"T3_146_rollback_copy_verified":true,"T3_146_ASAR_SHA256":"a43df7c98b17e1a0465821fff103049e3a7ed33b221f153e2a413b8fe2a624a2","T3_rollback_codesign_strict_verified":true,"source":"principal receipt"},
+    "package_receipts":{"T3_build":"/Users/moi/.cache/t3-spec147-package.LIkn22/delivery-build-receipt147.json","T3_verification":"/Users/moi/.cache/t3-spec147-package.LIkn22/verification.json","T3_build_logs_directory":"/Users/moi/.cache/t3-spec147-package.LIkn22","T3_ZIP_SHA256":"0cfe96d9025bf3129e3626b843ca10f4b089c4399c8968d53d2b1847a17e6db6","Bridget_release_build_log":"/Volumes/SD1TO/bridget-build-147-rust/spec147-release-build.XXXXXX.log","Bridget_release_source":"/Volumes/SD1TO/bridget-build-147-rust/release/bridget","Bridget_private_smoke_help_directory":"/tmp/h147-release-smoke.aRyyhp","Bridget_release_private_smoke":"version0.1.3/help/thread-help RC0 with private HOME and nonexistent socket"},
+    "runtime_validation": {"Bridget":"principal installed hash/build/status/SQLite/own_inspect/watch verified","T3":"pending authoritative activation result, no runtime smoke inferred from packaging"},
+    "cleanup": {"authorized":true,"source":"principal actual checkpoint","as_of":"2026-10-08T23:56:44Z","old_build_directories_removed":13,"old_build_allocated_bytes_measured":7075405824,"old_build_exact_targets_receipt":"/Users/moi/.cache/bridget-install147.VTg5jQ/old-builds-before.tsv","open_files_before_delete":0,"rollback146_signature_and_SHA_verified_before_delete":true,"runtime147_SHA_unchanged_after_delete":true,"local_merged_branches_removed":13,"corresponding_remote_branches_removed":10,"worktrees_removed":1,"T3_147_worktree_removed_normal_git_exit_code":0,"T3_147_local_and_fork_remote_branch_deleted":true,"T3_main_f4354_preserved":true,"external_volume_free_GiB_after":255,"external_volume_free_GiB_initial":183,"remaining_expected":{"Bridget147_worktree_and_local_remote_branch":"after final documentary commit/merge only","expected_total_worktrees_if_completed":2,"expected_total_local_branches_if_completed":14,"expected_total_remote_branches_if_completed":11},"remaining_done_claim":false,"142_preserved":true,"145_preserved":true,"146_dirty_preserved":true,"other_unrelated_work_preserved":true,"executed_by_documentary_owner":false},
+    "canonical_documentation":{"plan":"/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/147-panneau-bridget-vivant/plan.md","historical_worktree_references_preserved":true,"ROOT_audit_archive":"/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-09","archive_copy_diff_qr_exit_code":0,"complete_WT_audits_backup":"/Users/moi/.cache/bridget-install147.VTg5jQ/audits147.tgz","complete_backup_size_reported":"124K","source":"principal archival receipt"},
     "documentation_owner_actions": "Only isolated documentation preparation; no source/git/service/install actions by docs147."
   },
-  "updated_at": "2026-10-08T23:41:32Z"
+  "updated_at": "2026-10-08T23:56:44Z"
 }
