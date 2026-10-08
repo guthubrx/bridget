@@ -153,6 +153,10 @@ pub fn run() {
     let cmd = &args[1];
 
     // Voie humaine froide : avant création d'état, registre et identité.
+    if cmd == "thread" && args.get(2).is_some_and(|arg| arg == "watch") {
+        cmd_thread_watch(&args[3..]);
+        return;
+    }
     if cmd == "thread" && args.get(2).is_some_and(|arg| arg == "inspect") {
         cmd_thread_inspect(&args[3..]);
         return;
@@ -654,7 +658,7 @@ fn print_usage() {
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            journal <UUID>         Extrait [--tail N | --from-seq N] [--to UUID] [--reply]\n  \
            events <OP>            types | sub EVENEMENT [--agent UUID] [--file MOTIF] [--once] [--ttl S] | list | unsub ID\n  \
-           thread <OP>            Fils partagés : create | list | show | post | read | ack | history | close (thread --help)\n  \
+           thread <OP>            Fils partagés : create | add-members | list | show | post | read | ack | history | close (thread --help)\n  \
            handoff <OP>           Dossier de passation : preview | send, objet JSON sur stdin (--json-stdin [--json])\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            stop <N>               Arrête un équipier géré\n  \
@@ -897,8 +901,10 @@ fn thread_notice_marker(previous: &str) -> Option<String> {
 }
 
 const THREAD_USAGE: &str = "usage :\n  \
+  bridget thread watch --t3-thread UUID --project-root ROOT --json\n  \
   bridget thread inspect --t3-thread UUID --project-root ROOT --action list|show|history [--thread UUID] [--limit N] [--after UUID] [--from-seq N] [--to-seq N] --json\n  \
   bridget thread create --title TITRE --member UUID|NOM [--member …] --id UUID [--cross-project-reason MOTIF]\n  \
+  bridget thread add-members THREAD --member UUID|NOM [--member …] --id UUID [--cross-project-reason MOTIF]\n  \
   bridget thread list [--limit N] [--after UUID]\n  \
   bridget thread show THREAD\n  \
   bridget thread post THREAD (--silent | --notify UUID|NOM [--notify …] | --all) --id UUID [--kind history|action|blocker|decision] [--supersedes N] [--reply-to N] [--ack RECU] [--cross-project-reason MOTIF] -- TEXTE\n  \
@@ -1128,6 +1134,136 @@ fn parse_thread_inspect(
         project_root: project_root.into(),
         request,
     })
+}
+
+fn parse_thread_watch(
+    args: &[String],
+) -> Result<bridget_transport::protocol::HumanThreadWatchV1, ()> {
+    let mut fields = std::collections::BTreeMap::new();
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        let key = args[index].as_str();
+        if key == "--json" {
+            if json {
+                return Err(());
+            }
+            json = true;
+            index += 1;
+            continue;
+        }
+        if !matches!(key, "--t3-thread" | "--project-root") {
+            return Err(());
+        }
+        let value = args.get(index + 1).ok_or(())?;
+        if value.starts_with("--") || fields.insert(key, value.as_str()).is_some() {
+            return Err(());
+        }
+        index += 2;
+    }
+    let t3 = fields.get("--t3-thread").ok_or(())?;
+    let root = fields.get("--project-root").ok_or(())?;
+    if !json
+        || crate::threads::canonical_uuid(t3).is_none()
+        || !Path::new(root).is_absolute()
+        || root.chars().any(char::is_control)
+    {
+        return Err(());
+    }
+    Ok(bridget_transport::protocol::HumanThreadWatchV1 {
+        version: 1,
+        t3_thread_id: (*t3).into(),
+        project_root: (*root).into(),
+    })
+}
+
+#[cfg(test)]
+mod spec147_watch_cli_tests {
+    use super::*;
+    #[test]
+    fn spec147_cli_options_are_closed_and_have_no_agent_identity() {
+        let valid: Vec<String> = [
+            "--t3-thread",
+            "14700000-0000-4000-8000-000000000001",
+            "--project-root",
+            "/fixture",
+            "--json",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert!(parse_thread_watch(&valid).is_ok());
+        for extra in ["--agent", "--thread", "--instance-id", "--action", "--json"] {
+            let mut invalid = valid.clone();
+            invalid.push(extra.into());
+            invalid.push("secret147".into());
+            assert!(parse_thread_watch(&invalid).is_err());
+        }
+        let mut no_json = valid;
+        no_json.pop();
+        assert!(parse_thread_watch(&no_json).is_err());
+    }
+}
+
+fn cmd_thread_watch(args: &[String]) {
+    use bridget_transport::protocol::{HumanThreadViewError as R, HumanThreadWatchEvent as E};
+    let mut output = std::io::stdout().lock();
+    let mut emit = |event: &E| -> std::io::Result<()> {
+        serde_json::to_writer(&mut output, event)?;
+        writeln!(output)?;
+        output.flush()
+    };
+    let request = match parse_thread_watch(args) {
+        Ok(request) => request,
+        Err(()) => {
+            let _ = emit(&E::error(R::InvalidRequest));
+            std::process::exit(2);
+        }
+    };
+    let namespace = match crate::environment::Namespace::from_environment() {
+        Ok(namespace) => namespace,
+        Err(_) => {
+            let _ = emit(&E::error(R::BindingUnavailable));
+            std::process::exit(3);
+        }
+    };
+    let mut refused = false;
+    let result = crate::communication::client::human_thread_watch(
+        &namespace.socket,
+        request,
+        |event| {
+            refused |= matches!(event, E::Error { .. });
+            emit(event)
+        },
+        || {
+            let mut fd = libc::pollfd {
+                fd: libc::STDOUT_FILENO,
+                // Darwin ne rapporte pas POLLHUP d'un pipe avec events=0.
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            unsafe {
+                libc::poll(&mut fd, 1, 0);
+            }
+            fd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+        },
+    );
+    if let Err(error) = result {
+        let closed = matches!(
+            error,
+            crate::communication::client::ClientError::Technical {
+                code: "watch_output_closed",
+                ..
+            }
+        );
+        if !closed {
+            let _ = emit(&E::error(R::BindingUnavailable));
+        }
+        std::process::exit(if closed { 0 } else { 3 });
+    }
+    if refused {
+        std::process::exit(2);
+    }
 }
 
 fn cmd_thread_inspect(args: &[String]) {
@@ -1388,8 +1524,8 @@ fn thread_members(
 ) -> Result<Vec<String>, String> {
     let mut members = Vec::new();
     for value in parsed.multi.get(option).into_iter().flatten() {
-        if crate::threads::canonical_uuid(value).is_some() {
-            members.push(value.clone());
+        if let Ok(normalized) = crate::threads::require_uuid(value, option) {
+            members.push(normalized);
         } else {
             members.push(resolver(value)?);
         }
@@ -1399,7 +1535,7 @@ fn thread_members(
 
 /// Analyse stricte : sous-commande, options nommées, texte après `--`.
 /// Les noms explicitement saisis sont résolus par `resolver` ; un UUID
-/// canonique est transmis tel quel. Aucun --from, aucun chemin, aucun script.
+/// de 36 caractères avec tirets est normalisé. Aucun --from, aucun chemin, aucun script.
 fn parse_thread_args(
     args: &[String],
     resolver: &dyn Fn(&str) -> Result<String, String>,
@@ -1408,6 +1544,7 @@ fn parse_thread_args(
     let (subcommand, rest) = args.split_first().ok_or("thread : sous-commande requise")?;
     let parsed = collect_thread_args(rest)?;
     let allowed: &[&str] = match subcommand.as_str() {
+        "add-members" => &["--member", "--id", "--cross-project-reason"],
         "create" => &["--title", "--member", "--id", "--cross-project-reason"],
         "list" => &["--limit", "--after"],
         "show" | "ack" => &[],
@@ -1474,6 +1611,11 @@ fn parse_thread_args(
     let limit =
         thread_positive(&parsed, "--limit")?.map(|value| value.min(u64::from(u32::MAX)) as u32);
     Ok(match subcommand.as_str() {
+        "add-members" => ThreadAction::AddMembers {
+            thread_id: positional(0, "THREAD")?,
+            members: thread_members(&parsed, "--member", resolver)?,
+            operation_id: id()?,
+        },
         "create" => ThreadAction::Create {
             title: parsed
                 .single
@@ -1566,6 +1708,136 @@ mod spec102_cli_thread_tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn spec147_members_cli_reuses_members_and_strict_options() {
+        let upper = B.to_uppercase();
+        let action = parse_thread_args(
+            &args(&[
+                "add-members",
+                T,
+                "--member",
+                &upper,
+                "--member",
+                "Bruno",
+                "--id",
+                OP,
+            ]),
+            &|name| {
+                assert_eq!(name, "Bruno");
+                Ok(B.into())
+            },
+        )
+        .unwrap();
+        let value = serde_json::to_value(action).unwrap();
+        assert_eq!(value["action"], "add_members");
+        assert_eq!(value["members"], serde_json::json!([B, B]));
+        for invalid in [
+            args(&["add-members", T, "--member", B]),
+            args(&["add-members", T, "--id", OP, "--all"]),
+            args(&["add-members", T, "--id", OP, "--", "body"]),
+            args(&["add-members", T, "--member", "missing", "--id", OP]),
+        ] {
+            assert!(parse_thread_args(&invalid, &|_| Err("inconnu".into())).is_err());
+        }
+    }
+
+    #[test]
+    fn spec147_uuid_cli_members_and_notify_bypass_name_resolution() {
+        let resolve =
+            |name: &str| -> Result<String, String> { panic!("UUID pris pour un nom : {name}") };
+        let upper = B.to_uppercase();
+        let create = parse_thread_args(
+            &args(&[
+                "create",
+                "--title",
+                "Titre É exact",
+                "--member",
+                &upper,
+                "--id",
+                OP,
+            ]),
+            &resolve,
+        )
+        .unwrap();
+        assert!(
+            matches!(create, ThreadAction::Create { members, title, .. } if members == vec![B.to_string()] && title == "Titre É exact")
+        );
+        let post = parse_thread_args(
+            &args(&[
+                "post",
+                T,
+                "--notify",
+                &upper,
+                "--id",
+                OP,
+                "--",
+                "É\r\n  Exact\n",
+            ]),
+            &resolve,
+        )
+        .unwrap();
+        assert!(
+            matches!(post, ThreadAction::Post { notify: ThreadNotify::Targets(targets), body, .. } if targets == vec![B.to_string()] && body == "É\r\n  Exact\n")
+        );
+    }
+
+    #[test]
+    fn spec147_uuid_cli_keeps_explicit_names_and_rejects_invalid_declared_members() {
+        let create = parse_thread_args(
+            &args(&[
+                "create",
+                "--title",
+                "Noms",
+                "--member",
+                "Bridget-enhance",
+                "--id",
+                OP,
+            ]),
+            &resolver,
+        )
+        .unwrap();
+        assert!(
+            matches!(create, ThreadAction::Create { members, .. } if members == vec![B.to_string()])
+        );
+        assert!(
+            parse_thread_args(
+                &args(&[
+                    "create",
+                    "--title",
+                    "Refus",
+                    "--member",
+                    "{AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA}",
+                    "--id",
+                    OP
+                ]),
+                &resolver
+            )
+            .is_err()
+        );
+        assert!(
+            parse_thread_watch(&args(&[
+                "--t3-thread",
+                &B.to_uppercase(),
+                "--project-root",
+                "/fixture",
+                "--json"
+            ]))
+            .is_err()
+        );
+        assert!(
+            parse_thread_inspect(&args(&[
+                "--t3-thread",
+                &B.to_uppercase(),
+                "--project-root",
+                "/fixture",
+                "--action",
+                "list_recent",
+                "--json"
+            ]))
+            .is_err()
+        );
     }
 
     fn resolver(name: &str) -> Result<String, String> {

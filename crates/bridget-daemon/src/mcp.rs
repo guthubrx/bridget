@@ -1943,9 +1943,9 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_thread",
-            "description": "Fil inter-agents partagé : create/list/show/post/read/ack/history/close. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Confirmer chaque page via ack, puis contrôler has_more et les pages suivantes avant d'agir ; le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/post/close, rejeu exact sans duplicat. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
+            "description": "Fil inter-agents partagé : create/add_members/list/show/post/read/ack/history/close. add_members : créateur initial seul, fil ouvert, seize lecteurs maximum après déduplication ; accès à tout l'historique depuis le curseur zéro, aucun message ni réveil. Capacité dédiée obligatoire, aucun repli sur ancien daemon. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Confirmer chaque page via ack, puis contrôler has_more et les pages suivantes avant d'agir ; le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/add_members/post/close, rejeu exact sans duplicat. NoChange n'engage pas la clé. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
             "inputSchema": {"type":"object","properties":{
-                "action":{"enum":["create","list","show","post","read","ack","history","close"]},
+                "action":{"enum":["create","add_members","list","show","post","read","ack","history","close"]},
                 "thread_id":{"type":"string","minLength":36,"maxLength":36},
                 "title":{"type":"string","minLength":1,"maxLength":640},
                 "members":{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},
@@ -2424,6 +2424,144 @@ mod tests {
             tool_result(json!({"status":"accepted"}))["isError"],
             Value::Null
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec147_uuid_mcp_facade_ipc_and_business_replay_case() {
+        use crate::threads::{Directory, MemberFacts};
+        use bridget_transport::protocol::IdentityCredential;
+        use sha2::{Digest, Sha256};
+        const A: &str = "14700000-aaaa-4aaa-8aaa-00000000000a";
+        const B: &str = "14700000-bbbb-4bbb-8bbb-00000000000b";
+        const CREATE: &str = "14700000-cccc-4ccc-8ccc-00000000000c";
+        const POST: &str = "14700000-dddd-4ddd-8ddd-00000000000d";
+        struct FixtureDirectory;
+        impl Directory for FixtureDirectory {
+            fn known_agent(&self, id: &str) -> bool {
+                [A, B].contains(&id)
+            }
+            fn member_facts(&self, _: &str) -> MemberFacts {
+                MemberFacts::default()
+            }
+            fn communication_scope(
+                &self,
+                _: &str,
+                _: &[String],
+                _: Option<&str>,
+            ) -> Result<Vec<bridget_transport::protocol::ProjectWarning>, Value> {
+                Ok(vec![])
+            }
+        }
+        let root = std::env::temp_dir().join(format!("mcp147-{}", uuid::Uuid::new_v4().simple()));
+        bridget_transport::fsutil::create_private_dir(&root).unwrap();
+        bridget_transport::fsutil::create_private_dir(&root.join("agent-names")).unwrap();
+        let socket = root.join("s");
+        let proof = root
+            .join("agent-names")
+            .join(format!("proof-{:x}.json", Sha256::digest(b"instance147")));
+        bridget_transport::fsutil::write_private_file_atomic(&proof, &serde_json::to_vec(&json!({"agent_id":A,"instance_id":"instance147","credential":IdentityCredential::new("fixture-only".into())})).unwrap()).unwrap();
+        let store = crate::store::Store::open(&root.join("db")).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        // Réutilise la frontière auxiliaire de v33, pas handle_connection ni
+        // ses attestations. Façade, client IPC et backend SQLite sont réels.
+        let server = thread::spawn(move || {
+            let mut changed = Vec::new();
+            let mut writes = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(6)))
+                    .unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                assert!(matches!(
+                    bridget_transport::protocol::decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::RegisterAuxiliary { .. }
+                ));
+                std::io::Write::write_all(
+                    &mut stream,
+                    format!(
+                        "{}\n",
+                        bridget_transport::protocol::encode(&DaemonToWrapper::Registered {
+                            agent_id: A.into(),
+                            credential: None
+                        })
+                        .unwrap()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+                line.clear();
+                std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                let WrapperToDaemon::ThreadRequest { request } =
+                    bridget_transport::protocol::decode::<WrapperToDaemon>(line.trim()).unwrap()
+                else {
+                    panic!("ThreadRequest attendu")
+                };
+                let (result, marker) =
+                    crate::threads::handle_with_change(&store, &FixtureDirectory, A, request, 1);
+                changed.push(marker.is_some());
+                writes.push(store.connection().total_changes());
+                std::io::Write::write_all(
+                    &mut stream,
+                    format!(
+                        "{}\n",
+                        bridget_transport::protocol::encode(&DaemonToWrapper::ThreadResult {
+                            result
+                        })
+                        .unwrap()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            }
+            let bodies = store
+                .connection()
+                .prepare("SELECT body FROM discussion_entries ORDER BY seq")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            (changed, writes, bodies)
+        });
+        let call = |arguments: Value| {
+            execute_dynamic_tool_at_with_scope(
+                A,
+                "instance147",
+                "bridget_thread",
+                &arguments,
+                &socket,
+            )
+            .unwrap()
+        };
+        let created = call(
+            json!({"action":"create","title":"Titre É exact","members":[B.to_uppercase()],"operation_id":CREATE.to_uppercase()}),
+        );
+        let replay = call(
+            json!({"action":"create","title":"Titre É exact","members":[B],"operation_id":CREATE}),
+        );
+        let id = created["thread_id"]
+            .as_str()
+            .unwrap_or("14700000-eeee-4eee-8eee-00000000000e");
+        let body = "É 🦀\r\n  Exact\n\n";
+        let posted = call(
+            json!({"action":"post","thread_id":id.to_uppercase(),"body":body,"notify":[B.to_uppercase()],"operation_id":POST.to_uppercase()}),
+        );
+        let post_replay = call(
+            json!({"action":"post","thread_id":id,"body":body,"notify":[B],"operation_id":POST}),
+        );
+        let (changed, writes, bodies) = server.join().unwrap();
+        assert_eq!(created["status"], "created", "{created}");
+        assert_eq!(replay, created);
+        assert_eq!(posted["status"], "posted", "{posted}");
+        assert_eq!(post_replay, posted);
+        assert_eq!(changed, [true, false, true, false]);
+        assert_eq!(writes[0], writes[1]);
+        assert_eq!(writes[2], writes[3]);
+        assert_eq!(bodies, [body]);
         let _ = std::fs::remove_dir_all(root);
     }
 

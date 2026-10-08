@@ -684,6 +684,8 @@ impl Drop for FixtureRoot {
 }
 
 struct DaemonState {
+    /// Suivis de consultation : aucune observation, mission ou donnée durable.
+    human_thread_watches: HashMap<String, HumanThreadWatch>,
     /// Autorité éphémère : None interdit un fait contradictoire sur ce lien.
     t3_thread_bindings: HashMap<String, Option<String>>,
     /// La projection projet historique ne conserve pas son origine.
@@ -800,6 +802,96 @@ struct ManagedSpawnRecord {
     requester_conns: Vec<String>,
     wrapper_conn: Option<String>,
     stop: Arc<ManagedStopControl>,
+}
+
+const HUMAN_WATCH_MAX: usize = 128;
+const HUMAN_WATCH_QUEUE_MAX: usize = 16;
+
+struct HumanThreadWatch {
+    request: bridget_transport::protocol::HumanThreadWatchV1,
+    project: Option<bridget_transport::protocol::CommunicationProject>,
+    owner: String,
+    agent: String,
+    queue: HumanWatchQueue,
+    notify: mpsc::SyncSender<()>,
+}
+
+struct HumanWatchQueue {
+    generation: String,
+    seq: u64,
+    pending: VecDeque<bridget_transport::protocol::HumanThreadWatchEvent>,
+    terminal: bool,
+    #[cfg(test)]
+    guard_checks: u64,
+}
+
+impl HumanWatchQueue {
+    fn new() -> Self {
+        use bridget_transport::protocol::{HUMAN_THREAD_WATCH_VERSION, HumanThreadWatchEvent as E};
+        let generation = uuid::Uuid::new_v4().to_string();
+        Self {
+            pending: VecDeque::from([E::Ready {
+                version: HUMAN_THREAD_WATCH_VERSION,
+                generation: generation.clone(),
+                seq: 0,
+            }]),
+            generation,
+            seq: 0,
+            terminal: false,
+            #[cfg(test)]
+            guard_checks: 0,
+        }
+    }
+
+    fn terminate(&mut self, code: bridget_transport::protocol::HumanThreadViewError) {
+        use bridget_transport::protocol::HumanThreadWatchEvent as E;
+        if self.terminal {
+            return;
+        }
+        // Une révocation prime sur un ready non encore émis. Le terminal
+        // remplace les changements, puis ne peut plus être coalescé.
+        self.pending.clear();
+        self.pending.push_back(E::error(code));
+        self.terminal = true;
+    }
+
+    fn changed(&mut self) {
+        use bridget_transport::protocol::{
+            HUMAN_THREAD_WATCH_MAX_SEQ, HUMAN_THREAD_WATCH_VERSION, HumanThreadViewError,
+            HumanThreadWatchEvent as E,
+        };
+        if self.terminal {
+            return;
+        }
+        if self.seq == HUMAN_THREAD_WATCH_MAX_SEQ {
+            self.terminate(HumanThreadViewError::ResponseTooLarge);
+            return;
+        }
+        self.seq += 1;
+        let coalesced = self.pending.len() == HUMAN_WATCH_QUEUE_MAX
+            || self
+                .pending
+                .iter()
+                .any(|event| matches!(event, E::Resync { .. }));
+        if coalesced {
+            self.pending
+                .retain(|event| matches!(event, E::Ready { .. }));
+        }
+        let event = if coalesced {
+            E::Resync {
+                version: HUMAN_THREAD_WATCH_VERSION,
+                generation: self.generation.clone(),
+                seq: self.seq,
+            }
+        } else {
+            E::Changed {
+                version: HUMAN_THREAD_WATCH_VERSION,
+                generation: self.generation.clone(),
+                seq: self.seq,
+            }
+        };
+        self.pending.push_back(event);
+    }
 }
 
 type ManagedRecovery = (PreparedSpawn, Arc<ManagedStopControl>);
@@ -1640,21 +1732,40 @@ fn push_control_message_until(
     message: &DaemonToWrapper,
     deadline: Instant,
 ) -> std::io::Result<()> {
+    push_control_message_until_checked(writer, message, deadline, || Ok(None))
+}
+
+fn push_control_message_until_checked(
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    message: &DaemonToWrapper,
+    deadline: Instant,
+    mut before_emit: impl FnMut() -> std::io::Result<Option<DaemonToWrapper>>,
+) -> std::io::Result<()> {
     let timeout = || {
         std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             "budget de notification dépassé",
         )
     };
-    let mut json = encode(message)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    json.push('\n');
-    let mut writer = loop {
+    let (mut writer, replacement_message) = loop {
         if Instant::now() >= deadline {
             return Err(timeout());
         }
         match writer.try_lock() {
-            Ok(writer) => break writer,
+            Ok(writer) => match before_emit() {
+                Ok(message) => break (writer, message),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Ne jamais attendre state avec writer détenu : les
+                    // chemins historiques peuvent prendre les verrous à l'inverse.
+                    drop(writer);
+                    thread::sleep(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(Duration::from_millis(1)),
+                    );
+                }
+                Err(error) => return Err(error),
+            },
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 return Err(std::io::Error::other("writer empoisonné"));
             }
@@ -1667,6 +1778,11 @@ fn push_control_message_until(
             }
         }
     };
+    // Le contrôle ne s'exécute qu'après l'attente du writer. Il ne garde
+    // aucun verrou métier pendant la sérialisation ou l'écriture socket.
+    let mut json = encode(replacement_message.as_ref().unwrap_or(message))
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    json.push('\n');
     // Reprendre le tampon EXISTANT sans le perdre ni le rejouer. into_parts
     // ne flush pas : chaque write ci-dessous reçoit le temps encore disponible.
     // Ne pas changer O_NONBLOCK, qui affecterait aussi le lecteur du wrapper.
@@ -2953,6 +3069,7 @@ impl DaemonState {
             unix_now_secs().max(0) as u64,
         )?;
         Ok(DaemonState {
+            human_thread_watches: HashMap::new(),
             t3_thread_bindings: HashMap::new(),
             t3_project_connections: HashSet::new(),
             observations,
@@ -3093,6 +3210,16 @@ impl DaemonState {
     fn revoke_identity_authorizations(&mut self, owner: &str) {
         self.t3_thread_bindings.remove(owner);
         self.t3_project_connections.remove(owner);
+        for watch in self
+            .human_thread_watches
+            .values_mut()
+            .filter(|watch| watch.owner == owner)
+        {
+            watch
+                .queue
+                .terminate(bridget_transport::protocol::HumanThreadViewError::BindingUnavailable);
+            let _ = watch.notify.try_send(());
+        }
         let had_credential = self.identity_credentials.remove(owner).is_some();
         self.observation_sequences.remove(owner);
         self.observations.remove_source(owner, Instant::now());
@@ -4882,6 +5009,24 @@ fn handle_connection(
                 my_writer.flush()?;
                 continue;
             }
+            if display_name_kind.as_deref() == Some("HumanThreadWatchV1")
+                && (decode::<WrapperToDaemon>(line).is_err()
+                    || !serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .and_then(|value| value.as_object().map(|object| object.len() == 2))
+                        .unwrap_or(false))
+            {
+                let event = bridget_transport::protocol::HumanThreadWatchEvent::error(
+                    bridget_transport::protocol::HumanThreadViewError::InvalidRequest,
+                );
+                writeln!(
+                    my_writer,
+                    "{}",
+                    encode(&DaemonToWrapper::HumanThreadWatchEvent { event })?
+                )?;
+                my_writer.flush()?;
+                break;
+            }
             if matches!(
                 display_name_kind.as_deref(),
                 Some("display_name_set" | "display_name_resolve")
@@ -4962,9 +5107,18 @@ fn handle_connection(
             let response = handle_wrapper_message(&conn_id, msg, &state);
             let registered_just_now = matches!(response, Some(DaemonToWrapper::Registered { .. }));
             if let Some(dtw) = response {
+                let watch_terminal = matches!(
+                    &dtw,
+                    DaemonToWrapper::HumanThreadWatchEvent {
+                        event: bridget_transport::protocol::HumanThreadWatchEvent::Error { .. }
+                    }
+                );
                 let json = encode(&dtw)?;
                 writeln!(my_writer, "{}", json)?;
                 my_writer.flush()?;
+                if watch_terminal {
+                    break;
+                }
             }
             let post_response_controls = state
                 .lock()
@@ -5015,6 +5169,7 @@ fn handle_connection(
         st.connection_roles.remove(&conn_id);
         st.terminal_sessions.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
+        st.human_thread_watches.remove(&conn_id);
         st.service_negotiations.remove(&conn_id);
         st.peer_uids.remove(&conn_id);
         st.coordination_subscriptions.remove(&conn_id);
@@ -8050,6 +8205,7 @@ fn announce_communication_project(
         st.t3_project_connections.remove(conn_id);
         st.t3_thread_bindings.remove(conn_id);
     }
+    invalidate_human_authority(&mut st);
     let warnings = if project.is_none() {
         crate::communication::project_scope(None, None, "", None).unwrap_or_default()
     } else {
@@ -9077,6 +9233,7 @@ fn await_managed_stop(target: ManagedStopTarget, name: &str) -> StopOutcome {
 
 fn prune_agent_presence(state: &mut DaemonState, name: &str) {
     state.presences.retain(|_, presence| presence.name != name);
+    invalidate_human_authority(state);
 }
 
 fn artifact_publication_success(
@@ -11095,6 +11252,1660 @@ mod spec145_human_view_tests {
     }
 
     #[test]
+    fn spec147_watch_real_socket_accepts_human_ready_without_business_writes() {
+        let (state, root, _peer) = fixture("h147-red");
+        let before = snapshot(&state);
+        let (mut stream, server) = UnixStream::pair().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let server_state = state.clone();
+        let handle = thread::spawn(move || {
+            handle_connection(server, server_state).map_err(|e| e.to_string())
+        });
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        for request in [
+            json!({"type":"RoleHandshake","role":"client"}),
+            json!({"type":"ClientHello","contract_version":1,"issuer_scope":"scope147_human_watch_00000000","capabilities":["human_thread_watch_v1"]}),
+            json!({"type":"HumanThreadWatchV1","request":{"version":1,"t3_thread_id":T3,"project_root":root}}),
+        ] {
+            writeln!(stream, "{request}").unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let response: Value = serde_json::from_str(&line).unwrap();
+            if request["type"] == "HumanThreadWatchV1" {
+                assert_eq!(response["event"]["status"], "ready", "{response}");
+                assert_eq!(response["event"]["seq"], 0);
+            }
+        }
+        drop(reader);
+        drop(stream);
+        handle.join().unwrap().unwrap();
+        assert_eq!(snapshot(&state), before);
+    }
+
+    fn watch_socket(
+        state: &Arc<Mutex<DaemonState>>,
+        root: &str,
+    ) -> (
+        BufReader<UnixStream>,
+        thread::JoinHandle<Result<(), String>>,
+    ) {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let shared = state.clone();
+        let handle =
+            thread::spawn(move || handle_connection(server, shared).map_err(|e| e.to_string()));
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        for request in [
+            json!({"type":"RoleHandshake","role":"client"}),
+            json!({"type":"ClientHello","contract_version":1,"issuer_scope":"scope147_human_watch_fixture00","capabilities":["human_thread_watch_v1"]}),
+        ] {
+            writeln!(client, "{request}").unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(serde_json::from_str::<Value>(&line).unwrap()["type"] != "ClientRejected");
+        }
+        writeln!(client,"{}",json!({"type":"HumanThreadWatchV1","request":{"version":1,"t3_thread_id":T3,"project_root":root}})).unwrap();
+        drop(client);
+        (reader, handle)
+    }
+
+    fn watch_event(reader: &mut BufReader<UnixStream>) -> Value {
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).unwrap() > 0);
+        serde_json::from_str::<Value>(&line).unwrap()["event"].clone()
+    }
+
+    fn operation(state: &Arc<Mutex<DaemonState>>, action: Value) -> Value {
+        let request=serde_json::from_value(json!({"type":"ThreadRequest","request":{
+            "version":1,"cross_project_reason":"Échange synthétique explicite pour la recette147", "request":action
+        }})).unwrap();
+        serde_json::to_value(handle_wrapper_message("t3",request,state).unwrap()).unwrap()["result"]["result"].clone()
+    }
+
+    fn create_action() -> Value {
+        json!({"action":"create","title":"Titre secret147", "members":["89000000-0000-4000-8000-000000000102"], "operation_id":uuid::Uuid::new_v4().to_string()})
+    }
+
+    #[test]
+    fn spec147_members_capability_guard_refuses_before_mutation() {
+        let (state, _, _peer) = fixture("h147members-guard");
+        let created = operation(&state, create_action());
+        let before = snapshot(&state);
+        let refused = operation(
+            &state,
+            json!({"action":"add_members","thread_id":created["thread_id"],"members":[],"operation_id":uuid::Uuid::new_v4().to_string()}),
+        );
+        assert_eq!(refused["code"], "thread_members_unsupported");
+        assert_eq!(snapshot(&state), before);
+    }
+
+    #[test]
+    fn spec147_members_pending_wake_is_unchanged_and_watch_only_follows_commit() {
+        use crate::store::threads::{NotifySpec, PostEntry, ThreadTxOutcome};
+        let (state, root, mut peer) = fixture("h147members-silent");
+        let c = "14700000-0000-4000-8000-000000000003";
+        let a = crate::t3code::stable_uuid(T3);
+        let mut b_peer = spec094_live_test_connection(&mut state.lock().unwrap(), "conn-1");
+        let mut c_peer = {
+            let mut st = state.lock().unwrap();
+            let peer = spec094_live_test_connection(&mut st, "member-c");
+            let host = st.host.clone();
+            assert!(matches!(
+                handle_register_with_channel(
+                    "member-c",
+                    2,
+                    "fixture-c".into(),
+                    c.into(),
+                    Some(host),
+                    Some("fixture".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Cli),
+                    None,
+                    Some("test".into()),
+                    Some("member-c-instance".into()),
+                    None,
+                    false,
+                    Some(false),
+                    &mut st
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+            peer
+        };
+        let created = operation(&state, create_action());
+        let id = created["thread_id"].as_str().unwrap();
+        let (mut watch, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut watch)["status"], "ready");
+        let pending = {
+            let st = state.lock().unwrap();
+            let notify = NotifySpec::Targets(vec!["89000000-0000-4000-8000-000000000102".into()]);
+            assert!(matches!(
+                st.store
+                    .thread_post(PostEntry {
+                        actor: &a,
+                        operation_id: &uuid::Uuid::new_v4().to_string(),
+                        canonical_hash: "pending-member-proof",
+                        thread_id: id,
+                        message_id: &uuid::Uuid::new_v4().to_string(),
+                        body: "ancienne action",
+                        notify: &notify,
+                        notices: &[],
+                        project_warnings: &[],
+                        reply_to_seq: None,
+                        ack_receipt: None,
+                        kind: None,
+                        supersedes_seq: None,
+                        now: unix_now_secs(),
+                        limits: &crate::threads::LIMITS
+                    })
+                    .unwrap(),
+                ThreadTxOutcome::Done(_)
+            ));
+            st.store
+                .thread_show("89000000-0000-4000-8000-000000000102", id)
+                .unwrap()
+                .unwrap()
+                .own_wake
+                .unwrap()
+        };
+        assert_eq!(pending.state, "pending");
+        let (instance, credential) = {
+            let st = state.lock().unwrap();
+            (
+                st.conn_instances["t3"].clone(),
+                st.identity_credentials["t3"].clone(),
+            )
+        };
+        let _aux_peer = spec094_live_test_connection(&mut state.lock().unwrap(), "member-aux");
+        assert!(matches!(
+            handle_wrapper_message(
+                "member-aux",
+                WrapperToDaemon::RegisterAuxiliary {
+                    agent_id: a.clone(),
+                    instance_id: instance,
+                    credential,
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::Registered { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "member-aux",
+                WrapperToDaemon::ClientHello {
+                    contract_version: 1,
+                    issuer_scope: "membership147_primary_fixture".into(),
+                    capabilities: vec![
+                        ClientCapability::ThreadMembersV1,
+                        ClientCapability::CommunicationProjectsV1
+                    ]
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        let member_operation = |action: Value| {
+            let request = serde_json::from_value(json!({"type":"ThreadRequest","request":{
+                "version":1,"cross_project_reason":"Recette membres147 explicite","request":action
+            }}))
+            .unwrap();
+            serde_json::to_value(handle_wrapper_message("member-aux", request, &state).unwrap())
+                .unwrap()["result"]["result"]
+                .clone()
+        };
+        let action = json!({"action":"add_members","thread_id":id,"members":[c],"operation_id":uuid::Uuid::new_v4().to_string()});
+        let added = member_operation(action.clone());
+        assert_eq!(added["status"], "members_added", "{added}");
+        assert_eq!(watch_event(&mut watch)["seq"], 1);
+        assert_eq!(member_operation(action), added);
+        assert_eq!(
+            member_operation(
+                json!({"action":"add_members","thread_id":id,"members":[c],"operation_id":uuid::Uuid::new_v4().to_string()})
+            )["status"],
+            "no_change"
+        );
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .thread_show("89000000-0000-4000-8000-000000000102", id)
+                .unwrap()
+                .unwrap()
+                .own_wake
+                .as_ref(),
+            Some(&pending)
+        );
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .thread_show(c, id)
+                .unwrap()
+                .unwrap()
+                .own
+                .acked_seq,
+            0
+        );
+        use std::io::Read;
+        for primary in [&mut peer, &mut b_peer, &mut c_peer] {
+            primary.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(primary.read(&mut [0]),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock),
+                "aucun Deliver même avec pending préexistant"
+            );
+        }
+        watch
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .unwrap();
+        assert!(
+            watch.read_line(&mut String::new()).is_err(),
+            "replay/NoChange silencieux"
+        );
+        drop(watch);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn spec147_ready_and_terminal_survive_saturation_and_overflow() {
+        use bridget_transport::protocol::{
+            HUMAN_THREAD_WATCH_MAX_SEQ, HumanThreadViewError as R, HumanThreadWatchEvent as E,
+        };
+        let mut queue = HumanWatchQueue::new();
+        let original = queue.generation.clone();
+        for _ in 0..100 {
+            queue.changed();
+            assert!(queue.pending.len() <= HUMAN_WATCH_QUEUE_MAX);
+        }
+        assert!(matches!(
+            queue.pending.pop_front(),
+            Some(E::Ready { seq: 0, .. })
+        ));
+        assert!(matches!(
+            queue.pending.pop_front(),
+            Some(E::Resync { seq: 100, .. })
+        ));
+        queue.changed();
+        queue.terminate(R::ProjectMismatch);
+        for _ in 0..100 {
+            queue.changed();
+        }
+        assert_eq!(
+            queue.pending.pop_front(),
+            Some(E::error(R::ProjectMismatch))
+        );
+        assert!(queue.pending.is_empty());
+        let mut overflow = HumanWatchQueue::new();
+        overflow.seq = HUMAN_THREAD_WATCH_MAX_SEQ;
+        overflow.changed();
+        assert!(matches!(
+            overflow.pending.pop_front(),
+            Some(E::Error {
+                code: R::ResponseTooLarge,
+                ..
+            })
+        ));
+        assert_ne!(original, HumanWatchQueue::new().generation);
+    }
+
+    #[test]
+    fn spec147_revocation_before_first_output_does_not_claim_ready() {
+        use bridget_transport::protocol::{HumanThreadViewError as R, HumanThreadWatchEvent as E};
+        let mut queue = HumanWatchQueue::new();
+        queue.terminate(R::BindingUnavailable);
+        assert!(matches!(
+            queue.pending.pop_front(),
+            Some(E::Error {
+                code: R::BindingUnavailable,
+                ..
+            })
+        ));
+        assert!(queue.pending.is_empty());
+    }
+
+    #[test]
+    fn spec147_mutations_replay_reads_ack_foreign_and_rename_are_filtered() {
+        let (state, root, mut peer) = fixture("h147m");
+        let (mut reader, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut reader)["seq"], 0);
+        let create = create_action();
+        let created = operation(&state, create.clone());
+        assert_eq!(created["status"], "created", "{created}");
+        let thread_id = created["thread_id"].as_str().unwrap();
+        assert_eq!(watch_event(&mut reader)["seq"], 1);
+        assert_eq!(operation(&state, create), created);
+        let post = json!({"action":"post","thread_id":thread_id,"body":"secret147 body","notify":[],
+            "operation_id":uuid::Uuid::new_v4().to_string(),"kind":"action"});
+        let posted = operation(&state, post.clone());
+        assert_eq!(posted["status"], "posted", "{posted}");
+        assert_eq!(watch_event(&mut reader)["seq"], 2);
+        assert_eq!(operation(&state, post), posted);
+        let replacement = json!({"action":"post","thread_id":thread_id,"body":"replacement147","notify":[],
+            "operation_id":uuid::Uuid::new_v4().to_string(),"kind":"action","supersedes_seq":1});
+        assert_eq!(operation(&state, replacement)["status"], "posted");
+        assert_eq!(watch_event(&mut reader)["seq"], 3);
+        let read = operation(
+            &state,
+            json!({"action":"read","thread_id":thread_id,"limit":20}),
+        );
+        assert_eq!(read["status"], "read", "{read}");
+        let receipt = read["receipt"].as_str().unwrap();
+        assert_eq!(
+            operation(
+                &state,
+                json!({"action":"ack","thread_id":thread_id,"receipt":receipt})
+            )["status"],
+            "acknowledged"
+        );
+        assert_eq!(
+            operation(
+                &state,
+                json!({"action":"post","thread_id":"14700000-0000-4000-8000-000000000099","body":"foreign-secret147","notify":[],"operation_id":uuid::Uuid::new_v4().to_string()})
+            )["status"],
+            "error"
+        );
+        {
+            let mut st = state.lock().unwrap();
+            use crate::store::threads::CreateThread;
+            let members: [String; 2] = [
+                "14700000-0000-4000-8000-000000000097".into(),
+                "14700000-0000-4000-8000-000000000098".into(),
+            ];
+            st.store
+                .thread_create(CreateThread {
+                    actor: &members[0],
+                    operation_id: &uuid::Uuid::new_v4().to_string(),
+                    canonical_hash: "foreign147",
+                    thread_id: "14700000-0000-4000-8000-000000000096",
+                    title: "foreign-secret147",
+                    members: &members,
+                    project_warnings: &[],
+                    now: 1,
+                    limits: &crate::threads::LIMITS,
+                })
+                .unwrap();
+            publish_human_thread_change(&mut st, "14700000-0000-4000-8000-000000000096");
+        }
+        let close = json!({"action":"close","thread_id":thread_id,"operation_id":uuid::Uuid::new_v4().to_string()});
+        let closed = operation(&state, close.clone());
+        assert_eq!(closed["status"], "closed");
+        assert_eq!(
+            watch_event(&mut reader)["seq"],
+            4,
+            "replay/read/ACK/refus/fil étranger restent silencieux"
+        );
+        assert_eq!(operation(&state, close), closed);
+        let rename = || {
+            serde_json::from_value(json!({"type":"display_name_set","request":{"version":1,"display_name":"Nom synthétique147"}})).unwrap()
+        };
+        assert!(matches!(
+            handle_wrapper_message("t3", rename(), &state),
+            Some(DaemonToWrapper::DisplayNameResult { .. })
+        ));
+        assert_eq!(watch_event(&mut reader)["seq"], 5);
+        handle_wrapper_message("t3", rename(), &state);
+        let mut fd = libc::pollfd {
+            fd: reader.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(
+            unsafe { libc::poll(&mut fd, 1, 150) },
+            0,
+            "renommage identique et replay de clôture muets"
+        );
+        peer.set_nonblocking(true).unwrap();
+        assert_eq!(
+            std::io::Read::read(&mut peer, &mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "aucune remise agent produite par watch"
+        );
+        drop(reader);
+        handle.join().unwrap().unwrap();
+        assert!(state.lock().unwrap().human_thread_watches.is_empty());
+    }
+
+    #[test]
+    fn spec147_authority_loss_is_terminal_without_business_writes() {
+        for case in ["binding", "ambiguous", "instance", "connection", "project"] {
+            let (state, root, _peer) = fixture(&format!("h147{case}"));
+            let before = snapshot(&state);
+            let (mut reader, handle) = watch_socket(&state, &root);
+            assert_eq!(watch_event(&mut reader)["status"], "ready");
+            {
+                let mut st = state.lock().unwrap();
+                match case {
+                    "binding" => {
+                        st.t3_thread_bindings.insert("t3".into(), None);
+                    }
+                    "ambiguous" => {
+                        st.t3_thread_bindings
+                            .insert("duplicate".into(), Some(T3.into()));
+                    }
+                    "instance" => {
+                        st.conn_instances.insert("t3".into(), "invalid".into());
+                    }
+                    "connection" => {
+                        st.connections.remove("t3");
+                    }
+                    "project" => {
+                        st.communication_projects.get_mut("t3").unwrap().2 = true;
+                    }
+                    _ => unreachable!(),
+                }
+                invalidate_human_authority(&mut st);
+            }
+            let event = watch_event(&mut reader);
+            assert_eq!(event["status"], "error");
+            assert_eq!(
+                event["code"],
+                if case == "project" {
+                    "project_mismatch"
+                } else {
+                    "binding_unavailable"
+                }
+            );
+            assert_eq!(reader.read_line(&mut String::new()).unwrap(), 0);
+            drop(reader);
+            handle.join().unwrap().unwrap();
+            assert!(state.lock().unwrap().human_thread_watches.is_empty());
+            assert_eq!(snapshot(&state), before);
+        }
+    }
+
+    #[test]
+    fn spec147_idle_watch_does_not_scan_authority_or_content() {
+        let (state, root, _peer) = fixture("h147idle");
+        {
+            let mut st = state.lock().unwrap();
+            for index in 0..256 {
+                st.t3_thread_bindings.insert(
+                    format!("idle-{index}"),
+                    Some(uuid::Uuid::new_v4().to_string()),
+                );
+            }
+        }
+        let (mut reader, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut reader)["status"], "ready");
+        thread::sleep(Duration::from_millis(150));
+        let checks = || {
+            state
+                .lock()
+                .unwrap()
+                .human_thread_watches
+                .values()
+                .next()
+                .unwrap()
+                .queue
+                .guard_checks
+        };
+        let before = checks();
+        let started = Instant::now();
+        thread::sleep(Duration::from_millis(550));
+        let extra = checks() - before;
+        eprintln!(
+            "SPEC147 idle réel : {extra} scans sous verrou sur257bindings en {:?}",
+            started.elapsed()
+        );
+        drop(reader);
+        handle.join().unwrap().unwrap();
+        assert_eq!(extra, 0);
+    }
+
+    #[test]
+    fn spec147_takeover_renames_the_old_holder_and_invalidates_its_viewers() {
+        use crate::store::threads::CreateThread;
+        const HOLDER: &str = "14700000-0000-4000-8000-000000000093";
+        let (state, root, _peer) = fixture("h147name");
+        let _requester_peer = {
+            let mut st = state.lock().unwrap();
+            spec094_live_test_connection(&mut st, "conn-1")
+        };
+        {
+            let st = state.lock().unwrap();
+            let mut profiles = crate::agent_profile::AgentProfileStore::open(&st.db_path).unwrap();
+            profiles.ensure_agent_ids([HOLDER]).unwrap();
+            profiles
+                .rename_display_name(HOLDER, "Nom transférable147", |_| false)
+                .unwrap();
+            let mut members = vec![crate::t3code::stable_uuid(T3), HOLDER.into()];
+            members.sort();
+            st.store
+                .thread_create(CreateThread {
+                    actor: &members[0],
+                    operation_id: &uuid::Uuid::new_v4().to_string(),
+                    canonical_hash: "takeover147",
+                    thread_id: "14700000-0000-4000-8000-000000000092",
+                    title: "Ancien détenteur147",
+                    members: &members,
+                    project_warnings: &[],
+                    now: 1,
+                    limits: &crate::threads::LIMITS,
+                })
+                .unwrap();
+        }
+        let (mut reader, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut reader)["status"], "ready");
+        let rename=serde_json::from_value(json!({"type":"display_name_set","request":{"version":1,"display_name":"Nom transférable147"}})).unwrap();
+        let response = handle_wrapper_message("conn-1", rename, &state).unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::DisplayNameResult {
+                    outcome: bridget_transport::protocol::DisplayNameOutcome::Applied { .. }
+                }
+            ),
+            "{response:?}"
+        );
+        let mut fd = libc::pollfd {
+            fd: reader.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut fd, 1, 300) };
+        if ready > 0 {
+            assert_eq!(watch_event(&mut reader)["status"], "changed");
+        }
+        drop(reader);
+        handle.join().unwrap().unwrap();
+        assert!(
+            ready > 0,
+            "un fil de l'ancien détenteur doit être invalidé aussi"
+        );
+    }
+
+    #[test]
+    fn spec147_runtime_authority_hooks_terminate_an_idle_watch() {
+        for case in ["announce_project", "binding_fact", "unregister", "prune"] {
+            let (state, root, mut peer) = fixture(&format!("h147hook{case}"));
+            let (mut reader, handle) = watch_socket(&state, &root);
+            assert_eq!(watch_event(&mut reader)["status"], "ready");
+            let before = snapshot(&state);
+            match case {
+                "announce_project" => {
+                    let host = state.lock().unwrap().host.clone();
+                    announce_communication_project(
+                        &state,
+                        "t3",
+                        "/nonexistent-spec147-project",
+                        bridget_transport::protocol::CommunicationProjectSource::T3,
+                        &host,
+                        None,
+                    );
+                }
+                "binding_fact" => {
+                    handle_wrapper_message(
+                        "t3",
+                        WrapperToDaemon::T3ThreadBindingFact {
+                            version: 1,
+                            t3_thread_id: "14700000-0000-4000-8000-000000000099".into(),
+                        },
+                        &state,
+                    );
+                }
+                "unregister" => {
+                    handle_wrapper_message("t3", WrapperToDaemon::Unregister, &state);
+                }
+                "prune" => {
+                    let mut st = state.lock().unwrap();
+                    let name = st.presences[&st.conn_instances["t3"]].name.clone();
+                    prune_agent_presence(&mut st, &name);
+                }
+                _ => unreachable!(),
+            }
+            let refusal = watch_event(&mut reader);
+            assert_eq!(refusal["status"], "error");
+            assert_eq!(refusal["code"], "binding_unavailable");
+            assert_eq!(reader.read_line(&mut String::new()).unwrap(), 0);
+            drop(reader);
+            handle.join().unwrap().unwrap();
+            assert_eq!(
+                snapshot(&state),
+                before,
+                "aucune table métier changée par le suivi"
+            );
+            assert!(state.lock().unwrap().human_thread_watches.is_empty());
+            peer.set_nonblocking(true).unwrap();
+            assert_eq!(
+                std::io::Read::read(&mut peer, &mut [0]).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+    }
+
+    fn cli_binary() -> PathBuf {
+        std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("bridget")
+    }
+
+    // T040 : réutilise fixture145, son vrai état et handle_connection. Le
+    // shell représente seulement le parent fournisseur : aucun modèle.
+    struct Spec147McpChild {
+        child: std::process::Child,
+        input: Option<std::process::ChildStdin>,
+        output: std::process::ChildStdout,
+        mcp_pid: u32,
+        mcp_birth: u64,
+        deadline: Instant,
+    }
+
+    impl Spec147McpChild {
+        fn request(&mut self, request: Value) -> Value {
+            writeln!(self.input.as_mut().unwrap(), "{request}").unwrap();
+            self.response()
+        }
+
+        fn response(&mut self) -> Value {
+            use std::io::Read;
+            let deadline = (Instant::now() + Duration::from_secs(2)).min(self.deadline);
+            let mut line = Vec::new();
+            loop {
+                let mut bytes = [0_u8; 4096];
+                match self.output.read(&mut bytes) {
+                    Ok(0) => panic!("MCP privé a fermé stdout avant sa réponse"),
+                    Ok(count) => {
+                        line.extend_from_slice(&bytes[..count]);
+                        assert!(line.len() <= 64 * 1024, "réponse MCP non bornée");
+                        if line.ends_with(b"\n") {
+                            return serde_json::from_slice(&line).unwrap();
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!("lecture MCP privée : {error}"),
+                }
+                assert!(Instant::now() < deadline, "réponse MCP absente après2s");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    impl Drop for Spec147McpChild {
+        fn drop(&mut self) {
+            drop(self.input.take()); // EOF arrête MCP puis son shell parent.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if self.child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            // Seulement nos deux PID observés ; aucune cible de groupe et
+            // aucun SIGKILL. Vérifier commande/naissance avant chaque TERM.
+            for (pid, birth) in [
+                (self.mcp_pid, Some(self.mcp_birth)),
+                (
+                    if self.child.id() == self.mcp_pid {
+                        0
+                    } else {
+                        self.child.id()
+                    },
+                    None,
+                ),
+            ] {
+                if pid == 0 {
+                    continue;
+                }
+                if birth.is_some_and(|expected| {
+                    crate::managed_process::process_birth(pid).ok() != Some(expected)
+                }) {
+                    continue;
+                }
+                let Ok(observed) = std::process::Command::new("/bin/ps")
+                    .args(["-p", &pid.to_string(), "-o", "command="])
+                    .output()
+                else {
+                    continue;
+                };
+                let command = String::from_utf8_lossy(&observed.stdout);
+                let owned = if pid == self.mcp_pid {
+                    command.contains(cli_binary().to_string_lossy().as_ref())
+                        && crate::mcp_identity::process_parent(pid).ok()
+                            == Some(if self.child.id() == pid {
+                                std::process::id()
+                            } else {
+                                self.child.id()
+                            })
+                } else {
+                    command.contains("BRIDGET_147_TEST_BINARY")
+                        && crate::mcp_identity::process_parent(pid).ok() == Some(std::process::id())
+                };
+                if owned && !command.to_ascii_lowercase().contains("firefox") {
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                    }
+                    thread::sleep(Duration::from_secs(3));
+                }
+            }
+            let _ = self.child.try_wait();
+        }
+    }
+
+    fn spec147_native_mcp_case(mode: &str) -> Value {
+        use crate::store::threads::{CreateThread, NotifySpec, PostEntry, ThreadTxOutcome};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        const B: &str = "89000000-0000-4000-8000-000000000102";
+        const C: &str = "14700000-0000-4000-8000-000000000003";
+        const TA: &str = "14700000-aaaa-4aaa-8aaa-000000000001";
+        const TB: &str = "14700000-bbbb-4bbb-8bbb-000000000002";
+        let (state, _root, mut peer_a) = fixture(&format!("h147mcp-{mode}"));
+        let mut peer_b = spec094_live_test_connection(&mut state.lock().unwrap(), "conn-1");
+        let directory = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("h147mcp-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let _cleanup = FixtureRoot(directory.clone());
+        let socket = directory.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let a = crate::t3code::stable_uuid(T3);
+        let (instance_a, credential_a, credential_b) = {
+            let st = state.lock().unwrap();
+            for (actor, id, title) in [
+                (&a, TA, "CANARY147_NATIVE_A"),
+                (&B.to_string(), TB, "CANARY147_NATIVE_B"),
+            ] {
+                assert!(matches!(
+                    st.store
+                        .thread_create(CreateThread {
+                            actor,
+                            operation_id: id,
+                            canonical_hash: id,
+                            thread_id: id,
+                            title,
+                            members: &[actor.clone(), C.into()],
+                            project_warnings: &[],
+                            now: 1,
+                            limits: &crate::threads::LIMITS
+                        })
+                        .unwrap(),
+                    ThreadTxOutcome::Done(_)
+                ));
+            }
+            (
+                st.conn_instances["t3"].clone(),
+                st.identity_credentials["t3"].clone(),
+                st.identity_credentials["conn-1"].clone(),
+            )
+        };
+        if mode == "members" {
+            let st = state.lock().unwrap();
+            for seq in 1..=137 {
+                let body = format!("CANARY147 historique {seq} É🦀\r\n  exact\n\n");
+                let notify = NotifySpec::Targets(if seq <= 2 { vec![C.into()] } else { vec![] });
+                let kind = match seq {
+                    1 | 2 => Some(bridget_transport::protocol::ThreadEntryKind::Action),
+                    3 => None,
+                    _ => Some(bridget_transport::protocol::ThreadEntryKind::History),
+                };
+                assert!(matches!(
+                    st.store
+                        .thread_post(PostEntry {
+                            actor: &a,
+                            operation_id: &uuid::Uuid::new_v4().to_string(),
+                            canonical_hash: &format!("members-native-{seq}"),
+                            thread_id: TA,
+                            message_id: &uuid::Uuid::new_v4().to_string(),
+                            body: &body,
+                            notify: &notify,
+                            notices: &[],
+                            project_warnings: &[],
+                            reply_to_seq: None,
+                            ack_receipt: None,
+                            kind,
+                            supersedes_seq: (seq == 2).then_some(1),
+                            now: seq,
+                            limits: &crate::threads::LIMITS,
+                        })
+                        .unwrap(),
+                    ThreadTxOutcome::Done(_)
+                ));
+            }
+        }
+        crate::mcp_identity::save_credential(
+            &directory,
+            &a,
+            &instance_a,
+            if mode == "forged" {
+                credential_b.clone()
+            } else {
+                credential_a
+            },
+        )
+        .unwrap();
+        crate::mcp_identity::save_credential(&directory, B, "instance-1", credential_b).unwrap();
+        let name_a = directory.join("agent-names/native-a");
+        let name_b = directory.join("agent-names/native-b");
+        bridget_transport::fsutil::write_private_file_atomic(&name_a, a.as_bytes()).unwrap();
+        bridget_transport::fsutil::write_private_file_atomic(&name_b, B.as_bytes()).unwrap();
+        if matches!(mode, "closest" | "bad-with-ancestor" | "members") {
+            crate::mcp_identity::write_marker(
+                &directory.join("agent-pids"),
+                std::process::id(),
+                crate::managed_process::process_birth(std::process::id()).unwrap(),
+                "instance-1",
+                &name_b,
+            )
+            .unwrap();
+        }
+        let before = snapshot(&state);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let serving = state.clone();
+        let server = thread::spawn(move || {
+            let mut handles = Vec::new();
+            while !stopping.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        // Même mode bloquant que l'accept loop de production.
+                        // macOS hérite O_NONBLOCK du listener ; une grande page
+                        // ne doit pas devenir une trame JSONL tronquée.
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let st = serving.clone();
+                        handles.push(thread::spawn(move || {
+                            handle_connection(stream, st).map_err(|error| error.to_string())
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("listener MCP privé : {error}"),
+                }
+            }
+            for handle in handles {
+                handle.join().unwrap().unwrap();
+            }
+        });
+        let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut child = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "\"$BRIDGET_147_TEST_BINARY\" mcp; result=$?; exit \"$result\"",
+                ])
+                .env_clear()
+                .env("HOME", &directory)
+                .env("BRIDGET_HOME", &directory)
+                .env("BRIDGET_SOCKET", &socket)
+                .env("PATH", "/usr/bin:/bin")
+                .env("BRIDGET_147_TEST_BINARY", cli_binary())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let shell_pid = child.id();
+            let output = child.stdout.take().unwrap();
+            let mut process = Spec147McpChild {
+                input: child.stdin.take(),
+                output,
+                child,
+                mcp_pid: 0,
+                mcp_birth: 0,
+                deadline: Instant::now() + Duration::from_secs(10),
+            };
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mcp_pid = loop {
+                let observed = std::process::Command::new("/bin/ps")
+                    .args(["-axo", "pid=,ppid=,command="])
+                    .output()
+                    .unwrap();
+                let found = String::from_utf8_lossy(&observed.stdout)
+                    .lines()
+                    .find_map(|line| {
+                        let mut fields = line.split_whitespace();
+                        let pid = fields.next()?.parse::<u32>().ok()?;
+                        let parent = fields.next()?.parse::<u32>().ok()?;
+                        (parent == shell_pid
+                            && line.contains(cli_binary().to_string_lossy().as_ref())
+                            && line.ends_with(" mcp"))
+                        .then_some(pid)
+                    });
+                if let Some(pid) = found {
+                    break pid;
+                }
+                assert!(Instant::now() < deadline, "enfant MCP OS absent");
+                thread::sleep(Duration::from_millis(10));
+            };
+            unsafe {
+                let flags = libc::fcntl(process.output.as_raw_fd(), libc::F_GETFL);
+                assert!(flags >= 0);
+                assert_eq!(
+                    libc::fcntl(
+                        process.output.as_raw_fd(),
+                        libc::F_SETFL,
+                        flags | libc::O_NONBLOCK
+                    ),
+                    0
+                );
+            }
+            process.mcp_pid = mcp_pid;
+            process.mcp_birth = crate::managed_process::process_birth(mcp_pid).unwrap();
+            if mode != "absent" {
+                let birth = crate::managed_process::process_birth(shell_pid).unwrap();
+                crate::mcp_identity::write_marker(
+                    &directory.join("agent-pids"),
+                    shell_pid,
+                    if mode.starts_with("bad-") {
+                        birth + 1
+                    } else {
+                        birth
+                    },
+                    &instance_a,
+                    &name_a,
+                )
+                .unwrap();
+            }
+            let init =
+                process.request(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}));
+            assert!(init.get("result").is_some(), "{init}");
+            writeln!(
+                process.input.as_mut().unwrap(),
+                "{}",
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+            )
+            .unwrap();
+            let catalogue = process.request(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+            assert!(
+                catalogue["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "bridget_thread")
+            );
+            let mut observed = process.request(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bridget_thread","arguments":{"action":"list"}}}));
+            if mode == "members" {
+                let schema = &catalogue["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == "bridget_thread")
+                    .unwrap()["inputSchema"];
+                assert!(schema.to_string().contains("add_members"));
+                let key = uuid::Uuid::new_v4().to_string();
+                let request = json!({"action":"add_members","thread_id":TA,"members":[B.to_uppercase(),B],"operation_id":key.to_uppercase(),"cross_project_reason":"Recette native147 explicitement autorisée"});
+                observed = process.request(json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"bridget_thread","arguments":request}}));
+                let added = observed["result"]["structuredContent"].clone();
+                assert_eq!(added["status"], "members_added", "{observed}");
+                let replay = process.request(json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"bridget_thread","arguments":{"action":"add_members","thread_id":TA,"members":[B],"operation_id":key,"cross_project_reason":"Recette native147 explicitement autorisée"}}}));
+                assert_eq!(replay["result"]["structuredContent"], added);
+                let cli_deadline = process.deadline;
+                let cli = |args: &[&str]| {
+                    let mut child = std::process::Command::new(cli_binary())
+                        .args(args)
+                        .env_clear()
+                        .env("HOME", &directory)
+                        .env("BRIDGET_HOME", &directory)
+                        .env("BRIDGET_SOCKET", &socket)
+                        .env("PATH", "/usr/bin:/bin")
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .unwrap();
+                    let pid = child.id();
+                    let output = child.stdout.take().unwrap();
+                    let mut owned = Spec147McpChild {
+                        child,
+                        input: None,
+                        output,
+                        mcp_pid: pid,
+                        mcp_birth: crate::managed_process::process_birth(pid).unwrap(),
+                        deadline: cli_deadline,
+                    };
+                    unsafe {
+                        let flags = libc::fcntl(owned.output.as_raw_fd(), libc::F_GETFL);
+                        assert!(flags >= 0);
+                        assert_eq!(
+                            libc::fcntl(
+                                owned.output.as_raw_fd(),
+                                libc::F_SETFL,
+                                flags | libc::O_NONBLOCK
+                            ),
+                            0
+                        );
+                    }
+                    let result = owned.response();
+                    loop {
+                        if let Some(status) = owned.child.try_wait().unwrap() {
+                            assert!(status.success(), "CLI {args:?} : {status}, {result}");
+                            break;
+                        }
+                        assert!(
+                            Instant::now() < cli_deadline,
+                            "CLI privé n'a pas terminé dans son budget"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    drop(owned);
+                    assert!(
+                        crate::managed_process::process_birth(pid).is_err(),
+                        "CLI privé encore vivant"
+                    );
+                    result
+                };
+                let key_b = uuid::Uuid::new_v4().to_string();
+                let add_b = [
+                    "thread",
+                    "add-members",
+                    TB,
+                    "--member",
+                    &a,
+                    "--id",
+                    &key_b,
+                    "--cross-project-reason",
+                    "Recette native147 explicitement autorisée",
+                ];
+                let added_b = cli(&add_b);
+                assert_eq!(added_b["status"], "members_added", "{added_b}");
+                assert_eq!(cli(&add_b), added_b, "rejeu CLI exact");
+                assert_eq!(
+                    cli(&["thread", "show", TA])["creator_id"],
+                    a,
+                    "CLI identifié B lit désormais A"
+                );
+                let after_add = snapshot(&state);
+                for (table, rows) in &before {
+                    if !matches!(table.as_str(), "discussion_members" | "thread_operations") {
+                        assert_eq!(
+                            &after_add.iter().find(|(name, _)| name == table).unwrap().1,
+                            rows,
+                            "ajout ne touche pas les anciennes entrées, lectures, wakes ou timestamps : {table}"
+                        );
+                    }
+                }
+                let mut through = 0;
+                let mut pages = 0;
+                loop {
+                    let page = cli(&["thread", "read", TA, "--limit", "50"]);
+                    assert_eq!(page["base_seq"], through);
+                    assert_eq!(page["snapshot_seq"], 137);
+                    for entry in page["entries"].as_array().unwrap() {
+                        let seq = entry["seq"].as_u64().unwrap();
+                        if matches!(seq, 2 | 3) {
+                            assert_eq!(
+                                entry["body"],
+                                format!("CANARY147 historique {seq} É🦀\r\n  exact\n\n")
+                            );
+                        } else {
+                            assert!(
+                                entry.get("body").is_none(),
+                                "history/superseded restent références"
+                            );
+                        }
+                        if seq == 1 {
+                            assert_eq!(entry["superseded_by_seq"], 2);
+                        }
+                    }
+                    through = page["through_seq"].as_u64().unwrap();
+                    let ack = cli(&["thread", "ack", TA, page["receipt"].as_str().unwrap()]);
+                    assert_eq!(ack["status"], "acknowledged");
+                    pages += 1;
+                    if page["has_more"] == false {
+                        break;
+                    }
+                    assert!(pages < 4, "pagination bornée sur 137 entrées");
+                }
+                assert_eq!((pages, through), (3, 137));
+                for from in [1, 51, 101] {
+                    let history = cli(&[
+                        "thread",
+                        "history",
+                        TA,
+                        "--from-seq",
+                        &from.to_string(),
+                        "--to-seq",
+                        "137",
+                        "--limit",
+                        "50",
+                    ]);
+                    for entry in history["entries"].as_array().unwrap() {
+                        let seq = entry["seq"].as_u64().unwrap();
+                        assert_eq!(
+                            entry["body"],
+                            format!("CANARY147 historique {seq} É🦀\r\n  exact\n\n"),
+                            "historique exact pour nouveau membre"
+                        );
+                    }
+                }
+                let st = state.lock().unwrap();
+                let all = NotifySpec::All;
+                let future = st
+                    .store
+                    .thread_post(PostEntry {
+                        actor: &a,
+                        operation_id: &uuid::Uuid::new_v4().to_string(),
+                        canonical_hash: "members-future-all",
+                        thread_id: TA,
+                        message_id: &uuid::Uuid::new_v4().to_string(),
+                        body: "nouvelle action",
+                        notify: &all,
+                        notices: &[],
+                        project_warnings: &[],
+                        reply_to_seq: None,
+                        ack_receipt: None,
+                        kind: Some(bridget_transport::protocol::ThreadEntryKind::Action),
+                        supersedes_seq: None,
+                        now: 138,
+                        limits: &crate::threads::LIMITS,
+                    })
+                    .unwrap();
+                match future {
+                    ThreadTxOutcome::Done(result) => {
+                        assert_eq!(result["targets"], json!([C, B]))
+                    }
+                    other => panic!("futur notify all : {other:?}"),
+                }
+            }
+            if matches!(mode, "closest" | "bad-with-ancestor") {
+                let (id, actor) = if mode == "closest" {
+                    (TA, a.as_str())
+                } else {
+                    (TB, B)
+                };
+                let shown = process.request(json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"bridget_thread","arguments":{"action":"show","thread_id":id}}}));
+                assert_eq!(
+                    shown["result"]["structuredContent"]["status"], "shown",
+                    "{shown}"
+                );
+                assert_eq!(shown["result"]["structuredContent"]["creator_id"], actor);
+            }
+            eprintln!(
+                "SPEC147 native-MCP mode={mode} namespace={} shell={shell_pid} child={mcp_pid} code={} status={}",
+                directory.display(),
+                observed["result"]["code"],
+                observed["result"]["structuredContent"]["status"]
+            );
+            drop(process);
+            assert!(
+                crate::managed_process::process_birth(shell_pid).is_err(),
+                "shell privé encore vivant"
+            );
+            assert!(
+                crate::managed_process::process_birth(mcp_pid).is_err(),
+                "MCP privé encore vivant"
+            );
+            observed
+        }));
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+        if mode != "members" {
+            assert_eq!(
+                snapshot(&state),
+                before,
+                "MCP list/connect/aux/EOF ne modifie aucune table"
+            );
+        }
+        use std::io::Read;
+        for peer in [&mut peer_a, &mut peer_b] {
+            peer.set_nonblocking(true).unwrap();
+            let mut byte = [0];
+            assert!(
+                matches!(peer.read(&mut byte), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucun Deliver ni autre trame primaire attendu"
+            );
+        }
+        match observed {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    #[test]
+    fn spec147_members_native_cli_mcp_paginated_history_and_no_old_replay() {
+        let observed = spec147_native_mcp_case("members");
+        assert_eq!(
+            observed["result"]["structuredContent"]["status"],
+            "members_added"
+        );
+    }
+
+    #[test]
+    fn spec147_native_mcp_closest_valid_parent_is_the_exact_identity() {
+        let observed = spec147_native_mcp_case("closest");
+        assert_ne!(observed["result"]["isError"], true, "{observed}");
+        let payload = &observed["result"]["structuredContent"];
+        assert_eq!(payload["status"], "listed");
+        assert_eq!(payload["threads"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["threads"][0]["title"], "CANARY147_NATIVE_A");
+    }
+
+    #[test]
+    fn spec147_native_mcp_absent_bad_birth_and_forged_credential_refuse() {
+        for mode in ["absent", "bad-only", "forged"] {
+            let observed = spec147_native_mcp_case(mode);
+            assert_eq!(observed["result"]["isError"], true, "{mode}: {observed}");
+            assert_eq!(
+                observed["result"]["code"],
+                if mode == "forged" {
+                    "auxiliary_identity_unproven"
+                } else {
+                    "identity_not_found"
+                }
+            );
+            assert!(!observed.to_string().contains("CANARY147_NATIVE_"));
+        }
+    }
+
+    #[test]
+    fn spec147_native_mcp_recycled_marker_keeps_the_existing_valid_ancestor_rule() {
+        let observed = spec147_native_mcp_case("bad-with-ancestor");
+        assert_ne!(observed["result"]["isError"], true, "{observed}");
+        let payload = &observed["result"]["structuredContent"];
+        assert_eq!(payload["status"], "listed");
+        assert_eq!(payload["threads"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["threads"][0]["title"], "CANARY147_NATIVE_B");
+    }
+
+    #[test]
+    #[ignore = "interop T3 réelle explicite avec runner Node isolé"]
+    fn spec147_t3_service_real_cli_interop() {
+        let program = std::env::var("BRIDGET_SPEC147_T3_PROGRAM")
+            .expect("exécutable Node exact fourni par la laneRPC");
+        let script = std::env::var("BRIDGET_SPEC147_T3_SCRIPT")
+            .expect("runner Reader isolé exact fourni par la laneRPC");
+        let (state, root, mut peer) = fixture("h147rpc");
+        let created = operation(&state, create_action());
+        assert_eq!(created["status"], "created");
+        let thread_id = created["thread_id"].as_str().unwrap().to_string();
+        let directory =
+            std::env::temp_dir().join(format!("h147rpc-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let socket = directory.join("d.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        eprintln!(
+            "SPEC147 interop namespace={} socket={} CLI={} root={} T3={T3}",
+            directory.display(),
+            socket.display(),
+            cli_binary().display(),
+            root
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let serving = state.clone();
+        let server = thread::spawn(move || {
+            let mut handles = Vec::new();
+            while !stopping.load(std::sync::atomic::Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let st = serving.clone();
+                        handles.push(thread::spawn(move || {
+                            handle_connection(stream, st).map_err(|e| e.to_string())
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("listener privé147 : {error}"),
+                }
+            }
+            for handle in handles {
+                handle.join().unwrap().unwrap();
+            }
+        });
+        const BODY: &str = "CANARY147 interop exact é🦀\nPreuve synthétique.";
+        let recovery = std::env::var("BRIDGET_147_RECOVERY").as_deref() == Ok("1");
+        let marker = directory.join("ready.txt");
+        let mut child = std::process::Command::new(&program)
+            .arg(&script)
+            .env("BRIDGET_HOME", &directory)
+            .env("BRIDGET_SOCKET", &socket)
+            .env("BRIDGET_147_BINARY", cli_binary())
+            .env("BRIDGET_147_ROOT", &root)
+            .env("BRIDGET_147_T3_THREAD", T3)
+            .env("BRIDGET_147_EXPECT_BODY", BODY)
+            .env("BRIDGET_147_EXPECT_THREAD", &thread_id)
+            .env("BRIDGET_147_READY_MARKER", &marker)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut interrupted = false;
+        let subscribed = loop {
+            let ready_count = std::fs::read_to_string(&marker)
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| *line == "ready")
+                .count();
+            if recovery && ready_count == 1 && !interrupted {
+                let writer = {
+                    let st = state.lock().unwrap();
+                    let conn = st.human_thread_watches.keys().next().unwrap();
+                    st.connections[conn].clone()
+                };
+                let socket = writer.lock().unwrap().get_ref().try_clone().unwrap();
+                socket.shutdown(std::net::Shutdown::Both).unwrap();
+                interrupted = true;
+            }
+            if !state.lock().unwrap().human_thread_watches.is_empty()
+                && (!recovery || ready_count >= 2)
+            {
+                break true;
+            }
+            if child.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        if subscribed {
+            let posted = operation(
+                &state,
+                json!({"action":"post","thread_id":thread_id,"body":BODY,"notify":[],"kind":"history","operation_id":uuid::Uuid::new_v4().to_string()}),
+            );
+            assert_eq!(posted["status"], "posted");
+        }
+        let after_mutation = snapshot(&state);
+        let output = child.wait_with_output().unwrap(); // Runner Effect borné, scope libère ses CLI.
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        server.join().unwrap();
+        eprintln!(
+            "SPEC147 Reader réel stdout : {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        eprintln!(
+            "SPEC147 Reader réel stderr : {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(subscribed, "Node doit négocier le vrai watch humain147");
+        assert!(
+            output.status.success(),
+            "interop Node échouée : {}",
+            output.status
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(if recovery {
+                "SPEC147_INTEROP_RUNTIME_RECOVERY_OK"
+            } else {
+                "SPEC147_INTEROP_READER_OK"
+            })
+        );
+        if recovery {
+            assert!(interrupted);
+            assert_eq!(
+                std::fs::read_to_string(&marker)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                ["ready", "masked", "ready", "changed"]
+            );
+        }
+        assert_eq!(
+            snapshot(&state),
+            after_mutation,
+            "Reader/watch/inspect ne changent aucune table"
+        );
+        assert!(state.lock().unwrap().human_thread_watches.is_empty());
+        peer.set_nonblocking(true).unwrap();
+        assert_eq!(
+            std::io::Read::read(&mut peer, &mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn cli_event(reader: &mut BufReader<std::process::ChildStdout>) -> Value {
+        let mut fd = libc::pollfd {
+            fd: reader.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert!(
+            unsafe { libc::poll(&mut fd, 1, 6000) } > 0,
+            "CLI prêt sous6s"
+        );
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).unwrap() > 0);
+        let event: bridget_transport::protocol::HumanThreadWatchEvent =
+            serde_json::from_str(&line).unwrap();
+        serde_json::to_value(event).unwrap()
+    }
+
+    #[test]
+    fn spec147_cli_real_watch_mutations_replay_idle_and_cancel_ten_cycles() {
+        let (state, root, mut peer) = fixture("h147cli");
+        let directory =
+            std::env::temp_dir().join(format!("h147cli-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let socket = directory.join("d.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut generations = HashSet::new();
+        for cycle in 0..10 {
+            let before = snapshot(&state);
+            let server = state.clone();
+            let incoming = listener.try_clone().unwrap();
+            let handle = thread::spawn(move || {
+                handle_connection(incoming.accept().unwrap().0, server).map_err(|e| e.to_string())
+            });
+            let mut child = std::process::Command::new(cli_binary())
+                .env("BRIDGET_HOME", &directory)
+                .env("BRIDGET_SOCKET", &socket)
+                .args([
+                    "thread",
+                    "watch",
+                    "--t3-thread",
+                    T3,
+                    "--project-root",
+                    &root,
+                    "--json",
+                ])
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("construire bridget147 avant ce test");
+            let mut reader = BufReader::new(child.stdout.take().unwrap());
+            let ready = cli_event(&mut reader);
+            assert_eq!(ready["status"], "ready");
+            assert_eq!(ready["seq"], 0);
+            assert!(generations.insert(ready["generation"].as_str().unwrap().to_owned()));
+            assert_eq!(
+                snapshot(&state),
+                before,
+                "watch/hello ne modifient aucune table métier"
+            );
+            if cycle == 0 {
+                // Au-delà du budget unary historique, aucun contenu n'est relu.
+                thread::sleep(Duration::from_millis(10_100));
+                assert_eq!(state.lock().unwrap().human_thread_watches.len(), 1);
+                let create = create_action();
+                let created = operation(&state, create.clone());
+                assert_eq!(created["status"], "created");
+                let changed = cli_event(&mut reader);
+                assert_eq!(changed["status"], "changed");
+                assert_eq!(changed["seq"], 1);
+                assert_eq!(changed.as_object().unwrap().len(), 4);
+                assert_eq!(operation(&state, create), created);
+                let thread_id = created["thread_id"].as_str().unwrap();
+                let post = json!({"action":"post","thread_id":thread_id,"body":"CANARY147 exact é🦀","notify":[],"operation_id":uuid::Uuid::new_v4().to_string()});
+                let posted = operation(&state, post.clone());
+                assert_eq!(posted["status"], "posted");
+                assert_eq!(cli_event(&mut reader)["seq"], 2);
+                assert_eq!(operation(&state, post), posted);
+                let close = json!({"action":"close","thread_id":thread_id,"operation_id":uuid::Uuid::new_v4().to_string()});
+                assert_eq!(operation(&state, close)["status"], "closed");
+                assert_eq!(cli_event(&mut reader)["seq"], 3, "replay muet sur vrai CLI");
+            }
+            drop(reader); // Fermer le pipe doit terminer même sans prochain signal.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let writers: Vec<_> = {
+                        let st = state.lock().unwrap();
+                        st.human_thread_watches
+                            .keys()
+                            .filter_map(|conn| st.connections.get(conn).cloned())
+                            .collect()
+                    };
+                    for writer in writers {
+                        let _ = writer
+                            .lock()
+                            .unwrap()
+                            .get_ref()
+                            .shutdown(std::net::Shutdown::Both);
+                    }
+                    let status = child.wait().unwrap();
+                    panic!("pipe fermé n'a pas libéré le CLI : {status}");
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(status.code(), Some(0));
+            handle.join().unwrap().unwrap();
+            assert!(state.lock().unwrap().human_thread_watches.is_empty());
+            if cycle > 0 {
+                assert_eq!(snapshot(&state), before);
+            }
+        }
+        peer.set_nonblocking(true).unwrap();
+        assert_eq!(
+            std::io::Read::read(&mut peer, &mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(listener);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn spec147_authority_is_rechecked_after_waiting_for_the_writer() {
+        let (state, root, _peer) = fixture("h147emit");
+        let (mut reader, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut reader)["status"], "ready");
+        let writer = {
+            let st = state.lock().unwrap();
+            let conn = st.human_thread_watches.keys().next().unwrap();
+            st.connections[conn].clone()
+        };
+        let held = writer.lock().unwrap();
+        assert_eq!(operation(&state, create_action())["status"], "created");
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            if state
+                .lock()
+                .unwrap()
+                .human_thread_watches
+                .values()
+                .all(|watch| watch.queue.pending.is_empty())
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "le worker doit avoir sorti changed de la file"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        handle_wrapper_message("t3", WrapperToDaemon::Unregister, &state);
+        drop(held);
+        assert_eq!(
+            watch_event(&mut reader)["status"],
+            "error",
+            "aucun changed après révocation pendant attente writer"
+        );
+        assert_eq!(reader.read_line(&mut String::new()).unwrap(), 0);
+        drop(reader);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn spec147_emit_does_not_hold_writer_while_waiting_for_state() {
+        let (state, root, _peer) = fixture("h147locks");
+        let (mut reader, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut reader)["status"], "ready");
+        let writer = {
+            let st = state.lock().unwrap();
+            let conn = st.human_thread_watches.keys().next().unwrap();
+            st.connections[conn].clone()
+        };
+        let held_writer = writer.lock().unwrap();
+        operation(&state, create_action());
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while state
+            .lock()
+            .unwrap()
+            .human_thread_watches
+            .values()
+            .any(|watch| !watch.queue.pending.is_empty())
+        {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        let held_state = state.lock().unwrap();
+        drop(held_writer);
+        thread::sleep(Duration::from_millis(30));
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let writer_released = loop {
+            if writer.try_lock().is_ok() {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        };
+        drop(held_state);
+        assert_eq!(watch_event(&mut reader)["status"], "changed");
+        drop(reader);
+        handle.join().unwrap().unwrap();
+        assert!(
+            writer_released,
+            "un contrôle d'autorité ne bloque jamais state avec writer détenu"
+        );
+    }
+
+    #[test]
+    fn spec147_slow_writer_does_not_hold_mutation_lock() {
+        let (state, root, _peer) = fixture("h147slow");
+        let (mut reader, handle) = watch_socket(&state, &root);
+        assert_eq!(watch_event(&mut reader)["status"], "ready");
+        let writer = {
+            let st = state.lock().unwrap();
+            let conn = st.human_thread_watches.keys().next().unwrap();
+            st.connections[conn].clone()
+        };
+        let held = writer.lock().unwrap();
+        let started = Instant::now();
+        let created = operation(&state, create_action());
+        assert_eq!(created["status"], "created");
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(
+            reader.read_line(&mut String::new()).unwrap(),
+            0,
+            "sortie bornée fermée même si writer verrouillé"
+        );
+        drop(held);
+        drop(reader);
+        handle.join().unwrap().unwrap();
+        assert!(state.lock().unwrap().human_thread_watches.is_empty());
+    }
+
+    #[test]
     fn spec145_dormant_binding_project_and_disconnect_are_live_facts() {
         let (state, root, _peer) = fixture("h145b");
         let before = snapshot(&state);
@@ -11786,41 +13597,101 @@ mod spec145_human_view_tests {
     }
 }
 
-/// O(C + log T + P), C connexions ; pas d'annuaire ni de maintenance.
+/// Garde commune de lecture/suivi : O(1), aucune maintenance ni écriture.
+fn human_client_guard(
+    st: &DaemonState,
+    conn_id: &str,
+    version: u16,
+    t3_thread_id: &str,
+    capability: ClientCapability,
+) -> Result<(), bridget_transport::protocol::HumanThreadViewError> {
+    use bridget_transport::protocol::HumanThreadViewError as E;
+    if version != bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION {
+        return Err(E::UnsupportedVersion);
+    }
+    if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
+        || st.conn_names.contains_key(conn_id)
+        || st.auxiliary_connections.contains(conn_id)
+    {
+        return Err(E::BindingUnavailable);
+    }
+    if !st.client_negotiations.get(conn_id).is_some_and(|n| {
+        n.version == CLIENT_CONTRACT_VERSION && n.capabilities.as_slice() == [capability]
+    }) {
+        return Err(E::UnsupportedVersion);
+    }
+    if crate::threads::canonical_uuid(t3_thread_id).is_none() {
+        return Err(E::InvalidRequest);
+    }
+    Ok(())
+}
+
+/// O(C), C connexions ; identité et projet viennent de la liaison primaire.
+fn human_authority_guard(
+    st: &DaemonState,
+    t3_thread_id: &str,
+    project: &Option<bridget_transport::protocol::CommunicationProject>,
+) -> Result<(String, String), bridget_transport::protocol::HumanThreadViewError> {
+    use bridget_transport::protocol::HumanThreadViewError as E;
+    let mut candidates = st
+        .t3_thread_bindings
+        .iter()
+        .filter(|(_, thread)| thread.as_deref() == Some(t3_thread_id));
+    let Some((owner, _)) = candidates.next() else {
+        return Err(E::BindingUnavailable);
+    };
+    if candidates.next().is_some() {
+        return Err(E::BindingUnavailable);
+    }
+    let agent = crate::t3code::stable_uuid(t3_thread_id);
+    let instance = crate::t3code::stable_uuid(&format!("instance:{t3_thread_id}"));
+    if st.auxiliary_connections.contains(owner)
+        || st
+            .router
+            .get_agent(&agent)
+            .is_none_or(|route| route.connection_id != *owner)
+        || live_connection_identity(st, owner) != Some((agent.clone(), instance.clone()))
+        || !st
+            .presences
+            .get(&instance)
+            .is_some_and(|p| p.transport == "t3code" && p.host == st.host)
+    {
+        return Err(E::BindingUnavailable);
+    }
+    if !st.t3_project_connections.contains(owner)
+        || !st
+            .communication_projects
+            .get(owner)
+            .is_some_and(|fact| !fact.2 && fact.0.is_some() && fact.0 == *project)
+    {
+        return Err(E::ProjectMismatch);
+    }
+    Ok((owner.clone(), agent))
+}
+
+/// O(C + log T + P), C connexions ; même autorité que le suivi147.
 fn handle_human_thread_view(
     conn_id: &str,
     request: &bridget_transport::protocol::HumanThreadViewV1,
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
-    use bridget_transport::protocol::{
-        HUMAN_THREAD_VIEW_VERSION, HumanThreadViewError as E, HumanThreadViewResult as R,
-    };
+    use bridget_transport::protocol::HumanThreadViewResult as R;
     let refusal = |code| DaemonToWrapper::HumanThreadViewResult {
         result: R::error(code),
     };
     let host = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        if request.version != HUMAN_THREAD_VIEW_VERSION {
-            return refusal(E::UnsupportedVersion);
-        }
-        if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
-            || st.conn_names.contains_key(conn_id)
-            || st.auxiliary_connections.contains(conn_id)
-        {
-            return refusal(E::BindingUnavailable);
-        }
-        if !st.client_negotiations.get(conn_id).is_some_and(|n| {
-            n.version == CLIENT_CONTRACT_VERSION
-                && n.capabilities.as_slice() == [request.request.required_capability()]
-        }) {
-            return refusal(E::UnsupportedVersion);
-        }
-        if crate::threads::canonical_uuid(&request.t3_thread_id).is_none() {
-            return refusal(E::InvalidRequest);
+        if let Err(code) = human_client_guard(
+            &st,
+            conn_id,
+            request.version,
+            &request.t3_thread_id,
+            request.request.required_capability(),
+        ) {
+            return refusal(code);
         }
         st.host.clone()
     };
-    // Git hors verrou ; puis toute autorité est relue sous le verrou unique.
     let project = crate::communication::resolve_communication_project(
         &request.project_root,
         &host,
@@ -11828,42 +13699,274 @@ fn handle_human_thread_view(
         None,
     );
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
-    let mut candidates = st
-        .t3_thread_bindings
-        .iter()
-        .filter(|(_, thread)| thread.as_deref() == Some(&request.t3_thread_id));
-    let Some((owner, _)) = candidates.next() else {
-        return refusal(E::BindingUnavailable);
+    if let Err(code) = human_client_guard(
+        &st,
+        conn_id,
+        request.version,
+        &request.t3_thread_id,
+        request.request.required_capability(),
+    ) {
+        return refusal(code);
+    }
+    let (_, agent) = match human_authority_guard(&st, &request.t3_thread_id, &project) {
+        Ok(authority) => authority,
+        Err(code) => return refusal(code),
     };
-    if candidates.next().is_some() {
-        return refusal(E::BindingUnavailable);
-    }
-    let agent = crate::t3code::stable_uuid(&request.t3_thread_id);
-    let instance = crate::t3code::stable_uuid(&format!("instance:{}", request.t3_thread_id));
-    if st.auxiliary_connections.contains(owner)
-        || st
-            .router
-            .get_agent(&agent)
-            .is_none_or(|route| route.connection_id != *owner)
-        || live_connection_identity(&st, owner) != Some((agent.clone(), instance.clone()))
-        || !st
-            .presences
-            .get(&instance)
-            .is_some_and(|p| p.transport == "t3code" && p.host == host)
-    {
-        return refusal(E::BindingUnavailable);
-    }
-    if !st.t3_project_connections.contains(owner)
-        || !st
-            .communication_projects
-            .get(owner)
-            .is_some_and(|fact| !fact.2 && fact.0.is_some() && fact.0 == project)
-    {
-        return refusal(E::ProjectMismatch);
-    }
     DaemonToWrapper::HumanThreadViewResult {
         result: crate::threads::human_view(&st.store, &agent, &request.request),
     }
+}
+
+fn human_watch_guard(
+    st: &DaemonState,
+    conn: &str,
+) -> Result<(), bridget_transport::protocol::HumanThreadViewError> {
+    use bridget_transport::protocol::HumanThreadViewError as E;
+    let watch = st
+        .human_thread_watches
+        .get(conn)
+        .ok_or(E::BindingUnavailable)?;
+    human_client_guard(
+        st,
+        conn,
+        watch.request.version,
+        &watch.request.t3_thread_id,
+        ClientCapability::HumanThreadWatchV1,
+    )?;
+    let (owner, agent) = human_authority_guard(st, &watch.request.t3_thread_id, &watch.project)?;
+    if owner != watch.owner || agent != watch.agent {
+        return Err(E::BindingUnavailable);
+    }
+    Ok(())
+}
+
+/// O(log T+M+S*C), M<=16, S<=128 ; une requête de membres par mutation.
+/// Aucun corps ni E/S socket et aucune requête SQL par suivi humain.
+fn publish_human_thread_change(st: &mut DaemonState, thread_id: &str) {
+    let connections: Vec<_> = st.human_thread_watches.keys().cloned().collect();
+    if connections.is_empty() {
+        return;
+    }
+    let members = st.store.human_thread_members(thread_id);
+    for conn in connections {
+        let allowed = human_watch_guard(st, &conn).and_then(|()| {
+            members
+                .as_ref()
+                .map(|members| members.contains(&st.human_thread_watches[&conn].agent))
+                .map_err(|_| bridget_transport::protocol::HumanThreadViewError::StorageUnavailable)
+        });
+        let watch = st.human_thread_watches.get_mut(&conn).unwrap();
+        match allowed {
+            Ok(true) => watch.queue.changed(),
+            Ok(false) => continue,
+            Err(code) => watch.queue.terminate(code),
+        }
+        let _ = watch.notify.try_send(());
+    }
+}
+
+/// Deux requêtes de métadonnées indexées au plus, sans pagination.
+/// O(M+S*C), M appartenances pertinentes, S<=128. Aucun parcours de messages.
+fn publish_human_name_change(st: &mut DaemonState, renamed: &HashSet<String>) {
+    if st.human_thread_watches.is_empty() {
+        return;
+    }
+    // Deux identités au plus : demandeur et éventuel détenteur éteint déplacé.
+    let viewers = renamed
+        .iter()
+        .try_fold(HashSet::new(), |mut viewers, agent| {
+            viewers.extend(st.store.human_thread_viewers_for_member(agent)?);
+            Ok::<_, crate::store::StoreError>(viewers)
+        });
+    let connections: Vec<_> = st.human_thread_watches.keys().cloned().collect();
+    for conn in connections {
+        let allowed = human_watch_guard(st, &conn).and_then(|()| {
+            viewers
+                .as_ref()
+                .map(|viewers| viewers.contains(&st.human_thread_watches[&conn].agent))
+                .map_err(|_| bridget_transport::protocol::HumanThreadViewError::StorageUnavailable)
+        });
+        let watch = st.human_thread_watches.get_mut(&conn).unwrap();
+        match allowed {
+            Ok(true) => watch.queue.changed(),
+            Ok(false) => continue,
+            Err(code) => watch.queue.terminate(code),
+        }
+        let _ = watch.notify.try_send(());
+    }
+}
+
+/// La file est sous verrou mutation ; son writer indépendant reste hors verrou.
+/// O(S*C), S<=128 ; exécuté à changement d'autorité, jamais sur minuterie.
+fn invalidate_human_authority(st: &mut DaemonState) {
+    let connections: Vec<_> = st.human_thread_watches.keys().cloned().collect();
+    for conn in connections {
+        if let Err(code) = human_watch_guard(st, &conn) {
+            let watch = st.human_thread_watches.get_mut(&conn).unwrap();
+            watch.queue.terminate(code);
+            let _ = watch.notify.try_send(());
+        }
+    }
+}
+
+fn human_watch_output(
+    state: std::sync::Weak<Mutex<DaemonState>>,
+    conn: String,
+    receiver: Receiver<()>,
+    writer: Arc<Mutex<BufWriter<UnixStream>>>,
+    shutdown: UnixStream,
+) {
+    use bridget_transport::protocol::HumanThreadWatchEvent as E;
+    loop {
+        let Some(state) = state.upgrade() else {
+            break;
+        };
+        let event = {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if !st.human_thread_watches.contains_key(&conn) {
+                break;
+            }
+            #[cfg(test)]
+            {
+                st.human_thread_watches
+                    .get_mut(&conn)
+                    .unwrap()
+                    .queue
+                    .guard_checks += 1;
+            }
+            if let Err(code) = human_watch_guard(&st, &conn) {
+                st.human_thread_watches
+                    .get_mut(&conn)
+                    .unwrap()
+                    .queue
+                    .terminate(code);
+            }
+            st.human_thread_watches
+                .get_mut(&conn)
+                .unwrap()
+                .queue
+                .pending
+                .pop_front()
+        };
+        if let Some(event) = event {
+            let mut terminal = matches!(event, E::Error { .. });
+            let result = push_control_message_until_checked(
+                &writer,
+                &DaemonToWrapper::HumanThreadWatchEvent { event },
+                Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+                || {
+                    let st = match state.try_lock() {
+                        Ok(st) => st,
+                        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                        Err(std::sync::TryLockError::WouldBlock) => {
+                            return Err(std::io::ErrorKind::WouldBlock.into());
+                        }
+                    };
+                    Ok(human_watch_guard(&st, &conn).err().map(|code| {
+                        terminal = true;
+                        DaemonToWrapper::HumanThreadWatchEvent {
+                            event: E::error(code),
+                        }
+                    }))
+                },
+            );
+            if terminal || result.is_err() {
+                state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .human_thread_watches
+                    .remove(&conn);
+                break;
+            }
+        } else {
+            drop(state);
+            // Une mutation autorisée, révocation ou EOF libère cette attente.
+            // Aucun scan du contexte ou du contenu tant que rien ne change.
+            if receiver.recv().is_err() {
+                break;
+            }
+        }
+    }
+    let _ = shutdown.shutdown(std::net::Shutdown::Both);
+}
+
+fn handle_human_thread_watch(
+    conn_id: &str,
+    request: &bridget_transport::protocol::HumanThreadWatchV1,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    use bridget_transport::protocol::{HumanThreadViewError as E, HumanThreadWatchEvent};
+    let refusal = |code| {
+        Some(DaemonToWrapper::HumanThreadWatchEvent {
+            event: HumanThreadWatchEvent::error(code),
+        })
+    };
+    let host = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(code) = human_client_guard(
+            &st,
+            conn_id,
+            request.version,
+            &request.t3_thread_id,
+            ClientCapability::HumanThreadWatchV1,
+        ) {
+            return refusal(code);
+        }
+        st.host.clone()
+    };
+    let project = crate::communication::resolve_communication_project(
+        &request.project_root,
+        &host,
+        bridget_transport::protocol::CommunicationProjectSource::T3,
+        None,
+    );
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    if let Err(code) = human_client_guard(
+        &st,
+        conn_id,
+        request.version,
+        &request.t3_thread_id,
+        ClientCapability::HumanThreadWatchV1,
+    ) {
+        return refusal(code);
+    }
+    let (owner, agent) = match human_authority_guard(&st, &request.t3_thread_id, &project) {
+        Ok(authority) => authority,
+        Err(code) => return refusal(code),
+    };
+    if st.human_thread_watches.len() >= HUMAN_WATCH_MAX
+        || st.human_thread_watches.contains_key(conn_id)
+    {
+        return refusal(E::ResponseTooLarge);
+    }
+    let Some(writer) = st.connections.get(conn_id).cloned() else {
+        return refusal(E::BindingUnavailable);
+    };
+    let shutdown = match writer
+        .try_lock()
+        .ok()
+        .and_then(|writer| writer.get_ref().try_clone().ok())
+    {
+        Some(socket) => socket,
+        None => return refusal(E::BindingUnavailable),
+    };
+    let (notify, receiver) = mpsc::sync_channel(1);
+    st.human_thread_watches.insert(
+        conn_id.into(),
+        HumanThreadWatch {
+            request: request.clone(),
+            project,
+            owner,
+            agent,
+            queue: HumanWatchQueue::new(),
+            notify,
+        },
+    );
+    // Inscription et ready0 précèdent toute mutation qui prend le même verrou.
+    let weak = Arc::downgrade(state);
+    let conn = conn_id.to_string();
+    thread::spawn(move || human_watch_output(weak, conn, receiver, writer, shutdown));
+    None
 }
 
 fn handle_wrapper_message(
@@ -11871,7 +13974,20 @@ fn handle_wrapper_message(
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
+    {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(watch) = st.human_thread_watches.get_mut(conn_id) {
+            watch
+                .queue
+                .terminate(bridget_transport::protocol::HumanThreadViewError::InvalidRequest);
+            let _ = watch.notify.try_send(());
+            return None;
+        }
+    }
     // Cette consultation n'exécute aucune maintenance d'attach, même refusée.
+    if let WrapperToDaemon::HumanThreadWatchV1 { request } = &msg {
+        return handle_human_thread_watch(conn_id, request, state);
+    }
     if let WrapperToDaemon::HumanThreadViewV1 { request } = &msg {
         return Some(handle_human_thread_view(conn_id, request, state));
     }
@@ -11882,13 +13998,15 @@ fn handle_wrapper_message(
         }
     ) || matches!(&msg,WrapperToDaemon::ClientHello{capabilities,..}
             if capabilities.as_slice()==[ClientCapability::HumanThreadViewV1]
-                || capabilities.as_slice()==[ClientCapability::HumanThreadViewRecentV1]);
+                || capabilities.as_slice()==[ClientCapability::HumanThreadViewRecentV1]
+                || capabilities.as_slice()==[ClientCapability::HumanThreadWatchV1]);
     let human_client = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
             && st.client_negotiations.get(conn_id).is_some_and(|n| {
                 n.capabilities.as_slice() == [ClientCapability::HumanThreadViewV1]
                     || n.capabilities.as_slice() == [ClientCapability::HumanThreadViewRecentV1]
+                    || n.capabilities.as_slice() == [ClientCapability::HumanThreadWatchV1]
             })
     };
     if !human_client_handshake && !human_client {
@@ -12135,6 +14253,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
                 | WrapperToDaemon::HumanThreadViewV1 { .. }
+                | WrapperToDaemon::HumanThreadWatchV1 { .. }
                 | WrapperToDaemon::T3ThreadBindingFact { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
                 | WrapperToDaemon::LedgerSearch { .. }
@@ -12358,6 +14477,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
                 | WrapperToDaemon::HumanThreadViewV1 { .. }
+                | WrapperToDaemon::HumanThreadWatchV1 { .. }
                 | WrapperToDaemon::T3ThreadBindingFact { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
                 | WrapperToDaemon::LedgerSearch { .. }
@@ -12561,6 +14681,9 @@ fn handle_wrapper_message(
         WrapperToDaemon::HumanThreadViewV1 { request } => {
             Some(handle_human_thread_view(conn_id, &request, state))
         }
+        WrapperToDaemon::HumanThreadWatchV1 { request } => {
+            handle_human_thread_watch(conn_id, &request, state)
+        }
         WrapperToDaemon::T3ThreadBindingFact {
             version,
             t3_thread_id,
@@ -12585,7 +14708,7 @@ fn handle_wrapper_message(
                 .t3_thread_bindings
                 .get(conn_id)
                 .is_some_and(|prior| prior.as_deref() != Some(&t3_thread_id));
-            if valid && !contradictory {
+            let response = if valid && !contradictory {
                 st.t3_thread_bindings
                     .insert(conn_id.into(), Some(t3_thread_id));
                 None
@@ -12599,7 +14722,9 @@ fn handle_wrapper_message(
                     id: "t3-thread-binding".into(),
                     reason: "binding_unavailable".into(),
                 })
-            }
+            };
+            invalidate_human_authority(&mut st);
+            response
         }
         WrapperToDaemon::ThreadNoticeCapability { versions } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -12621,6 +14746,34 @@ fn handle_wrapper_message(
             None
         }
         WrapperToDaemon::ThreadRequest { request } => {
+            if matches!(
+                request.request,
+                bridget_transport::protocol::ThreadAction::AddMembers { .. }
+            ) {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if !st
+                    .client_negotiations
+                    .get(conn_id)
+                    .is_some_and(|negotiated| {
+                        negotiated
+                            .capabilities
+                            .contains(&ClientCapability::ThreadMembersV1)
+                    })
+                {
+                    return Some(DaemonToWrapper::ThreadResult {
+                        result: bridget_transport::protocol::ThreadResult {
+                            version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
+                            result: crate::threads::error(
+                                "thread_members_unsupported",
+                                "Capacité d'ajout de membres non négociée.",
+                                false,
+                            ),
+                        },
+                    });
+                }
+            }
+            // L'ajout de lecteurs invalide seulement la vue humaine après
+            // commit ; il ne dispatch même pas une ancienne intention pending.
             let mutates = matches!(
                 request.request,
                 bridget_transport::protocol::ThreadAction::Post { .. }
@@ -12642,10 +14795,13 @@ fn handle_wrapper_message(
                     });
                 };
                 let now = unix_now_secs();
-                let result = {
+                let (result, changed) = {
                     let directory = DaemonDirectory { state: &st };
-                    crate::threads::handle(&st.store, &directory, &owner, request, now)
+                    crate::threads::handle_with_change(&st.store, &directory, &owner, request, now)
                 };
+                if let Some(thread_id) = changed {
+                    publish_human_thread_change(&mut st, &thread_id);
+                }
                 let mut controls = Vec::new();
                 // Un dépôt, une confirmation ou une clôture réévaluent les
                 // sollicitations tout de suite ; la poussée part hors verrou.
@@ -13854,13 +16010,19 @@ fn handle_wrapper_message(
                     if st.auxiliary_connections.contains(conn_id)
                         && st.connection_roles.get(conn_id) == Some(&ConnectionRole::Wrapper)
                     {
-                        return *capability == ClientCapability::CommunicationProjectsV1;
+                        return matches!(
+                            capability,
+                            ClientCapability::CommunicationProjectsV1
+                                | ClientCapability::ThreadMembersV1
+                        );
                     }
                     matches!(
                         capability,
                         ClientCapability::SendIdempotent
+                            | ClientCapability::ThreadMembersV1
                             | ClientCapability::HumanThreadViewV1
                             | ClientCapability::HumanThreadViewRecentV1
+                            | ClientCapability::HumanThreadWatchV1
                             | ClientCapability::CommunicationProjectsV1
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1
@@ -15540,7 +17702,8 @@ fn handle_wrapper_message(
             use bridget_transport::protocol::{
                 DisplayNameOutcome as Outcome, DisplayNameRefusal as Refusal,
             };
-            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut renamed = HashSet::new();
             let result = (|| {
                 if request.version != 1
                     || request.display_name.is_empty()
@@ -15554,7 +17717,19 @@ fn handle_wrapper_message(
                     live_connection_identity(&st, conn_id).ok_or(Refusal::IdentityUnavailable)?;
                 let mut profiles = AgentProfileStore::open(&st.db_path)
                     .map_err(|_| Refusal::StorageUnavailable)?;
-                profiles
+                let previous = profiles
+                    .profile_for_agent_id(&agent)
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .ok_or(Refusal::IdentityUnavailable)?;
+                let displaced = profiles
+                    .agent_id_for_display_name(&request.display_name)
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .filter(|holder| holder != &agent)
+                    .map(|holder| profiles.profile_for_agent_id(&holder))
+                    .transpose()
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .flatten();
+                let profile = profiles
                     // Session 110 : un nom détenu par une identité absente de
                     // l'annuaire vivant est transféré ; un détenteur vivant
                     // conserve le sien.
@@ -15569,13 +17744,27 @@ fn handle_wrapper_message(
                         AgentProfileError::DisplayNameConflict => Refusal::NameConflict,
                         AgentProfileError::RevisionConflict => Refusal::RevisionConflict,
                         AgentProfileError::Sqlite(_) => Refusal::StorageUnavailable,
-                    })
-                    .map(|profile| Outcome::Applied {
-                        agent_id: profile.agent_id,
-                        display_name: profile.display_name,
-                        revision: profile.revision,
-                    })
+                    })?;
+                if previous.display_name != profile.display_name {
+                    renamed.insert(agent.clone());
+                }
+                if let Some(before) = displaced
+                    && profiles
+                        .profile_for_agent_id(&before.agent_id)
+                        .map_err(|_| Refusal::StorageUnavailable)?
+                        .is_some_and(|after| after.display_name != before.display_name)
+                {
+                    renamed.insert(before.agent_id);
+                }
+                Ok(Outcome::Applied {
+                    agent_id: profile.agent_id,
+                    display_name: profile.display_name,
+                    revision: profile.revision,
+                })
             })();
+            if !renamed.is_empty() {
+                publish_human_name_change(&mut st, &renamed);
+            }
             Some(DaemonToWrapper::DisplayNameResult {
                 outcome: result.unwrap_or_else(|reason| Outcome::Rejected { reason }),
             })

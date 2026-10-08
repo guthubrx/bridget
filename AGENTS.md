@@ -1,41 +1,41 @@
 <!-- SPECKIT START -->
-Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/plan.md.
-Session143 autorisée le 2026-10-07 par my-specify-all.
-Périmètre : entrées Bridget sans fond/bordure et moins de padding ; sorties MCP
-Bridget compactes seulement pour les formats réellement confirmés.
-Préserver texte exact au dépliage, copie, actions, pièces jointes et groupes141.
-Destinataire nommé seulement sur preuve ; sinon ID bref attesté ou libellé neutre.
-Ne jamais interpréter completed comme livré ou reçu. Formats inconnus : natif.
-Réutiliser logo, toggle, Markdown et PlainWorkEntryRow existants.
-Aucun panneau Sources ajouté, nouveau framework, dépendance, backend ou migration.
-Messages et outils ordinaires inchangés. Essais frontend isolés.
-Phase initiale : aucun restart, commit ou déploiement avant autorisation distincte.
-Livraison143 maintenant autorisée : commit, fusion, push, installation et restartT3.
-Conserver sessions141/142 et autres travaux ; aucun daemon, boucle ou mission modifié.
-Gate réutilisation PASS et tâches fondées sur les formes réelles attestées.
-Socle143 implémenté : T001–T008 et preuves346/recette/audit conservées.
-Complément US4 autorisé dans la même session143 ; implémenté, livraison en cours.
-Réponses textuelles interagents : préfixe strict, assistant terminé seulement,
-ligne à gauche logo/destinataire/Entre agents sans cadre et repliée par défaut.
-Note utilisateur explicite séparée reste visible ; ambiguïté/streaming natifs.
-Nom attesté par en-tête direct antérieur du même fil ; sinon UUID, sans I/O.
-Copie originale, citations, métadonnées, fichiers modifiés et actions préservés.
-Réponses mixtes : corps agent monté CSS display:none sans hidden/aria-hidden,
-pour flux canonique de citation stable ; coût Markdown complet antérieur assumé.
-Références Markdown/footnotes/HTML hors code sensibles : message entier natif.
-Réédition texte A→B→A repliée ; état lié séparément au fil/message.
-Gel392 tests PASS, contrôles et recette native isolée PASS, revue finale APPROVE.
-T001–T013 cochées sur preuves ; convergence principale CONVERGED11:39:54.
-Comparaison12/13 byte-identique ; T013 cochée ensuite en phase documentaire.
-Les preuves du socle restent historiques, jamais réutilisées comme preuve US4.
-CommitT3 a1a4f2ef12 et fusion FF local/v0.0.45 effectués ; deux branches poussées fork.
-Patch portable b8ffa6f280 capitalisé dans branche déjà sélectionnée par buildfutur.
-Paquet complet construit ; candidat0.0.45-local.143 signé/validé, pas installé.
-Sauvegarde app effectuée ; snapshot SQLite0600 quick_check ok, marqueur validé.
-Installation/activation pas encore prouvées ; ne pas les annoncer avant preuve.
-Restart supervisé et reçu durable préparés par le principal, pas par cet agentdocs.
-Aucun cleanup d'autres travaux sans autorisation.
-Sélection SpecKit : SPECIFY_FEATURE=143-echanges-discrets ; branche session-143-echanges-discrets.
+Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/specs/147-panneau-bridget-vivant/plan.md.
+Session147 approuvée le 2026-10-08 : abonnement humain du panneau Bridget et
+sélection retenue par environnement/projet/conversation T3.
+Socle146 fusionné ; sessions142/145 non committées et autres travaux intacts.
+Contrat147 : human_thread_watch_v1, bridget.watch, flux version/generation/seq/status.
+ready seq0 premier non coalescible ; changed/resync sans corps ni UUID de fil.
+Garde humaine commune, mutations réellement committées seulement, aucun signal
+sur replay/ACK/read/refus. Aucun réveil, notification agent, modèle ou mission.
+Reprise par lectures146, jamais par journal durable ou polling de contenu.
+Fil sélectionné : UUID seul dans store natif, clé environment/project/conversation.
+Un refus thread_unavailable confirmé efface le choix. Panne/binding garde le UUID
+mais masque le contenu non vérifié. Refus métier fermé : pas retry infini.
+Snapshot nouveau S commun au segment déjà chargé, staging puis publication atomique.
+Préserver dépliage, pages, focus, texte sélectionné et copie des lignes inchangées.
+Flux scoped annulé à fermeture/page masquée ; idleTtlMs0, ressources bornées.
+Session147 Implemented, Validé en environnement isolé, après ajouts US6–US9 approuvés le 2026-10-09.
+Le premier lot US1–US5 reste validé en isolé :30 tâches prouvées et cochées.
+Extension US6 : UUID des actions de fils partagés CLI/MCP normalisés avant idempotence/SQL et vrai montage MCP
+Claude/GLM avec identité attestée, opt-out et permissions conservés.
+Plan UUID validé ; T031–T034 prouvées et cochées sur GO après RED/GREEN et régressions.
+US7 : SDK294PASS/1SKIP final, MCP OS3PASS/refresh1PASS distincts ; T049/T050 validées après revues finales APPROVE.
+US8 : plan/gate5/5, tests et interop natifs validés ; T042–T048 cochées, capacité ThreadMembersV1/thread_members_v1.
+Créateur initial/fil ouvert/max16, --member répétable, historique complet/cursor0 et zéro alerte à l'adhésion.
+Union projet recheck transactionnelle ; ancien wakepending non dispatché ; pas composeur UI.
+US9 native validée : choix en haut/ligne épinglée unique autorisée hors page/filtre, sans header inférieur ; détails frères avec titre et membres complets. T051–T054 cochées sur122PASS et recette native finale. Pas nouvelle API/store/helper/rebrand.
+Cible regional-wrkr-1/claude_glm/.claude-glm vérifiée : MCP effectif sans Bridget.
+Avant correctif, T3 injectait t3-code seulement. Cause locale prouvée, montage MCP corrigé et validé dans les fixtures privées. Aucun succès de modèle actif déduit.
+Aucun modèle, restart ou configuration de production dans cette phase.
+Deux passes finales du principal :31FR/20SC/9US mappées, zéro finding actif,54/54 tâches après GO final. Tâches byte-identiques durant Converge ; cochage seulement après son approbation.
+Régressions Rust103PASS/2ignored, transport10PASS ; RPC US7294PASS/1SKIP et Web122PASS. Audits frais Rust A/T3 A99.86, validateurs RC0/0erreur/0warning, périmètres diff limités.
+Recette native avec données synthétiques distinguée de l’interop native réelle.
+US5 affiche les seuls destinataires sollicités dans la ligne auteur/date existante.
+Développement validé,54/54. Livraison EN COURS après autorisation utilisateur explicite de commit/fusion/push/installation et redémarrage T3. Ne pas déclarer installé/actif avant reçus réels.
+Push Bridget vers github/guthubrx/bridget et T3 vers fork/guthubrx/t3code, sans PR T3 ni push upstream.
+Sauvegardes ciblées application/binaire/DB Bridget, pas DB T3 ; pas cleanup142/145 ou autres travaux.
+Le principal exécute Git et livraison ; l'owner documentaire ne touche aucun code/service/production.
+Sélection SpecKit : SPECIFY_FEATURE=147-panneau-bridget-vivant ; branche session-147-panneau-bridget-vivant.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

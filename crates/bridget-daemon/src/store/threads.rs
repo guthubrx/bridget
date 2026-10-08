@@ -17,7 +17,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use serde_json::{Value, json};
 
 /// Version propre aux fils, distincte du schéma idempotence (`store_schema`).
-pub(crate) const THREAD_SCHEMA_VERSION: i64 = 2;
+pub(crate) const THREAD_SCHEMA_VERSION: i64 = 3;
 
 /// Bornes vérifiées dans la transaction ; les valeurs V1 sont fixées par le
 /// module métier, jamais par une option de configuration.
@@ -57,6 +57,7 @@ pub(crate) enum ThreadRefusal {
     ThreadUnavailable,
     ThreadClosed,
     CreatorRequired,
+    AudienceChanged,
     NotAMember(Vec<String>),
     InvalidReplyReference,
     InvalidSupersession,
@@ -73,6 +74,8 @@ pub(crate) enum ThreadTxOutcome {
     Done(Value),
     /// Rejeu exact d'une opération réussie : résultat sauvegardé.
     Replayed(Value),
+    /// Union déjà présente ; aucune écriture ni clé consommée.
+    NoChange(Value),
     Refused(ThreadRefusal),
 }
 
@@ -230,6 +233,19 @@ pub(crate) struct CreateThread<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AddMembers<'a> {
+    pub actor: &'a str,
+    pub operation_id: &'a str,
+    pub canonical_hash: &'a str,
+    pub thread_id: &'a str,
+    pub candidates: &'a [String],
+    /// Union complète vérifiée par la garde projet, triée et dédupliquée.
+    pub expected_members: &'a [String],
+    pub project_warnings: &'a [ProjectWarning],
+    pub now: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PostEntry<'a> {
     pub actor: &'a str,
     pub operation_id: &'a str,
@@ -349,7 +365,7 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<(), StoreError> {
          CREATE TABLE IF NOT EXISTS thread_operations (
              actor_id TEXT NOT NULL,
              operation_id TEXT NOT NULL,
-             action TEXT NOT NULL CHECK (action IN ('create', 'post', 'close')),
+             action TEXT NOT NULL CHECK (action IN ('create', 'post', 'close', 'add_members')),
              thread_id TEXT NOT NULL,
              canonical_hash TEXT NOT NULL,
              result_json TEXT NOT NULL,
@@ -402,6 +418,27 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<(), StoreError> {
              ON thread_wakes(state, last_attempt_at);",
     )
     .map_err(StoreError::Sqlite)?;
+    // O(O log O), O = reçus existants. Seul le CHECK du journal est remplacé ;
+    // aucun corps, repère de lecture ou intention de réveil n'est recopié.
+    let definition: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='thread_operations'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql)?;
+    if !definition.contains("'add_members'") {
+        tx.execute_batch("CREATE TABLE thread_operations_v3 (
+            actor_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+            action TEXT NOT NULL CHECK (action IN ('create','post','close','add_members')),
+            thread_id TEXT NOT NULL, canonical_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+            PRIMARY KEY(actor_id,operation_id));
+            INSERT INTO thread_operations_v3 SELECT actor_id,operation_id,action,thread_id,canonical_hash,result_json,created_at FROM thread_operations;
+            DROP TABLE thread_operations;
+            ALTER TABLE thread_operations_v3 RENAME TO thread_operations;
+            CREATE INDEX idx_thread_operations_thread ON thread_operations(thread_id);").map_err(sql)?;
+    }
     // Migration additive et atomique. O(C), C ≤ 10 colonnes : aucune copie
     // de corps ou remise à zéro des compteurs, reçus et sollicitations.
     let columns: std::collections::HashSet<String> = {
@@ -853,6 +890,82 @@ fn apply_ack(
 }
 
 impl Store {
+    /// O(log T + M log M), M ≤16 ; union/autorité recontrôlées sous IMMEDIATE.
+    pub(crate) fn thread_add_members(
+        &self,
+        request: AddMembers<'_>,
+    ) -> Result<ThreadTxOutcome, StoreError> {
+        let tx =
+            Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate).map_err(sql)?;
+        match lookup_operation(
+            &tx,
+            request.actor,
+            request.operation_id,
+            request.canonical_hash,
+        )? {
+            Some(Ok(result)) => return Ok(ThreadTxOutcome::Replayed(result)),
+            Some(Err(())) => return Ok(ThreadTxOutcome::Refused(ThreadRefusal::EnvelopeMismatch)),
+            None => {}
+        }
+        let (thread, _) = match load_thread_for_member(&tx, request.thread_id, request.actor)? {
+            Ok(found) => found,
+            Err(refused) => return Ok(ThreadTxOutcome::Refused(refused)),
+        };
+        if thread.creator_id != request.actor {
+            return Ok(ThreadTxOutcome::Refused(ThreadRefusal::CreatorRequired));
+        }
+        if thread.closed_at.is_some() {
+            return Ok(ThreadTxOutcome::Refused(ThreadRefusal::ThreadClosed));
+        }
+        let existing = load_members(&tx, request.thread_id)?;
+        let mut union = existing.clone();
+        union.extend_from_slice(request.candidates);
+        union.sort();
+        union.dedup();
+        if union != request.expected_members {
+            return Ok(ThreadTxOutcome::Refused(ThreadRefusal::AudienceChanged));
+        }
+        if union.len() > crate::threads::MAX_MEMBERS {
+            return Ok(ThreadTxOutcome::Refused(ThreadRefusal::CapacityExceeded(
+                "members",
+            )));
+        }
+        let existing_set: std::collections::HashSet<_> = existing.iter().collect();
+        let added: Vec<_> = union
+            .iter()
+            .filter(|member| !existing_set.contains(member))
+            .cloned()
+            .collect();
+        let mut result = json!({"status":if added.is_empty() {"no_change"} else {"members_added"},"thread_id":request.thread_id,"members":union,"added_members":added});
+        if !request.project_warnings.is_empty() {
+            result["project_warnings"] = json!(request.project_warnings);
+        }
+        if added.is_empty() {
+            return Ok(ThreadTxOutcome::NoChange(result));
+        }
+        for member in &added {
+            tx.execute(
+                "INSERT INTO discussion_members(thread_id,agent_id) VALUES(?1,?2)",
+                params![request.thread_id, member],
+            )
+            .map_err(sql)?;
+        }
+        record_operation(
+            &tx,
+            &OperationRecord {
+                actor: request.actor,
+                operation_id: request.operation_id,
+                action: "add_members",
+                thread_id: request.thread_id,
+                canonical_hash: request.canonical_hash,
+                now: request.now,
+            },
+            &result,
+        )?;
+        tx.commit().map_err(sql)?;
+        Ok(ThreadTxOutcome::Done(result))
+    }
+
     /// Lecture seule du reçu existant avant toute garde de portée mutable.
     /// La transaction d'écriture refait le même lookup pour couvrir la course.
     pub(crate) fn thread_operation_replay(
@@ -1320,6 +1433,37 @@ impl Store {
             own,
             own_wake,
         }))
+    }
+
+    /// Sélection indexée des seize membres au plus, sans contenu.
+    pub(crate) fn human_thread_members(
+        &self,
+        thread_id: &str,
+    ) -> Result<std::collections::HashSet<String>, StoreError> {
+        // Clé primaire existante (thread_id, agent_id), seize membres au plus.
+        let mut query = self
+            .conn
+            .prepare("SELECT agent_id FROM discussion_members WHERE thread_id=?1")
+            .map_err(sql)?;
+        query
+            .query_map([thread_id], |row| row.get(0))
+            .map_err(sql)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(sql)
+    }
+
+    /// Une jointure indexée par membre, sans contenu ni limite de pagination.
+    pub(crate) fn human_thread_viewers_for_member(
+        &self,
+        member: &str,
+    ) -> Result<std::collections::HashSet<String>, StoreError> {
+        // Une requête de métadonnées indexées ; aucune borne de pagination.
+        let mut query = self.conn.prepare("SELECT DISTINCT viewer.agent_id FROM discussion_members viewer JOIN discussion_members participant ON participant.thread_id=viewer.thread_id WHERE participant.agent_id=?1").map_err(sql)?;
+        query
+            .query_map([member], |row| row.get(0))
+            .map_err(sql)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(sql)
     }
 
     /// O(L log T + L M), L ≤100, M ≤16. Une requête, noms durables nullable.
@@ -1816,6 +1960,249 @@ mod spec102_quota_tests {
         (Store::open(&root.join("db.sqlite")).unwrap(), root)
     }
 
+    #[test]
+    fn spec147_members_schema_accepts_action_without_touching_old_receipts() {
+        let (store, root) = store();
+        let id = "14700000-0000-4000-8000-000000000001";
+        create(&store, &crate::threads::LIMITS, id);
+        let original: Vec<String> = store
+            .conn
+            .prepare("SELECT result_json FROM thread_operations ORDER BY operation_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        store.conn.execute("INSERT INTO thread_operations(actor_id,operation_id,action,thread_id,canonical_hash,result_json,created_at) VALUES(?1,'test','add_members',?2,'h','{}',3)", params![A,id]).unwrap();
+        ensure_schema(&store.conn).unwrap();
+        let preserved: Vec<String> = store.conn.prepare("SELECT result_json FROM thread_operations WHERE operation_id!='test' ORDER BY operation_id").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+        assert_eq!(preserved, original);
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT MAX(version) FROM thread_schema_migrations",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            3
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn legacy_members_schema(store: &Store, version: i64, invalid: bool) {
+        let check = if invalid {
+            ""
+        } else {
+            "CHECK(action IN ('create','post','close'))"
+        };
+        store.conn.execute_batch(&format!("BEGIN IMMEDIATE;
+            ALTER TABLE thread_operations RENAME TO old_operations;
+            CREATE TABLE thread_operations(actor_id TEXT NOT NULL,operation_id TEXT NOT NULL,action TEXT NOT NULL {check},thread_id TEXT NOT NULL,canonical_hash TEXT NOT NULL,result_json TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(actor_id,operation_id));
+            INSERT INTO thread_operations SELECT * FROM old_operations;
+            DROP TABLE old_operations;
+            CREATE INDEX idx_thread_operations_thread ON thread_operations(thread_id);
+            DELETE FROM thread_schema_migrations;
+            INSERT INTO thread_schema_migrations VALUES({version},1);
+            COMMIT;")).unwrap();
+        if version == 1 {
+            store.conn.execute_batch("DROP INDEX idx_discussion_entries_supersedes; ALTER TABLE discussion_entries DROP COLUMN supersedes_seq; ALTER TABLE discussion_entries DROP COLUMN kind;").unwrap();
+        }
+    }
+
+    #[test]
+    fn spec147_members_v1_v2_migration_preserves_pages_receipts_operations_and_indexes() {
+        for version in [1, 2] {
+            let (store, root) = store();
+            let id = "14700000-0000-4000-8000-000000000001";
+            create(&store, &crate::threads::LIMITS, id);
+            post(
+                &store,
+                &crate::threads::LIMITS,
+                id,
+                "CANARY147 exact é\r\n\n",
+            );
+            let read = ReadRequest {
+                actor: B,
+                thread_id: id,
+                limit: 1,
+                byte_budget: 60000,
+                receipt_id: "14700000-0000-4000-8000-000000000002",
+                receipt_ttl_secs: 600,
+                now: 2,
+            };
+            let page = store.thread_read(&read).unwrap();
+            let operations=store.conn.prepare("SELECT actor_id,operation_id,action,thread_id,canonical_hash,result_json,created_at FROM thread_operations ORDER BY operation_id").unwrap().query_map([],|r|Ok(format!("{:?}",(r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,i64>(6)?)))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+            legacy_members_schema(&store, version, false);
+            drop(store);
+            for _ in 0..2 {
+                let migrated = Store::open(&root.join("db.sqlite")).unwrap();
+                assert_eq!(
+                    migrated.thread_read(&read).unwrap(),
+                    match &page {
+                        ReadOutcome::Page {
+                            page,
+                            receipt,
+                            expires_at,
+                            requested_limit,
+                            ..
+                        } => ReadOutcome::Page {
+                            page: page.clone(),
+                            receipt: receipt.clone(),
+                            expires_at: *expires_at,
+                            requested_limit: *requested_limit,
+                            replayed: true
+                        },
+                        _ => panic!("page attendue"),
+                    }
+                );
+                let actual=migrated.conn.prepare("SELECT actor_id,operation_id,action,thread_id,canonical_hash,result_json,created_at FROM thread_operations ORDER BY operation_id").unwrap().query_map([],|r|Ok(format!("{:?}",(r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,i64>(6)?)))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+                assert_eq!(actual, operations);
+                assert!(schema_ready(&migrated.conn).unwrap());
+                assert_eq!(migrated.conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_thread_operations_thread'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+                assert_eq!(
+                    migrated
+                        .conn
+                        .query_row(
+                            "SELECT MAX(version) FROM thread_schema_migrations",
+                            [],
+                            |r| r.get::<_, i64>(0)
+                        )
+                        .unwrap(),
+                    3
+                );
+            }
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn spec147_members_migration_failure_rolls_back_the_only_journal() {
+        let (store, root) = store();
+        legacy_members_schema(&store, 2, true);
+        store.conn.execute("INSERT INTO thread_operations VALUES('actor','bad','invalid','fil','hash','exact',1)",[]).unwrap();
+        assert!(ensure_schema(&store.conn).is_err());
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT result_json FROM thread_operations WHERE operation_id='bad'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "exact"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='thread_operations_v3'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT MAX(version) FROM thread_schema_migrations",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec147_members_no_change_does_not_bind_key_and_stale_union_refuses() {
+        let (store, root) = store();
+        let id = "14700000-0000-4000-8000-000000000001";
+        create(&store, &crate::threads::LIMITS, id);
+        let c = "14700000-0000-4000-8000-000000000003";
+        let op = "14700000-0000-4000-8000-000000000002";
+        let old = vec![A.into(), B.into()];
+        let request = AddMembers {
+            actor: A,
+            operation_id: op,
+            canonical_hash: "noop",
+            thread_id: id,
+            candidates: &old,
+            expected_members: &old,
+            project_warnings: &[],
+            now: 2,
+        };
+        let changes = store.conn.total_changes();
+        assert!(matches!(
+            store.thread_add_members(request).unwrap(),
+            ThreadTxOutcome::NoChange(_)
+        ));
+        assert_eq!(store.conn.total_changes(), changes);
+        assert!(
+            store
+                .thread_operation_replay(A, op, "anything")
+                .unwrap()
+                .is_none()
+        );
+        let mut union = old.clone();
+        union.push(c.into());
+        union.sort();
+        let request = AddMembers {
+            actor: A,
+            operation_id: op,
+            canonical_hash: "add",
+            thread_id: id,
+            candidates: &[c.into()],
+            expected_members: &old,
+            project_warnings: &[],
+            now: 2,
+        };
+        assert_eq!(
+            store.thread_add_members(request.clone()).unwrap(),
+            ThreadTxOutcome::Refused(ThreadRefusal::AudienceChanged)
+        );
+        assert_eq!(store.conn.total_changes(), changes);
+        assert!(matches!(
+            store
+                .thread_add_members(AddMembers {
+                    expected_members: &union,
+                    ..request
+                })
+                .unwrap(),
+            ThreadTxOutcome::Done(_)
+        ));
+        let changes = store.conn.total_changes();
+        let d = "14700000-0000-4000-8000-000000000004";
+        let mut stale = old;
+        stale.push(d.into());
+        stale.sort();
+        assert_eq!(
+            store
+                .thread_add_members(AddMembers {
+                    actor: A,
+                    operation_id: "14700000-0000-4000-8000-000000000005",
+                    canonical_hash: "stale",
+                    thread_id: id,
+                    candidates: &[d.into()],
+                    expected_members: &stale,
+                    project_warnings: &[],
+                    now: 3
+                })
+                .unwrap(),
+            ThreadTxOutcome::Refused(ThreadRefusal::AudienceChanged)
+        );
+        assert_eq!(store.conn.total_changes(), changes);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn create(store: &Store, limits: &ThreadLimits, thread_id: &str) {
         let members = vec![A.to_string(), B.to_string()];
         let outcome = store
@@ -2113,7 +2500,7 @@ mod spec102_quota_tests {
                 "DROP INDEX idx_discussion_entries_supersedes;
             ALTER TABLE discussion_entries DROP COLUMN supersedes_seq;
             ALTER TABLE discussion_entries DROP COLUMN kind;
-            DELETE FROM thread_schema_migrations WHERE version=2;
+            DELETE FROM thread_schema_migrations WHERE version>1;
             INSERT OR IGNORE INTO thread_schema_migrations VALUES(1,1);",
             )
             .unwrap();
@@ -2158,7 +2545,7 @@ mod spec102_quota_tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, THREAD_SCHEMA_VERSION);
         let plan: Vec<String> = reopened.conn.prepare("EXPLAIN QUERY PLAN SELECT s.seq FROM discussion_entries e LEFT JOIN discussion_entries s ON s.thread_id=e.thread_id AND s.supersedes_seq=e.seq AND s.supersedes_seq IS NOT NULL AND s.seq<=10 WHERE e.thread_id=?1 AND e.seq>=1 AND e.seq<=10 ORDER BY e.seq LIMIT 200").unwrap().query_map([id], |r| r.get(3)).unwrap().collect::<Result<_,_>>().unwrap();
         assert!(
             plan.iter()

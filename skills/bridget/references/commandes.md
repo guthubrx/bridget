@@ -42,7 +42,7 @@ de couverture.
 | `attach` | CLI humain | Aucun outil MCP de terminal | Observe le journal et permet une saisie humaine dans un double-TTY ; ce n'est ni la TUI fournisseur ni un écran d'approbation. |
 | `journal` | MCP exposé (100) | `bridget_journal` | Extrait exact borné du journal ; `to` partage, `reply` suit une réponse. Source UUID, séquences, lacunes et reprise explicites. |
 | `events` | MCP exposé (100/101) | `bridget_events` | types/sub/list/unsub, capacités sources, propriétaire attesté, once/TTL et interruption visible ; notification d'un fait, sans obligation métier ni exécution de script. |
-| `thread` | MCP exposé (102) | `bridget_thread` | create/list/show/post/read/ack/history/close : fil partagé à membres fixes ; dépôt silencieux (`notify:[]`) par défaut, sollicitations ciblées structurées (UUID ou `all`), lecture paginée avec reçu puis confirmation, `history` relit sans déplacer le repère ; identité attestée par la connexion, aucun paramètre d'acteur ; `--id` clé de rejeu obligatoire pour create/post/close. |
+| `thread` | MCP exposé (102/147) | `bridget_thread` | create/add_members/list/show/post/read/ack/history/close : fil partagé ; ajout par le créateur initial sur fil ouvert, seize membres maximum ; dépôt silencieux (`notify:[]`), sollicitations ciblées (UUID ou `all`), lecture paginée avec reçu puis confirmation, `history` sans déplacer le repère ; identité attestée, aucun paramètre d'acteur ; `--id` clé de rejeu obligatoire pour create/add-members/post/close. |
 | `handoff` | MCP exposé (103) | `bridget_handoff` | `preview` valide et rend le dossier de passation v1 sans rien envoyer ; `send` transmet le corps exact à un UUID par l'envoi idempotent 099 (mêmes `id`/`issued_at` pour rejouer). Objet JSON sur stdin (`--json-stdin`, 64 Kio), `--json` pour le même reçu que MCP ; aucune source lue, conservation du journal, aucun secret. |
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
 | `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par origine de tour attestée avec repli FIFO ; t3code n'est jamais modifié. |
@@ -104,7 +104,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_ledger` — lire messages et demandes bornés (`recent`), chercher une page reprenable dans ses échanges ou un fil (`search`), relire un message exact par fragments (`read`).
 - `bridget_journal` — lire ou partager un extrait sourcé, sans lecture arbitraire du disque.
 - `bridget_events` — s'abonner aux faits futurs disponibles, lister et supprimer ses abonnements.
-- `bridget_thread` — créer, lister, consulter un fil partagé ; publier (silence, cibles ou `all`), lire avec reçu, confirmer, relire une plage, clore.
+- `bridget_thread` — créer, ajouter des membres, lister, consulter un fil partagé ; publier (silence, cibles ou `all`), lire avec reçu, confirmer, relire une plage, clore.
 - `bridget_handoff` — préparer (preview) puis transmettre (send) un dossier de passation rédigé par l'agent.
 - `bridget_publish_artifact` — publier un contenu structuré, sourcé et inerte.
 - `bridget_read_artifact` — relire les octets autorisés par références exactes.
@@ -137,7 +137,7 @@ bridget thread post '<FIL>' --kind history --silent --id '<UUID>' -- 'Preuve exa
 bridget thread post '<FIL>' --kind action --notify '<UUID>' --id '<UUID>' -- 'Action et référence'
 ```
 
-`bridget_thread` accepte `action` parmi `create`, `list`, `show`, `post`, `read`,
+`bridget_thread` accepte `action` parmi `create`, `add_members`, `list`, `show`, `post`, `read`,
 `ack`, `history`, `close` ; les champs inconnus sont refusés. Même contrat en CLI :
 `bridget thread <action> …`, sorties JSON identiques, code de sortie 0 succès,
 2 validation ou refus, 1 panne technique. L'identité est celle de la connexion
@@ -146,14 +146,15 @@ cibles sont des UUID ; en CLI, `--member`/`--notify` acceptent un nom d'affichag
 saisi explicitement, résolu par l'annuaire et refusé s'il est inconnu ou ambigu.
 
 Résultats : `status` fermé (`created`, `listed`, `shown`, `posted`, `read`,
-`history`, `acknowledged`, `already_acknowledged`, `closed`, `error`) ; une
+`history`, `acknowledged`, `already_acknowledged`, `closed`, `members_added`, `no_change`, `error`) ; une
 erreur porte `code`, `detail` et `retryable`, et l'outil MCP la marque
 `isError:true`. Codes : `invalid_request`, `unsupported_version`,
 `identity_unavailable`, `thread_unavailable`, `thread_closed`,
 `creator_required`, `unknown_member`, `ambiguous_name`, `not_a_member`,
 `invalid_reply_reference`, `envelope_mismatch`, `capacity_exceeded`,
 `entry_too_large`, `receipt_obsolete`, `receipt_invalid`, `cursor_conflict`,
-`range_unavailable`, `storage_unavailable` (seul rejouable),
+`range_unavailable`, `storage_unavailable`, `audience_changed` (revalider avant retry),
+`thread_members_unsupported` (capacité absente, aucun repli),
 `thread_notice_not_replyable` (raccourci `reply`).
 
 ### Recette à quatre participants
@@ -202,6 +203,7 @@ Formes CLI équivalentes :
 
 ```text
 bridget thread create --title "Relecture sécurité" --member <UUID> [--member <UUID>] --id $(uuidgen | tr A-Z a-z)
+bridget thread add-members <FIL> --member <UUID-ou-nom> [--member <UUID-ou-nom>] --id <UUID> [--cross-project-reason <MOTIF>]
 bridget thread post <FIL> --silent --id <UUID> -- Constat disponible.
 bridget thread post <FIL> --notify <UUID> --id <UUID> [--reply-to N] [--ack <RECU>] -- Peux-tu contrôler ?
 bridget thread post <FIL> --all --id <UUID> -- Avis de tous.
@@ -209,6 +211,21 @@ bridget thread read <FIL> [--limit N]        # puis : bridget thread ack <FIL> <
 bridget thread history <FIL> [--from-seq N] [--to-seq N] [--limit N]
 bridget thread show <FIL> | bridget thread list [--limit N] [--after <UUID>] | bridget thread close <FIL> --id <UUID>
 ```
+
+`add_members` reçoit `thread_id`, `members` et `operation_id` en MCP.
+La CLI emploie `add-members` et répète `--member`. Créateur initial seul,
+fil ouvert, seize lecteurs maximum après normalisation et déduplication.
+Le nouvel agent peut lire tout l'historique depuis le repère zéro. Aucun message,
+réveil ou rejeu d'ancienne consigne n'est produit. Un futur `all` inclut le membre ;
+les anciens targets et reçus ne changent pas. Le motif interprojets couvre l'union
+des lecteurs anciens et nouveaux.
+
+Préparer une clé avant l'appel. Le résultat `members_added` conserve son reçu
+durable pour le rejeu exact, même après une déconnexion ou un changement de projet.
+`no_change` n'écrit aucun reçu et n'engage pas la clé. Une audience divergente
+dans la transaction rend `audience_changed`, sans écriture partielle.
+La négociation de `thread_members_v1` précède la demande ; une capacité absente
+interdit la mutation et tout repli automatique. Aucun retrait ou transfert.
 
 ### Lecture, reçus et reprise
 

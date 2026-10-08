@@ -1201,6 +1201,233 @@ mod spec101_identity {
     }
 
     #[test]
+    fn spec147_native_t3_refresh_publishes_and_revokes_real_os_processes() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Child, ChildStdin, Command, Stdio};
+        use std::time::Instant;
+        // Même SQLite privée que spec114 et l'alias claudeAgent ci-dessus.
+        // Le tuple live et le credential restent des fixtures de protocole.
+        // T040 MCP/daemon vérifie séparément les credentials authentiques.
+        let root = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("t3147-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let base = root.join("t3");
+        fs::create_dir_all(base.join("userdata")).unwrap();
+        let db = rusqlite::Connection::open(base.join("userdata/state.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE provider_session_runtime(thread_id TEXT, provider_name TEXT, resume_cursor_json TEXT);").unwrap();
+        let session = format!("native147-{}", uuid::Uuid::new_v4().simple());
+        db.execute(
+            "INSERT INTO provider_session_runtime VALUES (?1,'claudeAgent',?2)",
+            rusqlite::params!["fil147", serde_json::json!({"resume":session}).to_string()],
+        )
+        .unwrap();
+        let rows_before = db
+            .query_row(
+                "SELECT thread_id,provider_name,resume_cursor_json FROM provider_session_runtime",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let changes_before = db.total_changes();
+        let socket = root.join("bridget.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let live = binding("fil147");
+        crate::mcp_identity::mock_private_identity(&socket, &live.1, &live.2);
+
+        struct Provider {
+            child: Child,
+            input: Option<ChildStdin>,
+            birth: u64,
+            session: String,
+        }
+        impl Drop for Provider {
+            fn drop(&mut self) {
+                drop(self.input.take());
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while self.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                if self.child.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                let pid = self.child.id();
+                if process_birth(pid).ok() != Some(self.birth)
+                    || process_parent(pid).ok() != Some(std::process::id())
+                {
+                    return;
+                }
+                let Ok(observed) = Command::new("/bin/ps")
+                    .args(["-p", &pid.to_string(), "-o", "command="])
+                    .output()
+                else {
+                    return;
+                };
+                let command = String::from_utf8_lossy(&observed.stdout);
+                if command.contains(&self.session)
+                    && !command.to_ascii_lowercase().contains("firefox")
+                {
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                    }
+                    std::thread::sleep(Duration::from_secs(3));
+                    let _ = self.child.try_wait();
+                }
+            }
+        }
+        let spawn = || {
+            // argv[0] synthétique reconnu par le collecteur OS. /bin/sh ne
+            // lance que read/exit intégrés ; jamais Claude ni un modèle.
+            let mut child = Command::new("/bin/sh")
+                .arg0("claude")
+                .args([
+                    "-c",
+                    "read fixture_gate || exit 0",
+                    "--session-id",
+                    &session,
+                ])
+                .env_clear()
+                .env("HOME", &root)
+                .env("PATH", "/usr/bin:/bin")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            Provider {
+                birth: process_birth(child.id()).unwrap(),
+                input: child.stdin.take(),
+                child,
+                session: session.clone(),
+            }
+        };
+        let first = spawn();
+        let pid = first.child.id();
+        assert_eq!(process_arguments(pid).unwrap()[0], "claude");
+        let runtime = ServerRuntime {
+            pid: std::process::id(),
+            port: 3773,
+        };
+        let mut bindings = IdentityBindings::new(&root);
+        let marker_path = root.join("agent-pids").join(pid.to_string());
+        assert!(!marker_path.exists());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let count = bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live))
+                .unwrap();
+            if count == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fournisseur synthétique absent de refresh OS"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let marker = read_marker(&marker_path).unwrap();
+        assert_eq!(marker.pid, pid);
+        assert_eq!(marker.birth, first.birth);
+        assert_eq!(marker.instance_id, live.2);
+        assert_eq!(
+            crate::mcp_identity::read_name(&marker.name_file).as_deref(),
+            Some(live.1.as_str())
+        );
+        assert_eq!(process_parent(pid).unwrap(), runtime.pid);
+        struct NativeTree;
+        impl crate::mcp_identity::ProcessTree for NativeTree {
+            fn birth(&self, pid: u32) -> Option<u64> {
+                process_birth(pid).ok()
+            }
+            fn parent(&self, pid: u32) -> Option<u32> {
+                process_parent(pid).ok()
+            }
+        }
+        let resolved = crate::mcp_identity::resolve_identity_with(
+            None,
+            &root.join("agent-pids"),
+            None,
+            pid,
+            &NativeTree,
+        )
+        .unwrap();
+        assert_eq!(resolved.name, live.1);
+        assert_eq!(resolved.instance_id, live.2);
+        let second = spawn();
+        assert_eq!(
+            bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live))
+                .unwrap(),
+            0,
+            "deux fournisseurs d'une même session ne deviennent pas uniques"
+        );
+        assert!(!marker_path.exists());
+        assert!(
+            !root
+                .join("agent-pids")
+                .join(second.child.id().to_string())
+                .exists()
+        );
+        assert!(
+            crate::mcp_identity::resolve_identity_with(
+                None,
+                &root.join("agent-pids"),
+                None,
+                pid,
+                &NativeTree
+            )
+            .is_err()
+        );
+        let second_pid = second.child.id();
+        drop(second);
+        assert!(process_birth(second_pid).is_err());
+        assert_eq!(
+            bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live))
+                .unwrap(),
+            1
+        );
+        assert_eq!(bindings.refresh(&base, &runtime, &[]).unwrap(), 0);
+        assert!(!marker_path.exists());
+        assert!(!marker.name_file.exists());
+        assert!(
+            crate::mcp_identity::auxiliary_registration(&live.1, &live.2, &socket).is_ok(),
+            "la révocation du marqueur ne retire pas le credential de fixture"
+        );
+        let rows_after = db
+            .query_row(
+                "SELECT thread_id,provider_name,resume_cursor_json FROM provider_session_runtime",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(rows_after, rows_before);
+        assert_eq!(db.total_changes(), changes_before);
+        bindings.clear();
+        drop(first);
+        assert!(process_birth(pid).is_err());
+        eprintln!(
+            "SPEC147 native-T3 refresh namespace={} PID/birth/lineage/marqueur/résolution/ambiguïté/retrait vérifiés ; live/credential synthétiques",
+            root.display()
+        );
+        drop(db);
+        drop(_listener);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn inventaire_partiellement_illisible_ne_rend_pas_autre_processus_unique() {
         let root = std::env::temp_dir().join(format!("bi101-{}", uuid::Uuid::new_v4()));
         crate::environment::ensure_private_directory(&root).unwrap();

@@ -185,6 +185,10 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    /// Ajout de lecteurs, distinct des publications et des sollicitations.
+    ThreadMembersV1,
+    /// Invalidation humaine sans contenu, distincte des observations agents.
+    HumanThreadWatchV1,
     /// Consultation humaine bornée, sans identité ni action d'agent.
     HumanThreadViewV1,
     /// Consultation humaine récente ; distincte de l'ordre technique145.
@@ -2153,6 +2157,175 @@ pub const THREAD_CONTRACT_VERSION: u16 = 1;
 
 pub const HUMAN_THREAD_VIEW_VERSION: u16 = 1;
 pub const HUMAN_THREAD_VIEW_MAX_BYTES: usize = 128 * 1024;
+pub const HUMAN_THREAD_WATCH_VERSION: u16 = 1;
+pub const HUMAN_THREAD_WATCH_MAX_BYTES: usize = 4096;
+pub const HUMAN_THREAD_WATCH_MAX_SEQ: u64 = 9_007_199_254_740_991;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadWatchV1 {
+    pub version: u16,
+    pub t3_thread_id: String,
+    pub project_root: String,
+}
+
+fn watch_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let value = u16::deserialize(d)?;
+    if value != HUMAN_THREAD_WATCH_VERSION {
+        return Err(serde::de::Error::custom("version de suivi incompatible"));
+    }
+    Ok(value)
+}
+
+fn watch_generation<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let value = String::deserialize(d)?;
+    if !uuid::Uuid::parse_str(&value).is_ok_and(|id| id.hyphenated().to_string() == value) {
+        return Err(serde::de::Error::custom("génération de suivi invalide"));
+    }
+    Ok(value)
+}
+
+fn watch_seq<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let value = u64::deserialize(d)?;
+    if !(1..=HUMAN_THREAD_WATCH_MAX_SEQ).contains(&value) {
+        return Err(serde::de::Error::custom("séquence de suivi invalide"));
+    }
+    Ok(value)
+}
+
+fn watch_ready_seq<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    let value = u64::deserialize(d)?;
+    if value != 0 {
+        return Err(serde::de::Error::custom("ready exige seq0"));
+    }
+    Ok(value)
+}
+
+/// JSONL fermé : aucun identifiant de fil, contenu ou texte d'erreur libre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HumanThreadWatchEvent {
+    Ready {
+        #[serde(deserialize_with = "watch_version")]
+        version: u16,
+        #[serde(deserialize_with = "watch_generation")]
+        generation: String,
+        #[serde(deserialize_with = "watch_ready_seq")]
+        seq: u64,
+    },
+    Changed {
+        #[serde(deserialize_with = "watch_version")]
+        version: u16,
+        #[serde(deserialize_with = "watch_generation")]
+        generation: String,
+        #[serde(deserialize_with = "watch_seq")]
+        seq: u64,
+    },
+    Resync {
+        #[serde(deserialize_with = "watch_version")]
+        version: u16,
+        #[serde(deserialize_with = "watch_generation")]
+        generation: String,
+        #[serde(deserialize_with = "watch_seq")]
+        seq: u64,
+    },
+    Error {
+        #[serde(deserialize_with = "watch_version")]
+        version: u16,
+        code: HumanThreadViewError,
+    },
+}
+
+impl HumanThreadWatchEvent {
+    pub fn error(code: HumanThreadViewError) -> Self {
+        Self::Error {
+            version: HUMAN_THREAD_WATCH_VERSION,
+            code,
+        }
+    }
+}
+
+#[cfg(test)]
+mod spec147_watch_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn spec147_members_contract_is_closed_and_capability_exact() {
+        let capability: ClientCapability =
+            serde_json::from_value(json!("thread_members_v1")).unwrap();
+        assert_eq!(
+            serde_json::to_value(capability).unwrap(),
+            json!("thread_members_v1")
+        );
+        let action = json!({"action":"add_members","thread_id":"14700000-aaaa-4aaa-8aaa-000000000001","members":["14700000-bbbb-4bbb-8bbb-000000000002"],"operation_id":"14700000-cccc-4ccc-8ccc-000000000003"});
+        let decoded: ThreadAction = serde_json::from_value(action.clone()).unwrap();
+        assert_eq!(decoded.name(), "add_members");
+        assert_eq!(serde_json::to_value(decoded).unwrap(), action);
+        for field in ["body", "notify", "owner", "from", "supersedes_seq"] {
+            let mut bad = action.clone();
+            bad[field] = json!("not allowed");
+            assert!(serde_json::from_value::<ThreadAction>(bad).is_err());
+        }
+        for field in ["thread_id", "members", "operation_id"] {
+            let mut bad = action.clone();
+            bad.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<ThreadAction>(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn spec147_watch_capability_and_request_are_available() {
+        let capability: ClientCapability =
+            serde_json::from_value(json!("human_thread_watch_v1")).unwrap();
+        assert_eq!(
+            serde_json::to_value(capability).unwrap(),
+            json!("human_thread_watch_v1")
+        );
+        let request = json!({"type":"HumanThreadWatchV1","request":{
+            "version":1,"t3_thread_id":"14700000-0000-4000-8000-000000000001",
+            "project_root":"/fixture"
+        }});
+        assert!(serde_json::from_value::<WrapperToDaemon>(request).is_ok());
+    }
+
+    #[test]
+    fn spec147_watch_signal_is_closed_and_safe_for_javascript() {
+        let valid = json!({"type":"HumanThreadWatchEvent","event":{
+            "version":1,"generation":"14700000-0000-4000-8000-000000000001",
+            "seq":0,"status":"ready"
+        }});
+        assert!(serde_json::from_value::<DaemonToWrapper>(valid.clone()).is_ok());
+        for (field, value) in [
+            ("body", json!("secret")),
+            ("title", json!("secret")),
+            ("members", json!([])),
+            ("thread_id", json!("14700000-0000-4000-8000-000000000099")),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["event"][field] = value;
+            assert!(serde_json::from_value::<DaemonToWrapper>(invalid).is_err());
+        }
+        for (field, value) in [
+            ("version", json!(2)),
+            ("generation", json!("not-a-uuid")),
+            ("seq", json!(9_007_199_254_740_992u64)),
+            ("seq", json!(1)),
+            ("status", json!("unknown")),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["event"][field] = value;
+            assert!(serde_json::from_value::<DaemonToWrapper>(invalid).is_err());
+        }
+        let refusal = json!({"type":"HumanThreadWatchEvent","event":{
+            "version":1,"status":"error","code":"binding_unavailable"
+        }});
+        assert!(serde_json::from_value::<DaemonToWrapper>(refusal.clone()).is_ok());
+        let mut invalid = refusal;
+        invalid["event"]["detail"] = json!("secret");
+        assert!(serde_json::from_value::<DaemonToWrapper>(invalid).is_err());
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2498,6 +2671,11 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ThreadAction {
+    AddMembers {
+        thread_id: String,
+        members: Vec<String>,
+        operation_id: String,
+    },
     Create {
         title: String,
         members: Vec<String>,
@@ -2561,6 +2739,7 @@ pub enum ThreadAction {
 impl ThreadAction {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::AddMembers { .. } => "add_members",
             Self::Create { .. } => "create",
             Self::List { .. } => "list",
             Self::Show { .. } => "show",
@@ -2575,7 +2754,7 @@ impl ThreadAction {
 
 /// Résultat versionné : `result` porte un discriminant fermé `status`
 /// (created/listed/shown/posted/read/history/acknowledged/
-/// already_acknowledged/closed/error), identique pour CLI et MCP.
+/// already_acknowledged/closed/members_added/no_change/error), identique pour CLI et MCP.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadResult {
@@ -2588,6 +2767,9 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    HumanThreadWatchV1 {
+        request: HumanThreadWatchV1,
+    },
     HumanThreadViewV1 {
         request: HumanThreadViewV1,
     },
@@ -3499,6 +3681,9 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    HumanThreadWatchEvent {
+        event: HumanThreadWatchEvent,
+    },
     HumanThreadViewResult {
         result: HumanThreadViewResult,
     },

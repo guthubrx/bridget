@@ -8,8 +8,8 @@
 //! mentions : seules les cibles structurées comptent.
 
 use crate::store::threads::{
-    AckOutcome, CloseThread, CreateThread, HistoryOutcome, NotifySpec, PostEntry, ReadOutcome,
-    ReadRequest, ThreadLimits, ThreadRefusal, ThreadTxOutcome, WakeRow,
+    AckOutcome, AddMembers, CloseThread, CreateThread, HistoryOutcome, NotifySpec, PostEntry,
+    ReadOutcome, ReadRequest, ThreadLimits, ThreadRefusal, ThreadTxOutcome, WakeRow,
 };
 use crate::store::{Store, StoreError};
 use bridget_transport::protocol::{
@@ -392,8 +392,13 @@ fn refusal_result(refusal: ThreadRefusal) -> Value {
         }
         ThreadRefusal::CreatorRequired => error(
             "creator_required",
-            "Seul le créateur peut clore ce fil.",
+            "Opération réservée au créateur initial du fil.",
             false,
+        ),
+        ThreadRefusal::AudienceChanged => error(
+            "audience_changed",
+            "Les membres ont changé pendant la vérification ; revalider la demande.",
+            true,
         ),
         ThreadRefusal::NotAMember(unknown) => error(
             "not_a_member",
@@ -490,14 +495,18 @@ fn validate_title(title: &str) -> Result<String, Value> {
     Ok(trimmed.to_string())
 }
 
-fn require_uuid(value: &str, field: &str) -> Result<String, Value> {
-    canonical_uuid(value).ok_or_else(|| {
-        error(
-            "invalid_request",
-            format!("{field} doit être un UUID canonique en minuscules."),
-            false,
-        )
-    })
+pub(crate) fn require_uuid(value: &str, field: &str) -> Result<String, Value> {
+    uuid::Uuid::parse_str(value)
+        .ok()
+        .map(|parsed| parsed.hyphenated().to_string())
+        .filter(|canonical| value.len() == 36 && canonical.eq_ignore_ascii_case(value))
+        .ok_or_else(|| {
+            error(
+                "invalid_request",
+                format!("{field} doit être un UUID de 36 caractères avec tirets."),
+                false,
+            )
+        })
 }
 
 /// Taille JSON qu'occupera l'entrée dans une page, bornée avant le dépôt.
@@ -552,6 +561,7 @@ fn wake_json(wake: Option<WakeRow>) -> Value {
 
 /// Point d'entrée unique CLI/MCP. `actor` est l'identité attestée par la
 /// connexion ; aucun paramètre ne peut la remplacer.
+#[cfg(test)]
 pub(crate) fn handle(
     store: &Store,
     directory: &dyn Directory,
@@ -559,23 +569,59 @@ pub(crate) fn handle(
     request: ThreadRequest,
     now: i64,
 ) -> ThreadResult {
+    handle_with_change(store, directory, actor, request, now).0
+}
+
+/// Le marqueur éphémère reste distinct du reçu JSON : seul Done après commit
+/// invalide une consultation humaine. Un rejeu conserve le reçu original.
+pub(crate) fn handle_with_change(
+    store: &Store,
+    directory: &dyn Directory,
+    actor: &str,
+    request: ThreadRequest,
+    now: i64,
+) -> (ThreadResult, Option<String>) {
+    let mut changed = None;
     if request.version != THREAD_CONTRACT_VERSION {
-        return result(error(
-            "unsupported_version",
-            format!(
-                "Version {} inconnue ; version attendue {THREAD_CONTRACT_VERSION}.",
-                request.version
-            ),
-            false,
-        ));
+        return (
+            result(error(
+                "unsupported_version",
+                format!(
+                    "Version {} inconnue ; version attendue {THREAD_CONTRACT_VERSION}.",
+                    request.version
+                ),
+                false,
+            )),
+            None,
+        );
     }
     let reason = match crate::communication::validate_cross_project_reason(
         request.cross_project_reason.as_deref(),
     ) {
         Ok(reason) => reason,
-        Err(detail) => return result(error("invalid_cross_project_reason", detail, false)),
+        Err(detail) => {
+            return (
+                result(error("invalid_cross_project_reason", detail, false)),
+                None,
+            );
+        }
     };
     let outcome = match request.request {
+        ThreadAction::AddMembers {
+            thread_id,
+            members,
+            operation_id,
+        } => add_members(
+            store,
+            directory,
+            actor,
+            &thread_id,
+            &members,
+            &operation_id,
+            reason.as_deref(),
+            now,
+            &mut changed,
+        ),
         ThreadAction::Create {
             title,
             members,
@@ -589,6 +635,7 @@ pub(crate) fn handle(
             &operation_id,
             reason.as_deref(),
             now,
+            &mut changed,
         ),
         ThreadAction::List {
             limit,
@@ -618,6 +665,7 @@ pub(crate) fn handle(
             supersedes_seq,
             reason.as_deref(),
             now,
+            &mut changed,
         ),
         ThreadAction::Read { thread_id, limit } => read(store, actor, &thread_id, limit, now),
         ThreadAction::Ack { thread_id, receipt } => ack(store, actor, &thread_id, &receipt),
@@ -630,9 +678,9 @@ pub(crate) fn handle(
         ThreadAction::Close {
             thread_id,
             operation_id,
-        } => close(store, actor, &thread_id, &operation_id, now),
+        } => close(store, actor, &thread_id, &operation_id, now, &mut changed),
     };
-    result(outcome.unwrap_or_else(|refused| refused))
+    (result(outcome.unwrap_or_else(|refused| refused)), changed)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -645,6 +693,7 @@ fn create(
     operation_id: &str,
     reason: Option<&str>,
     now: i64,
+    changed: &mut Option<String>,
 ) -> Result<Value, Value> {
     let title = validate_title(title)?;
     let operation_id = require_uuid(operation_id, "operation_id")?;
@@ -676,7 +725,7 @@ fn create(
         .thread_operation_replay(actor, &operation_id, &canonical_hash)
         .map_err(storage_error)?
     {
-        return tx_result(replay);
+        return tx_result(replay, changed);
     }
     let unknown: Vec<&String> = set
         .iter()
@@ -711,14 +760,107 @@ fn create(
             limits: &LIMITS,
         })
         .map_err(storage_error)?;
-    tx_result(outcome)
+    tx_result(outcome, changed)
 }
 
-fn tx_result(outcome: ThreadTxOutcome) -> Result<Value, Value> {
+fn tx_result(outcome: ThreadTxOutcome, changed: &mut Option<String>) -> Result<Value, Value> {
     match outcome {
-        ThreadTxOutcome::Done(value) | ThreadTxOutcome::Replayed(value) => Ok(value),
+        ThreadTxOutcome::Done(value) => {
+            *changed = value["thread_id"].as_str().map(str::to_owned);
+            Ok(value)
+        }
+        ThreadTxOutcome::Replayed(value) | ThreadTxOutcome::NoChange(value) => Ok(value),
         ThreadTxOutcome::Refused(refusal) => Err(refusal_result(refusal)),
     }
+}
+
+/// O(log T + M log M), M ≤16. Le reçu précède les faits vivants ; la
+/// transaction refuse une union différente de celle autorisée ici.
+#[allow(clippy::too_many_arguments)]
+fn add_members(
+    store: &Store,
+    directory: &dyn Directory,
+    actor: &str,
+    thread_id: &str,
+    members: &[String],
+    operation_id: &str,
+    reason: Option<&str>,
+    now: i64,
+    changed: &mut Option<String>,
+) -> Result<Value, Value> {
+    let thread_id = require_uuid(thread_id, "thread_id")?;
+    let operation_id = require_uuid(operation_id, "operation_id")?;
+    let mut candidates = members
+        .iter()
+        .map(|member| require_uuid(member, "members[]"))
+        .collect::<Result<Vec<_>, _>>()?;
+    candidates.sort();
+    candidates.dedup();
+    if candidates.is_empty() || candidates.len() > MAX_MEMBERS {
+        return Err(error(
+            "invalid_request",
+            "members exige de 1 à 16 UUID distincts.",
+            false,
+        ));
+    }
+    let mut parts: Vec<&[u8]> = vec![b"add_members", b"v1", thread_id.as_bytes()];
+    parts.extend(candidates.iter().map(|member| member.as_bytes()));
+    if let Some(reason) = reason {
+        parts.extend([b"communication-project-v1".as_slice(), reason.as_bytes()]);
+    }
+    let canonical_hash = digest(&parts);
+    if let Some(replay) = store
+        .thread_operation_replay(actor, &operation_id, &canonical_hash)
+        .map_err(storage_error)?
+    {
+        return tx_result(replay, changed);
+    }
+    let view = store
+        .thread_show(actor, &thread_id)
+        .map_err(storage_error)?
+        .map_err(refusal_result)?;
+    if view.thread.creator_id != actor {
+        return Err(refusal_result(ThreadRefusal::CreatorRequired));
+    }
+    if view.thread.closed_at.is_some() {
+        return Err(refusal_result(ThreadRefusal::ThreadClosed));
+    }
+    let mut union = view.members.clone();
+    union.extend_from_slice(&candidates);
+    union.sort();
+    union.dedup();
+    if union.len() > MAX_MEMBERS {
+        return Err(refusal_result(ThreadRefusal::CapacityExceeded("members")));
+    }
+    let existing: std::collections::HashSet<_> = view.members.iter().collect();
+    for member in candidates
+        .iter()
+        .filter(|member| !existing.contains(member))
+    {
+        if !directory.known_agent(member) {
+            return Err(error(
+                "unknown_member",
+                "Membre candidat inconnu de l'annuaire.",
+                false,
+            ));
+        }
+    }
+    let warnings = directory.communication_scope(actor, &union, reason)?;
+    tx_result(
+        store
+            .thread_add_members(AddMembers {
+                actor,
+                operation_id: &operation_id,
+                canonical_hash: &canonical_hash,
+                thread_id: &thread_id,
+                candidates: &candidates,
+                expected_members: &union,
+                project_warnings: &warnings,
+                now,
+            })
+            .map_err(storage_error)?,
+        changed,
+    )
 }
 
 fn list(
@@ -801,6 +943,7 @@ fn post(
     supersedes_seq: Option<u64>,
     reason: Option<&str>,
     now: i64,
+    changed: &mut Option<String>,
 ) -> Result<Value, Value> {
     let thread_id = require_uuid(thread_id, "thread_id")?;
     let operation_id = require_uuid(operation_id, "operation_id")?;
@@ -909,7 +1052,7 @@ fn post(
         .thread_operation_replay(actor, &operation_id, &canonical_hash)
         .map_err(storage_error)?
     {
-        return tx_result(replay);
+        return tx_result(replay, changed);
     }
     // Le fil conserve ses lecteurs, même quand notify est vide. Vérifier
     // l'accès avant la portée pour ne rien révéler à un non-membre.
@@ -937,7 +1080,7 @@ fn post(
             limits: &LIMITS,
         })
         .map_err(storage_error)?;
-    tx_result(outcome)
+    tx_result(outcome, changed)
 }
 
 fn read(
@@ -994,11 +1137,10 @@ fn read(
 
 fn ack(store: &Store, actor: &str, thread_id: &str, receipt: &str) -> Result<Value, Value> {
     let thread_id = require_uuid(thread_id, "thread_id")?;
-    if canonical_uuid(receipt).is_none() {
-        return Err(refusal_result(ThreadRefusal::ReceiptInvalid));
-    }
+    let receipt = require_uuid(receipt, "receipt")
+        .map_err(|_| refusal_result(ThreadRefusal::ReceiptInvalid))?;
     match store
-        .thread_ack(actor, &thread_id, receipt)
+        .thread_ack(actor, &thread_id, &receipt)
         .map_err(storage_error)?
     {
         AckOutcome::Acknowledged { acked_seq, wake } => Ok(json!({
@@ -1075,6 +1217,7 @@ fn close(
     thread_id: &str,
     operation_id: &str,
     now: i64,
+    changed: &mut Option<String>,
 ) -> Result<Value, Value> {
     let thread_id = require_uuid(thread_id, "thread_id")?;
     let operation_id = require_uuid(operation_id, "operation_id")?;
@@ -1088,7 +1231,7 @@ fn close(
             now,
         })
         .map_err(storage_error)?;
-    tx_result(outcome)
+    tx_result(outcome, changed)
 }
 
 /// Corps neutre de l'alerte : aucun texte de contribution, aucun titre.
@@ -1114,6 +1257,574 @@ pub(crate) fn notice_message_id(thread_id: &str, agent_id: &str, generation: u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const UUID_A: &str = "14700000-aaaa-4aaa-8aaa-00000000000a";
+    const UUID_B: &str = "14700000-bbbb-4bbb-8bbb-00000000000b";
+    const UUID_T: &str = "14700000-cccc-4ccc-8ccc-00000000000c";
+    const UUID_OP: &str = "14700000-dddd-4ddd-8ddd-00000000000d";
+
+    struct UuidDirectory;
+    impl Directory for UuidDirectory {
+        fn known_agent(&self, id: &str) -> bool {
+            [UUID_A, UUID_B].contains(&id)
+        }
+        fn member_facts(&self, _: &str) -> MemberFacts {
+            MemberFacts::default()
+        }
+        fn communication_scope(
+            &self,
+            _: &str,
+            _: &[String],
+            _: Option<&str>,
+        ) -> Result<Vec<ProjectWarning>, Value> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct UuidFixture {
+        store: Store,
+        root: std::path::PathBuf,
+    }
+    impl UuidFixture {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("uuid147-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir(&root).unwrap();
+            let store = Store::open(&root.join("db")).unwrap();
+            assert!(matches!(
+                store
+                    .thread_create(CreateThread {
+                        actor: UUID_A,
+                        operation_id: "14700000-eeee-4eee-8eee-00000000000e",
+                        canonical_hash: "seed",
+                        thread_id: UUID_T,
+                        title: "Titre É exact",
+                        members: &[UUID_A.into(), UUID_B.into()],
+                        project_warnings: &[],
+                        now: 1,
+                        limits: &LIMITS
+                    })
+                    .unwrap(),
+                ThreadTxOutcome::Done(_)
+            ));
+            Self { store, root }
+        }
+        fn run(&self, actor: &str, request: ThreadAction) -> (Value, Option<String>) {
+            let (result, changed) = handle_with_change(
+                &self.store,
+                &UuidDirectory,
+                actor,
+                ThreadRequest {
+                    version: 1,
+                    cross_project_reason: Some("Motif É inchangé".into()),
+                    request,
+                },
+                2,
+            );
+            (result.result, changed)
+        }
+        fn post(&self, upper: bool, notify: Vec<String>) -> (Value, Option<String>) {
+            self.run(
+                UUID_A,
+                ThreadAction::Post {
+                    thread_id: if upper {
+                        UUID_T.to_uppercase()
+                    } else {
+                        UUID_T.into()
+                    },
+                    operation_id: if upper {
+                        UUID_OP.to_uppercase()
+                    } else {
+                        UUID_OP.into()
+                    },
+                    body: "É 🦀\r\n  Exact\n\n".into(),
+                    notify: ThreadNotify::Targets(notify),
+                    reply_to_seq: None,
+                    ack_receipt: None,
+                    kind: None,
+                    supersedes_seq: None,
+                },
+            )
+        }
+    }
+    impl Drop for UuidFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn spec147_members_add_normalized_replay_no_change_and_cursor_zero() {
+        let fixture = UuidFixture::new();
+        struct Known;
+        impl Directory for Known {
+            fn known_agent(&self, _: &str) -> bool {
+                true
+            }
+            fn member_facts(&self, _: &str) -> MemberFacts {
+                MemberFacts::default()
+            }
+            fn communication_scope(
+                &self,
+                _: &str,
+                _: &[String],
+                _: Option<&str>,
+            ) -> Result<Vec<ProjectWarning>, Value> {
+                Ok(vec![])
+            }
+        }
+        let c = "14700000-ffff-4fff-8fff-00000000000f";
+        let run = |op: &str, members: Value| {
+            let request = serde_json::from_value(json!({"version":1,"request":{"action":"add_members","thread_id":UUID_T.to_uppercase(),"members":members,"operation_id":op}})).unwrap();
+            let (result, changed) = handle_with_change(&fixture.store, &Known, UUID_A, request, 9);
+            (result.result, changed)
+        };
+        fixture.post(false, vec![]);
+        let before = fixture.store.thread_show(UUID_A, UUID_T).unwrap().unwrap();
+        let op = "14700000-eeee-4eee-8eee-00000000000f";
+        let (added, changed) = run(&op.to_uppercase(), json!([c.to_uppercase(), c, UUID_B]));
+        assert_eq!(added["status"], "members_added");
+        assert_eq!(added["added_members"], json!([c]));
+        assert_eq!(changed.as_deref(), Some(UUID_T));
+        let (replayed, changed) = run(op, json!([UUID_B, c, c.to_uppercase()]));
+        assert_eq!(replayed, added);
+        assert!(changed.is_none());
+        let (noop, changed) = run("14700000-eeee-4eee-8eee-000000000010", json!([c]));
+        assert_eq!(noop["status"], "no_change");
+        assert!(changed.is_none());
+        let view = fixture.store.thread_show(c, UUID_T).unwrap().unwrap();
+        assert_eq!(view.own.acked_seq, 0);
+        assert_eq!(view.thread, before.thread);
+        assert!(view.own_wake.is_none());
+        let (bad, changed) = run(op, json!([UUID_B]));
+        assert_eq!(bad["code"], "envelope_mismatch");
+        assert!(changed.is_none());
+    }
+
+    #[test]
+    fn spec147_members_refusals_and_project_guard_cover_whole_audience() {
+        let f = UuidFixture::new();
+        struct Checked(std::cell::RefCell<Vec<String>>);
+        impl Directory for Checked {
+            fn known_agent(&self, id: &str) -> bool {
+                id != "14700000-ffff-4fff-8fff-000000000099"
+            }
+            fn member_facts(&self, _: &str) -> MemberFacts {
+                MemberFacts::default()
+            }
+            fn communication_scope(
+                &self,
+                _: &str,
+                members: &[String],
+                reason: Option<&str>,
+            ) -> Result<Vec<ProjectWarning>, Value> {
+                *self.0.borrow_mut() = members.to_vec();
+                if reason.is_none() {
+                    return Err(error(
+                        "cross_project_reason_required",
+                        "motif requis",
+                        false,
+                    ));
+                }
+                Ok(vec![])
+            }
+        }
+        let directory = Checked(std::cell::RefCell::new(vec![]));
+        let c = "14700000-ffff-4fff-8fff-00000000000f";
+        let run = |actor: &str, members: Value, reason: Option<&str>| {
+            let request = ThreadRequest {version:1,cross_project_reason:reason.map(str::to_string),request:serde_json::from_value(json!({"action":"add_members","thread_id":UUID_T,"members":members,"operation_id":uuid::Uuid::new_v4().to_string()})).unwrap()};
+            let (result, changed) = handle_with_change(&f.store, &directory, actor, request, 2);
+            (result.result, changed)
+        };
+        let before = f.store.thread_show(UUID_A, UUID_T).unwrap().unwrap();
+        for (actor, members, code) in [
+            (UUID_B, json!([c]), "creator_required"),
+            (c, json!([c]), "thread_unavailable"),
+            (UUID_A, json!([]), "invalid_request"),
+            (UUID_A, json!(["bad"]), "invalid_request"),
+            (
+                UUID_A,
+                json!(["14700000-ffff-4fff-8fff-000000000099"]),
+                "unknown_member",
+            ),
+        ] {
+            let (result, changed) = run(actor, members, Some("mandat"));
+            assert_eq!(result["code"], code, "{result}");
+            assert!(changed.is_none());
+            assert_eq!(
+                f.store.thread_show(UUID_A, UUID_T).unwrap().unwrap(),
+                before
+            );
+        }
+        let (refused, changed) = run(UUID_A, json!([c]), None);
+        assert_eq!(refused["code"], "cross_project_reason_required");
+        assert!(changed.is_none());
+        assert_eq!(
+            &*directory.0.borrow(),
+            &vec![UUID_A.to_string(), UUID_B.to_string(), c.to_string()]
+        );
+        let candidates: Vec<_> = (0..14)
+            .map(|n| format!("14700000-ffff-4fff-8fff-{n:012x}"))
+            .collect();
+        assert_eq!(
+            run(UUID_A, json!(candidates), Some("mandat")).0["status"],
+            "members_added"
+        );
+        let view = f.store.thread_show(UUID_A, UUID_T).unwrap().unwrap();
+        assert_eq!(view.members.len(), 16);
+        assert_eq!(
+            run(UUID_A, json!([c, c.to_uppercase()]), Some("mandat")).0["code"],
+            "capacity_exceeded"
+        );
+        assert_eq!(
+            run(
+                UUID_A,
+                json!([candidates[0].clone(), candidates[0].to_uppercase()]),
+                Some("mandat")
+            )
+            .0["status"],
+            "no_change"
+        );
+        f.run(
+            UUID_A,
+            ThreadAction::Close {
+                thread_id: UUID_T.into(),
+                operation_id: uuid::Uuid::new_v4().to_string(),
+            },
+        );
+        assert_eq!(
+            run(UUID_A, json!([candidates[0].clone()]), Some("mandat")).0["code"],
+            "thread_closed"
+        );
+    }
+
+    #[test]
+    fn spec147_uuid_create_replays_across_case_without_second_commit() {
+        for upper_first in [false, true] {
+            let f = UuidFixture::new();
+            let action = |upper: bool| ThreadAction::Create {
+                title: "Titre É exact".into(),
+                members: vec![if upper {
+                    UUID_B.to_uppercase()
+                } else {
+                    UUID_B.into()
+                }],
+                operation_id: if upper {
+                    UUID_OP.to_uppercase()
+                } else {
+                    UUID_OP.into()
+                },
+            };
+            let (first, changed) = f.run(UUID_A, action(upper_first));
+            assert_eq!(first["status"], "created", "{first}");
+            assert_eq!(changed.as_deref(), first["thread_id"].as_str());
+            let before = f.store.connection().total_changes();
+            let (replay, changed) = f.run(UUID_A, action(!upper_first));
+            assert_eq!(replay, first);
+            assert!(changed.is_none());
+            assert_eq!(f.store.connection().total_changes(), before);
+        }
+    }
+
+    #[test]
+    fn spec147_uuid_post_replays_across_case_and_keeps_exact_body() {
+        for upper_first in [false, true] {
+            let f = UuidFixture::new();
+            let (first, changed) = f.post(
+                upper_first,
+                vec![if upper_first {
+                    UUID_B.to_uppercase()
+                } else {
+                    UUID_B.into()
+                }],
+            );
+            assert_eq!(first["status"], "posted", "{first}");
+            assert_eq!(changed.as_deref(), Some(UUID_T));
+            let before = f.store.connection().total_changes();
+            let (replay, changed) = f.post(
+                !upper_first,
+                vec![if upper_first {
+                    UUID_B.into()
+                } else {
+                    UUID_B.to_uppercase()
+                }],
+            );
+            assert_eq!(replay, first);
+            assert!(changed.is_none());
+            assert_eq!(f.store.connection().total_changes(), before);
+            let (history, _) = f.run(
+                UUID_A,
+                ThreadAction::History {
+                    thread_id: UUID_T.into(),
+                    from_seq: None,
+                    to_seq: None,
+                    limit: None,
+                },
+            );
+            assert_eq!(history["entries"][0]["body"], "É 🦀\r\n  Exact\n\n");
+        }
+    }
+
+    #[test]
+    fn spec147_uuid_close_replays_across_case_without_second_commit() {
+        for upper_first in [false, true] {
+            let f = UuidFixture::new();
+            let action = |upper: bool| ThreadAction::Close {
+                thread_id: if upper {
+                    UUID_T.to_uppercase()
+                } else {
+                    UUID_T.into()
+                },
+                operation_id: if upper {
+                    UUID_OP.to_uppercase()
+                } else {
+                    UUID_OP.into()
+                },
+            };
+            let (first, changed) = f.run(UUID_A, action(upper_first));
+            assert_eq!(first["status"], "closed", "{first}");
+            assert_eq!(changed.as_deref(), Some(UUID_T));
+            let before = f.store.connection().total_changes();
+            let (replay, changed) = f.run(UUID_A, action(!upper_first));
+            assert_eq!(replay, first);
+            assert!(changed.is_none());
+            assert_eq!(f.store.connection().total_changes(), before);
+        }
+    }
+
+    #[test]
+    fn spec147_uuid_ack_receipt_is_case_insensitive_but_invalid_stays_typed() {
+        let f = UuidFixture::new();
+        assert_eq!(f.post(false, vec![]).0["status"], "posted");
+        let (page, _) = f.run(
+            UUID_B,
+            ThreadAction::Read {
+                thread_id: UUID_T.into(),
+                limit: None,
+            },
+        );
+        let receipt = page["receipt"].as_str().unwrap();
+        let (ack, _) = f.run(
+            UUID_B,
+            ThreadAction::Ack {
+                thread_id: UUID_T.to_uppercase(),
+                receipt: receipt.to_uppercase(),
+            },
+        );
+        assert_eq!(ack["status"], "acknowledged", "{ack}");
+        let before = f.store.connection().total_changes();
+        let (again, _) = f.run(
+            UUID_B,
+            ThreadAction::Ack {
+                thread_id: UUID_T.into(),
+                receipt: receipt.into(),
+            },
+        );
+        assert_eq!(again["status"], "already_acknowledged");
+        assert_eq!(f.store.connection().total_changes(), before);
+        let (bad, _) = f.run(
+            UUID_B,
+            ThreadAction::Ack {
+                thread_id: UUID_T.into(),
+                receipt: "bad".into(),
+            },
+        );
+        assert_eq!(bad["code"], "receipt_invalid");
+        assert_eq!(f.store.connection().total_changes(), before);
+        let g = UuidFixture::new();
+        assert_eq!(g.post(false, vec![]).0["status"], "posted");
+        let (page, _) = g.run(
+            UUID_B,
+            ThreadAction::Read {
+                thread_id: UUID_T.into(),
+                limit: None,
+            },
+        );
+        let receipt = page["receipt"].as_str().unwrap();
+        let action = |upper: bool| ThreadAction::Post {
+            thread_id: if upper {
+                UUID_T.to_uppercase()
+            } else {
+                UUID_T.into()
+            },
+            operation_id: if upper {
+                UUID_OP.to_uppercase()
+            } else {
+                UUID_OP.into()
+            },
+            body: "Réponse exacte".into(),
+            notify: ThreadNotify::Targets(vec![]),
+            reply_to_seq: None,
+            ack_receipt: Some(if upper {
+                receipt.to_uppercase()
+            } else {
+                receipt.into()
+            }),
+            kind: None,
+            supersedes_seq: None,
+        };
+        let (posted, changed) = g.run(UUID_B, action(true));
+        assert_eq!(posted["status"], "posted", "{posted}");
+        assert_eq!(changed.as_deref(), Some(UUID_T));
+        let before = g.store.connection().total_changes();
+        let (replayed, changed) = g.run(UUID_B, action(false));
+        assert_eq!(replayed, posted);
+        assert!(changed.is_none());
+        assert_eq!(g.store.connection().total_changes(), before);
+    }
+
+    #[test]
+    fn spec147_uuid_reads_show_history_use_the_same_thread() {
+        let f = UuidFixture::new();
+        assert_eq!(f.post(false, vec![]).0["status"], "posted");
+        for action in [
+            ThreadAction::Show {
+                thread_id: UUID_T.to_uppercase(),
+            },
+            ThreadAction::History {
+                thread_id: UUID_T.to_uppercase(),
+                from_seq: None,
+                to_seq: None,
+                limit: None,
+            },
+            ThreadAction::Read {
+                thread_id: UUID_T.to_uppercase(),
+                limit: None,
+            },
+        ] {
+            let (result, changed) = f.run(UUID_B, action);
+            assert_ne!(result["status"], "error", "{result}");
+            assert_eq!(result["thread_id"], UUID_T);
+            assert!(changed.is_none());
+        }
+    }
+
+    #[test]
+    fn spec147_uuid_members_and_targets_deduplicate_before_hash_and_membership() {
+        let f = UuidFixture::new();
+        let mixed_b = "14700000-bBbB-4bBb-8BbB-00000000000B";
+        let (first, _) = f.run(
+            UUID_A,
+            ThreadAction::Create {
+                title: "Identités".into(),
+                operation_id: "14700000-dDdD-4dDd-8DdD-00000000000D".into(),
+                members: vec![UUID_A.to_uppercase(), mixed_b.into(), UUID_B.into()],
+            },
+        );
+        assert_eq!(first["status"], "created", "{first}");
+        let before = f.store.connection().total_changes();
+        let (replay, changed) = f.run(
+            UUID_A,
+            ThreadAction::Create {
+                title: "Identités".into(),
+                operation_id: UUID_OP.into(),
+                members: vec![UUID_B.into()],
+            },
+        );
+        assert_eq!(replay, first);
+        assert!(changed.is_none());
+        assert_eq!(f.store.connection().total_changes(), before);
+        // Une autre clé est requise pour Post : la clé Create ne change pas d'enveloppe.
+        let g = UuidFixture::new();
+        let (posted, _) = g.post(
+            true,
+            vec![UUID_A.to_uppercase(), mixed_b.into(), UUID_B.into()],
+        );
+        assert_eq!(posted["status"], "posted", "{posted}");
+        let (replayed, changed) = g.post(false, vec![UUID_A.into(), UUID_B.into()]);
+        assert_eq!(replayed, posted);
+        assert!(changed.is_none());
+    }
+
+    #[test]
+    fn spec147_uuid_invalid_forms_never_mutate_and_human_canonical_stays_strict() {
+        let f = UuidFixture::new();
+        let before = f.store.connection().total_changes();
+        for invalid in [
+            UUID_T.replace('-', ""),
+            format!("{{{UUID_T}}}"),
+            format!("urn:uuid:{UUID_T}"),
+            format!(" {UUID_T}"),
+            "invalid".into(),
+        ] {
+            let actions = [
+                ThreadAction::Show {
+                    thread_id: invalid.clone(),
+                },
+                ThreadAction::Create {
+                    title: "Refus".into(),
+                    members: vec![UUID_B.into()],
+                    operation_id: invalid.clone(),
+                },
+                ThreadAction::Create {
+                    title: "Refus membre".into(),
+                    members: vec![invalid.clone()],
+                    operation_id: UUID_OP.into(),
+                },
+                ThreadAction::Close {
+                    thread_id: UUID_T.into(),
+                    operation_id: invalid.clone(),
+                },
+                ThreadAction::Post {
+                    thread_id: UUID_T.into(),
+                    operation_id: invalid.clone(),
+                    body: "Exact".into(),
+                    notify: ThreadNotify::Targets(vec![]),
+                    reply_to_seq: None,
+                    ack_receipt: None,
+                    kind: None,
+                    supersedes_seq: None,
+                },
+                ThreadAction::Post {
+                    thread_id: UUID_T.into(),
+                    operation_id: UUID_OP.into(),
+                    body: "Exact".into(),
+                    notify: ThreadNotify::Targets(vec![invalid.clone()]),
+                    reply_to_seq: None,
+                    ack_receipt: None,
+                    kind: None,
+                    supersedes_seq: None,
+                },
+                ThreadAction::Post {
+                    thread_id: UUID_T.into(),
+                    operation_id: UUID_OP.into(),
+                    body: "Exact".into(),
+                    notify: ThreadNotify::Targets(vec![]),
+                    reply_to_seq: None,
+                    ack_receipt: Some(invalid.clone()),
+                    kind: None,
+                    supersedes_seq: None,
+                },
+            ];
+            for action in actions {
+                let (bad, changed) = f.run(UUID_A, action);
+                assert_eq!(bad["code"], "invalid_request", "{bad}");
+                assert!(changed.is_none());
+            }
+        }
+        assert_eq!(f.store.connection().total_changes(), before);
+        assert!(canonical_uuid(&UUID_T.to_uppercase()).is_none());
+        assert_eq!(canonical_uuid(UUID_T).as_deref(), Some(UUID_T));
+        assert!(parse_recent_cursor(&format!("2:{}", UUID_T.to_uppercase())).is_err());
+        assert!(parse_recent_cursor(&format!("2:{UUID_T}")).is_ok());
+    }
+
+    #[test]
+    fn spec147_done_keeps_a_change_marker_but_replay_keeps_only_the_receipt() {
+        let value = json!({"status":"posted","thread_id":"14700000-0000-4000-8000-000000000001"});
+        let mut changed = None;
+        assert_eq!(
+            tx_result(ThreadTxOutcome::Done(value.clone()), &mut changed).unwrap(),
+            value
+        );
+        assert_eq!(changed.as_deref(), value["thread_id"].as_str());
+        let mut replayed = None;
+        assert_eq!(
+            tx_result(ThreadTxOutcome::Replayed(value.clone()), &mut replayed).unwrap(),
+            value
+        );
+        assert!(replayed.is_none());
+    }
 
     #[test]
     fn spec146_real_projection_descending_pages_exact_bodies_and_fixed_snapshot() {

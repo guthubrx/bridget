@@ -1,0 +1,1001 @@
+{
+  "schema_version": 1,
+  "spec": "147-panneau-bridget-vivant",
+  "status": "delivery_in_progress_development_54_of_54_validated_in_isolation",
+  "recorded_at": "2026-10-08T21:41:23Z",
+  "baselines": {
+    "bridget": {
+      "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+      "branch": "session-147-panneau-bridget-vivant",
+      "git_head": "fa4f9ad936c06ec7ed3f34515c5ae86a06564d09"
+    },
+    "t3": {
+      "worktree": "/Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+      "branch": "session-147-panneau-bridget-vivant",
+      "git_head": "0bd1e7a52ced2d03f3e71e7dc7569ac16e1927a3"
+    },
+    "note": "HEAD attestes par git rev-parse ; ce ne sont pas des hashes du worktree modifie147."
+  },
+  "setup": {
+    "cargo_target_dir": "/Volumes/SD1TO/bridget-build-147-rust",
+    "cargo_target_present": true,
+    "preview_dir": "/Users/moi/.cache/t3-spec147-preview.457DX8",
+    "preview_dir_present": true,
+    "preview_authorized": true,
+    "fixtures_and_temporaries": "present_validated_by_main",
+    "fixture_runtime_receipts": "verified_native_interop_with_synthetic_rpc_relay",
+    "task_T001": "validated_by_main",
+    "task_T002": "setup_only_validated_by_main",
+    "isolation_checkpoint": {
+      "source": "controle reel principal transmis au proprietaire documentaire",
+      "local_time": "23:39",
+      "bridget_running_pids": [
+        59975,
+        61796
+      ],
+      "t3_running_pids": [
+        63000,
+        63083
+      ],
+      "paths_unchanged": true,
+      "production_restart": false,
+      "bridget_user_root_diff_sha256": "85e3093db98db8e369f2a3dd5ee16585777a310b938ed05d88ebb429009519b2",
+      "t3_user_root_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "t3_user_root_clean": true
+    },
+    "dependencies": {
+      "command": "pnpm install --offline --frozen-lockfile --ignore-scripts",
+      "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+      "exit_code": 0,
+      "duration_seconds": 380.2,
+      "packages_added": 1861,
+      "packages_resolved": 1861,
+      "packages_reused": 1846,
+      "packages_downloaded": 0,
+      "tool_session": 34983,
+      "log_file": null,
+      "warning": "Node v26.9.0 vs racine T3 ^24.13.1 ; warning engine, pas un echec",
+      "build_compatibility": "server/web builds RC0 ; Node26 warning reste explicite"
+    },
+    "node_engine_resolution": "Aucune modification globale ; tests et builds ciblés passent avec Node26 et avertissement engine24."
+  },
+  "documentary_checks": {
+    "reuse_items": 18,
+    "reuse_initial_gate_items": 16,
+    "reuse_gate_checked_cases": 5,
+    "reuse_gate": "pass_design_only",
+    "functional_requirements_covered": 31,
+    "success_criteria_covered": 20,
+    "new_user_story": "US147-05 approuvée et validée RED/GREEN/QA/convergence ; T027–T030 completed après gate principal.",
+    "analysis_passes": 2,
+    "analysis_open_findings": 0,
+    "git_diff_check": "pass",
+    "final_documentary_checks":{"source":"docs147 actual executions after main final GO","tasks_checked":54,"JSON_syntax_exit_code":0,"git_diff_check_exit_code":0,"fresh_Rust_audit_validator_exit_code":0,"fresh_T3_audit_validator_exit_code":0,"validator_errors_each":0,"validator_warnings_each":0,"tasks_SHA256_after_authorized_checking":"8c4f2a39da5d82d139b347c8358586ef57bd0819b97767a3782c45849ebe9db7","tasks_SHA_changed_only_after_converge_GO":true,"product_test_rerun":false,"feature_schema":"selection_only; feature_directory kept147","git_operations":false,"installed":false,"activated":false},
+    "converge": {
+      "passes": 2,
+      "main_approved": true,
+      "functional_requirements": 18,
+      "success_criteria": 10,
+      "orphan_requirements": 0,
+      "active_findings": 0,
+      "frozen_tasks_sha256_before_and_after": "04379ec81e413bfbddfe7a3afca5b055cca6bb00a83ee4a45a32e10037fdf026",
+      "tasks_completed": 30,
+      "tasks_total": 30,
+      "scope": "US1–US5 initiales uniquement ; nouvelles exigences US6/US7 non encore validées"
+    },
+    "extension": {
+      "approved": true,
+      "user_stories": [
+        "US147-06",
+        "US147-07",
+        "US147-08",
+        "US147-09"
+      ],
+      "functional_requirements": [
+        "FR147-19",
+        "FR147-20",
+        "FR147-21",
+        "FR147-22",
+        "FR147-23",
+        "FR147-24","FR147-25","FR147-26","FR147-27","FR147-28",
+        "FR147-29","FR147-30","FR147-31"
+      ],
+      "success_criteria": [
+        "SC147-11",
+        "SC147-12",
+        "SC147-13",
+        "SC147-14",
+        "SC147-15","SC147-16","SC147-17","SC147-18",
+        "SC147-19","SC147-20"
+      ],
+      "previous_tasks_completed": 30,
+      "global_convergence_preparation":{"FR_count":31,"SC_count":20,"US_count":9,"tasks_total":54,"tasks_checked":54,"tasks_SHA256_before":"dbde969d79be9397992de8c061785995f8245455728880793486a70d92c99654","tasks_main_SHA_confirmed_identical":true,"main_pass1":"mapping_verified_FR31_MEDIUM_then_minimal_fix122PASS_reviewed_main","main_pass2":"CONVERGED_main_final_GO_after_QA_and_fresh_audits","gates_remaining":[],"task_edits_during_converge":false,"task_checking_after_converge":"main_final_GO_only","global_completion":true,"orphan_requirements":0,"missing_tasks":0,"active_findings":0},
+      "fresh_T3_extension_audit":{"directory":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/audits/2026-10-09/session-2026-10-09-spec-147-t3-extensions","receipt":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/audits/2026-10-09/session-2026-10-09-spec-147-t3-extensions/validation-receipts.json","source":"review147_plan and principal read/revalidation","grade":"A","score":99.86,"active_findings":0,"historical_MEDIUM":{"id":"UX-001","fingerprint":"033533d678e5","issue":"full authorized title/members unavailable","status":"FIXED","deduction_retained":true},"scope":"fresh T3 extension delta only, not global repository certification","validator_exit_code":0,"validator_errors":0,"validator_warnings":0,"main_reran_validator":true,"old_initial_grade_reused":false,"providers":1,"cost_annotation_reservation":"lifted outside scoring"},
+      "native_US9_final_QA":{"source":"preview147 final receipt read by principal and documentary owner","receipt":"/Users/moi/.cache/t3-spec147-preview.457DX8/us9-final-native.json","dark_capture":"/Users/moi/.cache/t3-spec147-preview.457DX8/us9-final-dark360.png","light_capture":"/Users/moi/.cache/t3-spec147-preview.457DX8/us9-final-light360.png","status":"PASS","product_findings":0,"panel_CSS_width":360,"viewport_CSS":{"width":1843,"height":1152},"screenshot_pixels":{"width":1280,"height":800},"full_title_and_three_members_wrapping":true,"paragraph_width":327,"horizontal_overflow":false,"history_h2_count":0,"keyboard_Space_focus_stable":true,"normal_pinned_same_nodes":true,"A_B_A_off_page103_single_selection":true,"pagination_confirmed_by_main":true,"refresh_resync_details_article_expansion_stable":true,"copied_body_exact_characters":1224,"technical_mask_keeps_UUID":true,"business_refusal_watch_count":0,"mask_rows_details_messages":0,"scope":"real T3 components/CSS/store in native preview; RPC,data,clipboard synthetic; no complete transport/provider/model E2E","restart":false,"source_edits_during_QA":false},
+      "fresh_Rust_extension_audit":{"directory":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/audits/2026-10-09/session-2026-10-09-spec-147-rust-extensions","source":"/root/live147_explore and principal review/revalidation","scope":"US6/US8/T040 targeted delta,eightfiles/hunks; not wholeSPEC147/repository","grade":"A","active_findings":0,"historical_MEDIUM":{"id":"TEST-001","fingerprint":"8b1d5922a379","issue":"unbounded native CLI test","status":"FIXED","timeout_injected":false},"validator_exit_code":0,"validator_errors":0,"validator_warnings":0,"main_reran_validator":true,"new_Rust_tests_by_reviewer":false,"old_initial_grade_reused":false,"strict_clippy_baseline_preserved":true},
+      "final_production_isolation_receipt":{"source":"principal read-only check RC0","T3_ASAR_SHA256":"a43df7c98b17e1a0465821fff103049e3a7ed33b221f153e2a413b8fe2a624a2","Bridget_release_SHA256":"eadffeeb9532bc9ddfbac7946e49c357a42de117cec9ab7f70fde481a902361d","binary_hashes_unchanged":true,"Bridget_root_binarydiff_SHA256":"85e3093db98db8e369f2a3dd5ee16585777a310b938ed05d88ebb429009519b2","T3_root_diff_SHA256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","root_diffs_unchanged":true,"install":false,"commit":false,"restart":false},
+      "new_tasks_created": 24,
+      "concrete_mcp_plan_gate": "principal_approved_before_tasks_implementation",
+      "mcp_tasks": ["T035","T036","T037","T038","T039","T040","T041"],
+      "mcp_product_tests": "294PASS_post_lifetime_and_flags_final_review_APPROVE_main_checked_T049_T050",
+      "mcp_post_lifetime_final_receipt":{
+        "source":"principal receipt from /root/rpc147",
+        "cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "command_same_as":"mcp_amendment_final_receipt.command (same9files)",
+        "start":"2026-10-09 01:11:26 local","seconds":2.24,"exit_code":0,"files_passed":9,"passed":294,"skipped":1,
+        "adapter_subgroup":{"start":"2026-10-09 01:10:46 local","passed":9,"skipped":144,"milliseconds":870,"exit_code":0},
+        "source_ownership":"Scope acquisition5060/finalizer5063 to map.set5174/publication true5176 ; consumer outside local Scope",
+        "flags_tests":"two cases automaticMcp=true in private HOME without inherited identity",
+        "typecheck_server_exit_code":0,"lint_files":10,"lint_exit_code":0,"lint_warnings":0,"diff_check_exit_code":0,
+        "build_cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server",
+        "build_command":"pnpm exec vp pack","build_exit_code":0,"build_milliseconds":801,
+        "readonly_review":"APPROVE_final_lifetime_flags_delta_main_authorized_checks","tasks_T049_T050_checked":true,"model_or_production_claim":false,"log_file":null
+      },
+      "mcp_lifetime_amendment":{"approved_by_main":true,"task":"T050","scope_changed":false,"requirements":["FR147-21","FR147-22"],"issue":"prepare succeeds then old query close fails; unpublished candidate requires owner cleanup","required_fix":"single local finalizer owner until sessions.set; failure closes candidate/consumer, no ready/prompt/orphan","RED":{"source":"/root/rpc147","command":"pnpm exec vp test run apps/server/src/provider/Layers/ClaudeAdapter.test.ts -t 'unowned candidate'","cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant","start":"2026-10-09 01:09:26 local","milliseconds":976,"exit_code":1,"failed":1,"skipped":152,"observation":"candidate.closeCalls=0 expected1 when old close fails"},"GREEN":"final294PASS1SKIP2.24s01:11:26_RC0","review":"APPROVE_main_checked_T050","typecheck_server_exit_code":0,"new_framework_or_helper":false,"prior293PASS":"pre_lifetime_history"},
+      "panel_story_US9":{"id":"US147-09","approved":true,"priority":"P2","requirements":["FR147-29","FR147-30","FR147-31"],"criteria":["SC147-19","SC147-20"],"scope":"Native selected upper row; remove repeated lower header; retain accessible details and unique pinned authorized choice outside first page/filter; no API/store/rebrand","plan":"principal_accepted_before_code_reuse_item27_gate5of5","tasks_created":4,"tasks":["T051","T052","T053","T054"],"tests":"122PASS_post_FR31_correction_static_build_RC0_native_QA_PASS_fresh_audit_validated_main_GO","source_freeze":true,"tasks_checked":true},
+      "US9_FR31_finding":{"severity":"MEDIUM","confirmed_by":"main reviewer and preview147","issue":"upper title/members truncated; existing details only dates/state, full metadata unavailable","approved_fix":"minimal wrapping full title/member paragraphs in existing details, RED longtitle/multimembers","new_task_required":false,"fix_status":"FIXED_Panel660_662_GREEN122_main_review_native_final_QA_PASS","previous121PASS":"pre_fix_history","preview_before_artifacts":["/Users/moi/.cache/t3-spec147-preview.457DX8/us9-before-details-fix.json","/Users/moi/.cache/t3-spec147-preview.457DX8/us9-before-dark520.png","/Users/moi/.cache/t3-spec147-preview.457DX8/us9-before-dark360.png","/Users/moi/.cache/t3-spec147-preview.457DX8/us9-before-light360-long-title.png"],"preview_before_observations":"after host restored:historyHeaderCount0,native row aria-current/pressed true,details sibling; long title unavailable confirmed","final_QA_claim":true},
+      "US9_FR31_fix_receipt":{
+        "source":"/root/web147",
+        "cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "red_command":"../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t 'full authorized title'",
+        "red_start":"2026-10-09 01:23:34 local","red_seconds":1.29,"red_failed":1,"red_skipped":49,"red_total":50,
+        "green_command":"../../node_modules/.bin/vp test run --project unit src/rightPanelStore.test.ts src/components/BridgetPanel.test.tsx",
+        "green_start":"2026-10-09 01:23:52 local","green_seconds":1.69,"green_passed":122,"store_passed":72,"panel_passed":50,
+        "typecheck_exit_code":0,"lint_exit_code":0,"format_exit_code":0,"diff_check_exit_code":0,
+        "fix_mapping":"Panel660/662 full authorized title/members wrapping in existing details; lower766/messageskey801/copy934/body947",
+        "build_command":"../../node_modules/.bin/vp build --logLevel warn","build_exit_code":0,"build_status":"final_post_details_fix","build_plugin_reported_seconds":28.4,"build_callbacks_reported_seconds":25.4,"build_warnings":"chunks>500kB and plugin timings nonblocking","QA":"PASS_native_DOM_synthetic_RPC","audit":"fresh_T3_and_Rust_targeted_extensions_validated_RC0_main_GO","log_file":null
+      },
+      "panel_US9_receipts":{
+        "source":"/root/web147",
+        "cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "red_command":"../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t US9",
+        "red_start":"2026-10-09 01:17:06 local","red_seconds":3.06,"red_failed":5,"red_skipped":44,"red_total":49,
+        "earlier_red_limit":"01:16:44 had4 business failures and1 ambiguous findByType fixture failure, corrected before final5 business RED.",
+        "green_command":"../../node_modules/.bin/vp test run --project unit src/rightPanelStore.test.ts src/components/BridgetPanel.test.tsx",
+        "green_start":"2026-10-09 01:19:21 local","green_seconds":1.59,"green_passed":121,"store_passed":72,"panel_passed":49,
+        "typecheck_exit_code":0,"targeted_lint_exit_code":0,"format_two_files_exit_code":0,"diff_check_exit_code":0,
+        "mapping":"Panel525-539 pin;599/621/631-639 native tokens/focus;655-670 details sibling;760/785 no lower header/loading retained; tests358/385/411/492/531.",
+        "preview_QA":"historical_pre_FR31_QA_incomplete; final receipt native_US9_final_QA supersedes","build":{"command":"../../node_modules/.bin/vp build","cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web","exit_code":0,"modules":6143,"seconds":30.12,"warnings":"chunks>500kB and plugin timings nonblocking","status":"pre_FR31_full_metadata_correction"},"audit":"historical_pre_fix_scoring_pause; fresh_T3_extension_audit is current","log_file":null
+      },
+      "mcp_amendment_final_receipt":{
+        "source":"/root/rpc147",
+        "cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "command":"pnpm exec vp test run apps/server/src/provider/Drivers/ClaudeMcp.test.ts apps/server/src/provider/Drivers/ClaudeSettingsPaths.test.ts apps/server/src/bridget/BridgetExecutable.test.ts apps/server/src/provider/Layers/ClaudeAdapter.test.ts apps/server/src/provider/Drivers/ClaudeSkills.test.ts apps/server/src/bridget/BridgetReader.test.ts apps/server/src/provider/Drivers/ClaudeHome.test.ts packages/client-runtime/src/state/runtime.test.ts packages/client-runtime/src/state/orchestration.test.ts",
+        "start":"2026-10-09 01:06:34 local","seconds":2.04,"exit_code":0,"files_passed":9,"passed":293,"skipped":1,
+        "supersedes_final_status_of":"mcp_sdk_green_receipts (292PASS retained as pre-amendment history)",
+        "skipped_reason":"Native CLI metadata opt-in separately executed per previous main receipt.",
+        "additional_subgroup":{"start":"2026-10-09 01:05:49 local","passed":193,"skipped":1,"exit_code":0,"exact_command_received":false},
+        "typecheck_command":"pnpm exec tsc --noEmit -p apps/server/tsconfig.json","typecheck_exit_code":0,
+        "lint_command_same_as":"mcp_sdk_green_receipts.lint_command","lint_exit_code":0,"lint_warnings":0,"diff_check_exit_code":0,
+        "build_cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server",
+        "build_command":"pnpm exec vp pack","build_exit_code":0,"build_milliseconds":765,"build_outputs":6,"build_MB":38.50,
+        "guard_order":"metadata before SDKstatus; flags/identity before I/O",
+        "fixtures":"Explicit legacy fixture opt-out and private MCP test homes; no actual profile mutation.",
+        "final_review":"historical_pre_lifetime_pending; final294PASS_APPROVE_supersedes","task_T049_checked":true,"model_runtime_claim":false,"log_file":null
+      },
+      "mcp_amendment":{"approved_by_main":true,"issue":"SDKstatus before metadata could fail disabled candidate instead of skip","required_order":"metadata guard before SDKstatus ; flags/identity require no I/O","previous_tasks":["T035","T038","T039","T041"],"correction_task":"T049","new_task_required":true,"scope_changed":false,"prior_checkmarks_preserved":true,"receipt":"GREEN_294PASS_review_APPROVE_main_checked_T049","global_closure":"CONVERGED_main_final_GO","red":{"source":"/root/rpc147","cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant","command":"pnpm exec vp test run apps/server/src/provider/Drivers/ClaudeMcp.test.ts -t 'explicit metadata refusal before'","start":"2026-10-09 01:04:54 local","milliseconds":577,"exit_code":1,"failed":1,"skipped":41,"observation":"explicit disabled metadata triggered sdk_failed because status called before guard","log_file":null}},
+      "mcp_sdk_green_receipts": {
+        "source":"/root/rpc147",
+        "cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "command":"pnpm exec vp test run apps/server/src/provider/Drivers/ClaudeMcp.test.ts apps/server/src/provider/Drivers/ClaudeSettingsPaths.test.ts apps/server/src/bridget/BridgetExecutable.test.ts apps/server/src/provider/Layers/ClaudeAdapter.test.ts apps/server/src/provider/Drivers/ClaudeSkills.test.ts apps/server/src/bridget/BridgetReader.test.ts apps/server/src/provider/Drivers/ClaudeHome.test.ts packages/client-runtime/src/state/runtime.test.ts packages/client-runtime/src/state/orchestration.test.ts",
+        "start":"2026-10-09 01:01:50 local","seconds":2.31,"exit_code":0,"files_passed":9,"passed":292,"skipped":1,
+        "skipped_reason":"Native CLI metadata opt-in, separately executed with1PASS/39skips per main at00:58:10; no exact separate command received.",
+        "adapter_command":"pnpm exec vp test run apps/server/src/provider/Layers/ClaudeAdapter.test.ts -t 'SPEC147 MCP'",
+        "adapter_start":"2026-10-09 01:01:14 local","adapter_seconds":1.08,"adapter_passed":8,"adapter_skipped":144,"adapter_exit_code":0,
+        "new_cases":"setMcpServers pending then deadline; explicit interruption; preserve previous query/session, close candidate/queue, late Promise gives no second status/publication",
+        "new_cases_RED":false,
+        "typecheck_command":"pnpm exec tsc --noEmit -p apps/server/tsconfig.json","typecheck_exit_code":0,
+        "lint_command":"pnpm exec vp lint apps/server/src/provider/Drivers/ClaudeMcp.ts apps/server/src/provider/Drivers/ClaudeMcp.test.ts apps/server/src/provider/Drivers/ClaudeSettingsPaths.ts apps/server/src/provider/Drivers/ClaudeSettingsPaths.test.ts apps/server/src/provider/Drivers/ClaudeSkills.ts apps/server/src/provider/Layers/ClaudeAdapter.ts apps/server/src/provider/Layers/ClaudeAdapter.test.ts apps/server/src/bridget/BridgetExecutable.ts apps/server/src/bridget/BridgetExecutable.test.ts apps/server/src/bridget/BridgetReader.ts --report-unused-disable-directives",
+        "lint_exit_code":0,"lint_warnings":0,
+        "build_cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server",
+        "build_command":"pnpm exec vp pack","build_exit_code":0,"build_milliseconds":893,"build_outputs":6,"build_MB":38.50,
+        "earlier_quality_runs":"Earlier lint/tsc failed during development and were corrected; only latest runs marked GREEN.",
+        "proof_limit":"SDK fixtures without model; not native MCP OS authority or complete T3+SDK+model chain.",
+        "readonly_final_review":"APPROVE_review147_plan_after_pending_deadline_interruption_late_resolution_review","tasks_checked":true,"log_file":null
+      },
+      "mcp_native_authority_receipt": {
+        "source":"/root/rust147",
+        "cwd":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "command":"TMPDIR=/tmp CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec147_native_mcp -- --nocapture --test-threads=1",
+        "exit_code":0,"passed":3,"failed":0,"filtered":1099,"compile_seconds":17.56,"test_seconds":1.58,
+        "cases":["closest shellA ahead of live ancestorB resolves A","absent or birthbad without another proof gives identity_not_found","tokenB stored for A gives auxiliary_identity_unproven","birthbad closest plus valid ancestorB resolves B by nearest VALID ancestor contract"],
+        "authority_boundary":"Real parent OS, MCP child, credentials, IPC handle_connection and private SQLite ; write_marker invoked directly by fixture.",
+        "not_proven":["IdentityBindings.refresh","T3 DB/OS inventory publication end to end","SDK to native runtime to MCP to model"],
+        "table_snapshots_unchanged":true,"Deliver_count":0,"child_pids_gone_after_EOF":10,"private_namespaces_cleaned":5,
+        "functional_identity_fix":false,"business_RED_claim":false,
+        "fixture_roots_removed":["/private/tmp/h147mcp-11932259be6245cb960ed8268b364d96","/private/tmp/h147mcp-e0085500c98e4a8397c5aa3d9c0a06af","/private/tmp/h147mcp-1c0c404b7dc04c5996388c239ded178b","/private/tmp/h147mcp-ebf66379b7ac447d9d4f637fde5b5ac6","/private/tmp/h147mcp-fee0c02f486c4c50aefd4f06b6f9ea0d"],
+        "full_spec147_command":"TMPDIR=/tmp /Volumes/SD1TO/bridget-build-147-rust/debug/deps/bridget_daemon-21678d889d786fbb spec147 --nocapture",
+        "full_spec147_exit_code":0,"full_spec147_passed":29,"full_spec147_ignored":1,"full_spec147_filtered":1072,"full_spec147_seconds":14.76,
+        "clippy_exit_code":0,"clippy_seconds":27.20,"warning":"Only baseline146 read_range_ordered eight arguments.",
+        "rustfmt_exit_code":0,"diff_check_exit_code":0,"log_file":null,
+        "task_checked":true,
+        "refresh_qualification":{
+          "approved_before_code":true,"source":"/root/rust147",
+          "source_tests":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/t3code_identity.rs:1204",
+          "test_name":"spec147_native_t3_refresh_publishes_and_revokes_real_os_processes",
+          "existing_module":"spec101_identity",
+          "command":"TMPDIR=/tmp CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec147_native_t3 -- --nocapture --test-threads=1",
+          "exit_code":0,"passed":1,"failed":0,"filtered":1106,"compile_seconds":17.73,"test_seconds":0.11,
+          "actual_boundaries":"IdentityBindings.refresh + private T3 provider_session_runtime DB + neutral OS children arg0claude/--session-id + native PID/birth/lineage + publish + NativeTree resolution + ambiguity revocation + unique republish + live empty removal",
+          "synthetic_boundary":"live T3 tuple and protocol credential fixture ; runtimePID is test process",
+          "not_proven":"HTTP/T3 SDK/model or authority daemon from this fixture ; real credential authority remains distinct MCP OS proof",
+          "receipt":"GREEN_received_readonly_review_APPROVE_live147_explore",
+          "SQL_unchanged":true,"proofcredential_preserved":true,
+          "fixture_root_removed":"/private/tmp/t3147-9611220eefea477cbb1e1f24236b5ef6","children_EOF_cleaned":2,
+          "regressions":{"t3code_identity":{"exit_code":0,"passed":22,"filtered":1085,"seconds":0.41},"mcp_identity":{"exit_code":0,"passed":14,"filtered":1093,"seconds":0.36}},
+          "rustfmt_exit_code":0,"diff_check_exit_code":0,"new_clippy_receipt":false,
+          "new_functional_helper_or_module":false,"log_file":null
+        }
+      },
+      "mcp_red_receipts": {
+        "source":"/root/rpc147",
+        "cwd":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "adapter_command":"pnpm exec vp test run apps/server/src/provider/Layers/ClaudeAdapter.test.ts -t 'SPEC147 MCP'",
+        "adapter_start":"2026-10-09 00:49:41 local","adapter_exit_code":1,"failed":3,"skipped":144,
+        "combined_command":"pnpm exec vp test run apps/server/src/provider/Drivers/ClaudeMcp.test.ts apps/server/src/provider/Drivers/ClaudeSettingsPaths.test.ts apps/server/src/bridget/BridgetExecutable.test.ts apps/server/src/provider/Layers/ClaudeAdapter.test.ts -t 'SPEC147'",
+        "combined_start":"2026-10-09 00:51:04 local","combined_exit_code":1,
+        "combined_result":"3 suites blocked at collection by absent planned modules +3 assertion failures/144 skipped ; six groups written, not all executed.",
+        "log_file":null
+      },
+      "exact_reported_agent": "regional-wrkr-1",
+      "exact_cause": "Read-only verified: effective Claude/GLM MCP config lacks Bridget and T3 injects only t3-code.",
+      "product_tests": "US6_US7_US8_US9_validated_in_isolation_final_audits_QA_CONVERGED_main_GO",
+      "uuid_receipts": {
+        "source": "/root/rust147",
+        "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec147_uuid -- --nocapture",
+        "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "red": {"exit_code":101,"passed":2,"failed":8,"filtered":1089,"compile_seconds":23.33,"test_seconds":0.08},
+        "green_initial": {"exit_code":0,"passed":10,"failed":0,"compile_seconds":28.82,"test_seconds":0.12},
+        "cases": "7 métier,2CLI,1 vraie façade MCP/IPC/backendSQLite",
+        "authority_limit": "Handshake auxiliaire stub fixture102v33 ; pas E2E handle_connection/autorité ni preuve no-forgery.",
+        "log_file": null,
+        "final_nonregression": {
+          "source": "/root/rust147",
+          "spec147": {"exit_code":0,"passed":26,"failed":0,"ignored":1,"filtered":1072,"compile_seconds":28.20,"test_seconds":11.97},
+          "direct_test_binary": "/Volumes/SD1TO/bridget-build-147-rust/debug/deps/bridget_daemon-21678d889d786fbb",
+          "spec145": {"passed":25,"ignored":1,"filtered":1073,"seconds":13.58},
+          "spec146": {"passed":9,"filtered":1090,"seconds":0.42},
+          "spec102": {"passed":24,"filtered":1075,"seconds":0.35},
+          "spec127": {"passed":1,"filtered":1098,"seconds":0},
+          "threads_tests": {"passed":17,"filtered":1082,"seconds":0.15},
+          "clippy_exit_code":0,"clippy_seconds":28.21,
+          "warning":"Baseline146 read_range_ordered huit arguments, git show HEAD attesté ; aucune annotation allow ajoutée.",
+          "rustfmt_three_files_exit_code":0,"diff_check_exit_code":0,
+          "private_cli_build_exit_code":0,"private_cli_build_seconds":16.60,
+          "authority_scope":"UUID façade test authstub ; pas autorité MCP E2E, pas preuve CLIOSuppercase.",
+          "log_file":null
+        },
+        "tasks_checked": true
+      },
+      "membership_story": {"id":"US147-08","approved":true,"requirements":["FR147-24","FR147-25","FR147-26","FR147-27","FR147-28"],"criteria":["SC147-15","SC147-16","SC147-17","SC147-18"],"scope":"Créateur initial/fil ouvert/ajout seul/max16/cursor0/sans autoalerte/full historique autorisé ; union recheck transactionnel et wakepending nondispatch.","concrete_plan":"principal_accepted_gate5of5_Analyze_two_passes_before_code","capability":"ThreadMembersV1/thread_members_v1","cli":"bridget thread add-members FIL --member UUID --member UUID --id UUID [--cross-project-reason MOTIF]","tasks_created":7,"tasks":["T042","T043","T044","T045","T046","T047","T048"],"product_tests":"final11PASS_native_interop_regress103PASS_2ignored_review_APPROVE_fresh_audit_validated_CONVERGED_main_GO","source_freeze":true,"source_docs_local_ready":true,"source_docs_quick_validate_exit_code":0,"source_docs_global_published":false,"CLI_fixture_correction":"native CLI spawn/owned child,64KiB output,2s wait/global10s and verified PID cleanup","timeout_injection_test":false,"timeout_proof_limit":"Code remediation reviewed and successful native path; no injected timeout RED/GREEN","tasks_checked":true},
+      "membership_final_receipts":{
+        "source":"/root/compact_t3",
+        "cwd":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "cargo_prefix":"TMPDIR=/tmp CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo",
+        "membership_command_suffix":"test -p bridget-daemon --lib spec147_members -- --nocapture",
+        "membership_exit_code":0,"passed":11,"failed":0,"skipped":0,"filtered":1103,"compile_seconds":18.50,"test_seconds":0.80,
+        "transport_command_suffix":"test -p bridget-transport --lib spec147 -- --nocapture",
+        "transport_exit_code":0,"transport_passed":3,"transport_filtered":297,"transport_compile_seconds":10.37,"transport_seconds":0,
+        "regression_command":"TMPDIR=/tmp /Volumes/SD1TO/bridget-build-147-rust/debug/deps/bridget_daemon-21678d889d786fbb spec102 spec127 spec138 spec145 spec146 spec147 --nocapture",
+        "regression_exit_code":0,"regression_passed":103,"regression_ignored":2,"regression_filtered":1009,"regression_seconds":14.62,
+        "ignored_tests":["mcp::tests::spec138_real_agent_loop_cli_daemon_scoped_replay","daemon::spec145_human_view_tests::spec147_t3_service_real_cli_interop"],
+        "transport_regression_command":"TMPDIR=/tmp /Volumes/SD1TO/bridget-build-147-rust/debug/deps/bridget_transport-340c5317a56866aa spec102 spec127 spec138 spec145 spec146 spec147 --nocapture",
+        "transport_regression_exit_code":0,"transport_regression_passed":10,"transport_regression_filtered":290,"transport_regression_seconds":0,
+        "catalogue_spec147_tests":42,"catalogue_is_execution":false,
+        "cli_build_command_suffix":"build -p bridget-daemon --bin bridget","cli_build_exit_code":0,"cli_build_seconds":39.60,"binary":"/Volumes/SD1TO/bridget-build-147-rust/debug/bridget",
+        "build_after_edits":"Only test daemon/store fixes after build; functional source identical.",
+        "native_interop_test":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:12417 spec147_members_native_cli_mcp_paginated_history_and_no_old_replay",
+        "actual_boundary":"MCP A and CLI B real children with private socket/credentials/PID/birth; additions/replay;137 older entries in3read pages+ACK; history exactCRLF/Unicode; superseded body omitted from read;cursor0;future all targetsC+B;0Deliver.",
+        "data_invariant":"Existing entries/wakes/reads/timestamps unchanged during addition.",
+        "cleanup":"Owned child response64KiB/2s,global10s,try_wait bounded,TERM only verified PID/birth/parent/command; every CLI/shell/MCP gone and RAII namespace destroyed.",
+        "timeout_injected":false,
+        "clippy_command_suffix":"clippy -p bridget-daemon -p bridget-transport --all-targets","clippy_exit_code":0,"clippy_seconds":26.34,"clippy_real_seconds":26.42,
+        "warning":"Only HEAD baseline146 read_range_ordered8args; strictDwarnings priorRC101 on this baseline, not masked.",
+        "rustfmt_seven_files_exit_code":0,"diff_check_exit_code":0,"source_skill_validate_exit_code":0,
+        "red_reports":"transport1FAIL RC10114.30s;daemon3FAIL RC10126.84s;guard1FAIL RC10119.29s;native old binary catalogue1FAIL RC101 compile18.25/test0.44s; exact initial commands not yet received by docs owner.",
+        "fixture_corrections":"Identityversion3 corrected2;primary hello replaced genuine auxiliary;accepted socket reset blocking like production;regression withoutTMPDIR failed32fixtures then environment fixed;old migration136oracle2 updated3 after observedfailure.",
+        "local_review":"APPROVE_live147_explore","no_global_skill_publish":true,"fresh_audit":"fresh_Rust_extension_audit_validated_RC0_main_GO","log_file":null
+      },
+      "uuid_plan_gate": "principal_approved_before_implementation",
+      "uuid_reuse_gate": "reuse_existing_require_uuid_thread_members_colocated_tests",
+      "uuid_tasks": [
+        "T031",
+        "T032",
+        "T033",
+        "T034"
+      ],
+      "total_tasks": 54,
+      "completed_tasks":54,
+      "provider": "claude_glm",
+      "provider_home": ".claude-glm",
+      "effective_mcp_configuration": "diagnostic_before_fix_bridget_absent; no_active_model_catalogue_claim",
+      "diagnostic": {
+        "source": "principal_and_rpc_readonly_receipt",
+        "t3_thread_id": "1288a673-d16e-473a-80dc-def0b2f776c8",
+        "agent": "regional-wrkr-1",
+        "adapter": "ClaudeAgent",
+        "provider": "claude_glm",
+        "model": "glm-5.3-flash",
+        "home_path": "/Users/moi/.claude-glm",
+        "binary": "gclaude",
+        "launch_args": "no_flags",
+        "home_and_project_mcp_names": [],
+        "command": "CLAUDE_CONFIG_DIR=/Users/moi/.claude-glm /Users/moi/.local/bin/claude mcp get bridget",
+        "cwd": "/Users/moi/Nextcloud/10.Scripts/69.opus2D",
+        "exit_code": 1,
+        "sanitized_output_bytes": 64,
+        "raw_output_saved": false,
+        "model_called": false,
+        "production_configuration_mutated": false,
+        "secret_values_saved": false
+      },
+      "uuid_scope": "Commandes et outil de fils partagés create/post/read/ack/history/show/close : références UUID thread/operation/membres/targets/reçus, pas acteur d’autorité/send opaque/noms/préfixes/contrat humain"
+    },
+    "functional_requirements_covered_previous_lot": 18,
+    "success_criteria_covered_previous_lot": 10,
+    "functional_requirements_total": 31,
+    "success_criteria_total": 20
+  },
+  "product_validation": {
+    "status": "all_nine_stories_passed_in_isolation; extension_receipts_in_documentary_checks.extension",
+    "verified_invocations": [
+      {
+        "id": "rust_protocol_red",
+        "phase": "red",
+        "source": "/root/rust147",
+        "command": "CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo test -p bridget-transport spec147 -- --nocapture",
+        "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "exit_code": 101,
+        "passed": 0,
+        "failed": 1,
+        "filtered": 297,
+        "compilation_seconds": 82,
+        "test_seconds": 0,
+        "finished_at": null,
+        "receipt_reported_at": "2026-10-08T21:40:29Z",
+        "cause": "unknown variant human_thread_watch_v1",
+        "tool_session": 96778,
+        "tool_chunk": "f713c5",
+        "log_file": null
+      },
+      {
+        "id": "t3_rpc_red",
+        "phase": "red",
+        "source": "/root/rpc147",
+        "command": "./node_modules/.bin/vp test run packages/contracts/src/bridget.test.ts apps/server/src/auth/RpcAuthorization.test.ts apps/server/src/bridget/BridgetReader.test.ts",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "exit_code": null,
+        "result": "reported_failed",
+        "files_failed": 3,
+        "passed": 78,
+        "failed": 7,
+        "total": 85,
+        "runner_local_start": "23:38:15",
+        "duration_ms": 980,
+        "tool_session": 44257,
+        "log_file": null
+      },
+      {
+        "id": "t3_web_red",
+        "phase": "red",
+        "source": "/root/web147",
+        "command": "../../node_modules/.bin/vp test run --project unit src/rightPanelStore.test.ts src/components/BridgetPanel.test.tsx",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "exit_code": null,
+        "result": "reported_failed",
+        "passed": 95,
+        "failed": 5,
+        "total": 100,
+        "store": {
+          "passed": 68,
+          "failed": 3,
+          "total": 71
+        },
+        "panel": {
+          "passed": 27,
+          "failed": 2,
+          "total": 29
+        },
+        "runner_local_start": "23:38:50",
+        "duration_seconds": 1.67,
+        "tool_session": 40308,
+        "tool_chunk": "474c8f",
+        "log_file": null,
+        "startup_error_excluded_from_red": true
+      },
+      {
+        "id": "t3_web_baseline_comparative_red",
+        "phase": "comparative_baseline_red_after_partial_implementation",
+        "source": "/root/web147",
+        "command": "../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t 'revalidates replacement|keeps the choice after|isolates remembered|cancels reads and masks|masks content during disconnect|releases its watch'",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "production_under_test": "BridgetPanel HEAD146 avec tests147 ; code147 restaure via apply_patch immediatement selon proprietaire",
+        "exit_code": null,
+        "result": "reported_failed",
+        "passed": 0,
+        "failed": 6,
+        "skipped": 29,
+        "total": 35,
+        "runner_local_start": "23:47:26",
+        "duration_seconds": 1.72,
+        "tool_session": 73501,
+        "tool_chunk": "494969",
+        "log_file": null,
+        "strict_red_before_implementation": false,
+        "cause": "base146 : supersession race affiche137 lignes au lieu100 ; binding efface choix ; disconnect garde body ; cancel et watch manquants"
+      }
+    ],
+    "red_proofs": [
+      "rust_protocol_red",
+      "t3_rpc_red",
+      "t3_web_red"
+    ],
+    "green_proofs": [
+      {
+        "id": "rust_spec147_final",
+        "passed": 16,
+        "exit_code": 0,
+        "receipt": "final_receipts.rust"
+      },
+      {
+        "id": "rpc_final",
+        "passed": 136,
+        "exit_code": 0,
+        "receipt": "provisional_green_reports et quality_partial_reports, reçus finaux"
+      },
+      {
+        "id": "web_final",
+        "passed": 116,
+        "exit_code": 0,
+        "receipt": "us5_receipts.green"
+      },
+      {
+        "id": "ws_bridget_human",
+        "passed": 1,
+        "exit_code": 0,
+        "receipt": "quality_partial_reports"
+      },
+      {
+        "id": "native_interop_final",
+        "primary_passed": 1,
+        "recovery_passed": 1,
+        "exit_code": 0,
+        "receipt": "final_receipts.native_interop"
+      }
+    ],
+    "provisional_green_reports": [
+      {
+        "source": "/root/rpc147",
+        "command_ref": "t3_rpc_red",
+        "files_passed": 3,
+        "passed": 85,
+        "failed": 0,
+        "runner_local_start": "23:39:44",
+        "duration_ms": 981,
+        "final_lane_validation": false,
+        "note": "runtime et integration encore en cours ; aucune tache GREEN cochee"
+      },
+      {
+        "id": "t3_rpc_122_targeted_green",
+        "source": "/root/rpc147",
+        "command": "./node_modules/.bin/vp test run packages/contracts/src/bridget.test.ts apps/server/src/bridget/BridgetReader.test.ts apps/server/src/auth/RpcAuthorization.test.ts packages/client-runtime/src/state/runtime.test.ts packages/client-runtime/src/state/orchestration.test.ts --testTimeout=10000",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "files_passed": 5,
+        "passed": 122,
+        "failed": 0,
+        "runner_local_start": "23:48:04",
+        "duration_seconds": 1.4,
+        "tool_session": 60055,
+        "log_file": null,
+        "final_lane_validation": false,
+        "observed_behaviors": [
+          "enfant OS script prive annule puis isRunning=false",
+          "10 relectures=10 RPC",
+          "10 liberations watch",
+          "ready nouvelle generation",
+          "reprise transport et refus metier terminal"
+        ],
+        "note": "processus OS reel avec script synthetique prive ; ce n'est pas la preuve vrai CLI147/daemon"
+      },
+      {
+        "id": "t3_ws_targeted_green",
+        "source": "/root/rpc147",
+        "command": "./node_modules/.bin/vp test run apps/server/src/server.test.ts -t 'Bridget human' --testTimeout=20000",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "passed": 1,
+        "failed": 0,
+        "skipped": 210,
+        "runner_local_start": "23:44:56",
+        "duration_seconds": 4.02,
+        "log_file": null,
+        "final_lane_validation": false
+      },
+      {
+        "id": "t3_web_106_partial_green",
+        "source": "principal",
+        "command": null,
+        "passed": 106,
+        "failed": 0,
+        "runner_local_start": "23:47:41",
+        "duration_seconds": 1.35,
+        "final_lane_validation": false,
+        "note": "commande exacte non retransmise dans ce recu ; coalescence ready+changed et rattrapage >50 messages encore en correction"
+      },
+      {
+        "id": "t3_web_111_green_before_lint_and_us5",
+        "source": "/root/web147",
+        "command": "../../node_modules/.bin/vp test run --project unit src/rightPanelStore.test.ts src/components/BridgetPanel.test.tsx",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "runner_local_date": "2026-10-09",
+        "runner_local_start": "00:00:04",
+        "duration_seconds": 4,
+        "passed": 111,
+        "failed": 0,
+        "store_passed": 72,
+        "panel_passed": 39,
+        "tool_session": 82764,
+        "tool_chunk": "f944a0",
+        "log_file": null,
+        "final_lane_validation": false,
+        "note": "GREEN final annonce pour US1-4 avant lint final et ajout US5 ; native RPC+AtomReact reels, lecturesCLI mock, recette focus/Range attendue"
+      },
+      {
+        "id": "t3_rpc_136_green",
+        "source": "/root/rpc147",
+        "command": "./node_modules/.bin/vp test run packages/contracts/src/bridget.test.ts apps/server/src/bridget/BridgetReader.test.ts apps/server/src/auth/RpcAuthorization.test.ts packages/client-runtime/src/state/runtime.test.ts packages/client-runtime/src/state/orchestration.test.ts packages/client-runtime/src/state/attachments.test.ts --testTimeout=10000",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "runner_local_date": "2026-10-09",
+        "runner_local_start": "00:04:07",
+        "duration_seconds": 2.3,
+        "exit_code": 0,
+        "files_passed": 6,
+        "passed": 136,
+        "failed": 0,
+        "log_file": null,
+        "final_lane_validation": false,
+        "note": "historical initial-lot receipt; later extension proofs and main global gate supersede the pending status"
+      },
+      {
+        "id": "t3_ws_rerun_green",
+        "source": "/root/rpc147",
+        "command": "./node_modules/.bin/vp test run apps/server/src/server.test.ts -t 'Bridget human' --testTimeout=20000",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "runner_local_date": "2026-10-09",
+        "runner_local_start": "00:03:56",
+        "duration_seconds": 4.64,
+        "exit_code": 0,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 210,
+        "log_file": null,
+        "final_lane_validation": false
+      },
+      {
+        "id": "rust_daemon_13_green",
+        "source": "/root/rust147",
+        "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec147 -- --nocapture",
+        "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "exit_code": 0,
+        "passed": 13,
+        "failed": 0,
+        "ignored": 1,
+        "filtered": 1072,
+        "compilation_seconds": 21.03,
+        "test_seconds": 11.67,
+        "observed_behaviors": [
+          "3hooks runtime reels",
+          "vrai CLI10cycles"
+        ],
+        "final_lane_validation": false,
+        "log_file": null
+      }
+    ],
+    "additional_red_receipts": [
+      {
+        "source": "/root/web147",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "command": "../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t 'contiguous window'",
+        "runner_local_date": "2026-10-08",
+        "runner_local_start": "23:58:10",
+        "duration_seconds": 1.2,
+        "failed": 1,
+        "skipped": 36,
+        "total": 37,
+        "comparison": "pont de revalidation retire temporairement puis restaure immediatement selon proprietaire",
+        "cause": "attendu beforeSeq150/S200 ; recu137/S200",
+        "log_file": null
+      },
+      {
+        "source": "/root/web147",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "command": "../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t 'native ready-and-changed'",
+        "runner_local_date": "2026-10-08",
+        "runner_local_start": "23:54:24",
+        "duration_seconds": 4.01,
+        "failed": 1,
+        "skipped": 36,
+        "total": 37,
+        "cause": "Atom+React : zero list read au lieu1",
+        "log_file": null
+      },
+      {
+        "source": "/root/web147",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+        "command": "../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t 'purges a confirmed|daemon watch is retrying'",
+        "runner_local_date": "2026-10-08",
+        "runner_local_start": "23:59:21",
+        "duration_seconds": 1.7,
+        "failed": 2,
+        "skipped": 37,
+        "total": 39,
+        "cause": "UUID conserve apres refus confirme et crash nullstate",
+        "log_file": null
+      },
+      {
+        "source": "/root/rpc147",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "command": "./node_modules/.bin/vp test run apps/server/src/bridget/BridgetReader.test.ts packages/client-runtime/src/state/orchestration.test.ts -t 'closes stdout|keeps handshake proof' --testTimeout=5000",
+        "runner_local_date": "2026-10-08",
+        "runner_local_start": "23:53:11",
+        "failed": 2,
+        "skipped": 38,
+        "log_file": null,
+        "green_followup_report": "deux fichiers40 tests passent sans filtre a23:54:00 ; reçu proprietaire"
+      },
+      {
+        "source": "/root/rpc147",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "command": "./node_modules/.bin/vp test run packages/client-runtime/src/state/orchestration.test.ts -t technical --testTimeout=5000",
+        "runner_local_date": "2026-10-08",
+        "runner_local_start": "23:57:44",
+        "failed": 3,
+        "skipped": 8,
+        "log_file": null,
+        "green_followup_report": "3passed8skipped a2026-10-09 00:00:45"
+      },
+      {
+        "source": "/root/rpc147",
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "command": "./node_modules/.bin/vp test run apps/server/src/bridget/BridgetReader.test.ts -t 'real CLI transport exit'",
+        "runner_local_date": "2026-10-09",
+        "runner_local_start": "00:00:32",
+        "failed": 1,
+        "skipped": 32,
+        "log_file": null,
+        "green_followup_report": "Reader+orchestration44 passent sans filtre a00:01:02 ; timeouts exacts finaux non retransmis"
+      }
+    ],
+    "quality_partial_reports": [
+      {
+        "source": "principal et /root/rpc147",
+        "checks": "tsc serveur/runtime et lint cible13 fichiers",
+        "commands": [
+          "./node_modules/.bin/tsc --noEmit -p apps/server/tsconfig.json --pretty false",
+          "./node_modules/.bin/tsc --noEmit -p packages/client-runtime/tsconfig.json --pretty false",
+          "./node_modules/.bin/vp lint packages/contracts/src/bridget.ts packages/contracts/src/bridget.test.ts packages/contracts/src/rpc.ts apps/server/src/bridget/BridgetReader.ts apps/server/src/bridget/BridgetReader.test.ts apps/server/src/auth/RpcAuthorization.ts apps/server/src/auth/RpcAuthorization.test.ts apps/server/src/ws.ts apps/server/src/server.test.ts packages/client-runtime/src/rpc/client.ts packages/client-runtime/src/state/orchestration.ts packages/client-runtime/src/state/orchestration.test.ts packages/client-runtime/src/state/runtime.ts"
+        ],
+        "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant",
+        "exit_codes": [
+          0,
+          0,
+          0
+        ],
+        "errors": 0,
+        "warnings": 25,
+        "warnings_note": "preexistants dans server.test hors diff selon proprietaire",
+        "final_validation": false
+      }
+    ],
+    "audit_followup_pending": null,
+    "design_convergence": {
+      "authorized_by_main": true,
+      "status": "corrections_et_preuves_en_cours_pas_completion",
+      "runtime_sticky_state": [
+        "event",
+        "readyGeneration",
+        "subscriptionId"
+      ],
+      "client_local_visit_id": true,
+      "wire_input_fields_unchanged": [
+        "threadId",
+        "projectId"
+      ],
+      "cli_recovery": {
+        "initial_attempts": 1,
+        "additional_attempts_max": 3,
+        "delay_seconds": 1,
+        "retryable_technical_codes": [
+          "unavailable",
+          "command_failed",
+          "timeout"
+        ],
+        "business_retry": false
+      },
+      "history_revalidation": "head nouvelle + intervalle jusqua ancienne ancre + segment consulte ; to_seq=S commun et publication atomique",
+      "history_cost": "O(nouveautes + pages consultees)",
+      "new_tasks_added": false,
+      "task_T026_completed": false
+    },
+    "real_daemon_to_cli": "passed_boundary_typed_reader_interop",
+    "real_cli_to_service_rpc": "passed_real_cli_to_typed_reader_not_ws",
+    "real_boundary_interop": {
+      "source": "/root/rust147",
+      "command": "TMPDIR=/tmp BRIDGET_SPEC147_T3_PROGRAM=/opt/homebrew/bin/node BRIDGET_SPEC147_T3_SCRIPT=/Users/moi/.cache/t3-spec147-rpc-interop/reader-interop.mjs /Volumes/SD1TO/bridget-build-147-rust/debug/deps/bridget_daemon-21678d889d786fbb spec147_t3_service_real_cli_interop --ignored --nocapture",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "filtered": 1084,
+      "test_seconds": 0.94,
+      "stdout_marker": "SPEC147_INTEROP_READER_OK ready changed list_recent show history_recent",
+      "stderr_empty": true,
+      "boundaries": [
+        "vrai daemon handler",
+        "socket",
+        "CLI147",
+        "BridgetReader type"
+      ],
+      "synthetic_boundary": "ProjectionSnapshotQuery fixture uniquement",
+      "real_ws_claim": false,
+      "real_dom_claim": false,
+      "after_fixture_post": "tables inchangees hors publication fixture ; zero DeliverT3/watch retenu selon proprietaire",
+      "fixture_namespace_socket": "non retransmis dans ce recu",
+      "log_file": null
+    },
+    "runtime_to_synthetic_dom": "passed_native_isolated_synthetic_recipe_main_approved",
+    "visual_recipe": "passed_native_isolated_synthetic_recipe_main_approved",
+    "us5_receipts": {
+      "source": "/root/web147",
+      "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+      "red": {
+        "command": "../../node_modules/.bin/vp test run --project unit src/components/BridgetPanel.test.tsx -t 'requested recipients'",
+        "runner_local_date": "2026-10-09",
+        "runner_local_start": "00:03:42",
+        "duration_seconds": 1.21,
+        "failed": 5,
+        "skipped": 39,
+        "panel_total": 44
+      },
+      "green": {
+        "command": "../../node_modules/.bin/vp test run --project unit src/rightPanelStore.test.ts src/components/BridgetPanel.test.tsx",
+        "runner_local_date": "2026-10-09",
+        "runner_local_start": "00:06:02",
+        "duration_seconds": 2.97,
+        "passed": 116,
+        "failed": 0,
+        "store_passed": 72,
+        "panel_passed": 44
+      },
+      "typecheck": {
+        "command": "../../node_modules/.bin/tsc --noEmit",
+        "exit_code": 0,
+        "runner_local_start_approx": "00:08"
+      },
+      "lint_format_four_files_exit_code": 0,
+      "log_file": null,
+      "author_exclusion": "explicitement demandee GO principal, pas deduite dune livraison",
+      "tasks_T027_T028": "checked_on_verified_receipts",
+      "task_T029": "native_QA_main_approved",
+      "task_T030": "main_converge_approved"
+    },
+    "native_qa_partial": {
+      "source": "principal",
+      "recipe_kind": "T3 natif isole avec fixture synthétique",
+      "selection": "A103 horspage1→B201→A103→B201 sans reselect",
+      "uuid_store_only_independent": true,
+      "visible_watch_count": 1,
+      "other_watch_count": 0,
+      "loaded_history": "A101 pages3=137exact descendant137…1",
+      "us5_header_rows": [
+        137,
+        136,
+        135,
+        134,
+        133,
+        132
+      ],
+      "us5_cases": [
+        "known",
+        "all-effective",
+        "none",
+        "unknown",
+        "two-known",
+        "known+unknown"
+      ],
+      "header_height_px_each": 24,
+      "time_count_each": 1,
+      "aria_exact_uuid": true,
+      "body_unchanged": true,
+      "post138_gestures": {
+        "same_article": true,
+        "same_text_node": true,
+        "focus": true,
+        "range_2_to_30": true,
+        "details": true,
+        "expanded": true,
+        "thread_details": true
+      },
+      "raw_copy": {
+        "chars": 1224,
+        "crlf_exact": true
+      },
+      "first_latency_ms": 3037,
+      "first_reads": 6,
+      "latency_sub2s_claim": false,
+      "condition": "hote occupe par build ; anciennespages665/867/862ms alors fixture90ms",
+      "status": "rerun_apres_build_attendu_aucune_validation_SC14701_sur_ce_premier_essai"
+    },
+    "partial_preview": {
+      "source": "principal",
+      "surface": "tab_b port5874",
+      "selection_a_b_a": "h2 restore observe",
+      "dom": "137 articles et focus/Range/details stables observes apres message138",
+      "reads": 4,
+      "last_observed_latency_ms_approx": 406,
+      "final_recipe": false,
+      "reason": "HMR a reinitialise ensuite la recette ; T024 non clos"
+    },
+    "final_receipts": {
+      "source": "Messages exécutants Rust/RPC/Web et observations natives du principal, aucun log persistant créé",
+      "rust": {
+        "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Volumes/SD1TO/bridget-build-147-rust CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec147 -- --nocapture",
+        "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "exit_code": 0,
+        "passed": 16,
+        "failed": 0,
+        "ignored": 1,
+        "filtered": 1072,
+        "compile_seconds": 35.27,
+        "test_seconds": 12.6,
+        "transport_passed": 298,
+        "transport_ignored": 1,
+        "threads_passed": 16,
+        "rustfmt_exit": 0,
+        "diff_check_exit": 0,
+        "clippy_normal_exit": 0,
+        "clippy_seconds": 51.99,
+        "clippy_warning": "Une alerte baseline146 huit arguments read_range_ordered:691 ; strict -Dwarnings RC101 sur cette seule alerte.",
+        "build_cli_exit": 0,
+        "build_cli_seconds": 75
+      },
+      "native_interop": {
+        "command": "TMPDIR=/tmp BRIDGET_SPEC147_T3_PROGRAM=/opt/homebrew/bin/node BRIDGET_SPEC147_T3_SCRIPT=/Users/moi/.cache/t3-spec147-rpc-interop/reader-interop.mjs /Volumes/SD1TO/bridget-build-147-rust/debug/deps/bridget_daemon-21678d889d786fbb spec147_t3_service_real_cli_interop --ignored --nocapture",
+        "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant",
+        "primary": {
+          "exit_code": 0,
+          "passed": 1,
+          "filtered": 1088,
+          "seconds": 0.53,
+          "socket": "/tmp/h147rpc-f42d006491d1486bb6b050160091725f/d.sock"
+        },
+        "recovery": {
+          "extra_environment": "BRIDGET_147_RECOVERY=1",
+          "exit_code": 0,
+          "passed": 1,
+          "filtered": 1088,
+          "seconds": 1.52,
+          "socket": "/tmp/h147rpc-63909345783e4e51a3eaeb75f2c03ff6/d.sock"
+        },
+        "namespaces_cleaned": true,
+        "real_boundaries": [
+          "daemon handler",
+          "SQLite privée",
+          "socket",
+          "CLI147",
+          "Reader typé",
+          "runtime natif EnvironmentRegistry"
+        ],
+        "synthetic_boundaries": [
+          "projection snapshot",
+          "relais RPC"
+        ],
+        "true_ws_or_dom_end_to_end_claim": false
+      },
+      "builds": {
+        "server": {
+          "command": "../../node_modules/.bin/vp pack",
+          "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server",
+          "exit_code": 0,
+          "duration_ms": 1745,
+          "files": 6,
+          "mb": 38.48
+        },
+        "web": {
+          "command": "../../node_modules/.bin/vp build",
+          "cwd": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web",
+          "exit_code": 0,
+          "seconds": 62.1,
+          "modules": 6143,
+          "warning": "chunks >500KiB ; aucun benchmark comparatif"
+        }
+      }
+    },
+    "native_qa_final": {
+      "source": "Principal via aperçu T3 natif isolé, données synthétiques",
+      "selection": "A103 hors première page → B201 → A103 → B201 sans clic supplémentaire ; UUID seul par contexte",
+      "latency_healthy_async_operation_ms": 693.6,
+      "latency_scope": "DOM synthétique, opération preview_evaluate awaitPromise active ; pas performance production",
+      "inactive_preview_trials_ms": [
+        3037,
+        3760,
+        3390
+      ],
+      "inactive_preview_note": "Timers fixture90ms observés vers995/1001ms hors opération ; pas correctif produit ni hypothèse causalité production revendiquée",
+      "burst": "138→238 en100 signaux puis239 ;239 articles uniques239…1 sous snapshot239 commun",
+      "quiet": {
+        "milliseconds": 69382.1,
+        "reads": 0,
+        "events": 0,
+        "external_actions": 0,
+        "active_watch": 1,
+        "dom_head": 239
+      },
+      "cycles": {
+        "count": 10,
+        "passed": 10,
+        "pending_reads": 0,
+        "external_actions": 0,
+        "sequence": "autre onglet0 / reopen1 / hide0 / show1 / close0 / reopen1",
+        "choice_kept": true
+      },
+      "outage": "CLI indisponible masque tous articles et gardeUUID ; reprise nouvelle génération rattrape240. Connexion T3 perdue watch0/articles0/UUIDgardé ; reprise241/watch1",
+      "supersession_race": "Dernière page before41/toSeq241 en vol ; supersedes4→242 ;242 articles242…1 et bounds241/191/141/91/41 sous toSeq242 commun ; ancienne réponse241 jamais publiée",
+      "focus_range_expand_details_stable": true,
+      "raw_copy_137": {
+        "characters": 1224,
+        "crlf_exact": true
+      },
+      "raw_copy_4_superseded": {
+        "characters": 114,
+        "exact": true
+      },
+      "search_old_page": "Article4 seul sans nouvelle lecture ; focus et valeur Collisions maintenus au signal",
+      "binding_refusal": "Après350ms : articles0/watch0/UUIDgardé/read0/event0 ; aucun retry métier",
+      "us5": "Six variantes connues/all/none/inconnu/deuxconnus/mixte ; chaque ligne24px, date unique, ariaUUIDexact,360px sans débordement horizontal, copie unchanged",
+      "production_conversations_or_agents_touched": false,
+      "healthy_metadata_metrics": {
+        "post_ms": 693.6,
+        "supersedes_ms": 875,
+        "close_ms": 823.3,
+        "directory_name_ms": 620.6,
+        "create_list_ms": 803.3,
+        "scope": "Mutations fixture/resync et DOM synthétique natif ; événements réels correspondants testés Rust séparément. Pas nouveau CRUD UI ni parcours E2E intégral."
+      }
+    },
+    "audit_validation": {
+      "rust": {
+        "exit_code": 0,
+        "errors": 0,
+        "warnings": 0
+      },
+      "t3": {
+        "exit_code": 0,
+        "errors": 0,
+        "warnings": 0
+      },
+      "gate": "principal_approved_final",
+      "scope": "Diff source Rust6/T3 17 ; A100 readonly zéro résiduel, pas dépôt global"
+    }
+  },
+  "delivery": {
+    "status": "in_progress_authorized_receipts_pending",
+    "development_tasks_completed": 54,
+    "development_validation_preserved": true,
+    "commit": false,
+    "merge": false,
+    "push": false,
+    "installed": false,
+    "activated": false,
+    "production_restart": false,
+    "authorization": "User explicitly authorized commit/merge/push/install and T3 restart for147; principal coordinates execution. No delivered/active claim before actual receipts.",
+    "repositories": {
+      "Bridget": {"worktree":"/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant","root":"/Users/moi/Nextcloud/10.Scripts/64.bridget","push_remote":"github","remote_URL":"https://github.com/guthubrx/bridget.git","commit_SHA":null,"merged_SHA":null,"push_receipt":null},
+      "T3": {"worktree":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant","root":"/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local","push_remote":"fork","remote_URL":"https://github.com/guthubrx/t3code.git","upstream_not_push_target":"https://github.com/pingdotgg/t3code.git","PR_created":false,"commit_SHA":null,"merged_SHA":null,"push_receipt":null}
+    },
+    "planned_backups": {"T3_application":true,"Bridget_binary":true,"Bridget_SQLite_targeted_small":true,"T3_database":false,"exact_paths":null,"verified":false},
+    "planned_runtime_validation": {"installed_binary_hashes":null,"T3_restart_receipt":null,"Bridget_runtime_version_receipt":null,"production_smoke_receipt":null},
+    "cleanup": {"142":false,"145":false,"other_work":false},
+    "documentation_owner_actions": "Only isolated documentation preparation; no source/git/service/install actions by docs147."
+  },
+  "updated_at": "2026-10-08T23:41:32Z"
+}

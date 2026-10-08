@@ -127,7 +127,32 @@ pub(crate) fn thread_request(
     request: bridget_transport::protocol::ThreadRequest,
 ) -> Result<bridget_transport::protocol::ThreadResult, ClientError> {
     let mut connection = registered_connection(identity, instance_id, socket)?;
-    if request.cross_project_reason.is_some() {
+    if matches!(
+        request.request,
+        bridget_transport::protocol::ThreadAction::AddMembers { .. }
+    ) {
+        let mut required = vec![ClientCapability::ThreadMembersV1];
+        if request.cross_project_reason.is_some() {
+            required.push(ClientCapability::CommunicationProjectsV1);
+        }
+        let accepted = match connection.exchange(&WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::communication::issuer_scope(instance_id),
+            capabilities: required.clone(),
+        })? {
+            DaemonToWrapper::ClientWelcome { capabilities, .. } => {
+                required.iter().all(|cap| capabilities.contains(cap))
+            }
+            _ => false,
+        };
+        if !accepted {
+            return Err(ClientError::Technical {
+                code: "thread_members_unsupported",
+                message: "le daemon ne négocie pas l'ajout de membres ; aucune mutation ni repli"
+                    .into(),
+            });
+        }
+    } else if request.cross_project_reason.is_some() {
         negotiate_projects(
             &mut connection,
             &crate::communication::issuer_scope(instance_id),
@@ -181,6 +206,139 @@ pub(crate) fn human_thread_view(
         }
         DaemonToWrapper::HumanThreadViewResult { .. } => Ok(R::error(E::UnsupportedVersion)),
         other => unexpected_response(other),
+    }
+}
+
+/// Le handshake est borné à6s. Après ready, seul un fragment en cours a un
+/// délai ; l'attente sans données reste ouverte et annulable sans polling métier.
+pub(crate) fn human_thread_watch(
+    socket: &Path,
+    request: bridget_transport::protocol::HumanThreadWatchV1,
+    mut output: impl FnMut(&bridget_transport::protocol::HumanThreadWatchEvent) -> io::Result<()>,
+    mut cancelled: impl FnMut() -> bool,
+) -> Result<(), ClientError> {
+    use bridget_transport::protocol::{
+        HUMAN_THREAD_WATCH_MAX_BYTES, HumanThreadViewError as R, HumanThreadWatchEvent as E,
+    };
+    let mut connection =
+        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(6))?;
+    connection.max_response_bytes = HUMAN_THREAD_WATCH_MAX_BYTES;
+    let handshake = (|| {
+        if !matches!(
+            connection.exchange(&WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client
+            })?,
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            }
+        ) {
+            return Ok(false);
+        }
+        Ok(matches!(connection.exchange(&WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::communication::issuer_scope("human-thread-watch"),
+            capabilities: vec![ClientCapability::HumanThreadWatchV1],
+        })?, DaemonToWrapper::ClientWelcome {version, capabilities,..}
+            if version == CLIENT_CONTRACT_VERSION && capabilities.as_slice() == [ClientCapability::HumanThreadWatchV1]))
+    })();
+    match handshake {
+        Ok(true) => {}
+        Ok(false) => {
+            output(&E::error(R::UnsupportedVersion)).map_err(watch_output_error)?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    }
+    let first = match connection.exchange(&WrapperToDaemon::HumanThreadWatchV1 { request })? {
+        DaemonToWrapper::HumanThreadWatchEvent { event } => event,
+        _ => {
+            output(&E::error(R::UnsupportedVersion)).map_err(watch_output_error)?;
+            return Ok(());
+        }
+    };
+    let generation = match &first {
+        E::Ready { generation, .. } => generation.clone(),
+        E::Error { .. } => {
+            output(&first).map_err(watch_output_error)?;
+            return Ok(());
+        }
+        _ => return Err(watch_protocol_error()),
+    };
+    output(&first).map_err(watch_output_error)?;
+    connection
+        .reader
+        .get_ref()
+        .set_read_timeout(None)
+        .map_err(watch_output_error)?;
+    let mut seq = 0;
+    loop {
+        if cancelled() {
+            connection.poison();
+            return Ok(());
+        }
+        let mut poll = libc::pollfd {
+            fd: connection.reader.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if connection.reader.buffer().is_empty() {
+            let ready = unsafe { libc::poll(&mut poll, 1, 100) };
+            if ready == 0 {
+                continue;
+            }
+            if ready < 0 {
+                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(watch_protocol_error());
+            }
+        }
+        let frame = bridget_transport::jsonl::read_unix_line(
+            &mut connection.reader,
+            HUMAN_THREAD_WATCH_MAX_BYTES,
+            bridget_transport::jsonl::LineDeadline::AfterFirstByte(Duration::from_secs(6)),
+        )
+        .map_err(|_| watch_protocol_error())?;
+        let Some(frame) = frame else {
+            return Err(watch_protocol_error());
+        };
+        let response: DaemonToWrapper =
+            serde_json::from_slice(&frame).map_err(|_| watch_protocol_error())?;
+        let DaemonToWrapper::HumanThreadWatchEvent { event } = response else {
+            return Err(watch_protocol_error());
+        };
+        match &event {
+            E::Changed {
+                generation: current,
+                seq: next,
+                ..
+            }
+            | E::Resync {
+                generation: current,
+                seq: next,
+                ..
+            } if current == &generation && *next > seq => seq = *next,
+            E::Error { .. } => {
+                output(&event).map_err(watch_output_error)?;
+                return Ok(());
+            }
+            _ => return Err(watch_protocol_error()),
+        }
+        output(&event).map_err(watch_output_error)?;
+    }
+}
+
+fn watch_protocol_error() -> ClientError {
+    ClientError::Technical {
+        code: "daemon_protocol",
+        message: "flux de suivi interrompu ou invalide".into(),
+    }
+}
+
+fn watch_output_error(_: io::Error) -> ClientError {
+    ClientError::Technical {
+        code: "watch_output_closed",
+        message: "sortie de suivi fermée".into(),
     }
 }
 
@@ -757,6 +915,7 @@ pub(crate) struct DaemonConnection {
     reader: BufReader<UnixStream>,
     deadline: Instant,
     poisoned: bool,
+    max_response_bytes: usize,
 }
 
 impl DaemonConnection {
@@ -780,6 +939,7 @@ impl DaemonConnection {
             reader: BufReader::new(reader_stream),
             deadline,
             poisoned: false,
+            max_response_bytes: MAX_DAEMON_RESPONSE_BYTES,
         })
     }
 
@@ -878,11 +1038,28 @@ impl DaemonConnection {
                     message: "connexion fermée ou budget total dépassé".into(),
                 });
             }
-            let line = read_bounded_response(&mut self.reader, self.deadline).map_err(|error| {
-                ClientError::Technical {
-                    code: failure_code,
-                    message: format!("réponse daemon indisponible : {error}"),
-                }
+            let frame = if self.max_response_bytes == MAX_DAEMON_RESPONSE_BYTES {
+                read_bounded_response(&mut self.reader, self.deadline)
+            } else {
+                bridget_transport::jsonl::read_unix_line(
+                    &mut self.reader,
+                    self.max_response_bytes,
+                    bridget_transport::jsonl::LineDeadline::Absolute(self.deadline),
+                )
+                .and_then(|frame| {
+                    frame.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::UnexpectedEof, "daemon fermé sans réponse")
+                    })
+                })
+                .and_then(|frame| {
+                    String::from_utf8(frame).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidData, "réponse non UTF-8")
+                    })
+                })
+            };
+            let line = frame.map_err(|error| ClientError::Technical {
+                code: failure_code,
+                message: format!("réponse daemon indisponible : {error}"),
             })?;
             let response = decode(&line).map_err(|_| ClientError::Technical {
                 code: failure_code,
@@ -1006,6 +1183,216 @@ pub(crate) fn unexpected_response<T>(_response: DaemonToWrapper) -> Result<T, Cl
 #[cfg(test)]
 mod security_tests {
     use super::*;
+
+    #[test]
+    fn spec147_members_client_uses_one_combined_hello_and_refuses_old_peer() {
+        for supports_members in [false, true] {
+            let path = crate::mcp_identity::mock_socket("members-negotiation");
+            let listener = UnixListener::bind(&path).unwrap();
+            let actor = "14700000-0000-4000-8000-000000000001";
+            crate::mcp_identity::mock_private_identity(&path, actor, "instance147members");
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::RegisterAuxiliary { .. }
+                ));
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        agent_id: actor.into(),
+                        credential: None
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::ClientHello { capabilities, .. } =
+                    decode(line.trim()).unwrap()
+                else {
+                    panic!("hello requis")
+                };
+                assert_eq!(
+                    capabilities,
+                    vec![
+                        ClientCapability::ThreadMembersV1,
+                        ClientCapability::CommunicationProjectsV1
+                    ]
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::ClientWelcome {
+                        version: 1,
+                        build_id: "fixture".into(),
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: if supports_members {
+                            capabilities
+                        } else {
+                            vec![ClientCapability::CommunicationProjectsV1]
+                        }
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                line.clear();
+                let bytes = reader.read_line(&mut line).unwrap();
+                if !supports_members {
+                    assert_eq!(bytes, 0, "aucune requête ni repli après cap absente");
+                    return;
+                }
+                assert!(
+                    matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(),WrapperToDaemon::ThreadRequest{request} if request.request.name()=="add_members")
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::ThreadResult {
+                        result: bridget_transport::protocol::ThreadResult {
+                            version: 1,
+                            result: serde_json::json!({"status":"no_change"})
+                        }
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+            });
+            let request=serde_json::from_value(serde_json::json!({"version":1,"cross_project_reason":"mandat explicite","request":{"action":"add_members","thread_id":actor,"members":[actor],"operation_id":"14700000-0000-4000-8000-000000000002"}})).unwrap();
+            let result = thread_request(actor, "instance147members", &path, request);
+            if supports_members {
+                assert_eq!(result.unwrap().result["status"], "no_change");
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ClientError::Technical {
+                        code: "thread_members_unsupported",
+                        ..
+                    })
+                ));
+            }
+            server.join().unwrap();
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn spec147_old_daemon_capability_refusal_is_terminal_and_typed() {
+        let path =
+            std::env::temp_dir().join(format!("h147old-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            reader.read_line(&mut String::new()).unwrap();
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            let mut hello = String::new();
+            reader.read_line(&mut hello).unwrap();
+            assert!(hello.contains("human_thread_watch_v1"));
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::ClientRejected {
+                    reason: bridget_transport::protocol::ClientRefusal::CapabilityNotNegotiated
+                })
+                .unwrap()
+            )
+            .unwrap();
+            assert_eq!(
+                reader.read_line(&mut String::new()).unwrap(),
+                0,
+                "aucun repli agent ni Register"
+            );
+        });
+        let mut events = Vec::new();
+        human_thread_watch(
+            &path,
+            bridget_transport::protocol::HumanThreadWatchV1 {
+                version: 1,
+                t3_thread_id: "14700000-0000-4000-8000-000000000001".into(),
+                project_root: "/fixture".into(),
+            },
+            |event| {
+                events.push(event.clone());
+                Ok(())
+            },
+            || false,
+        )
+        .unwrap();
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            events,
+            [bridget_transport::protocol::HumanThreadWatchEvent::error(
+                bridget_transport::protocol::HumanThreadViewError::UnsupportedVersion
+            )]
+        );
+    }
+
+    #[test]
+    fn spec147_transport_disconnect_is_not_a_permanent_version_refusal() {
+        let path =
+            std::env::temp_dir().join(format!("h147c-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            reader.read_line(&mut String::new()).unwrap();
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            reader.read_line(&mut String::new()).unwrap();
+        });
+        let mut events = Vec::new();
+        let result = human_thread_watch(
+            &path,
+            bridget_transport::protocol::HumanThreadWatchV1 {
+                version: 1,
+                t3_thread_id: "14700000-0000-4000-8000-000000000001".into(),
+                project_root: "/fixture".into(),
+            },
+            |event| {
+                events.push(event.clone());
+                Ok(())
+            },
+            || false,
+        );
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            result.is_err(),
+            "une coupure de transport doit rester reprenable"
+        );
+        assert!(
+            events.is_empty(),
+            "aucun unsupported_version métier inventé"
+        );
+    }
     use std::io::BufRead;
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
@@ -1023,6 +1410,7 @@ mod security_tests {
                 writer: stream,
                 deadline: Instant::now() + budget,
                 poisoned: false,
+                max_response_bytes: MAX_DAEMON_RESPONSE_BYTES,
             },
             peer,
         )

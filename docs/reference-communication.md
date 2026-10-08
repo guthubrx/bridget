@@ -304,7 +304,7 @@ réception inutilement. Une nouvelle question explicite reste possible : il
 n'existe pas de filtre sur des mots comme « OK », ni de blocage des envois volontaires.
 
 La session 102 ajoute les fils partagés : un historique commun à des membres
-fixés, des dépôts silencieux par défaut, des sollicitations ciblées structurées
+autorisés, des dépôts silencieux par défaut, des sollicitations ciblées structurées
 (`notify` : `[]`, UUID ou `"all"`), une lecture paginée avec reçu puis
 confirmation, et `history` pour relire sans déplacer le repère. L'outil
 `bridget_thread` et la famille `bridget thread` partagent le même contrat ;
@@ -321,7 +321,30 @@ citer la séquence de la preuve longue, ne pas recopier le compte rendu.
 `supersedes_seq` remplace explicitement une consigne antérieure du même auteur,
 pour les mêmes cibles effectives figées au dépôt. La cible doit être courante,
 non historique ; changer l'audience ou créer une branche est refusé atomiquement.
-Le texte seul ne remplace jamais une consigne. Les membres du fil restent fixes.
+Le texte seul ne remplace jamais une consigne. Les cibles effectives d'un ancien
+dépôt restent inchangées lorsqu'un membre rejoint le fil.
+
+La session147 ajoute `add_members` dans le même outil `bridget_thread`.
+Seul le créateur initial peut ajouter des membres à un fil ouvert. Le plafond
+reste seize, après normalisation des UUID et déduplication. Le nouveau membre
+peut lire tout l'historique antérieur ; son repère commence à zéro. Cet ajout
+ne publie aucun message, ne réveille personne et ne rejoue aucune ancienne
+consigne. Un futur dépôt `notify:"all"` inclut les nouveaux membres.
+Pour une audience interprojets, fournir un motif explicite couvrant tous les
+lecteurs anciens et nouveaux, pas seulement les agents ajoutés.
+
+CLI : `bridget thread add-members FIL --member UUID --id OPERATION_UUID`
+(répéter `--member` si nécessaire ; ajouter `--cross-project-reason MOTIF`
+pour un échange volontaire entre projets).
+MCP : `{"action":"add_members","thread_id":"FIL_UUID","members":["AGENT_UUID"],"operation_id":"OPERATION_UUID"}`.
+Préparer la clé avant l'appel. Un ajout accepté rend `members_added` et conserve
+son reçu pour le rejeu exact. `no_change` signifie que tous les candidats sont
+déjà membres ; il n'écrit aucun reçu et n'engage pas la clé. Une divergence
+concurrente de l'audience rend `audience_changed`, sans ajout partiel.
+La capacité `thread_members_v1` est négociée avant mutation. Un daemon ancien
+qui ne la possède pas est refusé, sans message direct ni recréation de fil.
+L'ajout réussi actualise les panneaux humains autorisés après le commit.
+Il ne modifie ni les dates des messages ni l'ordre d'activité des fils.
 
 `read` rend les corps courants et des références sans `body` pour les historiques
 et consignes remplacées, avec `history_ref`, `presentation` et, si remplacé,
