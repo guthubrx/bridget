@@ -2177,7 +2177,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-
     #[test]
     fn spec138_thread_reason_absence_is_legacy_but_null_is_invalid() {
         let legacy =

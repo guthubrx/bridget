@@ -2,7 +2,7 @@
 Plan actif canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/147-panneau-bridget-vivant/plan.md.
 Session147 approuvée le 2026-10-08 : abonnement humain du panneau Bridget et
 sélection retenue par environnement/projet/conversation T3.
-Socle146 fusionné ; sessions142/145 non committées et autres travaux intacts.
+Socles142/145/146 committés et fusionnés dans la livraison147 ; autres projets intacts.
 Contrat147 : human_thread_watch_v1, bridget.watch, flux version/generation/seq/status.
 ready seq0 premier non coalescible ; changed/resync sans corps ni UUID de fil.
 Garde humaine commune, mutations réellement committées seulement, aucun signal
@@ -38,7 +38,10 @@ Sauvegardes ciblées146 et DB Bridget arrêtée/quickcheckok : /Users/moi/.cache
 Cleanup attesté à01:56CEST :13 anciens builds/7,075,405,824octets alloués retirés,13branches locales/10distantes et WT T3147 supprimés ; mainf4354 conservé. WT/branche Bridget147 restent à retirer après commit documentaire, pas anticipés. Dirty142/145/146 préservés.
 Les chemins WT dans les preuves sont historiques. Audits archivés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-09, copie diff-qrRC0 ; archive complète /Users/moi/.cache/bridget-install147.VTg5jQ/audits147.tgz.
 Le principal exécute Git et livraison ; l'owner documentaire ne touche aucun code/service/production.
-Sélection SpecKit : SPECIFY_FEATURE=147-panneau-bridget-vivant ; branche session-147-panneau-bridget-vivant.
+Sélection SpecKit : SPECIFY_FEATURE=147-panneau-bridget-vivant ; livraison finale sur main.
+Le complément CLI/MCP147 est intégré. Reconstruire depuis les arbres fusionnés propres.
+Installer uniquement les fichiers ; ne relancer ni T3 ni les services Bridget.
+Les anciens checkpoints ci-dessus restent historiques, pas une preuve du runtime actuel.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->
