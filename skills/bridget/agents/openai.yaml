@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bridget"
+  short_description: "Échanges et coordination entre agents"
+  default_prompt: "Utilise $bridget pour contacter un agent, demander une revue ou transmettre un résultat."

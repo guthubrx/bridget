@@ -1,9 +1,14 @@
 ---
 name: bridget
-description: Communiquer et demander une relecture entre agents avec Bridget, tenir un fil de discussion partagé avec sollicitations ciblées, transmettre un dossier de passation, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier sur demande, ou d'office en lecture seule pour une tâche de lecture. MCP ou CLI attesté, sans orchestrateur métier.
+description: "Communiquer et coordonner les échanges entre agents avec Bridget : annuaire, messages, fils partagés et passations. À utiliser pour contacter un agent, demander une revue ou transmettre un résultat."
 ---
 
 # Communication entre agents
+
+Utiliser `bridget` pour les échanges, `bridget-loop` pour la surveillance et
+les relances, et `bridget-handoff` pour le registre de passation.
+Les noms `agent-bridge`, `agent-loop` et `agent-handoff-ledger` sont
+uniquement des alias de compatibilité.
 
 Utiliser la connexion Bridget de la session courante. Ne pas démarrer de daemon,
 changer de namespace, installer une skill globale ou relancer un fournisseur pour

@@ -27,3 +27,4 @@ crates/bridget-daemon/assets/ui/node_modules/
 
 # Dépôt public généré (passe de confidentialité), non versionné ici
 /.publish/
+.gstack/
