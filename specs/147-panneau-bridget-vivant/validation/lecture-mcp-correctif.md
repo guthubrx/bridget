@@ -57,4 +57,20 @@ Compilation release du commit ff168d1c : succès en47.92s. Le binaire signé est
 
 Contrôle après remplacement : daemon93353, pont93355 et serveur T350035 sont toujours les mêmes processus. Le daemon et les MCP déjà ouverts conservent leur code/catalogue chargé ; les prochains appels CLI utilisent le nouveau fichier. Aucun redémarrage, tour de modèle, notification ou mission envoyé.
 
-T3 installé reste0.0.45-local.146. Le candidat147 est prêt dans /Users/moi/.cache/t3-spec147-package.LIkn22/staging/T3 Code (Local).app, sans activation. Le montage MCP Claude/GLM de147 ne peut donc pas être annoncé actif chez Relance. Aucun restart différé n'est programmé.
+À ce premier checkpoint, T3 installé restait0.0.45-local.146 et le candidat147 était prêt, sans activation. La livraison suivante est consignée ci-dessous. Aucun restart différé n'est programmé.
+
+## Livraison finale sur disque, sans activation
+
+Mandat suivant du2026-10-09 : livrer les builds pour la prochaine relance, puis nettoyer branches, worktrees et anciens builds. Aucun redémarrage demandé ou effectué.
+
+Le paquet T3 déjà construit correspond au HEAD source f4354fb0d5bee925338304cf3101d0853244f64b, déjà poussé sur fork/local/v0.0.45. Sa signature stricte, sa version et ses métadonnées sont vérifiées avant et après installation. Le serveur embarqué contient bridget_thread, setMcpServers et mcpServerStatus. Aucune compilation identique supplémentaire n'est nécessaire.
+
+L'application /Applications/T3 Code (Local).app porte maintenant0.0.45-local.147. SHA256 app.asar inchangé : a1ae5da6e46a3f8dca1f77dc6eefaf9fae2e9695e1b06850770500773808cee2. L'ancienne146 est déplacée vers /Users/moi/.cache/bridget-delivery147-final.X8rgoK/T3-Code-before147.app.backup ; son suffixe évite de présenter une seconde application .app. LaunchServices enregistre le chemin canonique, sans ouvrir l'application.
+
+Le binaire Bridget corrigé reste installé au chemin canonique. Une copie exacte est conservée dans /Users/moi/.cache/bridget-delivery147-final.X8rgoK/bridget-ff168d1c. Le paquet ZIP147 et les reçus de compilation sont conservés. Les versions installées sur disque ne prouvent pas un chargement par les processus actifs.
+
+T3 conserve les PID49975/50035 ; daemon et pont conservent93353/93355. Leur prochaine relance chargera les fichiers installés. T3 et les deux services Bridget ont des cycles de vie distincts : redémarrer T3 seul ne redémarre pas ces services. Aucun tour, MCP de modèle actif, base, mission, Agent Loop ou configuration fournisseur modifié par la livraison.
+
+Nettoyage : suppression du cache Cargo /Volumes/SD1TO/bridget-build-147-rust, du snapshot de build /Users/moi/.cache/t3-spec147-package.LIkn22/source et des anciens paquets141/143 sous leurs chemins exacts. Contrôles d'absence de fichiers ouverts réalisés avant suppression. Environ8,4Go de données reproductibles retirées, dont7,5Go sur le disque externe. Les binaires installés, ZIP147 et sauvegardes de retour arrière restent disponibles.
+
+La branche distante Bridget session-146-bridget-panel-lisible est supprimée après vérification de son inclusion dans main. Le worktree du correctif147 avait déjà été retiré avec sa branche propre. Aucun autre worktree n'est supprimé : Bridget142/145/146 et T3145 sont fusionnés mais contiennent encore des modifications non committées ; T3139 n'est pas inclus par ascendance dans local/v0.0.45. Les autres projets et branches ne sont pas des cibles.
