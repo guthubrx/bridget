@@ -1,7 +1,7 @@
 {
   "feature": "142-skills-bridget",
   "date": "2026-10-07",
-  "status": "implemented_published_uncommitted",
+  "status": "implemented_published_committed_integrated_pushed",
   "tasks": { "completed": 8, "total": 8 },
   "tests": {
     "publisher": { "passed": 16, "total": 16, "executors": ["implementation_teammate", "principal_final_replay"], "principal_final_time": "2026-10-07 08:46 CEST", "principal_cwd": "/Users/moi/dotfiles/", "principal_command": "python3 -m unittest discover -s claude/tests -p test_142_bridget_skill_sync.py", "path": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/142-bridget-skills/claude/tests/test_142_bridget_skill_sync.py" },
@@ -55,6 +55,6 @@
     "mission_launched": false,
     "paid_model_call": false
   },
-  "git_delivery": { "authorized": false, "commit": null, "merge": null, "push": null },
+  "git_delivery": { "authorized": true, "date": "2026-10-09", "commit": "9f45d595", "merge": "fa07c3d4", "push": true, "dotfiles_main": "d0d8b04d", "dotfiles_user_checkout": "6b157ef3", "restart_performed": false },
   "limits": ["Discovery fixtures do not prove model behavior or implicit selection.", "Claude check uses the existing T3 reader, not the native Claude menu or a model run.", "Open sessions may keep their existing catalog; none was restarted.", "Six explicit identities do not imply a UI limited to three entries."]
 }

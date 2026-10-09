@@ -1,6 +1,6 @@
 # Journal d'implémentation — SPEC142
 
-Date : 2026-10-07. Statut : Implemented — publié, non committé. Journal documentaire après Converge lecture seule.
+Date du journal initial : 2026-10-07. Statut actuel : publié, committé, intégré et poussé le 2026-10-09. Les étapes ci-dessous restent historiques.
 
 | Phase | Preuve reçue | État |
 |---|---|---|
@@ -21,3 +21,13 @@ Date : 2026-10-07. Statut : Implemented — publié, non committé. Journal docu
 | Converge | Deux passes lecture seule, couverture 15 FR et 6 SC, aucun écart nouveau ; tâches identiques pendant chaque passe | CONVERGED |
 
 T001–T008 cochées seulement dans cette phase de journalisation. Aucun commit, fusion ou push142 : autorisation distincte non reçue. Aucun redémarrage, mission réelle ou appel de modèle payant. Les preuves de catalogue ne prouvent ni le comportement futur du modèle ni le rendu du menu natif Claude. Le contrôle Claude utilise le lecteur existant de T3, pas une exécution de Claude.
+
+## Livraison autorisée du 2026-10-09
+
+Le mandat suivant autorise commit, fusion, push, reconstruction, installation et nettoyage sans redémarrage. Bridget142 est intégré par les commits9a4ebfee,7524e1f4 et la fusionfa07c3d4. Ses artefacts sont désormais dans le dépôt canonique.
+
+Dotfiles142 est committé en9f45d595. Son périmètre skills est intégré dans origin/main par67b0a166 et d0d8b04d. Les appelants retirés du socle main ne sont pas ressuscités ; le moteur de passation et les alias compatibles sont conservés. Les16 tests de publication/catalogue repassent.
+
+Le checkout utilisateur104 conserve son historique distinct et les travaux étrangers en cours. Ses fichiers142 sont committés enbf80dccc et4c66f81e, puis l'historique142 est fusionné en6b157ef3 et poussé. Cette fusion ne change aucun fichier. Les16 tests du checkout utilisateur passent aussi. Les moteurs Agent Loop ne sont pas modifiés.
+
+Les worktrees142 et les branches de session propres sont retirés après vérification des fusions et de l'absence de fichiers ouverts. Les historiques restent dans Git. Aucun T3, Bridget, agent ou mission n'est relancé.

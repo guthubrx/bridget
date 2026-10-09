@@ -74,3 +74,25 @@ T3 conserve les PID49975/50035 ; daemon et pont conservent93353/93355. Leur proc
 Nettoyage : suppression du cache Cargo /Volumes/SD1TO/bridget-build-147-rust, du snapshot de build /Users/moi/.cache/t3-spec147-package.LIkn22/source et des anciens paquets141/143 sous leurs chemins exacts. Contrôles d'absence de fichiers ouverts réalisés avant suppression. Environ8,4Go de données reproductibles retirées, dont7,5Go sur le disque externe. Les binaires installés, ZIP147 et sauvegardes de retour arrière restent disponibles.
 
 La branche distante Bridget session-146-bridget-panel-lisible est supprimée après vérification de son inclusion dans main. Le worktree du correctif147 avait déjà été retiré avec sa branche propre. Aucun autre worktree n'est supprimé : Bridget142/145/146 et T3145 sont fusionnés mais contiennent encore des modifications non committées ; T3139 n'est pas inclus par ascendance dans local/v0.0.45. Les autres projets et branches ne sont pas des cibles.
+
+## Livraison reconstruite après intégration complète — 2026-10-09
+
+Ce checkpoint remplace l'état de livraison précédent. Le nouveau mandat demande explicitement de committer les reliquats, intégrer les branches, reconstruire les deux programmes, pousser, installer et nettoyer, sans redémarrage.
+
+Bridget : anciens travaux142/145/146 committés puis intégrés parfa07c3d4,f6a7e743 et3aa2a3c3. La source propre1163038fc25f864962e50a2893125c63ee27c3b7 est poussée sur github/main et reconstruite avec un nouveau cache Cargo. Le test145 ajouté deux fois par la fusion est conservé une seule fois ; le code Rust final est identique à celui déjà validé sur main.
+
+T3 : les travaux145 et les en-têtes139 sont intégrés par0e9b54245a eteace00356d. Le HEAD eace00356d91b38ff950c7a100251d677773b0ea est poussé sur fork/local/v0.0.45. Les conflits145 étaient des copies exactes du commit d'importd381302ec1, hors modes de fichiers. Les deux fusions T3 ne changent aucun contenu de code. Une nouvelle compilation web/serveur/desktop et un nouveau paquet natif sont néanmoins réalisés depuis ce HEAD, comme demandé. Les dépendances sont installées avec le fichier de verrouillage, dans un clone privé.
+
+Skills : origine142 intégrée dans dotfiles/main end0d8b04d. Checkout utilisateur capitalisé puis fusion de l'historique142 en6b157ef3, poussée sur origin/104-bridge-role-auth. Cette dernière fusion ne change aucun fichier ; les symlinks Claude existants sont conservés. Les travaux Vigi/Horizon et les index préexistants hors périmètre ne sont pas inclus dans les nouveaux commits de ce complément.
+
+Vérifications finales réellement exécutées :16 tests de publication/catalogue dans chaque checkout skills ; T3 MCP/Claude194PASS/1SKIP et panneau50PASS ; paquet natif2413 contrôles réussis, zéro échec. Rust release : fils19PASS, CLI de fils11PASS, MCP54PASS/1SKIP et intégration daemon privé11PASS. Total ciblé Rust95PASS, zéro échec. Format Rust et git diff --check passent.
+
+La sélection CLI plus large donne85PASS/2FAIL. Les deux échecs de spawn signalent auxiliary_credential_required, déjà rencontré dans la suite globale. Ils restent visibles dans les reçus ; aucune suite globale verte n'est revendiquée et aucun wrapper/agent n'est relancé pour les contourner.
+
+Installation vérifiée : /Applications/T3 Code (Local).app, version0.0.45-local.147, commit embarqué eace00356d91, SHA256 app.asar01b46973b376b936ea2320fb565ac43acfe171724bdcffb4c5de9445273ec9c5. Signature ad hoc stricte valide. Binaire /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget, SHA2569f70172027c06ca231f64496541a5ba14d48031985edb1d1a43a8d5094d21c11, signature valide. Le CLI /Users/moi/.local/bin/bridget et les deux services LaunchAgent pointent sur ce chemin.
+
+Les PID T349975/50035 et Bridget93353/93355 gardent leurs dates de démarrage. Aucun redémarrage, job d'activation différé ou migration de base. La prochaine relance de T3 charge l'application installée ; la prochaine relance des services Bridget charge leur binaire installé. Ces cycles restent distincts.
+
+Nettoyage final : worktrees Bridget142/145/146, T3139/145 et dotfiles142/deux intégrations147 propres retirés avec leurs branches, après vérification des fusions et des fichiers ouverts. Les branches et worktrees d'autres travaux restent intacts. Snapshots de compilation, cinq stages natifs145/146/147, ancien paquet145, paquet147 remplacé et copie intermédiaire147 retirés. Les gros caches Cargo temporaires sont retirés après conservation des logs. Aucun fichier de conversation ou base T3 n'est supprimé.
+
+Paquet final et reçus : /Users/moi/.cache/t3-final147.zrm6Zc. ZIP SHA2566ea9b12373283a6b7a5cfcf7226e1cb3621804f491e31300c932b2e992fe5035. Binaire final et logs Rust conservés dans ce dossier. Sauvegarde146 de retour arrière : /Users/moi/.cache/bridget-delivery147-final.X8rgoK/T3-Code-before147.app.backup. Ancien binaire corrigé : /Users/moi/.cache/bridget-147-lecture-backup.LO6P9D/bridget-before-ff168d1c. La taille supprimée est une taille de données reproductibles, pas une promesse de gain physique identique sur APFS.
