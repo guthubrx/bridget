@@ -50,6 +50,7 @@ pub mod store;
 pub mod store_schema;
 pub mod t3code;
 pub mod t3code_contract;
+mod t3code_contract_v2;
 pub(crate) mod t3code_identity;
 #[cfg(feature = "test-support")]
 pub mod test_sync;

@@ -5,12 +5,16 @@
 //! Bridget n'écrit dans t3code que par `dispatch` ; la base d'authentification
 //! n'est touchée que par la commande officielle `t3`.
 
+use crate::t3code_contract_v2 as v2;
 use serde_json::Value;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+use std::time::Instant;
 
 /// Fichier d'état publié par le serveur t3code (`<base>/userdata/`).
 pub const RUNTIME_FILE: &str = "server-runtime.json";
@@ -475,20 +479,23 @@ pub struct DispatchResult {
 pub struct Client {
     base_url: String,
     token: String,
+    v2: Cell<Option<bool>>,
+    providers: RefCell<HashMap<String, String>>,
+    providers_at: Cell<Option<Instant>>,
 }
 
 impl Client {
     pub fn new(runtime: &ServerRuntime, token: &str) -> Self {
-        Self {
-            base_url: runtime.base_url(),
-            token: token.to_string(),
-        }
+        Self::for_base_url(&runtime.base_url(), token)
     }
 
     pub fn for_base_url(base_url: &str, token: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
+            v2: Cell::new(None),
+            providers: RefCell::new(HashMap::new()),
+            providers_at: Cell::new(None),
         }
     }
 
@@ -505,6 +512,8 @@ impl Client {
         }
         .with_header("Authorization", format!("Bearer {}", self.token))
         .with_header("Accept", "application/json")
+        .with_header("x-t3-orchestration-protocol", "2")
+        .with_max_redirects(0)
         .with_timeout(HTTP_TIMEOUT.as_secs());
         if let Some(body) = body {
             request = request
@@ -512,21 +521,108 @@ impl Client {
                 .with_body(body.to_string());
         }
         let response = request
-            .send()
+            .send_lazy()
             .map_err(|error| ContractError::Transport(error.to_string()))?;
-        let text = response.as_str().unwrap_or_default().to_string();
-        match response.status_code {
+        let status = response.status_code;
+        let mut bytes = Vec::new();
+        Read::take(response, 16 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ContractError::Transport("lecture HTTP T3 interrompue".into()))?;
+        if bytes.len() > 16 * 1024 * 1024 {
+            return Err(shape("HTTP T3", "response limit"));
+        }
+        let text = String::from_utf8(bytes).map_err(|_| shape("HTTP T3", "UTF-8"))?;
+        match status {
             200..=299 => Ok(text),
             401 => Err(ContractError::Unauthorized),
             status => Err(ContractError::Http {
                 status,
-                body: text.chars().take(300).collect(),
+                body: "requête T3 refusée".into(),
             }),
         }
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, ContractError> {
-        parse_snapshot(&self.request("GET", "/api/orchestration/snapshot", None)?)
+        let uses_v2 = match self.v2.get() {
+            Some(version) => version,
+            None => {
+                // Les routes inconnues peuvent rendre index.html avec HTTP200.
+                // Le descripteur officiel annonce le protocole ; seule la lecture
+                // authentifiée qui suit confirme et mémorise ce choix.
+                let text = self.request("GET", "/.well-known/t3/environment", None)?;
+                let value: Value =
+                    serde_json::from_str(&text).map_err(|_| shape("environment", "json"))?;
+                str_field(&value, "environment", "environmentId")?;
+                str_field(&value, "environment", "serverVersion")?;
+                match value.get("orchestrationProtocolVersion") {
+                    None => false,
+                    Some(version) if version.as_u64() == Some(1) => false,
+                    Some(version) if version.as_u64() == Some(2) => true,
+                    _ => return Err(shape("environment", "orchestrationProtocolVersion")),
+                }
+            }
+        };
+        if !uses_v2 {
+            let snapshot =
+                parse_snapshot(&self.request("GET", "/api/orchestration/snapshot", None)?)?;
+            self.v2.set(Some(false));
+            return Ok(snapshot);
+        }
+        let mut snapshot =
+            v2::parse_snapshot(&self.request("GET", "/api/orchestration/shell", None)?)?;
+        self.v2.set(Some(true));
+        // Le nom d'une instance personnalisée n'atteste pas son driver.
+        // Catalogue borné partagé par les lectures de ce Client, rafraîchi à30s.
+        if self
+            .providers_at
+            .get()
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(30))
+            || snapshot.threads.iter().any(|t| {
+                t.provider_instance_id
+                    .as_ref()
+                    .is_some_and(|id| !self.providers.borrow().contains_key(id))
+            })
+        {
+            let config = v2::rpc(
+                &self.base_url,
+                &self.token,
+                "server.getConfig",
+                &serde_json::json!({}),
+            )?;
+            let mut providers = HashMap::new();
+            for provider in config["providers"]
+                .as_array()
+                .filter(|a| a.len() <= 1024)
+                .ok_or_else(|| shape("server.getConfig", "providers"))?
+            {
+                providers.insert(
+                    str_field(provider, "server.getConfig", "instanceId")?.into(),
+                    str_field(provider, "server.getConfig", "driver")?.into(),
+                );
+            }
+            *self.providers.borrow_mut() = providers;
+            self.providers_at.set(Some(Instant::now()));
+        }
+        for thread in &mut snapshot.threads {
+            if let Some(session) = &mut thread.session {
+                session.provider_name = self
+                    .providers
+                    .borrow()
+                    .get(session.provider_instance_id.as_deref().unwrap_or_default())
+                    .cloned()
+                    .ok_or_else(|| shape("server.getConfig", "thread provider missing"))?;
+            }
+        }
+        Ok(snapshot)
+    }
+
+    pub(crate) fn uses_v2(&self) -> bool {
+        self.v2.get() == Some(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_protocol(&self, v2: bool) {
+        self.v2.set(Some(v2));
     }
 
     pub fn thread_detail(
@@ -534,11 +630,46 @@ impl Client {
         thread_id: &str,
         turn_limit: u32,
     ) -> Result<ThreadDetail, ContractError> {
+        if self.v2.get().is_none() {
+            self.snapshot()?;
+        }
+        // Les identifiants ne doivent jamais devenir un fragment de route arbitraire.
+        if !thread_id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
+        {
+            return Err(shape("thread_detail", "threadId"));
+        }
+        if self.uses_v2() {
+            let suffix = if turn_limit <= 20 { "/bounded" } else { "" };
+            let path = format!("/api/orchestration/threads/{thread_id}{suffix}");
+            return v2::parse_detail(&self.request("GET", &path, None)?, thread_id);
+        }
         let path = format!("/api/orchestration/threads/{thread_id}?turnLimit={turn_limit}");
         parse_thread_detail(&self.request("GET", &path, None)?)
     }
 
-    pub fn dispatch(&self, command: &Value) -> Result<DispatchResult, ContractError> {
+    pub fn dispatch(
+        &self,
+        command: &Value,
+        steer_current: bool,
+    ) -> Result<DispatchResult, ContractError> {
+        if self.v2.get().is_none() {
+            self.snapshot()?;
+        }
+        if self.uses_v2() {
+            let value = v2::rpc(
+                &self.base_url,
+                &self.token,
+                "orchestration.dispatchCommand",
+                &v2::dispatch_command(command, steer_current)?,
+            )?;
+            return Ok(DispatchResult {
+                sequence: value["sequence"]
+                    .as_u64()
+                    .ok_or_else(|| shape("orchestration.dispatchCommand", "sequence"))?,
+            });
+        }
         const SRC: &str = "POST /api/orchestration/dispatch";
         let text = self.request("POST", "/api/orchestration/dispatch", Some(command))?;
         let value: Value = serde_json::from_str(&text).map_err(|_| shape(SRC, "json"))?;

@@ -59,9 +59,10 @@ impl IdentityBindings {
         base: &Path,
         runtime: &ServerRuntime,
         live: &[Binding],
+        uses_v2: bool,
     ) -> Result<usize, String> {
         self.refresh_with_retry(Duration::from_millis(50), |state| {
-            state.refresh_inner(base, runtime, live)
+            state.refresh_inner(base, runtime, live, uses_v2)
         })
     }
 
@@ -91,6 +92,7 @@ impl IdentityBindings {
         base: &Path,
         runtime: &ServerRuntime,
         live: &[Binding],
+        uses_v2: bool,
     ) -> Result<usize, String> {
         self.reap_orphans()?;
         if live.len() > MAX_ROWS {
@@ -100,7 +102,11 @@ impl IdentityBindings {
             self.clear();
             return Ok(0);
         }
-        let rows = read_sessions(&base.join("userdata/state.sqlite"), live)?;
+        let rows = if uses_v2 {
+            read_sessions_v2(&base.join("userdata/statev2.sqlite"), live)?
+        } else {
+            read_sessions(&base.join("userdata/state.sqlite"), live)?
+        };
         let Ok(birth_before) = process_birth(runtime.pid) else {
             return Err("serveur T3 absent de l'inventaire OS".into());
         };
@@ -526,6 +532,79 @@ fn read_delegated_marker(path: &Path) -> Option<DelegatedPidMarker> {
         return None;
     }
     serde_json::from_slice(&bytes).ok()
+}
+
+/// Seul le fil fournisseur principal actif atteste l'identité, jamais un enfant
+/// ni une ancienne session conservée après un changement de fournisseur.
+fn read_sessions_v2(path: &Path, live: &[Binding]) -> Result<Vec<Session>, String> {
+    if live.is_empty() {
+        return Ok(Vec::new());
+    }
+    if live.len() > MAX_ROWS {
+        return Err("trop de fils T3 actifs".into());
+    }
+    let db = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| "état des sessions T3 V2 indisponible (lecture seule)")?;
+    db.busy_timeout(Duration::from_millis(100))
+        .map_err(|_| "sessions T3 V2 occupées")?;
+    let placeholders = std::iter::repeat_n("?", live.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!("SELECT substr(t.thread_id,1,1025), substr(p.driver,1,65), substr(p.payload_json,1,65537)
+        FROM orchestration_v2_projection_threads t
+        JOIN orchestration_v2_projection_provider_threads p ON p.provider_thread_id=t.active_provider_thread_id
+        JOIN orchestration_v2_projection_provider_sessions s ON s.provider_session_id=p.provider_session_id
+        WHERE t.thread_id IN ({placeholders}) AND p.thread_id=t.thread_id AND p.owner_node_id IS NULL
+        AND p.provider_instance_id=t.provider_instance_id AND s.provider_instance_id=p.provider_instance_id
+        AND s.driver=p.driver AND p.status IN ('idle','active')
+        AND s.status IN ('starting','ready','running','waiting') AND t.deleted_at IS NULL
+        LIMIT 513");
+    let mut statement = db
+        .prepare(&query)
+        .map_err(|_| "schéma des sessions T3 V2 incompatible")?;
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(
+            live.iter().map(|binding| &binding.0),
+        ))
+        .map_err(|_| "sessions T3 V2 illisibles")?;
+    let mut result = Vec::new();
+    let mut count = 0;
+    while let Some(row) = rows
+        .next()
+        .map_err(|_| "lecture des sessions T3 V2 interrompue")?
+    {
+        count += 1;
+        if count > MAX_ROWS {
+            return Err("inventaire des sessions T3 V2 tronqué".into());
+        }
+        let thread: String = row
+            .get(0)
+            .map_err(|_| "identifiant de fil T3 V2 invalide")?;
+        let provider: String = row.get(1).map_err(|_| "fournisseur T3 V2 invalide")?;
+        let payload: String = row.get(2).map_err(|_| "session T3 V2 invalide")?;
+        if thread.len() > 1024 || provider.len() > 64 || payload.len() > MAX_BYTES {
+            return Err("session T3 V2 au-delà de la borne".into());
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&payload).map_err(|_| "session T3 V2 invalide")?;
+        let native = &value["nativeThreadRef"];
+        if !matches!(provider.as_str(), "codex" | "claude" | "cursor")
+            || native["strength"] != "strong"
+            || native["driver"] != provider
+        {
+            continue;
+        }
+        if let Some(id) = native["nativeId"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 256)
+        {
+            result.push((thread, provider, id.into()));
+        }
+    }
+    Ok(result)
 }
 
 fn read_sessions(path: &Path, live: &[Binding]) -> Result<Vec<Session>, String> {
@@ -1011,6 +1090,109 @@ fn process_arguments(pid: u32) -> Option<Vec<String>> {
 mod spec101_identity {
     use super::*;
 
+    #[test]
+    #[ignore = "requires a disposable T3 V2 server database"]
+    fn spec147_v2_real_database_schema_is_readable() {
+        let base = std::env::var("BRIDGET_TEST_T3_WORKSPACE").unwrap();
+        assert!(base.starts_with("/private/tmp/t3-bridget-v2."));
+        let path = Path::new(&base).join("userdata/statev2.sqlite");
+        assert!(path.is_file());
+        assert!(
+            read_sessions_v2(&path, &[binding("fixture-absent")])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn spec147_v2_identity_reads_only_current_primary_strong_session() {
+        let temp = std::env::temp_dir().join(format!("bi147-{}", uuid::Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&temp).unwrap();
+        let path = temp.join("statev2.sqlite");
+        let live = [binding("t")];
+        assert!(read_sessions_v2(&path, &live).is_err());
+        assert!(!path.exists());
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT PRIMARY KEY,active_provider_thread_id TEXT,provider_instance_id TEXT,deleted_at TEXT);
+            CREATE TABLE orchestration_v2_projection_provider_threads(provider_thread_id TEXT PRIMARY KEY,thread_id TEXT,owner_node_id TEXT,provider_session_id TEXT,driver TEXT,provider_instance_id TEXT,status TEXT,payload_json TEXT);
+            CREATE TABLE orchestration_v2_projection_provider_sessions(provider_session_id TEXT PRIMARY KEY,driver TEXT,provider_instance_id TEXT,status TEXT);
+            INSERT INTO orchestration_v2_projection_threads VALUES('t','p','cx-pro',NULL);
+            INSERT INTO orchestration_v2_projection_provider_sessions VALUES('s','codex','cx-pro','running');
+            INSERT INTO orchestration_v2_projection_provider_threads VALUES('p','t',NULL,'s','codex','cx-pro','active','{}');").unwrap();
+        let payload = serde_json::json!({"nativeThreadRef":{"driver":"codex","strength":"strong","nativeId":"native"}});
+        db.execute(
+            "UPDATE orchestration_v2_projection_provider_threads SET payload_json=?",
+            [payload.to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            read_sessions_v2(&path, &live).unwrap(),
+            vec![("t".into(), "codex".into(), "native".into())]
+        );
+        for (sql, restore) in [
+            (
+                "UPDATE orchestration_v2_projection_provider_threads SET owner_node_id='child'",
+                "UPDATE orchestration_v2_projection_provider_threads SET owner_node_id=NULL",
+            ),
+            (
+                "UPDATE orchestration_v2_projection_provider_threads SET thread_id='other'",
+                "UPDATE orchestration_v2_projection_provider_threads SET thread_id='t'",
+            ),
+            (
+                "UPDATE orchestration_v2_projection_provider_threads SET provider_instance_id='old'",
+                "UPDATE orchestration_v2_projection_provider_threads SET provider_instance_id='cx-pro'",
+            ),
+            (
+                "UPDATE orchestration_v2_projection_provider_sessions SET driver='claude'",
+                "UPDATE orchestration_v2_projection_provider_sessions SET driver='codex'",
+            ),
+            (
+                "UPDATE orchestration_v2_projection_provider_sessions SET status='stopped'",
+                "UPDATE orchestration_v2_projection_provider_sessions SET status='running'",
+            ),
+            (
+                "UPDATE orchestration_v2_projection_threads SET active_provider_thread_id='old'",
+                "UPDATE orchestration_v2_projection_threads SET active_provider_thread_id='p'",
+            ),
+            (
+                "UPDATE orchestration_v2_projection_threads SET deleted_at='now'",
+                "UPDATE orchestration_v2_projection_threads SET deleted_at=NULL",
+            ),
+        ] {
+            db.execute_batch(sql).unwrap();
+            assert!(read_sessions_v2(&path, &live).unwrap().is_empty(), "{sql}");
+            db.execute_batch(restore).unwrap();
+        }
+        for native in [
+            serde_json::json!({"driver":"codex","strength":"weak","nativeId":"native"}),
+            serde_json::json!({"driver":"claude","strength":"strong","nativeId":"native"}),
+            serde_json::json!({"driver":"codex","strength":"strong","nativeId":null}),
+        ] {
+            db.execute(
+                "UPDATE orchestration_v2_projection_provider_threads SET payload_json=?",
+                [serde_json::json!({"nativeThreadRef":native}).to_string()],
+            )
+            .unwrap();
+            assert!(read_sessions_v2(&path, &live).unwrap().is_empty());
+        }
+        // Une ancienne base V1 reste indépendante du chemin explicitement choisi.
+        let old = rusqlite::Connection::open(temp.join("state.sqlite")).unwrap();
+        old.execute_batch("CREATE TABLE provider_session_runtime(thread_id TEXT, provider_name TEXT, resume_cursor_json TEXT); INSERT INTO provider_session_runtime VALUES('t','claude','{\"resume\":\"old-native\"}');").unwrap();
+        assert_eq!(
+            read_sessions(&temp.join("state.sqlite"), &live).unwrap()[0].2,
+            "old-native"
+        );
+        assert!(read_sessions_v2(&path, &live).unwrap().is_empty());
+        assert!(
+            read_sessions_v2(&temp.join("absent"), &[])
+                .unwrap()
+                .is_empty()
+        );
+        drop(db);
+        drop(old);
+        std::fs::remove_dir_all(&temp).unwrap();
+    }
+
     fn binding(thread: &str) -> (String, String, String) {
         (
             thread.into(),
@@ -1320,7 +1502,7 @@ mod spec101_identity {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let count = bindings
-                .refresh(&base, &runtime, std::slice::from_ref(&live))
+                .refresh(&base, &runtime, std::slice::from_ref(&live), false)
                 .unwrap();
             if count == 1 {
                 break;
@@ -1359,10 +1541,54 @@ mod spec101_identity {
         .unwrap();
         assert_eq!(resolved.name, live.1);
         assert_eq!(resolved.instance_id, live.2);
+        // Le même processus réel est attesté depuis V2, sans ouvrir la base V1
+        // en écriture. Une session V2 arrêtée révoque le marqueur malgré V1.
+        let v2db = rusqlite::Connection::open(base.join("userdata/statev2.sqlite")).unwrap();
+        v2db.execute_batch("CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT PRIMARY KEY,active_provider_thread_id TEXT,provider_instance_id TEXT,deleted_at TEXT);
+            CREATE TABLE orchestration_v2_projection_provider_threads(provider_thread_id TEXT PRIMARY KEY,thread_id TEXT,owner_node_id TEXT,provider_session_id TEXT,driver TEXT,provider_instance_id TEXT,status TEXT,payload_json TEXT);
+            CREATE TABLE orchestration_v2_projection_provider_sessions(provider_session_id TEXT PRIMARY KEY,driver TEXT,provider_instance_id TEXT,status TEXT);
+            INSERT INTO orchestration_v2_projection_threads VALUES('fil147','p','claude_glm',NULL);
+            INSERT INTO orchestration_v2_projection_provider_sessions VALUES('s','claude','claude_glm','running');
+            INSERT INTO orchestration_v2_projection_provider_threads VALUES('p','fil147',NULL,'s','claude','claude_glm','active','{}');").unwrap();
+        v2db.execute("UPDATE orchestration_v2_projection_provider_threads SET payload_json=?",[serde_json::json!({"nativeThreadRef":{"driver":"claude","strength":"strong","nativeId":session}}).to_string()]).unwrap();
+        assert_eq!(
+            bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live), true)
+                .unwrap(),
+            1
+        );
+        assert_eq!(read_marker(&marker_path).unwrap().instance_id, live.2);
+        v2db.execute_batch(
+            "UPDATE orchestration_v2_projection_provider_sessions SET status='stopped'",
+        )
+        .unwrap();
+        assert_eq!(
+            bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live), true)
+                .unwrap(),
+            0
+        );
+        assert!(!marker_path.exists());
+        v2db.execute_batch(
+            "UPDATE orchestration_v2_projection_provider_sessions SET status='running'",
+        )
+        .unwrap();
+        assert_eq!(
+            bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live), true)
+                .unwrap(),
+            1
+        );
         let second = spawn();
         assert_eq!(
             bindings
-                .refresh(&base, &runtime, std::slice::from_ref(&live))
+                .refresh(&base, &runtime, std::slice::from_ref(&live), true)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            bindings
+                .refresh(&base, &runtime, std::slice::from_ref(&live), false)
                 .unwrap(),
             0,
             "deux fournisseurs d'une même session ne deviennent pas uniques"
@@ -1389,11 +1615,11 @@ mod spec101_identity {
         assert!(process_birth(second_pid).is_err());
         assert_eq!(
             bindings
-                .refresh(&base, &runtime, std::slice::from_ref(&live))
+                .refresh(&base, &runtime, std::slice::from_ref(&live), false)
                 .unwrap(),
             1
         );
-        assert_eq!(bindings.refresh(&base, &runtime, &[]).unwrap(), 0);
+        assert_eq!(bindings.refresh(&base, &runtime, &[], false).unwrap(), 0);
         assert!(!marker_path.exists());
         assert!(!marker.name_file.exists());
         assert!(
@@ -1744,7 +1970,7 @@ mod spec101_identity {
             port: 3773,
         };
         let mut bindings = IdentityBindings::new(&root);
-        let result = bindings.refresh(&base, &ours, &[binding("fil-a")]);
+        let result = bindings.refresh(&base, &ours, &[binding("fil-a")], false);
         assert!(
             result.is_ok(),
             "un fichier d'état étranger ne révoque plus rien : {result:?}"
@@ -1766,7 +1992,7 @@ mod spec101_identity {
         };
         assert!(
             owner
-                .refresh(&root.join("absent"), &runtime, &[binding("a")])
+                .refresh(&root.join("absent"), &runtime, &[binding("a")], false)
                 .is_err()
         );
         assert!(!root.join("agent-pids/42").exists());
@@ -1802,7 +2028,7 @@ mod spec101_identity {
             .unwrap();
         let mut restarted = IdentityBindings::new(&root);
         restarted
-            .refresh(&root, &ServerRuntime { pid: 1, port: 1 }, &[])
+            .refresh(&root, &ServerRuntime { pid: 1, port: 1 }, &[], false)
             .unwrap();
         assert!(!root.join("agent-pids/42").exists());
         assert!(!old_name.exists());

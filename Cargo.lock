@@ -108,6 +108,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "signal-hook",
+ "tungstenite",
  "unicode-width",
  "uuid",
 ]

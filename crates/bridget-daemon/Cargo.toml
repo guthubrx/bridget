@@ -24,6 +24,8 @@ serde_yaml = "0.9"
 uuid = { workspace = true }
 # HTTP loopback vers t3code (session 098) : sans TLS, une seule crate ; aucun client HTTP dans le workspace.
 minreq = { version = "2", default-features = false }
+# Même version que bridget-transport ; RPC natif T3 V2, sans TLS ni runtime async.
+tungstenite = { version = "0.26.2", default-features = false, features = ["handshake"] }
 rusqlite = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }

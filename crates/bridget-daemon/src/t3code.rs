@@ -3,10 +3,10 @@
 //! Le pont ne modifie jamais t3code. Il lit son serveur local par HTTP en
 //! boucle locale avec une session émise par le CLI officiel `t3`, présente
 //! chaque fil vivant au daemon Bridget comme un agent (`t3code | cli`), remet
-//! les messages par `thread.turn.start` et renvoie à l'expéditeur la réponse
-//! du tour corrélé par rang FIFO. Tout l'état est sous `<BRIDGET_HOME>/t3code`.
+//! les messages par le protocole natif V1/V2 et renvoie à l'expéditeur la
+//! réponse du tour attesté. Tout l'état est sous `<BRIDGET_HOME>/t3code`.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -1225,11 +1225,14 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 )
             })
             .collect();
-        let runtime = session.lock().runtime.clone();
+        let (runtime, uses_v2) = {
+            let state = session.lock();
+            (state.runtime.clone(), state.client.uses_v2())
+        };
         // Session 114 : ces deux faits se répètent à chaque cycle de trois
         // secondes. Ne les dire qu'au changement : sinon un seul incident noie
         // le journal (456 lignes identiques en une journée) et cache le reste.
-        match identities.refresh(&t3_base, &runtime, &bindings) {
+        match identities.refresh(&t3_base, &runtime, &bindings, uses_v2) {
             Ok(_) => {
                 if identity_error.take().is_some() {
                     info!("rattachement MCP T3 rétabli");
@@ -2179,7 +2182,13 @@ impl LinkWorker {
                     "remise annulée, périmée ou autorité déconnectée avant dispatch".into(),
                 ));
             }
-            client.dispatch(&command)
+            client.dispatch(
+                &command,
+                deliverable_while_busy(
+                    thread_provider(summary).as_deref(),
+                    messages.iter().all(groupable),
+                ),
+            )
         }) {
             Ok(result) => {
                 for message in messages {
@@ -2369,6 +2378,12 @@ impl LinkWorker {
         self.confirm_journal();
         self.state.forget_invisible(detail);
         self.journal_dirty = true;
+        let v2_states: HashMap<&str, &str> = detail
+            .activities
+            .iter()
+            .filter(|a| a.kind == "t3v2.run")
+            .filter_map(|a| Some((a.turn_id.as_deref()?, a.payload["status"].as_str()?)))
+            .collect();
         if !self.journal_caught_up {
             return;
         }
@@ -2383,6 +2398,11 @@ impl LinkWorker {
                     m.turn_id
                         .as_ref()
                         .filter(|id| {
+                            if !v2_states.is_empty() {
+                                return v2_states
+                                    .get(id.as_str())
+                                    .is_some_and(|state| turn_is_final(state));
+                            }
                             latest.is_none_or(|turn| {
                                 &turn.turn_id != *id || turn_is_final(&turn.state)
                             })
@@ -2446,6 +2466,11 @@ impl LinkWorker {
                 .insert(turn.turn_id.clone(), origin.to_string());
         }
         let final_turn = |turn_id: &str| {
+            if !v2_states.is_empty() {
+                return v2_states
+                    .get(turn_id)
+                    .is_some_and(|state| turn_is_final(state));
+            }
             summary
                 .latest_turn
                 .as_ref()
@@ -2683,6 +2708,21 @@ impl LinkWorker {
     /// journal d'observation soit à jour ou non : l'appariement des réponses en
     /// dépend désormais, pas seulement l'observation.
     fn record_turn_origin(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
+        let users: HashSet<&str> = detail
+            .messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .map(|m| m.id.as_str())
+            .collect();
+        for activity in detail.activities.iter().filter(|a| a.kind == "t3v2.run") {
+            if let (Some(turn), Some(user)) = (
+                activity.turn_id.as_ref(),
+                activity.payload["userMessageId"].as_str(),
+            ) && users.contains(user)
+            {
+                self.state.turn_origins.insert(turn.clone(), user.into());
+            }
+        }
         let latest = detail.latest_turn.as_ref().or(summary.latest_turn.as_ref());
         if let Some(turn) = latest {
             if let Some(origin) = observation_origin(detail, turn) {
@@ -3176,6 +3216,18 @@ fn observation_origin<'a>(
     detail: &'a ThreadDetail,
     turn: &contract::LatestTurn,
 ) -> Option<&'a str> {
+    if let Some(run) = detail
+        .activities
+        .iter()
+        .find(|a| a.kind == "t3v2.run" && a.turn_id.as_deref() == Some(&turn.turn_id))
+    {
+        let user_id = run.payload["userMessageId"].as_str()?;
+        return detail
+            .messages
+            .iter()
+            .find(|m| m.role == "user" && m.id == user_id)
+            .map(|m| m.id.as_str());
+    }
     let requested = turn.requested_at.as_ref()?;
     let mut candidates = detail
         .messages
@@ -3192,6 +3244,9 @@ fn observation_origin<'a>(
 /// pas en provenir, sa fin est donc observable sans risque de boucle. Avant,
 /// un tel tour rendait tout le fil Claude inobservable. O(n).
 fn spontaneous_turn(detail: &ThreadDetail, turn: &contract::LatestTurn) -> bool {
+    if detail.activities.iter().any(|a| a.kind == "t3v2.run") {
+        return false;
+    }
     let Some(requested) = turn.requested_at.as_deref() else {
         return false;
     };
@@ -3261,6 +3316,15 @@ fn proven_turn_answer(
     summary: &ThreadSummary,
     turn_id: &str,
 ) -> Correlation {
+    if detail.activities.iter().any(|a| {
+        a.kind == "t3v2.run"
+            && a.turn_id.as_deref() == Some(turn_id)
+            && a.payload["status"]
+                .as_str()
+                .is_none_or(|status| !turn_is_final(status))
+    }) {
+        return Correlation::Waiting;
+    }
     let parts: Vec<&contract::Message> = detail
         .messages
         .iter()
@@ -3329,6 +3393,28 @@ pub(crate) fn correlate(
     pending: &Pending,
     origins: &BTreeMap<String, String>,
 ) -> Correlation {
+    // V2 lie explicitement chaque message à son run. Aucun appariement ordinal
+    // ni hypothèse « un tour plus récent clôt le précédent » n'est nécessaire.
+    if detail.activities.iter().any(|a| a.kind == "t3v2.run") {
+        let Some(message) = detail
+            .messages
+            .iter()
+            .find(|m| m.id == pending.message_id && m.role == "user")
+        else {
+            return Correlation::Missing;
+        };
+        let Some(run_id) = message.turn_id.as_deref() else {
+            return Correlation::Waiting;
+        };
+        if !detail
+            .activities
+            .iter()
+            .any(|a| a.kind == "t3v2.run" && a.turn_id.as_deref() == Some(run_id))
+        {
+            return Correlation::Waiting;
+        }
+        return proven_turn_answer(detail, summary, run_id);
+    }
     let messages = &detail.messages;
     let start = match pending.anchor_turn_id.as_deref() {
         Some(anchor) => match messages
@@ -5041,6 +5127,13 @@ mod tests {
             port: listener.local_addr().unwrap().port(),
             pid: std::process::id(),
         });
+        worker
+            .session
+            .inner
+            .lock()
+            .unwrap()
+            .client
+            .set_test_protocol(false);
         thread::spawn(move || {
             // Session 132 : 1 s ne suffisait pas sous forte charge (accept tardif).
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -5166,6 +5259,99 @@ mod tests {
         }
     }
 
+    #[test]
+    fn spec147_v2_lost_receipt_keeps_pending_and_recovers_exact_answer() {
+        let (mut worker, _peer) = worker099();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        worker.session.reset_runtime(ServerRuntime {
+            port: listener.local_addr().unwrap().port(),
+            pid: std::process::id(),
+        });
+        worker
+            .session
+            .inner
+            .lock()
+            .unwrap()
+            .client
+            .set_test_protocol(true);
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let frame: serde_json::Value =
+                serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+            frame["payload"].clone() // Connexion perdue après admission simulée.
+        });
+        let mut request = bridget_core::BridgetMessage::new("alice", &worker.agent_id, "question");
+        request.reply = true;
+        assert!(worker.dispatch_with_id(&request, &summary(None)).is_err());
+        let accepted = server.join().unwrap();
+        let saved = ThreadState::load(&worker.state_path);
+        assert_eq!(saved.pending.len(), 1);
+        assert_eq!(accepted["messageId"], saved.pending[0].message_id);
+        assert!(accepted.get("deliveryIntent").is_none());
+        let mut detail = detail116(
+            vec![
+                message(
+                    &saved.pending[0].message_id,
+                    "user",
+                    "question",
+                    Some("r"),
+                    false,
+                ),
+                message("a", "assistant", "réponse récupérée", Some("r"), false),
+            ],
+            ("r", "completed"),
+        );
+        detail.activities.push(contract::Activity {id:"v2-run:r".into(),kind:"t3v2.run".into(),turn_id:Some("r".into()),payload:serde_json::json!({"status":"completed","userMessageId":saved.pending[0].message_id})});
+        worker.settle_pending(&detail, &summary(Some(("r", "completed"))));
+        assert_eq!(
+            worker.state.pending[0].response.as_deref(),
+            Some("réponse récupérée")
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec147_v2_queued_run_does_not_close_running_observation() {
+        let (mut worker, _peer) = worker099();
+        let mut detail = detail116(
+            vec![
+                message("u", "user", "question", Some("running"), false),
+                message("a", "assistant", "en cours", Some("running"), false),
+                message("queued-user", "user", "attente", Some("queued"), false),
+            ],
+            ("queued", "queued"),
+        );
+        for (id, status, user) in [
+            ("running", "running", "u"),
+            ("queued", "queued", "queued-user"),
+        ] {
+            detail.activities.push(contract::Activity {
+                id: format!("v2-run:{id}"),
+                kind: "t3v2.run".into(),
+                turn_id: Some(id.into()),
+                payload: serde_json::json!({"status":status,"userMessageId":user}),
+            });
+        }
+        let summary = summary(Some(("queued", "queued")));
+        worker.record_turn_origin(&detail, &summary);
+        worker.project_journal(&detail, &summary);
+        assert!(!worker.state.ended_turns.contains(&"running".into()));
+        worker.project_journal(&detail, &summary);
+        assert!(!worker.journal_inflight.contains("end:running"));
+        detail.activities[0].payload["status"] = serde_json::json!("completed");
+        worker.project_journal(&detail, &summary);
+        worker.journal.stop();
+        worker.confirm_journal();
+        assert!(worker.state.ended_turns.contains(&"running".into()));
+        assert!(!worker.state.ended_turns.contains(&"queued".into()));
+        worker.relay.shutdown();
+    }
+
     fn message(id: &str, role: &str, text: &str, turn: Option<&str>, streaming: bool) -> Message {
         Message {
             created_at: None,
@@ -5212,6 +5398,49 @@ mod tests {
             response: None,
             reply_requested: Some(true),
         }
+    }
+
+    #[test]
+    fn spec147_v2_correlation_uses_run_not_rank_and_waits_for_completion() {
+        let mut detail = detail116(
+            vec![
+                message("u", "user", "question", Some("r"), false),
+                message("steer", "user", "complément", Some("r"), false),
+                message("a", "assistant", "bonne réponse", Some("r"), false),
+                message("other", "assistant", "autre réponse", Some("next"), false),
+            ],
+            ("next", "completed"),
+        );
+        detail.activities.push(contract::Activity {
+            id: "v2-run:r".into(),
+            kind: "t3v2.run".into(),
+            turn_id: Some("r".into()),
+            payload: serde_json::json!({"status":"queued","userMessageId":"u"}),
+        });
+        let summary = summary(Some(("next", "completed")));
+        for id in ["u", "steer"] {
+            assert_eq!(
+                correlate_sans_origine(&detail, &summary, &pending(id, None)),
+                Correlation::Waiting
+            );
+        }
+        detail.activities[0].payload["status"] = serde_json::json!("completed");
+        for id in ["u", "steer"] {
+            assert_eq!(
+                correlate_sans_origine(&detail, &summary, &pending(id, None)),
+                Correlation::Answered("bonne réponse".into())
+            );
+        }
+        detail.messages.retain(|m| m.id != "a");
+        detail.activities[0].payload["status"] = serde_json::json!("interrupted");
+        assert_eq!(
+            correlate_sans_origine(&detail, &summary, &pending("u", None)),
+            Correlation::Silent
+        );
+        assert_eq!(
+            correlate_sans_origine(&detail, &summary, &pending("absent", None)),
+            Correlation::Missing
+        );
     }
 
     /// Appariement historique, sans preuve directe d'origine.
