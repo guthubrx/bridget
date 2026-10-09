@@ -44,3 +44,17 @@ Les dix échecs concernent des tests de spawn, de supervision, de reprise et d'a
 - Validation de la skill et format Rust : succès ; git diff --check sans erreur.
 
 Les suites unitaires ciblées utilisent le binaire de test compilé par Cargo, avec TMPDIR=/tmp. L'intégration utilise cargo test -p bridget-daemon --test spec102_threads_test spec102_v1, avec le même CARGO_TARGET_DIR externe. Aucun daemon de production n'est lancé ou arrêté.
+
+## Publication sans redémarrage
+
+Le correctif de code ff168d1ca802df3d7c3e2bb347b621854642a6ee est fusionné sur main et poussé sur github/main.
+
+La skill est publiée par le publisher existant, limité à SKILLS=bridget. Codex et le registre agents restent liés à la source canonique. Le guide Claude est identique octet par octet ; ses références étaient déjà liées à la source.
+
+Un second fait est vérifié : le profil /Users/moi/.claude-glm ne possédait pas de dossier skills. Le même publisher, avec SOURCE_ROOT=/Users/moi/.claude-glm/skills, crée uniquement l'entrée bridget vers la source Codex canonique. Guide et référence sont identiques. Aucune configuration MCP, permission, clé ou session active n'est modifiée. Cette publication ne prouve pas le rechargement du catalogue d'un tour déjà ouvert.
+
+Compilation release du commit ff168d1c : succès en47.92s. Le binaire signé est remplacé par renommage atomique, sans relance, à /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget. SHA256 b7b0bb0ccc36289a374f5d684c8ed83cc1131745c33293c4ff096d46c065e0c6. Le CLI canonique affiche la nouvelle procédure. L'ancien binaire est conservé dans /Users/moi/.cache/bridget-147-lecture-backup.LO6P9D/bridget-before-ff168d1c.
+
+Contrôle après remplacement : daemon93353, pont93355 et serveur T350035 sont toujours les mêmes processus. Le daemon et les MCP déjà ouverts conservent leur code/catalogue chargé ; les prochains appels CLI utilisent le nouveau fichier. Aucun redémarrage, tour de modèle, notification ou mission envoyé.
+
+T3 installé reste0.0.45-local.146. Le candidat147 est prêt dans /Users/moi/.cache/t3-spec147-package.LIkn22/staging/T3 Code (Local).app, sans activation. Le montage MCP Claude/GLM de147 ne peut donc pas être annoncé actif chez Relance. Aucun restart différé n'est programmé.
