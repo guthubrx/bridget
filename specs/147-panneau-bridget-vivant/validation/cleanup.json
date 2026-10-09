@@ -1,0 +1,48 @@
+{
+  "spec": "147-panneau-bridget-vivant",
+  "as_of": "2026-10-08T23:59:00Z",
+  "source": "Principal execution receipts; no cleanup or Git performed by documentary owner",
+  "authorized": true,
+  "old_builds": {
+    "directories_removed": 13,
+    "allocated_bytes_measured": 7075405824,
+    "exact_targets_receipt": "/Users/moi/.cache/bridget-install147.VTg5jQ/old-builds-before.tsv",
+    "open_files_before_delete": 0,
+    "rollback146_signature_and_SHA_verified": true,
+    "runtime147_SHA_unchanged_after_delete": true
+  },
+  "git_cleanup": {
+    "worktrees_removed": 2,
+    "normal_git_remove_exit_codes": {"T3_147": 0, "Bridget_147": 0},
+    "local_merged_branches_removed": 14,
+    "corresponding_remote_branches_removed": 11,
+    "Bridget147_remote_branch_delete_exit_code": 0,
+    "Bridget_root_main_and_github_identical_reported": "e94e01b8",
+    "cleanup_complete_confirmed_by_principal": true,
+    "source_commits_preserved": {
+      "Bridget": "82f4abebea9aca2b582a84c72d43c844f5e17cf9",
+      "T3": "f4354fb0d5bee925338304cf3101d0853244f64b"
+    },
+    "T3_removed_worktree_allocated_size_reported": "76.638 GB on ExFAT, including dependencies and reference repos; not T3 database"
+  },
+  "free_space_GiB_reported": {
+    "external_8TB2_before": 183,
+    "external_8TB2_after": 255,
+    "home_volume_before": 88,
+    "home_volume_after": 91
+  },
+  "preserved": {
+    "dirty_Bridget_142_145_146": true,
+    "T3_worktree145_and_nonancestor139": true,
+    "single_T3_database_snapshot": true,
+    "agent_loop_helpers_unchanged": true,
+    "Bridget_installed_SHA256": "91cdc1e1d6c210c754cb5603011269a202a97474fb3c68351a518cbe6e7e37f5",
+    "ROOT_audits": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-09",
+    "full_audit_backup": "/Users/moi/.cache/bridget-install147.VTg5jQ/audits147.tgz"
+  },
+  "T3_activation": {
+    "pending_at_this_document_checkpoint": true,
+    "future_authoritative_receipt": "/Users/moi/.cache/bridget-install147.VTg5jQ/t3-activation-result.json",
+    "active_runtime_claim": false
+  }
+}
