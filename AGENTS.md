@@ -1,25 +1,22 @@
 <!-- SPECKIT START -->
-Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/plan.md.
-Périmètre : présentation des lots de messages directs Bridget dans T3.
-Session141 autorisée explicitement le 2026-10-07 par « oui ».
-Un groupe compact, noms visibles, messages repliables et aperçu littéral du corps.
-Aucun panneau Sources ou détails techniques pour ces lots, même en repli sûr.
-Préserver textes, ordre, copie complète, pièces jointes, actions et missions.
-Les notifications et autres enveloppes SPEC140 gardent leur présentation.
-Aucun changement daemon, agent-loop, stockage, API ou migration.
-Essais frontend isolés. Commit, fusion, push et installation de la session141
-autorisés explicitement le 2026-10-07. Préparer une sauvegarde et vérifier sur preuves.
-Interdiction explicite de relancer T3 : ne pas quitter ni redémarrer l'application.
-Conserver les conversations et processus T3 en cours. Installation distincte de
-l'activation : ne pas annoncer la nouvelle présentation active sans preuve.
-Session141 installée à côté dans /Applications/T3 Code (Local SPEC141).app,
-signatures et assets vérifiés. L'application active /Applications/T3 Code (Local).app
-reste intacte ; aucune relance ni activation141. Activation future uniquement
-après fermeture volontaire de l'ancienne application par l'utilisateur, puis
-ouverture explicite de la nouvelle application adjacente. Relancer l'ancienne
-application ne charge pas la session141.
+Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/142-skills-bridget/specs/142-skills-bridget/plan.md.
+Périmètre : noms et descriptions français des compétences bridget, bridget-loop
+et bridget-handoff pour Codex et Claude. Session142 approuvée le 2026-10-07.
+Garder agent-bridge, agent-loop et agent-handoff-ledger comme alias explicites
+visibles et invocables. Corriger les huit appelants documentaires ciblés.
+Source unique explicite et publisher existant ; aucune promotion par date pour
+ces six identités. Conserver les anciens scripts et le LaunchAgent actif.
+Publier avec sauvegarde, chemins exacts et contrôles non destructifs.
+Session142 implémentée et publiée : six identités, seconde publication no-op,
+tests ciblés et découverte vérifiés. Aucun comportement de modèle revendiqué.
+Sauvegarde : /Users/moi/.cache/bridget-skills-142.eTqmgl/.
+Aucun moteur, daemon, T3, mission, API, modèle payant ou runtime modifié.
+Aucun restart, seconde application, quit/open T3 ni relance de LaunchAgent.
+La session141 installée mais non activée et les processus actifs restent intactes.
+Ne pas confondre catalogue de compétences et exécution réelle d'un modèle.
+Commit, fusion et push142 attendent une autorisation explicite distincte.
 Aucun cleanup d'autres travaux sans autorisation.
-Sélection SpecKit : SPECIFY_FEATURE=141-messages-groupes ; branche session-141-messages-groupes.
+Sélection SpecKit : SPECIFY_FEATURE=142-skills-bridget ; branche session-142-skills-bridget.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

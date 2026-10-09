@@ -1,0 +1,60 @@
+{
+  "feature": "142-skills-bridget",
+  "date": "2026-10-07",
+  "status": "implemented_published_uncommitted",
+  "tasks": { "completed": 8, "total": 8 },
+  "tests": {
+    "publisher": { "passed": 16, "total": 16, "executors": ["implementation_teammate", "principal_final_replay"], "principal_final_time": "2026-10-07 08:46 CEST", "principal_cwd": "/Users/moi/dotfiles/", "principal_command": "python3 -m unittest discover -s claude/tests -p test_142_bridget_skill_sync.py", "path": "/Volumes/8TB2/01-workflow/git-worktrees/dotfiles/142-bridget-skills/claude/tests/test_142_bridget_skill_sync.py" },
+    "format": { "principal_final_quick_validate_passed": 5, "bridget_previously_validated": true, "bash_syntax_passed": true },
+    "loop_regression": { "passed": 152, "total": 152, "executor": "implementation_teammate", "isolated": true },
+    "initial_red": { "total": 8, "failures": 5, "errors": 2, "passed": 1 }
+  },
+  "source_hashes": {
+    "publisher_sha256": "3ca8bb32b4f14ecd016f50d73ffc7b9d8874aeeb0598884e12c08af662dd6d4f",
+    "publisher_tests_sha256": "0c1dd34f9511c2421bb3e3828373ec9b3b7301cb35e6318da955f9ab1870cb28"
+  },
+  "review": { "reuse_audit": "PASS", "final_independent_review": "APPROVE", "reviewer_tests_executed": false, "review_report_test_count_snapshot": 15, "converge": "CONVERGED", "converge_passes": 2, "tasks_sha256_unchanged_within_passes": ["d3437c5905ac2f4e0074fe8b0d2e46584125ccf388ac31a5c8d310e871b8b2ee", "2ea2257f56f2a454ed0d74c52bb11492c1265dea39e2cdb730e66f3f86398102"], "open_findings_reported": 0 },
+  "publication": {
+    "executor": "principal",
+    "exit_code": 0,
+    "identities": ["bridget", "bridget-loop", "bridget-handoff", "agent-bridge", "agent-loop", "agent-handoff-ledger"],
+    "canonical_sync_count": 6,
+    "environment": {
+      "CODEX_ROOT": "/Users/moi/.codex/skills",
+      "CODEX_SOURCE_ROOT": "/Users/moi/dotfiles/codex/.codex/skills",
+      "SOURCE_ROOT": "/Users/moi/dotfiles/claude/.claude/skills",
+      "AGENTS_ROOT": "/Users/moi/.agents/skills",
+      "BRIDGET_SOURCE_ROOT": "/Users/moi/Nextcloud/10.Scripts/64.bridget/skills/bridget",
+      "BACKUP_ROOT": "/Users/moi/.cache/bridget-skills-142.eTqmgl/publication",
+      "CHECK_SKILL_DUPLICATES": "0",
+      "SKILLS": "bridget,bridget-loop,bridget-handoff,agent-bridge,agent-loop,agent-handoff-ledger"
+    },
+    "idempotence": { "exit_code": 0, "instruction_files_checked": 36, "unchanged": ["bytes", "realpath", "mtime", "mode"] },
+    "callers_updated": 8,
+    "legacy_cli_lines_preserved": 4,
+    "backup": "/Users/moi/.cache/bridget-skills-142.eTqmgl/",
+    "recovered_entries": ["/Users/moi/.cache/bridget-skills-142.eTqmgl/codex-bridget-entry/", "/Users/moi/.cache/bridget-skills-142.eTqmgl/agents-bridget-entry/"],
+    "archives": ["/Users/moi/dotfiles/archives/skills/spec142/codex/agent-bridge.pre-104-20260713-082347/", "/Users/moi/dotfiles/archives/skills/spec142/claude/agent-bridge.pre-104-20260713-082347/"],
+    "archive_comparison": { "executor": "principal", "diff_rq_differences": 0 }
+  },
+  "discovery": {
+    "codex": { "native_version": "0.160.1", "enabled": 6, "errors": [], "fixture": "/tmp/bridget-spec142-published.QObzd7/published.cjs" },
+    "claude": { "reader": "existing T3 ClaudeSkills reader", "enabled_invocable": 6, "exit_code": 0, "fixture": "/tmp/bridget-spec142-published.QObzd7/claude-reader.cjs", "native_cli_or_menu_tested": false },
+    "model_execution_tested": false
+  },
+  "preservation": {
+    "principal_reported_program_hashes_unchanged": 3,
+    "launch_agent_preserved": true,
+    "observed_sha256": {
+      "/Users/moi/.codex/skills/agent-loop/scripts/agent_loop.py": "bd561d1c46f1c70a5517cb9852610a97897d94e9fd4eb900b861bc9cb8b5347f",
+      "/Users/moi/.codex/skills/agent-handoff-ledger/scripts/handoff_ledger.py": "f7d464e0259cdaeddac3917c6b0b99965db9fdb4730407af61664697ab8d90b3",
+      "/Users/moi/Library/LaunchAgents/local.agent-loop.politique-20261004.plist": "8d4792834941fcd95a1994e3d2a418365edf111f1efc958c45beb7d94b2c44ca"
+    },
+    "restart_performed": false,
+    "active_t3_processes_unchanged": [{ "pid": 85017, "start_time": "2026-10-07 07:21:41 CEST" }, { "pid": 85080, "start_time": "2026-10-07 07:21:42 CEST" }],
+    "mission_launched": false,
+    "paid_model_call": false
+  },
+  "git_delivery": { "authorized": false, "commit": null, "merge": null, "push": null },
+  "limits": ["Discovery fixtures do not prove model behavior or implicit selection.", "Claude check uses the existing T3 reader, not the native Claude menu or a model run.", "Open sessions may keep their existing catalog; none was restarted.", "Six explicit identities do not imply a UI limited to three entries."]
+}
