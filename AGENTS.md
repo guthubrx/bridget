@@ -1,41 +1,32 @@
 <!-- SPECKIT START -->
-Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/plan.md.
-Session143 autorisée le 2026-10-07 par my-specify-all.
-Périmètre : entrées Bridget sans fond/bordure et moins de padding ; sorties MCP
-Bridget compactes seulement pour les formats réellement confirmés.
-Préserver texte exact au dépliage, copie, actions, pièces jointes et groupes141.
-Destinataire nommé seulement sur preuve ; sinon ID bref attesté ou libellé neutre.
-Ne jamais interpréter completed comme livré ou reçu. Formats inconnus : natif.
-Réutiliser logo, toggle, Markdown et PlainWorkEntryRow existants.
-Aucun panneau Sources ajouté, nouveau framework, dépendance, backend ou migration.
-Messages et outils ordinaires inchangés. Essais frontend isolés.
-Phase initiale : aucun restart, commit ou déploiement avant autorisation distincte.
-Livraison143 maintenant autorisée : commit, fusion, push, installation et restartT3.
-Conserver sessions141/142 et autres travaux ; aucun daemon, boucle ou mission modifié.
-Gate réutilisation PASS et tâches fondées sur les formes réelles attestées.
-Socle143 implémenté : T001–T008 et preuves346/recette/audit conservées.
-Complément US4 autorisé dans la même session143 ; implémenté, livraison en cours.
-Réponses textuelles interagents : préfixe strict, assistant terminé seulement,
-ligne à gauche logo/destinataire/Entre agents sans cadre et repliée par défaut.
-Note utilisateur explicite séparée reste visible ; ambiguïté/streaming natifs.
-Nom attesté par en-tête direct antérieur du même fil ; sinon UUID, sans I/O.
-Copie originale, citations, métadonnées, fichiers modifiés et actions préservés.
-Réponses mixtes : corps agent monté CSS display:none sans hidden/aria-hidden,
-pour flux canonique de citation stable ; coût Markdown complet antérieur assumé.
-Références Markdown/footnotes/HTML hors code sensibles : message entier natif.
-Réédition texte A→B→A repliée ; état lié séparément au fil/message.
-Gel392 tests PASS, contrôles et recette native isolée PASS, revue finale APPROVE.
-T001–T013 cochées sur preuves ; convergence principale CONVERGED11:39:54.
-Comparaison12/13 byte-identique ; T013 cochée ensuite en phase documentaire.
-Les preuves du socle restent historiques, jamais réutilisées comme preuve US4.
-CommitT3 a1a4f2ef12 et fusion FF local/v0.0.45 effectués ; deux branches poussées fork.
-Patch portable b8ffa6f280 capitalisé dans branche déjà sélectionnée par buildfutur.
-Paquet complet construit ; candidat0.0.45-local.143 signé/validé, pas installé.
-Sauvegarde app effectuée ; snapshot SQLite0600 quick_check ok, marqueur validé.
-Installation/activation pas encore prouvées ; ne pas les annoncer avant preuve.
-Restart supervisé et reçu durable préparés par le principal, pas par cet agentdocs.
+Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/146-bridget-panel-lisible/specs/146-bridget-panel-lisible/plan.md.
+Session146 approuvée par le « go » utilisateur du 2026-10-08 ; statut Implemented.
+Périmètre : panneau Bridget plus lisible, fils triés par dernier échange DESC,
+historiques ouverts sur leurs vrais derniers messages puis pages plus anciennes.
+Titre, membres et date courts ; auteurs visibles ; séparation discrète.
+Corps longs : aperçu quatre lignes, Déplier/Replier ; corps et copie exacts.
+Détails techniques sous chevron ; types français ; icône monochrome native T3.
+Recherche locale dans pages chargées, même portions repliées ; refresh manuel.
+Préserver appartenance, liaison attestée, refus et rejet des contextes obsolètes145.
+Aucune émission, ACK, avance de curseur agent, relance, mission ou appel modèle.
+Session145 installée ; ses sources non committées sont importées isolément avec manifeste.
+Ne pas modifier les racines principales,145, les bases réelles ni les processus actifs.
+Conception et reuse-audit rédigés ; gate documentaire et relecture principale PASS.
+Actions list_recent/history_recent et singleton HumanThreadViewRecentV1 distincts de145.
+Activité par dernière séquence ; date DESC, UUID ASC ; after canonique activité:UUID.
+Historique DESC : before inclusif, snapshot global, through=min, next=minémis-1.
+Projection des corrections conserve snapshot ; deux gardes humaines sans maintenance.
+Tâches146 : 10/10 ; Rust14 nouveaux uniques PASS, UI27 PASS, intégration603 ciblés PASS.
+RecetteDOM isolée et Converge1 CONVERGED ; screenshots échoués, aucune image revendiquée.
+RED, recouvrements de filtres Rust et warnings hérités consignés ; pas zéro warning.
+Builds privés web/serveur et release Rust vérifiés ; interop 8 enveloppes/137 corps ; desktop non packagé.
+Deux audits du delta validés strictement : exit 0, zéro erreur et zéro warning de validation.
+Revues finales APPROVE, même fournisseur ; aucun autre fournisseur joignable dans le projet.
+Gate conception et Analyze principal en deux passes manuelles : PASS, GO code reçu.
+Recette autorisée en aperçu isolé avec données de test, sans agents actifs.
+Aucun commit, fusion, push, déploiement, installation ou restart autorisé pour146.
 Aucun cleanup d'autres travaux sans autorisation.
-Sélection SpecKit : SPECIFY_FEATURE=143-echanges-discrets ; branche session-143-echanges-discrets.
+Sélection SpecKit : SPECIFY_FEATURE=146-bridget-panel-lisible ; branche session-146-bridget-panel-lisible.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->
