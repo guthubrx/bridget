@@ -684,6 +684,10 @@ impl Drop for FixtureRoot {
 }
 
 struct DaemonState {
+    /// Autorité éphémère : None interdit un fait contradictoire sur ce lien.
+    t3_thread_bindings: HashMap<String, Option<String>>,
+    /// La projection projet historique ne conserve pas son origine.
+    t3_project_connections: HashSet<String>,
     /// Fait de communication de la connexion primaire (None = ambigu).
     communication_projects: HashMap<
         String,
@@ -2949,6 +2953,8 @@ impl DaemonState {
             unix_now_secs().max(0) as u64,
         )?;
         Ok(DaemonState {
+            t3_thread_bindings: HashMap::new(),
+            t3_project_connections: HashSet::new(),
             observations,
             observation_sequences: HashMap::new(),
             thread_notice_versions: HashMap::new(),
@@ -3085,6 +3091,8 @@ impl DaemonState {
     }
 
     fn revoke_identity_authorizations(&mut self, owner: &str) {
+        self.t3_thread_bindings.remove(owner);
+        self.t3_project_connections.remove(owner);
         let had_credential = self.identity_credentials.remove(owner).is_some();
         self.observation_sequences.remove(owner);
         self.observations.remove_source(owner, Instant::now());
@@ -4862,6 +4870,18 @@ fn handle_connection(
                         .and_then(|kind| kind.as_str())
                         .map(str::to_owned)
                 });
+            if display_name_kind.as_deref() == Some("HumanThreadViewV1")
+                && decode::<WrapperToDaemon>(line).is_err()
+            {
+                let response = DaemonToWrapper::HumanThreadViewResult {
+                    result: bridget_transport::protocol::HumanThreadViewResult::error(
+                        bridget_transport::protocol::HumanThreadViewError::InvalidRequest,
+                    ),
+                };
+                writeln!(my_writer, "{}", encode(&response)?)?;
+                my_writer.flush()?;
+                continue;
+            }
             if matches!(
                 display_name_kind.as_deref(),
                 Some("display_name_set" | "display_name_resolve")
@@ -8024,6 +8044,12 @@ fn announce_communication_project(
     let last_known = previous.1.or_else(|| project.clone());
     st.communication_projects
         .insert(conn_id.into(), (project.clone(), last_known, conflicting));
+    if project.is_some() && local && source == CommunicationProjectSource::T3 {
+        st.t3_project_connections.insert(conn_id.into());
+    } else {
+        st.t3_project_connections.remove(conn_id);
+        st.t3_thread_bindings.remove(conn_id);
+    }
     let warnings = if project.is_none() {
         crate::communication::project_scope(None, None, "", None).unwrap_or_default()
     } else {
@@ -10941,18 +10967,836 @@ mod spec099_classic_delivery_tests {
     }
 }
 
+#[cfg(test)]
+mod spec145_human_view_tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    const T3: &str = "89000000-0000-4000-8000-000000000145";
+
+    fn read_request(version: u16) -> WrapperToDaemon {
+        serde_json::from_value(json!({"type":"HumanThreadViewV1","request":{
+            "version":version,"t3_thread_id":T3,"project_root":"/fixture",
+            "request":{"action":"list"}
+        }}))
+        .expect("contrat humain disponible")
+    }
+
+    fn response(state: &Arc<Mutex<DaemonState>>, conn: &str, version: u16) -> Value {
+        serde_json::to_value(handle_wrapper_message(conn, read_request(version), state).unwrap())
+            .unwrap()["result"]
+            .clone()
+    }
+
+    fn call(state: &Arc<Mutex<DaemonState>>, root: &str, action: Value) -> Value {
+        let request = serde_json::from_value(json!({"type":"HumanThreadViewV1","request":{
+            "version":1,"t3_thread_id":T3,"project_root":root,"request":action
+        }}))
+        .unwrap();
+        serde_json::to_value(handle_wrapper_message("human",request,state).unwrap()).unwrap()["result"].clone()
+    }
+
+    fn snapshot(state: &Arc<Mutex<DaemonState>>) -> Vec<(String, Vec<String>)> {
+        let st = state.lock().unwrap();
+        let db = rusqlite::Connection::open_with_flags(
+            &st.db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").unwrap()
+            .query_map([],|row|row.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        tables
+            .into_iter()
+            .map(|table| {
+                let mut stmt = db
+                    .prepare(&format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
+                    .unwrap();
+                let cols = stmt.column_count();
+                let mut rows = stmt
+                    .query_map([], |row| {
+                        (0..cols)
+                            .map(|col| row.get::<_, rusqlite::types::Value>(col))
+                            .collect::<Result<Vec<_>, _>>()
+                            .map(|row| format!("{row:?}"))
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                rows.sort();
+                (table, rows)
+            })
+            .collect()
+    }
+
+    fn fixture(label: &str) -> (Arc<Mutex<DaemonState>>, String, UnixStream) {
+        let (mut st, _) = presence_tests::state_with_registered_agent(label);
+        st.conn_counter = 1; // conn-1 appartient déjà à la fixture héritée.
+        let peer = spec094_live_test_connection(&mut st, "t3");
+        let host = st.host.clone();
+        assert!(matches!(
+            handle_register_with_channel(
+                "t3",
+                2,
+                "fixture".into(),
+                crate::t3code::stable_uuid(T3),
+                Some(host.clone()),
+                Some("t3code".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Cli),
+                None,
+                Some("test".into()),
+                Some(crate::t3code::stable_uuid(&format!("instance:{T3}"))),
+                None,
+                false,
+                Some(false),
+                &mut st
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        st.connection_roles
+            .insert("human".into(), ConnectionRole::Client);
+        st.client_negotiations.insert(
+            "human".into(),
+            NegotiatedClient {
+                version: 1,
+                issuer_scope: "spec145-human".into(),
+                capabilities: vec![serde_json::from_value(json!("human_thread_view_v1")).unwrap()],
+            },
+        );
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let state = Arc::new(Mutex::new(st));
+        assert!(matches!(
+            announce_communication_project(
+                &state,
+                "t3",
+                &root,
+                bridget_transport::protocol::CommunicationProjectSource::T3,
+                &host,
+                None
+            ),
+            DaemonToWrapper::ProjectContextResult {
+                project: Some(_),
+                ..
+            }
+        ));
+        let fact = serde_json::from_value(
+            json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3}),
+        )
+        .unwrap();
+        assert!(handle_wrapper_message("t3", fact, &state).is_none());
+        (state, root, peer)
+    }
+
+    #[test]
+    fn spec145_dormant_binding_project_and_disconnect_are_live_facts() {
+        let (state, root, _peer) = fixture("h145b");
+        let before = snapshot(&state);
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["status"],
+            "listed"
+        );
+        assert_eq!(
+            call(&state, "/nonexistent-project", json!({"action":"list"}))["result"]["code"],
+            "project_mismatch"
+        );
+        {
+            let mut st = state.lock().unwrap();
+            st.conn_instances
+                .insert("t3".into(), "wrong-instance".into());
+        }
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+        state.lock().unwrap().conn_instances.insert(
+            "t3".into(),
+            crate::t3code::stable_uuid(&format!("instance:{T3}")),
+        );
+        state.lock().unwrap().connections.remove("t3");
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+        state.lock().unwrap().mark_unreachable("t3");
+        assert!(!state.lock().unwrap().t3_thread_bindings.contains_key("t3"));
+        assert!(!state.lock().unwrap().t3_project_connections.contains("t3"));
+        assert_eq!(
+            snapshot(&state),
+            before,
+            "toutes les tables métier restent identiques"
+        );
+    }
+
+    #[test]
+    fn spec145_binding_ambiguity_auxiliary_and_conflicting_fact_fail_closed() {
+        let (state, root, _peer) = fixture("h145a");
+        state
+            .lock()
+            .unwrap()
+            .t3_thread_bindings
+            .insert("duplicate".into(), Some(T3.into()));
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+        state.lock().unwrap().t3_thread_bindings.remove("duplicate");
+        state
+            .lock()
+            .unwrap()
+            .auxiliary_connections
+            .insert("t3".into());
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+        state.lock().unwrap().auxiliary_connections.remove("t3");
+        state
+            .lock()
+            .unwrap()
+            .conn_names
+            .insert("t3".into(), "14500000-0000-4000-8000-000000000099".into());
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+        state
+            .lock()
+            .unwrap()
+            .conn_names
+            .insert("t3".into(), crate::t3code::stable_uuid(T3));
+        let fact=serde_json::from_value(json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":"14500000-0000-4000-8000-000000000099"})).unwrap();
+        assert!(matches!(
+            handle_wrapper_message("t3", fact, &state),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+    }
+
+    #[test]
+    fn spec145_reconnect_requires_fresh_primary_binding() {
+        let (state, root, _old_peer) = fixture("h145r");
+        let host = state.lock().unwrap().host.clone();
+        let _fresh_peer = {
+            let mut st = state.lock().unwrap();
+            st.connections.remove("t3");
+            st.router.unregister_by_conn("t3");
+            st.mark_unreachable("t3");
+            st.conn_names.remove("t3");
+            let peer = spec094_live_test_connection(&mut st, "t3-new");
+            let registered = handle_register_with_channel(
+                "t3-new",
+                2,
+                "fixture".into(),
+                crate::t3code::stable_uuid(T3),
+                Some(host.clone()),
+                Some("t3code".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Cli),
+                None,
+                Some("test".into()),
+                Some(crate::t3code::stable_uuid(&format!("instance:{T3}"))),
+                None,
+                false,
+                Some(false),
+                &mut st,
+            );
+            assert!(
+                matches!(registered, DaemonToWrapper::Registered { .. }),
+                "réponse réelle reconnexion: {registered:?}"
+            );
+            peer
+        };
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable"
+        );
+        announce_communication_project(
+            &state,
+            "t3-new",
+            &root,
+            bridget_transport::protocol::CommunicationProjectSource::T3,
+            &host,
+            None,
+        );
+        let fact = serde_json::from_value(
+            json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3}),
+        )
+        .unwrap();
+        assert!(handle_wrapper_message("t3-new", fact, &state).is_none());
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["status"],
+            "listed"
+        );
+        assert!(!state.lock().unwrap().t3_thread_bindings.contains_key("t3"));
+    }
+
+    #[test]
+    fn spec145_git_canonical_root_worktree_alias_and_source_are_attested() {
+        let (state, root, _peer) = fixture("h145g");
+        let canonical = state.lock().unwrap().communication_projects["t3"]
+            .0
+            .clone()
+            .unwrap()
+            .root;
+        assert_ne!(
+            root, canonical,
+            "workspace et gitcommon sont deux chemins distincts"
+        );
+        let primary = std::path::Path::new(&canonical).parent().unwrap();
+        assert_eq!(
+            call(&state, primary.to_str().unwrap(), json!({"action":"list"}))["result"]["status"],
+            "listed"
+        );
+        let alias =
+            std::env::temp_dir().join(format!("h145-alias-{}", uuid::Uuid::new_v4().simple()));
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        assert_eq!(
+            call(&state, alias.to_str().unwrap(), json!({"action":"list"}))["result"]["status"],
+            "listed"
+        );
+        std::fs::remove_file(alias).unwrap();
+        let unrelated =
+            std::env::temp_dir().join(format!("h145-git-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&unrelated).unwrap();
+        let _cleanup = FixtureRoot(unrelated.clone());
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&unrelated)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            call(
+                &state,
+                unrelated.to_str().unwrap(),
+                json!({"action":"list"})
+            )["result"]["code"],
+            "project_mismatch"
+        );
+        let host = state.lock().unwrap().host.clone();
+        announce_communication_project(
+            &state,
+            "t3",
+            &root,
+            bridget_transport::protocol::CommunicationProjectSource::Git,
+            &host,
+            None,
+        );
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable",
+            "un fait Git ne prouve pas une source T3"
+        );
+        announce_communication_project(
+            &state,
+            "t3",
+            &root,
+            bridget_transport::protocol::CommunicationProjectSource::T3,
+            &host,
+            None,
+        );
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable",
+            "restaurer projet ne ressuscite pas binding"
+        );
+        let fact = serde_json::from_value(
+            json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3}),
+        )
+        .unwrap();
+        assert!(handle_wrapper_message("t3", fact, &state).is_none());
+        announce_communication_project(
+            &state,
+            "t3",
+            unrelated.to_str().unwrap(),
+            bridget_transport::protocol::CommunicationProjectSource::T3,
+            &host,
+            None,
+        );
+        assert!(state.lock().unwrap().communication_projects["t3"].2);
+        assert_eq!(
+            call(&state, &root, json!({"action":"list"}))["result"]["code"],
+            "binding_unavailable",
+            "conflit retire autorité"
+        );
+    }
+
+    #[test]
+    fn spec145_real_client_lifecycle_and_refusal_do_not_mutate_business_tables() {
+        let (state, root, mut peer) = fixture("h145l");
+        let directory =
+            std::env::temp_dir().join(format!("h145-s-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let _cleanup = FixtureRoot(directory.clone());
+        let socket = directory.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let before = snapshot(&state);
+        let presence_before = {
+            let st = state.lock().unwrap();
+            st.presences
+                .iter()
+                .map(|(id, p)| (id.clone(), p.state.clone(), p.capacity_seen, p.link_seen))
+                .collect::<Vec<_>>()
+        };
+        {
+            let mut st = state.lock().unwrap();
+            st.attach_subscriptions.insert(
+                "spec145-maintenance-sentinel".into(),
+                AttachSubscription {
+                    agent: crate::t3code::stable_uuid(T3),
+                    attach_conn: "desktop".into(),
+                    wrapper_conn: "t3".into(),
+                    caught_up: true,
+                },
+            );
+            st.view_closed_tx
+                .send("spec145-maintenance-sentinel".into())
+                .unwrap();
+        }
+        for action in [
+            json!({"action":"list"}),
+            json!({"action":"show","thread_id":"14500000-0000-4000-8000-000000000099"}),
+        ] {
+            let server = state.clone();
+            let listener = listener.try_clone().unwrap();
+            let handle = std::thread::spawn(move || {
+                handle_connection(listener.accept().unwrap().0, server).map_err(|e| e.to_string())
+            });
+            let request = serde_json::from_value(
+                json!({"version":1,"t3_thread_id":T3,"project_root":root,"request":action}),
+            )
+            .unwrap();
+            let result = crate::communication::client::human_thread_view(&socket, request).unwrap();
+            let value = serde_json::to_value(result).unwrap();
+            assert!(matches!(
+                value["result"]["status"].as_str(),
+                Some("listed" | "error")
+            ));
+            handle.join().unwrap().unwrap();
+            assert_eq!(
+                snapshot(&state),
+                before,
+                "connect/hello/read/disconnect complets restent sans écriture"
+            );
+        }
+        let binary = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("bridget");
+        for action in ["list", "show"] {
+            let server = state.clone();
+            let listener = listener.try_clone().unwrap();
+            let handle = std::thread::spawn(move || {
+                handle_connection(listener.accept().unwrap().0, server).map_err(|e| e.to_string())
+            });
+            let mut command = std::process::Command::new(&binary);
+            command
+                .env("BRIDGET_HOME", &directory)
+                .env("BRIDGET_SOCKET", &socket)
+                .args([
+                    "thread",
+                    "inspect",
+                    "--t3-thread",
+                    T3,
+                    "--project-root",
+                    &root,
+                    "--action",
+                    action,
+                    "--json",
+                ]);
+            if action == "show" {
+                command.args(["--thread", "14500000-0000-4000-8000-000000000099"]);
+            }
+            let output = command
+                .output()
+                .expect("construire le binaire bridget avant ce test bout-en-bout");
+            assert_eq!(
+                output.status.code(),
+                Some(if action == "list" { 0 } else { 2 })
+            );
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                value["result"]["status"],
+                if action == "list" { "listed" } else { "error" }
+            );
+            handle.join().unwrap().unwrap();
+            assert_eq!(snapshot(&state), before, "CLI complet sans écriture métier");
+        }
+        {
+            let server = state.clone();
+            let listener = listener.try_clone().unwrap();
+            let handle = std::thread::spawn(move || {
+                handle_connection(listener.accept().unwrap().0, server).map_err(|e| e.to_string())
+            });
+            let mut stream = UnixStream::connect(&socket).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            writeln!(stream,"{}",json!({"type":"HumanThreadViewV1","request":{
+                "version":1,"t3_thread_id":T3,"project_root":root,"request":{"action":"ack","thread_id":"14500000-0000-4000-8000-000000000099"}
+            }})).unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let value: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["result"]["result"]["code"], "invalid_request");
+            drop(reader);
+            drop(stream);
+            handle.join().unwrap().unwrap();
+            assert_eq!(
+                snapshot(&state),
+                before,
+                "refus wire fermé sans écriture ni maintenance"
+            );
+        }
+        let presence_after = {
+            let st = state.lock().unwrap();
+            st.presences
+                .iter()
+                .map(|(id, p)| (id.clone(), p.state.clone(), p.capacity_seen, p.link_seen))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            state.lock().unwrap().view_closed_rx.try_recv().unwrap(),
+            "spec145-maintenance-sentinel",
+            "le cycle humain ne draine pas la maintenance des vues agent"
+        );
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .attach_subscriptions
+                .contains_key("spec145-maintenance-sentinel")
+        );
+        assert_eq!(presence_after, presence_before);
+        peer.set_nonblocking(true).unwrap();
+        assert_eq!(
+            std::io::Read::read(&mut peer, &mut [0u8; 1])
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn spec145_history_three_pages_exact_body_and_business_nonmutation() {
+        use crate::store::threads::{CreateThread, NotifySpec, PostEntry, ThreadTxOutcome};
+        let (state, root, mut peer) = fixture("h145p");
+        const THREAD: &str = "14500000-0000-4000-8000-000000000001";
+        let actor = crate::t3code::stable_uuid(T3);
+        let body = "  exact é🦀\n\n```rust\nlet x = 1;\n```\n ";
+        {
+            let st = state.lock().unwrap();
+            let mut members = vec![actor.clone(), "14500000-0000-4000-8000-000000000002".into()];
+            members.sort();
+            assert!(matches!(
+                st.store
+                    .thread_create(CreateThread {
+                        actor: &actor,
+                        operation_id: &uuid::Uuid::new_v4().to_string(),
+                        canonical_hash: "create",
+                        thread_id: THREAD,
+                        title: "Lecture",
+                        members: &members,
+                        project_warnings: &[],
+                        now: 1,
+                        limits: &crate::threads::LIMITS
+                    })
+                    .unwrap(),
+                ThreadTxOutcome::Done(_)
+            ));
+            for seq in 1..=7 {
+                assert!(matches!(
+                    st.store
+                        .thread_post(PostEntry {
+                            actor: &actor,
+                            operation_id: &uuid::Uuid::new_v4().to_string(),
+                            canonical_hash: &format!("post-{seq}"),
+                            thread_id: THREAD,
+                            message_id: &uuid::Uuid::new_v4().to_string(),
+                            body,
+                            notify: &NotifySpec::None,
+                            notices: &[],
+                            project_warnings: &[],
+                            reply_to_seq: None,
+                            ack_receipt: None,
+                            kind: Some(bridget_transport::protocol::ThreadEntryKind::History),
+                            supersedes_seq: None,
+                            now: seq,
+                            limits: &crate::threads::LIMITS
+                        })
+                        .unwrap(),
+                    ThreadTxOutcome::Done(_)
+                ));
+            }
+        }
+        let before = snapshot(&state);
+        let listed = call(&state, &root, json!({"action":"list","limit":1}));
+        assert_eq!(
+            listed["result"]["threads"][0]["members"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            listed["result"]["threads"][0]["members"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["name"].is_null())
+        );
+        let shown = call(&state, &root, json!({"action":"show","thread_id":THREAD}));
+        assert_eq!(shown["result"]["status"], "shown");
+        assert!(shown["result"].get("own_acked_seq").is_none());
+        assert!(shown["result"].get("own_wake").is_none());
+        let mut seqs = Vec::new();
+        let mut witnesses = json!({"list":listed,"show":shown});
+        for from in [1, 4, 7] {
+            let page = call(
+                &state,
+                &root,
+                json!({"action":"history","thread_id":THREAD,"from_seq":from,"to_seq":7,"limit":3}),
+            );
+            if from == 1 {
+                witnesses["history"] = page.clone();
+            }
+            assert_eq!(page["result"]["snapshot_seq"], 7);
+            for entry in page["result"]["entries"].as_array().unwrap() {
+                assert_eq!(entry["body"], body);
+                assert_eq!(entry["kind"], "history");
+                assert!(entry.get("author_name").is_some());
+                seqs.push(entry["seq"].as_u64().unwrap());
+            }
+        }
+        assert_eq!(seqs, (1..=7).collect::<Vec<_>>());
+        witnesses["error"] = call(
+            &state,
+            &root,
+            json!({"action":"show","thread_id":"14500000-0000-4000-8000-000000000099"}),
+        );
+        if let Ok(path) = std::env::var("BRIDGET_SPEC145_WITNESS") {
+            std::fs::write(path, serde_json::to_vec_pretty(&witnesses).unwrap()).unwrap();
+        }
+        for action in [
+            json!({"action":"list","limit":0}),
+            json!({"action":"history","thread_id":THREAD,"limit":201}),
+            json!({"action":"history","thread_id":THREAD,"from_seq":0}),
+            json!({"action":"history","thread_id":THREAD,"from_seq":u64::MAX,"to_seq":u64::MAX}),
+        ] {
+            assert_eq!(
+                call(&state, &root, action)["result"]["code"],
+                "invalid_request"
+            );
+        }
+        assert_eq!(
+            call(
+                &state,
+                &root,
+                json!({"action":"show","thread_id":"14500000-0000-4000-8000-000000000099"})
+            )["result"]["code"],
+            "thread_unavailable"
+        );
+        assert_eq!(
+            snapshot(&state),
+            before,
+            "ACK, curseurs, réveils, émissions et missions inchangés"
+        );
+        peer.set_nonblocking(true).unwrap();
+        let mut bytes = [0u8; 1];
+        assert_eq!(
+            std::io::Read::read(&mut peer, &mut bytes)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock,
+            "aucun dispatch sur la socket agent"
+        );
+    }
+
+    #[test]
+    fn spec145_client_only_negotiated_binding_and_version() {
+        let (state, _) = presence_tests::state_with_registered_agent("h145");
+        let state = Arc::new(Mutex::new(state));
+        let refusal = response(&state, "cold", 1);
+        assert_eq!(refusal["result"]["code"], "binding_unavailable");
+        assert!(refusal["subject"].is_null());
+        assert!(!state.lock().unwrap().connection_roles.contains_key("cold"));
+        {
+            let mut st = state.lock().unwrap();
+            st.connection_roles
+                .insert("human".into(), ConnectionRole::Client);
+            st.client_negotiations.insert(
+                "human".into(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "spec145-human".into(),
+                    capabilities: vec![
+                        serde_json::from_value(json!("human_thread_view_v1")).unwrap(),
+                    ],
+                },
+            );
+        }
+        assert_eq!(
+            response(&state, "human", 2)["result"]["code"],
+            "unsupported_version"
+        );
+        assert_eq!(
+            response(&state, "human", 1)["result"]["code"],
+            "binding_unavailable"
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "human",
+                WrapperToDaemon::ThreadRequest {
+                    request: bridget_transport::protocol::ThreadRequest {
+                        version: 1,
+                        cross_project_reason: None,
+                        request: bridget_transport::protocol::ThreadAction::List {
+                            limit: None,
+                            after_thread_id: None
+                        }
+                    }
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::ClientRejected { .. })
+        ));
+    }
+}
+
+/// O(C + log T + P), C connexions ; pas d'annuaire ni de maintenance.
+fn handle_human_thread_view(
+    conn_id: &str,
+    request: &bridget_transport::protocol::HumanThreadViewV1,
+    state: &Arc<Mutex<DaemonState>>,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::{
+        HUMAN_THREAD_VIEW_VERSION, HumanThreadViewError as E, HumanThreadViewResult as R,
+    };
+    let refusal = |code| DaemonToWrapper::HumanThreadViewResult {
+        result: R::error(code),
+    };
+    let host = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if request.version != HUMAN_THREAD_VIEW_VERSION {
+            return refusal(E::UnsupportedVersion);
+        }
+        if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
+            || st.conn_names.contains_key(conn_id)
+            || st.auxiliary_connections.contains(conn_id)
+        {
+            return refusal(E::BindingUnavailable);
+        }
+        if !st.client_negotiations.get(conn_id).is_some_and(|n| {
+            n.version == CLIENT_CONTRACT_VERSION
+                && n.capabilities
+                    .contains(&ClientCapability::HumanThreadViewV1)
+        }) {
+            return refusal(E::UnsupportedVersion);
+        }
+        if crate::threads::canonical_uuid(&request.t3_thread_id).is_none() {
+            return refusal(E::InvalidRequest);
+        }
+        st.host.clone()
+    };
+    // Git hors verrou ; puis toute autorité est relue sous le verrou unique.
+    let project = crate::communication::resolve_communication_project(
+        &request.project_root,
+        &host,
+        bridget_transport::protocol::CommunicationProjectSource::T3,
+        None,
+    );
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut candidates = st
+        .t3_thread_bindings
+        .iter()
+        .filter(|(_, thread)| thread.as_deref() == Some(&request.t3_thread_id));
+    let Some((owner, _)) = candidates.next() else {
+        return refusal(E::BindingUnavailable);
+    };
+    if candidates.next().is_some() {
+        return refusal(E::BindingUnavailable);
+    }
+    let agent = crate::t3code::stable_uuid(&request.t3_thread_id);
+    let instance = crate::t3code::stable_uuid(&format!("instance:{}", request.t3_thread_id));
+    if st.auxiliary_connections.contains(owner)
+        || st
+            .router
+            .get_agent(&agent)
+            .is_none_or(|route| route.connection_id != *owner)
+        || live_connection_identity(&st, owner) != Some((agent.clone(), instance.clone()))
+        || !st
+            .presences
+            .get(&instance)
+            .is_some_and(|p| p.transport == "t3code" && p.host == host)
+    {
+        return refusal(E::BindingUnavailable);
+    }
+    if !st.t3_project_connections.contains(owner)
+        || !st
+            .communication_projects
+            .get(owner)
+            .is_some_and(|fact| !fact.2 && fact.0.is_some() && fact.0 == project)
+    {
+        return refusal(E::ProjectMismatch);
+    }
+    DaemonToWrapper::HumanThreadViewResult {
+        result: crate::threads::human_view(&st.store, &agent, &request.request),
+    }
+}
+
 fn handle_wrapper_message(
     conn_id: &str,
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Option<DaemonToWrapper> {
-    let (controls, views) = {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        collect_closed_attach_views(&mut st)
+    // Cette consultation n'exécute aucune maintenance d'attach, même refusée.
+    if let WrapperToDaemon::HumanThreadViewV1 { request } = &msg {
+        return Some(handle_human_thread_view(conn_id, request, state));
+    }
+    let human_client_handshake = matches!(
+        &msg,
+        WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client
+        }
+    ) || matches!(&msg,WrapperToDaemon::ClientHello{capabilities,..}
+            if capabilities.as_slice()==[ClientCapability::HumanThreadViewV1]);
+    let human_client = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
+            && st
+                .client_negotiations
+                .get(conn_id)
+                .is_some_and(|n| n.capabilities.as_slice() == [ClientCapability::HumanThreadViewV1])
     };
-    let _ = execute_controls(controls);
-    for view in views {
-        view.close_and_join();
+    if !human_client_handshake && !human_client {
+        let (controls, views) = {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            collect_closed_attach_views(&mut st)
+        };
+        let _ = execute_controls(controls);
+        for view in views {
+            view.close_and_join();
+        }
     }
     if !state
         .lock()
@@ -11187,6 +12031,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DirectoryScoped { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
+                | WrapperToDaemon::HumanThreadViewV1 { .. }
+                | WrapperToDaemon::T3ThreadBindingFact { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
                 | WrapperToDaemon::LedgerSearch { .. }
                 | WrapperToDaemon::LedgerRead { .. }
@@ -11408,6 +12254,8 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
+                | WrapperToDaemon::HumanThreadViewV1 { .. }
+                | WrapperToDaemon::T3ThreadBindingFact { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
                 | WrapperToDaemon::LedgerSearch { .. }
                 | WrapperToDaemon::LedgerRead { .. }
@@ -11606,6 +12454,49 @@ fn handle_wrapper_message(
             st.observations
                 .set_source(conn_id, &agent, events, Instant::now());
             None
+        }
+        WrapperToDaemon::HumanThreadViewV1 { request } => {
+            Some(handle_human_thread_view(conn_id, &request, state))
+        }
+        WrapperToDaemon::T3ThreadBindingFact {
+            version,
+            t3_thread_id,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let agent = crate::t3code::stable_uuid(&t3_thread_id);
+            let instance = crate::t3code::stable_uuid(&format!("instance:{t3_thread_id}"));
+            let valid = version == bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION
+                && crate::threads::canonical_uuid(&t3_thread_id).is_some()
+                && !st.auxiliary_connections.contains(conn_id)
+                && st
+                    .router
+                    .get_agent(&agent)
+                    .is_some_and(|route| route.connection_id == conn_id)
+                && live_connection_identity(&st, conn_id) == Some((agent, instance.clone()))
+                && st
+                    .presences
+                    .get(&instance)
+                    .is_some_and(|p| p.transport == "t3code")
+                && st.t3_project_connections.contains(conn_id);
+            let contradictory = st
+                .t3_thread_bindings
+                .get(conn_id)
+                .is_some_and(|prior| prior.as_deref() != Some(&t3_thread_id));
+            if valid && !contradictory {
+                st.t3_thread_bindings
+                    .insert(conn_id.into(), Some(t3_thread_id));
+                None
+            } else {
+                // Un projet pas encore attesté ne crée pas de fait ; une
+                // contradiction avec un binding existant invalide ce lien.
+                if st.t3_thread_bindings.contains_key(conn_id) {
+                    st.t3_thread_bindings.insert(conn_id.into(), None);
+                }
+                Some(DaemonToWrapper::Nack {
+                    id: "t3-thread-binding".into(),
+                    reason: "binding_unavailable".into(),
+                })
+            }
         }
         WrapperToDaemon::ThreadNoticeCapability { versions } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -12865,6 +13756,7 @@ fn handle_wrapper_message(
                     matches!(
                         capability,
                         ClientCapability::SendIdempotent
+                            | ClientCapability::HumanThreadViewV1
                             | ClientCapability::CommunicationProjectsV1
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1

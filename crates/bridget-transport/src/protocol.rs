@@ -185,6 +185,8 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    /// Consultation humaine bornée, sans identité ni action d'agent.
+    HumanThreadViewV1,
     CommunicationProjectsV1,
     SendIdempotent,
     Lookup,
@@ -2147,6 +2149,210 @@ pub enum ObservationRequest {
 /// inconnue ; chaque variante rejette les champs inconnus.
 pub const THREAD_CONTRACT_VERSION: u16 = 1;
 
+pub const HUMAN_THREAD_VIEW_VERSION: u16 = 1;
+pub const HUMAN_THREAD_VIEW_MAX_BYTES: usize = 128 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadViewV1 {
+    pub version: u16,
+    pub t3_thread_id: String,
+    pub project_root: String,
+    pub request: HumanThreadViewAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HumanThreadViewAction {
+    List {
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        after_thread_id: Option<String>,
+    },
+    Show {
+        thread_id: String,
+    },
+    History {
+        thread_id: String,
+        #[serde(default)]
+        from_seq: Option<u64>,
+        #[serde(default)]
+        to_seq: Option<u64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadMember {
+    pub agent_id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanThreadState {
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadSummary {
+    pub thread_id: String,
+    pub title: String,
+    pub creator_id: String,
+    pub state: HumanThreadState,
+    pub last_seq: u64,
+    pub members: Vec<HumanThreadMember>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanThreadNotifyMode {
+    None,
+    Targets,
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadNotify {
+    pub mode: HumanThreadNotifyMode,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadEntry {
+    pub seq: u64,
+    pub message_id: String,
+    pub author_id: String,
+    pub author_name: Option<String>,
+    pub created_at: i64,
+    pub body: String,
+    pub notify: HumanThreadNotify,
+    pub reply_to_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ThreadEntryKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by_seq: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanThreadViewError {
+    UnsupportedVersion,
+    BindingUnavailable,
+    ProjectMismatch,
+    ThreadUnavailable,
+    InvalidRequest,
+    StorageUnavailable,
+    ResponseTooLarge,
+}
+
+impl HumanThreadViewError {
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::UnsupportedVersion => "Version de consultation incompatible.",
+            Self::BindingUnavailable => "Liaison T3 indisponible.",
+            Self::ProjectMismatch => "Projet T3 indisponible ou différent.",
+            Self::ThreadUnavailable => "Fil indisponible pour cette identité.",
+            Self::InvalidRequest => "Requête de consultation invalide.",
+            Self::StorageUnavailable => "Stockage indisponible.",
+            Self::ResponseTooLarge => "Projection supérieure à la limite de consultation.",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HumanThreadViewOutcome {
+    Listed {
+        threads: Vec<HumanThreadSummary>,
+        next_after: Option<String>,
+    },
+    Shown {
+        thread_id: String,
+        title: String,
+        creator_id: String,
+        state: HumanThreadState,
+        created_at: i64,
+        closed_at: Option<i64>,
+        last_seq: u64,
+        members: Vec<HumanThreadMember>,
+    },
+    History {
+        thread_id: String,
+        from_seq: u64,
+        through_seq: u64,
+        snapshot_seq: u64,
+        has_more: bool,
+        next_from_seq: Option<u64>,
+        entries: Vec<HumanThreadEntry>,
+    },
+    Error {
+        code: HumanThreadViewError,
+        detail: String,
+        retryable: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanThreadViewResult {
+    pub version: u16,
+    pub subject: Option<HumanThreadMember>,
+    pub result: HumanThreadViewOutcome,
+}
+
+impl HumanThreadViewResult {
+    pub fn error(code: HumanThreadViewError) -> Self {
+        Self {
+            version: HUMAN_THREAD_VIEW_VERSION,
+            subject: None,
+            result: HumanThreadViewOutcome::Error {
+                code,
+                detail: code.detail().into(),
+                retryable: code == HumanThreadViewError::StorageUnavailable,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod spec145_protocol_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn spec145_human_request_and_capability_are_closed() {
+        let envelope = json!({"type":"HumanThreadViewV1","request":{
+            "version":1,"t3_thread_id":"89000000-0000-4000-8000-000000000145",
+            "project_root":"/fixture","request":{"action":"list"}
+        }});
+        assert!(serde_json::from_value::<WrapperToDaemon>(envelope.clone()).is_ok());
+        assert!(serde_json::from_str::<ClientCapability>("\"human_thread_view_v1\"").is_ok());
+        for action in ["create", "post", "read", "ack", "close"] {
+            let mut invalid = envelope.clone();
+            invalid["request"]["request"]["action"] = json!(action);
+            assert!(serde_json::from_value::<WrapperToDaemon>(invalid).is_err());
+        }
+        for field in ["agent_id", "credential", "cross_project_reason"] {
+            let mut invalid = envelope.clone();
+            invalid["request"][field] = json!("forged");
+            assert!(serde_json::from_value::<WrapperToDaemon>(invalid).is_err());
+        }
+        let binding = json!({"type":"T3ThreadBindingFact","version":1,
+            "t3_thread_id":"89000000-0000-4000-8000-000000000145"});
+        assert!(serde_json::from_value::<WrapperToDaemon>(binding).is_ok());
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadRequest {
@@ -2300,6 +2506,14 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    HumanThreadViewV1 {
+        request: HumanThreadViewV1,
+    },
+    /// Fait éphémère de la connexion T3 primaire après contexte projet.
+    T3ThreadBindingFact {
+        version: u16,
+        t3_thread_id: String,
+    },
     CommunicationProjectFact {
         root: String,
         source: CommunicationProjectSource,
@@ -3203,6 +3417,9 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    HumanThreadViewResult {
+        result: HumanThreadViewResult,
+    },
     ProjectContextResult {
         project: Option<CommunicationProject>,
         project_warnings: Vec<ProjectWarning>,

@@ -93,6 +93,165 @@ fn result(value: Value) -> ThreadResult {
     }
 }
 
+/// O(log T + P log E + M), P ≤200, M ≤16. Aucun reçu ni écriture.
+pub(crate) fn human_view(
+    store: &Store,
+    actor: &str,
+    action: &bridget_transport::protocol::HumanThreadViewAction,
+) -> bridget_transport::protocol::HumanThreadViewResult {
+    use bridget_transport::protocol::{
+        HUMAN_THREAD_VIEW_MAX_BYTES, HUMAN_THREAD_VIEW_VERSION, HumanThreadEntry,
+        HumanThreadMember, HumanThreadState as S, HumanThreadSummary, HumanThreadViewAction as A,
+        HumanThreadViewError as E, HumanThreadViewOutcome as O, HumanThreadViewResult as R,
+    };
+    const MAX_SEQ: u64 = 9_007_199_254_740_991;
+    let outcome = (|| -> Result<R, E> {
+        let invalid = || E::InvalidRequest;
+        let limit = |value, default, max| page_limit(value, default, max).map_err(|_| invalid());
+        let uuid = |value: &str| canonical_uuid(value).ok_or_else(invalid);
+        let result = match action {
+            A::List {
+                limit: requested,
+                after_thread_id,
+            } => {
+                let limit = limit(*requested, LIST_DEFAULT, LIST_MAX)?;
+                let after = after_thread_id.as_deref().map(uuid).transpose()?;
+                let (threads, next_after) = store
+                    .thread_list(actor, limit, after.as_deref())
+                    .map_err(|_| E::StorageUnavailable)?;
+                let ids = threads
+                    .iter()
+                    .map(|t| t.thread_id.clone())
+                    .collect::<Vec<_>>();
+                let mut members = store
+                    .thread_members_with_names(actor, &ids)
+                    .map_err(|_| E::StorageUnavailable)?;
+                O::Listed {
+                    threads: threads
+                        .into_iter()
+                        .map(|t| HumanThreadSummary {
+                            members: members.remove(&t.thread_id).unwrap_or_default(),
+                            thread_id: t.thread_id,
+                            title: t.title,
+                            creator_id: t.creator_id,
+                            state: if t.closed { S::Closed } else { S::Open },
+                            last_seq: t.last_seq,
+                        })
+                        .collect(),
+                    next_after,
+                }
+            }
+            A::Show { thread_id } => {
+                let thread_id = uuid(thread_id)?;
+                let view = store
+                    .thread_show(actor, &thread_id)
+                    .map_err(|_| E::StorageUnavailable)?
+                    .map_err(|_| E::ThreadUnavailable)?;
+                let mut grouped = store
+                    .thread_members_with_names(actor, std::slice::from_ref(&thread_id))
+                    .map_err(|_| E::StorageUnavailable)?;
+                O::Shown {
+                    thread_id,
+                    title: view.thread.title,
+                    creator_id: view.thread.creator_id,
+                    state: if view.thread.closed_at.is_some() {
+                        S::Closed
+                    } else {
+                        S::Open
+                    },
+                    created_at: view.thread.created_at,
+                    closed_at: view.thread.closed_at,
+                    last_seq: view.thread.last_seq,
+                    members: grouped.remove(&view.thread.thread_id).unwrap_or_default(),
+                }
+            }
+            A::History {
+                thread_id,
+                from_seq,
+                to_seq,
+                limit: requested,
+            } => {
+                let thread_id = uuid(thread_id)?;
+                let limit = limit(*requested, PAGE_DEFAULT, PAGE_MAX)?;
+                let from = from_seq.unwrap_or(1);
+                if from == 0
+                    || from > MAX_SEQ
+                    || to_seq.is_some_and(|to| to > MAX_SEQ || to.saturating_add(1) < from)
+                {
+                    return Err(E::InvalidRequest);
+                }
+                let page = match store
+                    .thread_history(
+                        actor,
+                        &thread_id,
+                        from,
+                        *to_seq,
+                        limit,
+                        PAGE_MAX_BYTES - PAGE_METADATA_RESERVE_BYTES,
+                    )
+                    .map_err(|_| E::StorageUnavailable)?
+                {
+                    HistoryOutcome::Page(page) => page,
+                    HistoryOutcome::Refused(ThreadRefusal::RangeUnavailable) => {
+                        return Err(E::InvalidRequest);
+                    }
+                    HistoryOutcome::Refused(_) => return Err(E::ThreadUnavailable),
+                };
+                let mut grouped = store
+                    .thread_members_with_names(actor, std::slice::from_ref(&thread_id))
+                    .map_err(|_| E::StorageUnavailable)?;
+                let names = grouped
+                    .remove(&thread_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m| (m.agent_id, m.name))
+                    .collect::<std::collections::HashMap<_, _>>();
+                // Une table ≤16 noms ; aucune requête par entrée.
+                let entries = page
+                    .entries
+                    .into_iter()
+                    .map(|mut entry| {
+                        entry["author_name"] = json!(
+                            entry["author_id"]
+                                .as_str()
+                                .and_then(|id| names.get(id))
+                                .cloned()
+                                .flatten()
+                        );
+                        serde_json::from_value::<HumanThreadEntry>(entry)
+                            .map_err(|_| E::StorageUnavailable)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                O::History {
+                    thread_id,
+                    from_seq: from,
+                    through_seq: page.through_seq,
+                    snapshot_seq: page.snapshot_seq,
+                    has_more: page.has_more,
+                    next_from_seq: page.has_more.then_some(page.through_seq + 1),
+                    entries,
+                }
+            }
+        };
+        let projection = R {
+            version: HUMAN_THREAD_VIEW_VERSION,
+            subject: Some(HumanThreadMember {
+                agent_id: actor.into(),
+                name: store
+                    .agent_display_name(actor)
+                    .map_err(|_| E::StorageUnavailable)?,
+            }),
+            result,
+        };
+        let bytes = serde_json::to_vec(&projection).map_err(|_| E::StorageUnavailable)?;
+        if bytes.len() > HUMAN_THREAD_VIEW_MAX_BYTES {
+            return Err(E::ResponseTooLarge);
+        }
+        Ok(projection)
+    })();
+    outcome.unwrap_or_else(R::error)
+}
+
 /// UUID canonique en minuscules ; toute autre forme est refusée.
 pub(crate) fn canonical_uuid(value: &str) -> Option<String> {
     let parsed = uuid::Uuid::parse_str(value).ok()?;
@@ -848,6 +1007,111 @@ pub(crate) fn notice_message_id(thread_id: &str, agent_id: &str, generation: u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec145_projection_bound_and_member_revocation() {
+        use bridget_transport::protocol::HumanThreadViewAction as A;
+        let root =
+            std::env::temp_dir().join(format!("h145-projection-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let db = root.join("db");
+        let store = Store::open(&db).unwrap();
+        let mut profiles = crate::agent_profile::AgentProfileStore::open(&db).unwrap();
+        let mut members = (0..16)
+            .map(|n| format!("14500000-0000-4000-8000-{n:012}"))
+            .collect::<Vec<_>>();
+        members.sort();
+        profiles.ensure_agent_ids(members.iter().cloned()).unwrap();
+        for (n, member) in members.iter().enumerate() {
+            store.connection().execute("UPDATE agent_profiles SET display_name=?2,display_name_normalized=?3 WHERE agent_id=?1",
+                rusqlite::params![member,format!("{}{}","🦀".repeat(78),n),format!("member-{n}")]).unwrap();
+        }
+        let actor = &members[0];
+        for n in 0..24 {
+            let thread = format!("14500000-0000-4001-8000-{n:012}");
+            assert!(matches!(
+                store
+                    .thread_create(CreateThread {
+                        actor,
+                        operation_id: &uuid::Uuid::new_v4().to_string(),
+                        canonical_hash: &thread,
+                        thread_id: &thread,
+                        title: "Projection bornée",
+                        members: &members,
+                        project_warnings: &[],
+                        now: 1,
+                        limits: &LIMITS
+                    })
+                    .unwrap(),
+                ThreadTxOutcome::Done(_)
+            ));
+        }
+        let before = store.connection().total_changes();
+        let refused = serde_json::to_value(human_view(
+            &store,
+            actor,
+            &A::List {
+                limit: Some(100),
+                after_thread_id: None,
+            },
+        ))
+        .unwrap();
+        assert_eq!(refused["result"]["code"], "response_too_large");
+        assert!(refused["subject"].is_null());
+        assert_eq!(store.connection().total_changes(), before);
+        let first = human_view(
+            &store,
+            actor,
+            &A::List {
+                limit: Some(10),
+                after_thread_id: None,
+            },
+        );
+        let first = serde_json::to_value(first).unwrap();
+        assert_eq!(first["result"]["threads"].as_array().unwrap().len(), 10);
+        let second = serde_json::to_value(human_view(
+            &store,
+            actor,
+            &A::List {
+                limit: Some(10),
+                after_thread_id: Some(first["result"]["next_after"].as_str().unwrap().into()),
+            },
+        ))
+        .unwrap();
+        assert!(
+            first["result"]["threads"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| second["result"]["threads"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|b| a["thread_id"] != b["thread_id"]))
+        );
+        let thread = "14500000-0000-4001-8000-000000000000";
+        store
+            .connection()
+            .execute(
+                "DELETE FROM discussion_members WHERE thread_id=?1 AND agent_id=?2",
+                rusqlite::params![thread, actor],
+            )
+            .unwrap();
+        let before = store.connection().total_changes();
+        let refused = serde_json::to_value(human_view(
+            &store,
+            actor,
+            &A::Show {
+                thread_id: thread.into(),
+            },
+        ))
+        .unwrap();
+        assert_eq!(refused["result"]["code"], "thread_unavailable");
+        assert_eq!(store.connection().total_changes(), before);
+        drop(store);
+        drop(profiles);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn spec138_thread_reason_absence_is_legacy_but_null_is_invalid() {

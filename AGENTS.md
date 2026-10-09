@@ -1,41 +1,35 @@
 <!-- SPECKIT START -->
-Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/plan.md.
-Session143 autorisée le 2026-10-07 par my-specify-all.
-Périmètre : entrées Bridget sans fond/bordure et moins de padding ; sorties MCP
-Bridget compactes seulement pour les formats réellement confirmés.
-Préserver texte exact au dépliage, copie, actions, pièces jointes et groupes141.
-Destinataire nommé seulement sur preuve ; sinon ID bref attesté ou libellé neutre.
-Ne jamais interpréter completed comme livré ou reçu. Formats inconnus : natif.
-Réutiliser logo, toggle, Markdown et PlainWorkEntryRow existants.
-Aucun panneau Sources ajouté, nouveau framework, dépendance, backend ou migration.
-Messages et outils ordinaires inchangés. Essais frontend isolés.
-Phase initiale : aucun restart, commit ou déploiement avant autorisation distincte.
-Livraison143 maintenant autorisée : commit, fusion, push, installation et restartT3.
-Conserver sessions141/142 et autres travaux ; aucun daemon, boucle ou mission modifié.
-Gate réutilisation PASS et tâches fondées sur les formes réelles attestées.
-Socle143 implémenté : T001–T008 et preuves346/recette/audit conservées.
-Complément US4 autorisé dans la même session143 ; implémenté, livraison en cours.
-Réponses textuelles interagents : préfixe strict, assistant terminé seulement,
-ligne à gauche logo/destinataire/Entre agents sans cadre et repliée par défaut.
-Note utilisateur explicite séparée reste visible ; ambiguïté/streaming natifs.
-Nom attesté par en-tête direct antérieur du même fil ; sinon UUID, sans I/O.
-Copie originale, citations, métadonnées, fichiers modifiés et actions préservés.
-Réponses mixtes : corps agent monté CSS display:none sans hidden/aria-hidden,
-pour flux canonique de citation stable ; coût Markdown complet antérieur assumé.
-Références Markdown/footnotes/HTML hors code sensibles : message entier natif.
-Réédition texte A→B→A repliée ; état lié séparément au fil/message.
-Gel392 tests PASS, contrôles et recette native isolée PASS, revue finale APPROVE.
-T001–T013 cochées sur preuves ; convergence principale CONVERGED11:39:54.
-Comparaison12/13 byte-identique ; T013 cochée ensuite en phase documentaire.
-Les preuves du socle restent historiques, jamais réutilisées comme preuve US4.
-CommitT3 a1a4f2ef12 et fusion FF local/v0.0.45 effectués ; deux branches poussées fork.
-Patch portable b8ffa6f280 capitalisé dans branche déjà sélectionnée par buildfutur.
-Paquet complet construit ; candidat0.0.45-local.143 signé/validé, pas installé.
-Sauvegarde app effectuée ; snapshot SQLite0600 quick_check ok, marqueur validé.
-Installation/activation pas encore prouvées ; ne pas les annoncer avant preuve.
-Restart supervisé et reçu durable préparés par le principal, pas par cet agentdocs.
+Plan actif : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/specs/145-bridget-thread-viewer/plan.md.
+Session145 approuvée le 2026-10-07 ; statut Implemented, 20/20 tâches vérifiées.
+Non installé, non activé ; clôture documentaire hors Converge.
+Périmètre : surface native droite T3 « Bridget », icône b blanche/muted neutre,
+liste des fils du seul agent T3 sélectionné, membres et historique exact paginé.
+Recherche locale dans pages chargées ; rafraîchissement manuel ; plusieurs fils.
+Lecture humaine distincte Client HumanThreadViewV1, enum list/show/history fermé.
+Une seule RPC T3 bridget.read avec AuthOrchestrationReadScope et service Effect.
+Serveur résout conversation/projet ; workspaceRoot canonisé est l'autorité.
+T3ThreadBindingFact primaire attesté après Registered et report_project_context.
+Identité dormant admise avec lien primaire vivant ; aucun PID MCP requis.
+Index source T3 et liaison en mémoire, refus ambigu et cleanup disconnect.
+Handler lecture/refus avant collect_closed_attach_views ; inspect avant init/autostart.
+Conserver appartenance, bornes et lectures stockage ; projection sans ACK/wake/credentials.
+Aucune émission, ACK, avance curseur agent, réveil, mission modifiée ou appel modèle.
+Réutiliser rightPanelStore, RightPanelTabs, ChatView, ProcessRunner et RPC natifs.
+Aucune dépendance, table DB ou migration nouvelle ; ancien ui.rs supprimé exclu.
+Gate documentaire de conception PASS ; GO principal des tâches reçu.
+Tâches produites ; Analyze documentaire PASS après corrections et deux lectures.
+Implémentation et contrôles vérifiés ; 512 frontend, 50 backend/runtime, Rust ciblé PASS.
+Audit final : APPROVE, trois constats corrigés, validation artefacts deux fois exit 0.
+Converge2 CONVERGED à 16:24:21 UTC ; tâches inchangées pendant comparaison.
+96 avertissements frontend consignés, aucun zéro warning revendiqué.
+Les preuves de143 sont historiques et ne prouvent pas145.
+Conserver sessions141/142, racines, autres worktrees et processus actifs.
+Aperçu isolé vérifié : pages, copie, refus, refresh et fermeture ; aucune capture finale.
+Clavier JSDOM vérifié, clavier matériel complet non revendiqué.
+Rapports audit ignorés Git à prévoir pour future intégration, non stagés.
+Aucun commit, fusion, push, déploiement, installation ou restart autorisé.
 Aucun cleanup d'autres travaux sans autorisation.
-Sélection SpecKit : SPECIFY_FEATURE=143-echanges-discrets ; branche session-143-echanges-discrets.
+Sélection SpecKit : SPECIFY_FEATURE=145-bridget-thread-viewer ; branche session-145-bridget-thread-viewer.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

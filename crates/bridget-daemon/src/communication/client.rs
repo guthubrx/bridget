@@ -143,6 +143,47 @@ pub(crate) fn thread_request(
     }
 }
 
+/// Lecture humaine : connexion Client nue, sans autostart ni credential.
+pub(crate) fn human_thread_view(
+    socket: &Path,
+    request: bridget_transport::protocol::HumanThreadViewV1,
+) -> Result<bridget_transport::protocol::HumanThreadViewResult, ClientError> {
+    use bridget_transport::protocol::{
+        HUMAN_THREAD_VIEW_VERSION, HumanThreadViewError as E, HumanThreadViewResult as R,
+    };
+    let mut connection = DaemonConnection::connect(socket)?;
+    match connection.exchange(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Client,
+    })? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        _ => return Ok(R::error(E::UnsupportedVersion)),
+    }
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: crate::communication::issuer_scope("human-thread-view"),
+        capabilities: vec![ClientCapability::HumanThreadViewV1],
+    })? {
+        DaemonToWrapper::ClientWelcome {
+            version,
+            capabilities,
+            ..
+        } if version == CLIENT_CONTRACT_VERSION
+            && capabilities.contains(&ClientCapability::HumanThreadViewV1) => {}
+        _ => return Ok(R::error(E::UnsupportedVersion)),
+    }
+    match connection.exchange(&WrapperToDaemon::HumanThreadViewV1 { request })? {
+        DaemonToWrapper::HumanThreadViewResult { result }
+            if result.version == HUMAN_THREAD_VIEW_VERSION =>
+        {
+            Ok(result)
+        }
+        DaemonToWrapper::HumanThreadViewResult { .. } => Ok(R::error(E::UnsupportedVersion)),
+        other => unexpected_response(other),
+    }
+}
+
 /// Session 104 : recherche bornée ; un daemon antérieur répond par une
 /// erreur de protocole explicite, jamais par un repli vers le ledger global.
 pub(crate) fn ledger_search(

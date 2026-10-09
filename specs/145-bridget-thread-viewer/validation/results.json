@@ -1,0 +1,411 @@
+{
+  "spec": "145-bridget-thread-viewer",
+  "status": "Implemented",
+  "installed": false,
+  "activated": false,
+  "completed_tasks": 20,
+  "total_tasks": 20,
+  "documentation_verification": {
+    "json_valid": true,
+    "checked_tasks": 20,
+    "recorded_commands": 28,
+    "source_files_rehashed": 31,
+    "changed_sources": 0,
+    "tasks_sha256_after_documentation": "45e59bcf6ef46c0be8bf6dfe02a0ad2ca30114ae60643205531716a4670fefb6",
+    "note": "Hash après T020 distinct du hash conservé pendant les deux Converge. Aucun nouveau Converge."
+  },
+  "language": "fr",
+  "roots": {
+    "bridget": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+    "t3": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer"
+  },
+  "timing": {
+    "started_utc": "2026-10-07T15:04:22Z",
+    "final_checks_utc": "2026-10-07T16:33:07Z",
+    "elapsed_through_final_checks_seconds": 5325,
+    "recalibrated_remaining_estimate_minutes": [50, 85],
+    "delta_from_initial_midpoint_percent": -1.39,
+    "initial_estimate_minutes": [
+      65,
+      115
+    ],
+    "converge2_started_utc": "2026-10-07T16:23:57Z",
+    "converge2_closed_utc": "2026-10-07T16:24:21Z",
+    "elapsed_through_converge2_seconds": 4799,
+    "elapsed_through_converge2_minutes": "79 min 59 s",
+    "documentation_phase": "hors Converge, après 16:24:21 UTC"
+  },
+  "commands": [
+    {
+      "id": "rust_build_fresh",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/tmp/bridget145-cache-check.9Uc6FY /Users/moi/.cargo/bin/cargo build -p bridget-daemon --bin bridget",
+      "exit_code": 0,
+      "duration_seconds": 19.26,
+      "provenance": "travailleur Rust"
+    },
+    {
+      "id": "rust_spec145_fresh",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/tmp/bridget145-cache-check.9Uc6FY /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec145 -- --nocapture --test-threads=1",
+      "exit_code": 0,
+      "passed": 10,
+      "failed": 0,
+      "compile_seconds": 23.09,
+      "test_seconds": 0.56,
+      "provenance": "travailleur Rust"
+    },
+    {
+      "id": "rust_cli145_fresh",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/tmp/bridget145-cache-check.9Uc6FY /Users/moi/.cargo/bin/cargo test -p bridget-daemon --test spec145_human_cli -- --nocapture --test-threads=1",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0,
+      "compile_seconds": 11.61,
+      "test_seconds": 0.09,
+      "provenance": "travailleur Rust"
+    },
+    {
+      "id": "rust_fmt",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "/Users/moi/.cargo/bin/cargo fmt --all -- --check",
+      "exit_code": 0,
+      "provenance": "travailleur Rust"
+    },
+    {
+      "id": "rust_clippy",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo clippy -p bridget-daemon -p bridget-transport --lib --tests -- -D warnings",
+      "exit_code": 0,
+      "provenance": "travailleur Rust avant rejeu frais privé"
+    },
+    {
+      "id": "rust_threads_regression",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib threads:: -- --test-threads=1",
+      "exit_code": 0,
+      "passed": 9,
+      "failed": 0,
+      "phase": "avant retrait de quatre lignes de dispatch mort"
+    },
+    {
+      "id": "rust_spec138_regression",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec138_t3_ -- --test-threads=1",
+      "exit_code": 0,
+      "passed": 2,
+      "failed": 0
+    },
+    {
+      "id": "rust_transport_regression",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-transport --lib",
+      "exit_code": 0,
+      "passed": 295,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "id": "rust_cli_existing_regression",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib cli::spec102_cli_thread_tests -- --test-threads=1",
+      "exit_code": 0,
+      "passed": 7,
+      "failed": 0,
+      "phase": "après retrait du dispatch mort"
+    },
+    {
+      "id": "rust_cli_broad",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib cli:: -- --test-threads=1",
+      "exit_code": 101,
+      "passed": 79,
+      "failed": 2,
+      "classification": "deux échecs reproduits sur la base, aucun PASS global"
+    },
+    {
+      "id": "backend_tests",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/vp test run packages/contracts/src/bridget.test.ts apps/server/src/bridget/BridgetReader.test.ts apps/server/src/auth/RpcAuthorization.test.ts packages/client-runtime/src/state/orchestration.test.ts",
+      "exit_code": 0,
+      "passed": 50,
+      "suites": 4,
+      "independent_replay": {
+        "actor": "principal",
+        "exit_code": 0,
+        "passed": 50,
+        "suites": 4
+      }
+    },
+    {
+      "id": "rpc_mount",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/vp test run apps/server/src/server.test.ts -t 'Bridget human read'",
+      "exit_code": 0,
+      "passed": 1,
+      "not_selected": 210
+    },
+    {
+      "id": "tsc_backend_0",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/tsc --noEmit -p packages/contracts/tsconfig.json",
+      "exit_code": 0
+    },
+    {
+      "id": "tsc_backend_1",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/tsc --noEmit -p packages/client-runtime/tsconfig.json",
+      "exit_code": 0
+    },
+    {
+      "id": "tsc_backend_2",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/tsc --noEmit -p apps/server/tsconfig.json",
+      "exit_code": 0
+    },
+    {
+      "id": "backend_fmt_final",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/vp fmt --check apps/server/src/bridget/BridgetReader.ts apps/server/src/bridget/BridgetReader.test.ts packages/client-runtime/src/state/orchestration.test.ts",
+      "exit_code": 0
+    },
+    {
+      "id": "backend_lint_final",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/vp lint apps/server/src/bridget/BridgetReader.ts apps/server/src/bridget/BridgetReader.test.ts packages/client-runtime/src/state/orchestration.test.ts",
+      "exit_code": 0
+    },
+    {
+      "id": "frontend_tests_final",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web",
+      "command": "./node_modules/.bin/vp test run --project unit src/hooks/useCopyToClipboard.test.ts src/rightPanelStore.test.ts src/components/RightPanelTabs.test.tsx src/components/BridgetPanel.test.tsx src/components/chat/MessagesTimeline.logic.test.ts src/components/chat/MessagesTimeline.test.tsx",
+      "exit_code": 0,
+      "passed": 512,
+      "suites": 6,
+      "duration_seconds": 5.65,
+      "counts": {
+        "helper": 12,
+        "store": 68,
+        "tabs": 22,
+        "panel": 18,
+        "timeline": 392
+      },
+      "provenance": "travailleur frontend"
+    },
+    {
+      "id": "frontend_typecheck",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web",
+      "command": "./node_modules/.bin/vp exec tsc --noEmit -p tsconfig.json",
+      "exit_code": 0
+    },
+    {
+      "id": "frontend_fmt",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web",
+      "command": "./node_modules/.bin/vp fmt --check src/hooks/useCopyToClipboard.ts src/hooks/useCopyToClipboard.test.ts src/rightPanelStore.ts src/rightPanelStore.test.ts src/components/RightPanelTabs.tsx src/components/RightPanelTabs.test.tsx src/components/BridgetPanel.tsx src/components/BridgetPanel.test.tsx src/components/ChatView.tsx src/routes/_chat.pull-requests.tsx",
+      "exit_code": 0,
+      "files": 10
+    },
+    {
+      "id": "frontend_lint",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web",
+      "command": "./node_modules/.bin/vp lint --report-unused-disable-directives src/hooks/useCopyToClipboard.ts src/hooks/useCopyToClipboard.test.ts src/rightPanelStore.ts src/rightPanelStore.test.ts src/components/RightPanelTabs.tsx src/components/RightPanelTabs.test.tsx src/components/BridgetPanel.tsx src/components/BridgetPanel.test.tsx src/components/ChatView.tsx src/routes/_chat.pull-requests.tsx",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 96,
+      "warning_statement": "96 avertissements consignés, aucun zéro warning revendiqué",
+      "warning_counts": {
+        "ChatView": 69,
+        "pullRequestsRoute": 18,
+        "RightPanelTabs": 1,
+        "BridgetPanel": 3,
+        "useCopyToClipboard": 5
+      },
+      "baseline_lint_separate": false
+    },
+    {
+      "id": "frontend_build",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web",
+      "command": "./node_modules/.bin/vp build --outDir /private/tmp/bridget-145-web-build.tDyw2u --logLevel warn",
+      "exit_code": 0,
+      "duration_seconds": 25.5,
+      "output_dir": "/private/tmp/bridget-145-web-build.tDyw2u",
+      "warnings": [
+        "chunks >500 kB",
+        "timings Babel/licences"
+      ],
+      "baseline_build_separate": false
+    },
+    {
+      "id": "frontend_helper_panel_replay",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "./node_modules/.bin/vp test run apps/web/src/hooks/useCopyToClipboard.test.ts apps/web/src/components/BridgetPanel.test.tsx",
+      "exit_code": 0,
+      "passed": 30,
+      "suites": 2,
+      "provenance": "rejeu indépendant principal"
+    },
+    {
+      "id": "interop",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "node /tmp/bridget145-interop-check.mjs",
+      "exit_code": 0,
+      "payloads": 4,
+      "exact_bodies": 3,
+      "witness": "/tmp/bridget145-witnesses.json",
+      "sha256": "31d28552e832f17eaa9c4c8eee5f5003585f45ba5ea99eadc69a7fc4bbe44f3c",
+      "provenance": "principal"
+    },
+    {
+      "id": "audit_validator",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "python3 /Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/audits/2026-10-07/session-2026-10-07-spec-145-01",
+      "exit_code": 0,
+      "errors": 0,
+      "warnings": 0,
+      "principal_replays": 2
+    },
+    {
+      "id": "rust_source_hashes",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "shasum -a 256 -c /tmp/bridget145-rust-final-sha256.txt",
+      "exit_code": 0,
+      "ok": 8
+    },
+    {
+      "id": "diff_bridget",
+      "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer",
+      "command": "git diff --check",
+      "exit_code": 0
+    },
+    {
+      "id": "diff_t3",
+      "cwd": "/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer",
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "baseline_failures": [
+    {
+      "test": "cli::hook_tests::spawn_roundtrip_rejoue_la_meme_issue_apres_reponse_perdue",
+      "cwd": "/tmp/bridget145-baseline.roheJ5",
+      "base": "3bb89e0de935b782a2b4fb7be8173fca9edd9ece",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib cli::hook_tests::spawn_roundtrip_rejoue_la_meme_issue_apres_reponse_perdue -- --exact --nocapture --test-threads=1",
+      "exit_code": 101,
+      "passed": 0,
+      "failed": 1,
+      "cause": "auxiliary_credential_required dans les fixtures de base",
+      "classification": "préexistant reproduit, aucun fix hors périmètre"
+    },
+    {
+      "test": "cli::spawn_executor_tests::spawn_cli_laisse_l_executant_refuser_le_cwd_absent_et_garde_le_cas_valide",
+      "cwd": "/tmp/bridget145-baseline.roheJ5",
+      "base": "3bb89e0de935b782a2b4fb7be8173fca9edd9ece",
+      "command": "TMPDIR=/tmp CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib cli::spawn_executor_tests::spawn_cli_laisse_l_executant_refuser_le_cwd_absent_et_garde_le_cas_valide -- --exact --nocapture --test-threads=1",
+      "exit_code": 101,
+      "passed": 0,
+      "failed": 1,
+      "cause": "auxiliary_credential_required dans les fixtures de base",
+      "classification": "préexistant reproduit, aucun fix hors périmètre"
+    }
+  ],
+  "excluded_results": [
+    {
+      "kind": "target partagé après baseline",
+      "passed": 0,
+      "filtered": 1053,
+      "reason": "sélection invalide, non comptée GREEN"
+    },
+    {
+      "kind": "premier essai baseline",
+      "error": "E0004 cache périmé",
+      "reason": "pas une preuve de test"
+    }
+  ],
+  "audit": {
+    "artifact_dir": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/audits/2026-10-07/session-2026-10-07-spec-145-01",
+    "latest": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/audits/latest",
+    "artifact_dir_git_ignored": true,
+    "latest_git_tracked": true,
+    "not_staged": true,
+    "reviewed_sources_tests": 31,
+    "rust_sources_tests": 8,
+    "t3_sources_tests": 23,
+    "grade": "A",
+    "mechanical_score": 100,
+    "hostile_score": 19,
+    "hostile_max": 20,
+    "initial_medium_fixed": 2,
+    "initial_low_fixed": 1,
+    "residual_findings": 0,
+    "readonly_closed_utc": "2026-10-07T16:17:04Z",
+    "source_hash_before_after": "7c765f38d24163def6fe80a1b4c792aca1b954e3f6612ee63ac1215a40456bc6",
+    "other_provider_available": false
+  },
+  "converge": {
+    "first_closed_utc": "2026-10-07T16:01:21Z",
+    "second_closed_utc": "2026-10-07T16:24:21Z",
+    "verdict": "CONVERGED",
+    "requirements": 22,
+    "success_criteria": 8,
+    "missing_tasks": 0,
+    "tasks_sha256_before_after": "9e4944e1173e1ec13d4176b2eea8020c32b578ad0d6d11bd5928a665668a8616",
+    "closure_note": "Les coches et statuts sont modifiés seulement après la comparaison, dans T020."
+  },
+  "preview": {
+    "authorized": true,
+    "url": "http://127.0.0.1:5845/",
+    "tab": "tab_5",
+    "current_articles": 2,
+    "show_true_proves_visible_window": false,
+    "pages": 3,
+    "articles": 6,
+    "copy_exact_in_private_sink": true,
+    "search_calls": [
+      10,
+      10
+    ],
+    "closed_thread_articles": 2,
+    "empty_thread_articles": 0,
+    "revoked_page_articles": [
+      2,
+      0
+    ],
+    "revoked_thread_buttons": 0,
+    "refresh_calls": [
+      48,
+      51
+    ],
+    "close_calls": [
+      51,
+      51
+    ],
+    "close_wait_ms": 400,
+    "narrow_width_px": 360,
+    "overflow": false,
+    "neutral_icon_valid": true,
+    "external_attempts": [],
+    "screenshot_final": false,
+    "hardware_keyboard_full_app": false,
+    "dom_click_after_resize": true
+  },
+  "limitations": [
+    "96 avertissements frontend consignés ; aucun zéro warning revendiqué",
+    "Deux échecs CLI préexistants reproduits sur la base ; aucune suite CLI globale GREEN",
+    "Pas de capture finale ni de recette clavier matérielle complète",
+    "Tests Windows avec plateforme injectée, pas machine Windows physique",
+    "Copie dans un puits privé et helper JSDOM ; presse-papiers système complet non prouvé",
+    "Aucun agent d'un fournisseur différent disponible",
+    "Aucun scanner CVE, SBOM, jscpd ou métrique LCP/INP/CLS revendiqué",
+    "Artefacts audit ignorés Git à prévoir lors d'une future intégration autorisée"
+  ],
+  "external_actions": {
+    "commit": false,
+    "merge": false,
+    "push": false,
+    "install": false,
+    "restart": false,
+    "deploy": false,
+    "source_change_during_T020": false
+  }
+}
