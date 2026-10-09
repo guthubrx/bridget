@@ -1,0 +1,28 @@
+{
+  "story": "US147-10",
+  "date": "2026-10-09",
+  "scope": "Compatibilité du pont avec T3 V1 et V2, sans activation",
+  "t3_upstream": "563645cf6e104ad930f4c9b209678a77eef07e65",
+  "t3_local_commit": "1535fc0844f5",
+  "bridget_source_commit": "439d4d8f1ede8da6b5ab34bf34168c5bde067804",
+  "checks": {
+    "parser_red": {"passed": 1, "failed": 4, "log": "/private/tmp/bridget147-v2-red.log"},
+    "regressions": {"passed": 124, "failed": 0, "ignored_native_tests": 2, "log": "/private/tmp/bridget147-final-tests2.log"},
+    "native_v2": {"passed": 2, "failed": 0, "log": "/private/tmp/bridget147-native-final2.log", "home": "/private/tmp/t3-bridget-v2.RJgs3S", "server_stopped": true},
+    "identity": "SQLite V1/V2 synthétiques, processus OS synthétique attesté dans les deux versions, révocation V2 malgré base V1 résiduelle, refus de session étrangère et ambiguïté",
+    "rpc": "HTTP authentifié, WS natif, catalogue des drivers, détection fermée, perte de reçu sans repli, pending conservé et réponse récupérée, identifiants stables",
+    "correlation": "Run explicite, steer partageant le run, attente sans clôture prématurée, silence terminal, branche enfant exclue",
+    "clippy": {"new_warnings": 0, "baseline_warning": "store/threads.rs:728 clippy::too_many_arguments, présent avant US10", "log": "/private/tmp/bridget147-clippy-final.log"},
+    "clippy_tests": {"exit_code": 0, "known_baseline_lint_allowed": "clippy::too_many_arguments", "log": "/private/tmp/bridget147-clippy-tests-final.log"},
+    "bridget_release": {"exit_code": 0, "log": "/private/tmp/bridget147-release-final.log", "path": "/Users/moi/Downloads/t3-local-20261009/bridget", "installed": false},
+    "t3_custom_tests": {"passed": 1285, "skipped": 1, "log": "/private/tmp/t3-all-local-tests.log"},
+    "t3_typechecks": "server, web, desktop, client-runtime : zéro erreur",
+    "t3_package": {"version": "0.0.45-local.20261009.7", "embedded_commit": "1535fc0844f5", "path": "/Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/release/upstream-20261009/T3-Code-0.0.45-local.20261009.7-arm64.zip"}
+  },
+  "limits": [
+    "Aucun fournisseur réel appelé. L'intégration native garde le run en defer_start ; dispatch queue/steer et perte de reçu sont testés sur transport simulé.",
+    "Les réponses HTTP sont bornées à16Mio, RPC à4Mio et10s. Un historique dépassant la borne est refusé, pas silencieusement tronqué.",
+    "Les applications T3 et Bridget actives ne sont ni remplacées ni relancées. L'ancien installateur Downloads ne sélectionne pas encore le paquet V2.",
+    "Pas de push ni PR. Les changements T3 et Bridget restent locaux."
+  ]
+}

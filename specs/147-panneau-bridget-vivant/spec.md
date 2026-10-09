@@ -105,6 +105,36 @@ Test indépendant : créer un fil privé de fixture avec plusieurs pages de mess
 
 Périmètre accepté par le principal : créateur initial seul, fil ouvert, maximum16 après normalisation/dédoublonnage, ajout seulement par add_members. Aucun retrait, transfert de propriété ou nouveau composeur UI. Le contrat et les tâches suivent le plan accepté et sa revue ; aucune réussite produit anticipée.
 
+### US147-10 — Conserver le pont lors du passage à T3 V2 (P1)
+
+Extension approuvée le 2026-10-09, ajoutée à147 à la demande de l'utilisateur.
+Comme utilisateur, je veux mettre T3 à jour sans perdre les messages interagents,
+leurs réponses ni l'identité attestée des agents. Le même Bridget reste utilisable
+avec mon ancien T3 pendant la préparation et en cas de retour arrière.
+
+Pourquoi P1 : les anciennes routes HTTP et le stockage des sessions ont disparu
+dans T3 V2. Une application compilée ne suffit donc pas à préserver le pont.
+
+Test indépendant : serveurs locaux et bases synthétiques V1/V2, puis API du vrai
+T3 isolé sans fournisseur. Aucune donnée réelle modifiée, aucun modèle appelé.
+
+1. Étant donné T3 V1 ou V2, quand le pont découvre les fils, alors il sélectionne
+   explicitement le contrat correspondant et conserve racine, fournisseur et état.
+2. Étant donné une remise, quand T3 V2 reçoit la commande native, alors les mêmes
+   identifiants de commande et de message assurent le rejeu sans doublon. Une panne
+   après envoi n'autorise jamais un second envoi par un autre protocole.
+3. Étant donné une réponse en cours ou finale, quand le pont lit son historique,
+   alors il la rattache au bon message et au bon tour. File, interruption, échec,
+   sous-agent et réponse partielle ne deviennent pas une fausse réponse finale.
+4. Étant donné un processus fournisseur, quand son identité est vérifiée, alors
+   seules les sessions natives attestées du T3 actif sont utilisées. Une ancienne
+   base conservée sur disque ne peut pas attester une nouvelle session.
+5. Étant donné une forme inconnue, un refus d'accès ou une lecture incomplète,
+   quand le pont la reçoit, alors il refuse explicitement sans identité inventée,
+   secret dans les diagnostics ni action sur un autre fil.
+6. Étant donné l'application en service, quand la version est préparée, alors ni
+   T3 ni Bridget ne sont relancés. Installation et activation restent distinctes.
+
 ### US147-04 — Garder une lecture confortable (P2)
 
 Comme utilisateur, je veux que les nouveautés n'interrompent pas ma lecture et ne défassent pas mes gestes.
@@ -186,7 +216,23 @@ Les exigences FR147-01 à18, dont FR147-15, décrivent le panneau et son suivi h
 - FR147-30 : retirer le bloc répété titre/membres/état avant les messages de la partie inférieure. Le fil choisi reste identifiable en haut même s'il est hors première page ou masqué par la recherche, sans réassignation automatique ni nouveau header en bas.
 - FR147-31 : garder les détails autorisés du fil accessibles par un contrôle visible/identifiable au clavier après retrait du bloc inférieur. Ne pas ajouter API/store ni modifier messages, copie, autorisations, suivi ou règles de silence ; conserver les états chargement/refus/absence.
 
+- FR147-32 : détecter V1/V2 par une lecture authentifiée, sans repli sur une panne
+  ou un refus. Réutiliser les structures internes du pont derrière l'adaptateur.
+- FR147-33 : lire les messages/runs V2 et envoyer message.dispatch par le RPC
+  officiel ; conserver idempotence, corrélation et permissions du fil.
+- FR147-34 : attester les identifiants natifs depuis la base de la version active,
+  en lecture seule et avec les contrôles PID/naissance/lignée existants.
+- FR147-35 : valider V1/V2, erreurs, file, rejeu, identité et intégration réelle
+  isolée sans modèle ; construire sans installation ni redémarrage automatique.
+
 ## Success Criteria
+
+- SC147-21 : les mêmes scénarios de remise et de réponse passent sur V1 et V2 ;
+  zéro double remise après reprise et zéro réponse attribuée au mauvais tour.
+- SC147-22 : une base V1 résiduelle, une session étrangère ou un état inconnu ne
+  donnent aucune identité ; les tests d'autorité existants restent verts.
+- SC147-23 : la recette utilise un vrai transport T3 isolé avec données synthétiques,
+  sans appel de modèle ni changement des données et processus de production.
 
 - SC147-01 : dans une connexion saine, chaque scénario de création, de publication, de remplacement, de clôture ou de changement de nom d'annuaire devient visible dans le panneau ouvert sous deux secondes après sa validation.
 - SC147-02 : pendant 60 secondes sans changement, après la lecture initiale, le nombre de relectures de contenu est zéro. Une rafale de 100 changements produit au plus une relecture en cours et une relecture complémentaire en attente par contexte concerné ; l'état final reste exact.

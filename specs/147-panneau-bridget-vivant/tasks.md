@@ -4,6 +4,20 @@ Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développeme
 
 Plan et gate de réutilisation validés par le principal. Les templates/helpers locaux sont absents ; génération manuelle selon l'outline de speckit-tasks. Les quatre corrections de revue sont contractuelles : ready premier protégé, nouveau snapshot S commun, refus métier sans retry infini et sélection effacée seulement sur refus confirmé du fil.
 
+## Complément approuvé US10 — T3 V2, même session147
+
+- [x] T055 [US10] Ajouter les tests de parsing V2, états et corrélation dans t3code_contract_v2.rs ; observer RED sans toucher aux fixtures V1.
+- [x] T056 [US10] Adapter détection, lectures et dispatch RPC borné dans t3code_contract.rs/t3code_contract_v2.rs ; tester auth, rejeu et panne après envoi sans repli.
+- [x] T057 [US10] Adapter la lecture seule des identités natives V2 dans t3code_identity.rs, choisie par protocole actif ; tester base V1 résiduelle, session étrangère et refus d'ambiguïté.
+- [x] T058 [US10] Exercer corrélation et observations existantes avec projections V2 ; tester queue, steer, erreurs et sous-agents sans faux succès.
+- [x] T059 [US10] Faire une recette API sur vrai T3 isolé sans modèle ; lancer les régressions ciblées, format/clippy et construire le binaire.
+- [x] T060 [US10] Relire le diff, consigner les preuves et limites puis préparer les deux paquets sans installer ni redémarrer. Aucun push/PR.
+
+Ces tâches vivent dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/session-147-t3-v2.
+Ordre : T055 → T056 → T057 → T058 → T059 → T060. Les54 tâches antérieures restent closes.
+US10 validée :124 tests ciblés +2 tests natifs ; build release réussi. Total60/60.
+Preuves et limites : validation/t3-v2.json. Activation des deux applications non effectuée.
+
 ## Phase1 — Préparation
 
 - [x] T001 Consigner les bases146, les deux worktrees147, les propriétaires Rust/RPC/Web et les limites de non-intervention dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/specs/147-panneau-bridget-vivant/implementation.md ; résultat observable : sources142/145 et services actifs inchangés, commandes de test et données privées de fixture identifiées.

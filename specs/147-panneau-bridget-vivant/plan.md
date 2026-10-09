@@ -4,6 +4,51 @@ Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développeme
 
 ## Résumé
 
+## Complément US10 — compatibilité T3 V2 (2026-10-09)
+
+Autorisation utilisateur : adapter Bridget et ajouter à147, pas créer148.
+Travail dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/session-147-t3-v2.
+Les US1–US9 restent livrées ; les preuves ci-dessous ne valent pas preuve US10.
+
+Contrat vérifié sur T3 upstream563645cf6e10, intégré localement1535fc0844 :
+shell HTTP avec x-t3-orchestration-protocol:2 ; détail projection V2 ; mutations
+par RPC WebSocket orchestration.dispatchCommand ; base userdata/statev2.sqlite.
+
+Réutiliser Client, Snapshot/ThreadSummary/ThreadDetail, la file et la corrélation.
+Lire orchestrationProtocolVersion dans /.well-known/t3/environment au premier
+snapshot. L'absence de ce champ annonce V1 ; une autre version est refusée.
+Confirmer par la lecture authentifiée du snapshot correspondant, puis mémoriser
+seulement dans ce Client
+(réinitialisé lors du changement de runtime). Aucun essai V1 après envoi V2.
+Le chemin V1 reste inchangé ; un refus401/403 ou une panne ne rétrograde pas.
+Le mapping V2 reste dans t3code_contract_v2.rs : runs/messages natifs vers les
+vues internes existantes, statuts validés, pas de résumé ni d'appel de modèle.
+Les messages de sous-agents ne doivent pas devenir la réponse du tour racine.
+Les observations d'outils utilisent uniquement les faits V2 confirmés.
+Ne pas sonder une route absente pour choisir la version : le vrai serveur peut
+renvoyer index.html avec HTTP200. Le test natif a révélé ce cas.
+
+Une connexion WebSocket courte par dispatch, loopback/auth/délai/taille bornés.
+Dépendance directe tungstenite0.26.2, déjà utilisée par bridget-transport, sans TLS,
+handshake seul : nécessaire car minreq ne gère
+pas WebSocket. Préférer son implémentation RFC testée à des trames artisanales ou
+à un sous-processus Node pour chaque message. Pas nouveau service ni pool.
+Source primaire : https://docs.rs/tungstenite/0.26.2/tungstenite/client/fn.client_with_config.html.
+
+La sélection de base d'identité suit le protocole authentifié, jamais l'existence
+du fichier. Lire les sessions natives V2 en lecture seule ; garder les gardes OS
+et le refus d'ambiguïté. Aucune identité depuis le titre, cwd ou texte du modèle.
+
+Tests : parsing fermé V2 et V1, fin/cancel/queue/steer, RPC idempotent et ambigu,
+identité de version et sessions étrangères, puis vrai serveur T3 privé sans modèle.
+Complexité O(fils + messages + items), lookup indexé ; I/O bornées, pas une requête
+par message. Aucun changement du panneau ou du protocole humain147.
+Le helper de prérequis SpecKit est absent : vérification manuelle des artefacts.
+L'outil Sequential Thinking n'est pas disponible ; choix et invariants explicités ici.
+
+La fusion T3 est construite mais n'est pas activée tant que ce complément n'est
+pas validé. Aucun push, nouveau PR, restart ou modification de base réelle.
+
 Ajouter un signal de changement humain, sans contenu, au daemon Bridget. Le faire traverser la CLI locale, puis le flux RPC T3 existant. Le panneau utilise ce signal pour relire les vues146 autorisées. Il ne reçoit pas les corps dans l'abonnement.
 
 Mémoriser seulement le UUID du fil choisi dans le store natif du panneau droit. La clé contient l'environnement, le projet et la conversation T3. Au retour sur une conversation, restaurer ce UUID puis revalider son accès, même s'il n'apparaît pas dans la première page.
