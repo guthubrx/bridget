@@ -31,11 +31,16 @@ Deux passes finales du principal :31FR/20SC/9US mappées, zéro finding actif,54
 Régressions Rust103PASS/2ignored, transport10PASS ; RPC US7294PASS/1SKIP et Web122PASS. Audits frais Rust A/T3 A99.86, validateurs RC0/0erreur/0warning, périmètres diff limités.
 Recette native avec données synthétiques distinguée de l’interop native réelle.
 US5 affiche les seuls destinataires sollicités dans la ligne auteur/date existante.
-Développement validé,54/54. Sources147 committées/fusionnées/poussées : Bridget82f4abebea9a, T3f4354fb0d5be. Bridget installé/actif (daemon93353, pont93355,30agents/schema3). T3 package0.0.45-local.147 prêt, activation encore en attente.
-Le seul reçu d'activation T3 faisant foi après restart : /Users/moi/.cache/bridget-install147.VTg5jQ/t3-activation-result.json. Ne pas déduire un runtime actif du package2413PASS.
+Développement validé,54/54. Livraison finale reconstruite : Bridget1163038fc25f, T3eace00356d91, sources intégrées et poussées.
+Fichiers installés : /Applications/T3 Code (Local).app en0.0.45-local.147 et /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget.
+Signatures valides ; paquet2413 contrôles réussis. Aucun redémarrage : T349975/50035 et Bridget93353/93355 conservent leur code chargé.
+Reçu actuel : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/147-panneau-bridget-vivant/validation/lecture-mcp-correctif.md, dernier checkpoint.
+L'ancien reçu d'activation aborted_before_replacement reste historique. Aucun job d'activation différé n'est programmé.
 Push Bridget vers github/guthubrx/bridget et T3 vers fork/guthubrx/t3code, sans PR T3 ni push upstream.
 Sauvegardes ciblées146 et DB Bridget arrêtée/quickcheckok : /Users/moi/.cache/bridget-install147.VTg5jQ. Application146 rollback-ready vérifiée, pas DB T3.
-Cleanup attesté à01:56CEST :13 anciens builds/7,075,405,824octets alloués retirés,13branches locales/10distantes et WT T3147 supprimés ; mainf4354 conservé. WT/branche Bridget147 restent à retirer après commit documentaire, pas anticipés. Dirty142/145/146 préservés.
+Cleanup final : reliquats142/145/146 committés et intégrés ; leurs worktrees propres et branches de session retirés. Les intégrations147 des skills sont également retirées.
+Les snapshots de build, caches Cargo et anciens paquets/stages remplacés sont nettoyés. Paquet final et reçus : /Users/moi/.cache/t3-final147.zrm6Zc.
+Conserver la sauvegarde146, les preuves et tous les travaux étrangers. Aucun moteur Agent Loop, fichier de conversation ou base T3 supprimé.
 Les chemins WT dans les preuves sont historiques. Audits archivés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-09, copie diff-qrRC0 ; archive complète /Users/moi/.cache/bridget-install147.VTg5jQ/audits147.tgz.
 Le principal exécute Git et livraison ; l'owner documentaire ne touche aucun code/service/production.
 Sélection SpecKit : SPECIFY_FEATURE=147-panneau-bridget-vivant ; livraison finale sur main.
