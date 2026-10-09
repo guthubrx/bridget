@@ -12,6 +12,12 @@ envoyer un message. Une panne de connexion n'autorise pas une autre route.
 ## Trouver puis envoyer
 
 Si l'outil MCP Bridget requis est présent (éventuellement différé), l'employer.
+Chercher aussi dans la découverte d'outils du harnais : `ToolSearch` si Claude
+l'expose, ou `ALL_TOOLS` via `functions.exec` si Codex l'expose. Ne pas supposer
+qu'un outil absent de la première liste est absent du catalogue. Les outils
+internes `ListAgents`/`SendMessage` ne remplacent pas l'annuaire Bridget : ils
+peuvent omettre les agents d'un autre fournisseur. GLM dans Claude suit le même
+accès MCP que Claude ; le modèle choisi ne prouve pas quels outils sont montés.
 La présence du daemon Bridget et celle du serveur MCP sont deux faits distincts.
 Si des outils Bridget de base sont visibles mais qu'un outil requis manque, signaler
 un catalogue MCP ancien : installer un binaire ne recharge pas le processus déjà
@@ -247,6 +253,13 @@ boucle de sondage après rattrapage. Un membre absent, en « ne pas déranger »
 avec un client ancien n'est ni lancé ni contourné : l'état visible dans `show`
 (`pending`, `in_flight`, `dispatched`, `refused`, `outcome_unknown`,
 `satisfied_by_read`, `cancelled`) dit ce qui est prouvé.
+
+Après chaque ACK réussi, si `has_more:true`, refaire **le même `read` sur le même fil** : il reprend
+automatiquement après la dernière page confirmée. Ne pas ajouter `from_seq` ou
+`to_seq` à `read` et ne pas passer à `history` pour avancer. `limit` vaut au plus
+200 ; la borne de 60 Kio peut rendre moins d'entrées. Lire la page complète avant
+l'ACK : ne pas acquitter une sortie réduite aux reçus par un filtre shell, ni des
+corps tronqués. `history` sert à relire une preuve exacte, sans déplacer le repère.
 
 Le créateur initial peut ajouter un membre avec `add_members` seulement si le
 fil est ouvert. Le nouveau membre accède à tout l'historique depuis le repère

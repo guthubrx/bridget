@@ -1943,7 +1943,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_thread",
-            "description": "Fil inter-agents partagé : create/add_members/list/show/post/read/ack/history/close. add_members : créateur initial seul, fil ouvert, seize lecteurs maximum après déduplication ; accès à tout l'historique depuis le curseur zéro, aucun message ni réveil. Capacité dédiée obligatoire, aucun repli sur ancien daemon. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Confirmer chaque page via ack, puis contrôler has_more et les pages suivantes avant d'agir ; le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/add_members/post/close, rejeu exact sans duplicat. NoChange n'engage pas la clé. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
+            "description": "Fil inter-agents partagé : create/add_members/list/show/post/read/ack/history/close. add_members : créateur initial seul, fil ouvert, seize lecteurs maximum après déduplication ; accès à tout l'historique depuis le curseur zéro, aucun message ni réveil. Capacité dédiée obligatoire, aucun repli sur ancien daemon. Coordination : publier preuves et comptes rendus avec kind=history, notify:[] obligatoire (zéro réveil) ; nouvelles consignes kind=action, blocages kind=blocker, décisions kind=decision, corps ≤2048 octets, preuves citées par séquence. supersedes_seq remplace explicitement une tête du même auteur et pour les mêmes cibles effectives ; aucun remplacement déduit du texte. read transmet les corps actuels et des références sans body pour history/consignes remplacées ; history avec from_seq/to_seq relit les corps exacts, jamais des consignes à exécuter. Lire chaque page complète, confirmer via ack, puis refaire le même read sur le même thread_id tant que has_more est vrai, avant d'agir. from_seq/to_seq sont réservés à history, qui ne fait pas avancer le repère ; ne pas utiliser history pour paginer read. Le reçu n'accepte aucune mission. Rejeu d'une page au snapshot figé, nouvelle correction visible après ACK. operation_id UUID obligatoire pour create/add_members/post/close, rejeu exact sans duplicat. NoChange n'engage pas la clé. notify liste d'UUID membres ou all, auteur exclu. Pages 1–200/60Kio : la borne d'octets peut rendre moins d'entrées. Sans kind, dépôt legacy inchangé. Aucun résumé automatique ; erreurs code/retryable.",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["create","add_members","list","show","post","read","ack","history","close"]},
                 "thread_id":{"type":"string","minLength":36,"maxLength":36},
@@ -1960,8 +1960,8 @@ fn tools() -> Vec<Value> {
                 "receipt":{"type":"string","minLength":36,"maxLength":36},
                 "limit":{"type":"integer","minimum":1,"maximum":200},
                 "after_thread_id":{"type":"string","minLength":36,"maxLength":36},
-                "from_seq":{"type":"integer","minimum":1},
-                "to_seq":{"type":"integer","minimum":1}
+                "from_seq":{"type":"integer","minimum":1,"description":"history uniquement ; read reprend automatiquement après ack."},
+                "to_seq":{"type":"integer","minimum":1,"description":"history uniquement ; ne pas utiliser pour paginer read."}
             },"required":["action"],"additionalProperties":false}
         }),
         json!({
@@ -2563,6 +2563,25 @@ mod tests {
         assert_eq!(writes[2], writes[3]);
         assert_eq!(bodies, [body]);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec147_thread_catalogue_explains_ack_then_same_read() {
+        let tool = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_thread")
+            .unwrap();
+        let description = tool["description"].as_str().unwrap();
+        assert!(description.contains("même read sur le même thread_id"));
+        assert!(description.contains("history, qui ne fait pas avancer le repère"));
+        for bound in ["from_seq", "to_seq"] {
+            assert!(
+                tool["inputSchema"]["properties"][bound]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("history uniquement")
+            );
+        }
     }
 
     #[test]

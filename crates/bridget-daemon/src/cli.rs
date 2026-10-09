@@ -915,6 +915,8 @@ const THREAD_USAGE: &str = "usage :\n  \
 Un dépôt --silent ne réveille personne ; --notify vise des membres, --all tous les autres membres.\n\
 Un fil hors projet exige --cross-project-reason MOTIF pour tous ses lecteurs, même avec --silent.\n\
 Recevoir une alerte n'est pas lire ; lire (read) n'est pas confirmer (ack) : confirmer chaque page reçue.\n\
+Après lecture complète et ack, refaire le même read sur le même fil jusqu'à has_more=false.\n\
+--from-seq et --to-seq sont réservés à history ; history ne fait pas avancer le repère de lecture.\n\
 --id est une clé de rejeu à préparer avant l'appel (uuidgen) et à réutiliser à l'identique après une coupure.\n\
 Sorties JSON ; code de sortie 0 succès, 2 validation ou refus, 1 panne technique.";
 
@@ -1571,6 +1573,11 @@ fn parse_thread_args(
         .chain(parsed.flags.iter())
     {
         if !allowed.contains(used) {
+            if subcommand == "read" && matches!(*used, "--from-seq" | "--to-seq") {
+                return Err(format!(
+                    "thread read : option {used} non admise ; après lecture complète puis ack, refaire le même read sur le même fil. Ces bornes sont réservées à history, qui ne fait pas avancer le repère."
+                ));
+            }
             return Err(format!("thread {subcommand} : option {used} non admise"));
         }
     }
@@ -1708,6 +1715,35 @@ mod spec102_cli_thread_tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn spec147_read_sequence_options_explain_ack_then_same_read() {
+        for option in ["--from-seq", "--to-seq"] {
+            let error =
+                parse_thread_args(&args(&["read", T, option, "31"]), &resolver).unwrap_err();
+            assert!(error.contains(option));
+            assert!(error.contains("ack"), "{error}");
+            assert!(error.contains("même read"), "{error}");
+            assert!(error.contains("history"), "{error}");
+        }
+        let next = parse_thread_args(&args(&["read", T, "--limit", "30"]), &resolver).unwrap();
+        assert!(matches!(
+            next,
+            ThreadAction::Read {
+                limit: Some(30),
+                ..
+            }
+        ));
+        let history =
+            parse_thread_args(&args(&["history", T, "--from-seq", "31"]), &resolver).unwrap();
+        assert!(matches!(
+            history,
+            ThreadAction::History {
+                from_seq: Some(31),
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -236,10 +236,31 @@ même page et le même reçu (`pending_receipt_replayed`) : une réponse perdue 
 fait rien sauter. `ack` avance le repère jusqu'à `through_seq` seulement ; le
 dernier reçu confirmé reste rejouable (`already_acknowledged`), un reçu remplacé
 est `receipt_obsolete`, un reçu étranger `receipt_invalid`. Une page vide n'a pas
-de reçu. `has_more:true` : confirmer puis relire. Les entrées propres apparaissent
+de reçu. `has_more:true` : lire la page complète, confirmer son `receipt`, puis
+refaire le même `read` avec le même `thread_id`. Le repère confirmé donne
+automatiquement le départ suivant : ni `from_seq`/`to_seq` en MCP, ni
+`--from-seq`/`--to-seq` en CLI. Ne pas remplacer cette suite par `history`, qui
+n'avance pas le repère. Une limite de 200 est un maximum, pas une promesse de
+200 entrées : la borne de 60 Kio peut arrêter la page plus tôt. Ne pas filtrer
+les corps puis acquitter automatiquement les seuls reçus.
+Les entrées propres apparaissent
 aussi en lecture. Après une perte de contexte, relire explicitement avec `history`
 (`from_seq`, `to_seq` figé au `snapshot_seq` rendu, `next_from_seq`) : le repère
 persistant ne prouve pas que le modèle se souvient des textes.
+
+Exemple de continuation CLI après lecture complète de la première page :
+
+```text
+bridget thread read <FIL> --limit 50
+bridget thread ack <FIL> <RECU_DE_CETTE_PAGE>
+bridget thread read <FIL> --limit 50
+```
+
+En MCP, répéter `{"action":"read","thread_id":"<FIL>","limit":50}` après
+`{"action":"ack","thread_id":"<FIL>","receipt":"<RECU_DE_CETTE_PAGE>"}`.
+Répéter seulement tant que `has_more:true`, en prenant connaissance de chaque
+page. Après une erreur, examiner sa sortie brute avant tout filtre JSON ; ne
+pas inventer une nouvelle option.
 
 ### Synthèse demandée
 

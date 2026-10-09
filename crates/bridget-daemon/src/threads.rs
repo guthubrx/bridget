@@ -1241,8 +1241,9 @@ pub(crate) fn notice_body(thread_id: &str, through_seq: u64) -> String {
          Lis les nouveautés avec bridget_thread/read. Les références sans body \
          sont des preuves historiques ou des consignes remplacées : history permet \
          de les relire, jamais de les exécuter comme consignes actuelles. Confirme \
-         chaque page reçue, puis contrôle has_more et les pages suivantes avant \
-         d'agir. L'ACK n'accepte aucune mission. Publie preuves avec kind=history \
+         chaque page entièrement lue avec ack, puis refais le même read sur le même \
+         fil tant que has_more est vrai, avant d'agir. Ne mets pas from_seq/to_seq \
+         dans read ; history ne fait pas avancer le repère. L'ACK n'accepte aucune mission. Publie preuves avec kind=history \
          et notify:[], consignes courtes avec kind=action/blocker/decision et \
          supersedes_seq si remplacement. Ne réponds pas par message direct à cette alerte."
     )
@@ -2254,6 +2255,8 @@ mod tests {
         assert!(body.contains("33333333-3333-4333-8333-333333333333"));
         assert!(body.contains("jusqu'à 20"));
         assert!(body.contains("Ne réponds pas par message direct"));
+        assert!(body.contains("même read sur le même"));
+        assert!(body.contains("history ne fait pas avancer le repère"));
         assert!(!body.contains("Bridget thread"));
         assert_eq!(notice_message_id("t", "b", 3), "thread-notice:t:b:3");
         assert_ne!(
