@@ -1,0 +1,30 @@
+{
+  "observedAt": "2026-10-10T23:31:14.445007+00:00",
+  "removed": [
+    {
+      "path": "/Users/moi/.cache/bridget-fd149.eksbzxke/source",
+      "estimatedBytes": 74571776
+    },
+    {
+      "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-fd-target",
+      "estimatedBytes": 691011584
+    },
+    {
+      "path": "/private/tmp/b149fd.s_mzs3i8",
+      "estimatedBytes": 0
+    },
+    {
+      "path": "/private/tmp/b149fd-tests-l8Gv",
+      "estimatedBytes": 0
+    }
+  ],
+  "estimatedTotalBytes": 765583360,
+  "preserved": [
+    "/Users/moi/.cache/bridget-fd149.eksbzxke/bridget149-before",
+    "/Users/moi/.cache/bridget-fd149.eksbzxke/bridget",
+    "/Users/moi/.cache/bridget-fd149.eksbzxke/build",
+    "/Users/moi/.cache/bridget-fd149.eksbzxke/source-manifest.json",
+    "/Users/moi/.cache/bridget-install149.8atzwz"
+  ],
+  "scope": "Seulement clone et caches privés du correctif ; aucune base ni conversation supprimée"
+}

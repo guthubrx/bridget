@@ -1,0 +1,119 @@
+{
+  "result": "PASS_FD_HOTFIX",
+  "codeCommit": "0d5107afcf186bacc57aefd1925cd98f076806b8",
+  "testsCommit": "8d3eff76",
+  "buildId": "0d5107afcf18",
+  "install": {
+    "commit": "0d5107afcf186bacc57aefd1925cd98f076806b8",
+    "buildId": "0d5107afcf18",
+    "sha256": "b0dd9b9040604128ad28efd1680c0ff08ed08e6f19f52129963aba1a4e76ead9",
+    "signed": true,
+    "sourceUnchanged": true,
+    "installed": true,
+    "version": "bridget 0.1.3",
+    "installedAt": "2026-10-10T23:28:25.015549+00:00",
+    "installedPath": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+    "installedSha256": "b0dd9b9040604128ad28efd1680c0ff08ed08e6f19f52129963aba1a4e76ead9"
+  },
+  "before": {
+    "observedAt": "2026-10-11T01:19:42.596707+02:00",
+    "daemonPid": 44728,
+    "bridgePid": 44934,
+    "t3ServerPid": 60228,
+    "launchdLimit": {
+      "soft": 256,
+      "hard": "unlimited"
+    },
+    "bridgeDescriptors": 255,
+    "exposedThreads": 63,
+    "perThread": {
+      "unixDescriptors": 3,
+      "receiptLockDescriptors": 1
+    },
+    "daemonBuild": "072161262a7d",
+    "T3Version": "0.0.45-local.149",
+    "packageRoot": "/Users/moi/.cache/bridget-fd149.eksbzxke"
+  },
+  "samples": [
+    {
+      "observedAt": "2026-10-10T23:30:21.282061+00:00",
+      "bridgeStatus": {
+        "state": "running",
+        "detail": "http://127.0.0.1:3773",
+        "updated_at": "2026-10-10T23:30:18.499Z",
+        "threads": 322
+      },
+      "services": {
+        "daemon": {
+          "pid": 10624,
+          "process": "10624     1 Sun Oct 11 01:28:25 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon",
+          "numericDescriptors": 983
+        },
+        "bridge": {
+          "pid": 14501,
+          "process": "14501     1 Sun Oct 11 01:28:38 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve",
+          "numericDescriptors": 1295
+        }
+      }
+    },
+    {
+      "observedAt": "2026-10-10T23:30:27.421429+00:00",
+      "bridgeStatus": {
+        "state": "running",
+        "detail": "http://127.0.0.1:3773",
+        "updated_at": "2026-10-10T23:30:23.421Z",
+        "threads": 322
+      },
+      "services": {
+        "daemon": {
+          "pid": 10624,
+          "process": "10624     1 Sun Oct 11 01:28:25 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon",
+          "numericDescriptors": 983
+        },
+        "bridge": {
+          "pid": 14501,
+          "process": "14501     1 Sun Oct 11 01:28:38 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve",
+          "numericDescriptors": 1296
+        }
+      }
+    }
+  ],
+  "logs": {
+    "daemon": {
+      "path": "/Users/moi/.cache/bridget-core/daemon-stderr.log",
+      "scope": "dernier démarrage corrigé après sa ligne RLIMIT_NOFILE",
+      "startupLine": "[2026-10-10T23:28:25Z INFO  bridget_daemon::service_limits] service RLIMIT_NOFILE: soft=4096, hard=9223372036854775807, budget=4096",
+      "soft": 4096,
+      "hard": 9223372036854775807,
+      "budget": 4096,
+      "emfileErrors": 0,
+      "connectionRefusedErrors": 0,
+      "threadDetailShapeWarnings": 0
+    },
+    "bridge": {
+      "path": "/Users/moi/Library/Logs/com.bridget.t3.log",
+      "scope": "dernier démarrage corrigé après sa ligne RLIMIT_NOFILE",
+      "startupLine": "[2026-10-10T23:28:38Z INFO  bridget_daemon::service_limits] service RLIMIT_NOFILE: soft=4096, hard=9223372036854775807, budget=4096",
+      "soft": 4096,
+      "hard": 9223372036854775807,
+      "budget": 4096,
+      "emfileErrors": 0,
+      "connectionRefusedErrors": 0,
+      "threadDetailShapeWarnings": 4535
+    }
+  },
+  "t3Unchanged": {
+    "60116": "60116     1 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+    "60228": "60228 60116 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+  },
+  "isolatedTests": {
+    "passed": 4,
+    "failed": 0,
+    "ignoredFixture": 1
+  },
+  "t3SessionAttestation": "PASS",
+  "orchestratorCatalog": "PASS",
+  "currentInheritedBridgetMcp": "identity_not_found ; processus MCP 73669 démarré avant le correctif, variables BRIDGET_T3_MCP_ENDPOINT et BRIDGET_T3_MCP_AUTHORIZATION absentes ; contrôle distinct de la limite de fichiers",
+  "scope": "Limite de fichiers de daemon/pont uniquement ; pas de validation globale des outils MCP ni des modèles ; warnings threadId antérieurs conservés",
+  "backup": "/Users/moi/.cache/bridget-fd149.eksbzxke/bridget149-before"
+}

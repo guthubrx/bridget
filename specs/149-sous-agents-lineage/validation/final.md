@@ -1,5 +1,19 @@
 # Reçu final - session 149 (sous-agents natifs et Lineage T3)
 
+**Complément actif du 2026-10-11 : saturation des fichiers ouverts corrigée.**
+Code `0d5107afcf186bacc57aefd1925cd98f076806b8`, tests `8d3eff76`, intégrés sur `main` et poussés vers `github/main`.
+Binaire signé installé : build `0d5107afcf18`, sha256 `b0dd9b9040604128ad28efd1680c0ff08ed08e6f19f52129963aba1a4e76ead9`.
+Après la demande utilisateur « corrige », seuls le daemon et le pont ont été relancés, individuellement.
+Daemon PID10624 et pont PID14501 : limite souple4096, plafond dur inchangé ; 4tests isolés PASS, 1fixture ignorée.
+Deux observations réelles : 322fils contre63 avant, daemon983descripteurs et pont1295–1296, zéro erreur de saturation après leur démarrage corrigé.
+T3 PID60116/60228 conserve sa naissance du 11 octobre à01:13:35/36 ; application non relancée par ce correctif.
+Le contrôle MCP hérité du principal répond encore `identity_not_found` ; ses variables d’attestation sont absentes.
+Les avertissements `thread_detail/threadId` antérieurs subsistent. Ce complément valide le correctif de saturation uniquement.
+Preuve : `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/limite-fichiers149-apres.json`.
+Sauvegarde du binaire149 remplacé : `/Users/moi/.cache/bridget-fd149.eksbzxke/bridget149-before`.
+
+Les sections ci-dessous sont le reçu historique du 10 octobre, avant les relances utilisateur et ce correctif.
+
 **Résultat du contrôle : PASS**, avec les réserves de la section 7.
 Date : 2026-10-10. Contrôle : Haiku 5.5 high (T045). Détail : `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/livraison-controle-haiku149.md`.
 

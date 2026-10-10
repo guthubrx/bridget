@@ -1,4 +1,14 @@
 <!-- SPECKIT START -->
+Correctif149 de limite de fichiers activé le 2026-10-11 après demande « corrige ».
+Code Bridget0d5107afcf186bacc57aefd1925cd98f076806b8, intégré et poussé github/main.
+Binaire signé build0d5107afcf18 ; daemon10624 et pont14501 relancés individuellement.
+Limite souple4096 sur les deux services, plafond dur inchangé ; 4testsPASS, 1fixture ignorée.
+Pont322fils contre63 avant, daemon983descripteurs et pont1295–1296 ; zéroEMFILE après démarrage corrigé.
+T3 reste en0.0.45-local.149 ; PID60116/60228 et dates de naissance inchangés par ce correctif.
+MCP hérité du principal : identity_not_found, variables d’attestation absentes dans son processus73669.
+Warnings thread_detail/threadId antérieurs conservés ; aucune validation globale déduite.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/limite-fichiers149-apres.json.
+Les checkpoints de livraison ci-dessous décrivent les opérations historiques du 10 octobre.
 Session149 livrée sur disque le 2026-10-10 : 45/45 tâches validées et cochées.
 Sous-agents natifs autonomes hors T3 ; Lineage T3 avec statut, journal et résultat.
 Droits hérités du parent sans grant humain neuf, sans gain de droits.

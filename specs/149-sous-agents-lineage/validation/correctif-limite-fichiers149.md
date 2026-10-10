@@ -50,8 +50,8 @@ Le dossier `/private/tmp/b149fd-tests-l8Gv` est vide.
 
 | Cible | soft au départ | hard | Source |
 |---|---|---|---|
-| Pont réel PID 44934 (avant correctif) | 256 | illimité | `/Users/moi/.cache/bridget-fd149.eksbzxke/pid-44934-before.txt` (FD 255) |
-| Daemon réel PID 44728 (avant correctif) | - | - | `/Users/moi/.cache/bridget-fd149.eksbzxke/pid-44728-before.txt` (FD 206) |
+| Pont réel PID 44934 (avant correctif) | 256 | illimité | `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/limite-fichiers149-avant.json` (FD 255) |
+| Daemon réel PID 44728 (avant correctif) | - | - | `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/limite-fichiers149-avant.json` (FD 206) |
 | Enfant de test, cas 256 | 256 | celui du parent (illimité ici) | imposé par `setrlimit` entre `fork` et `exec` |
 | Enfant de test, cas 8192 | 8192 | inchangé | idem |
 | Enfant de test, cas hard 512 | 256 puis 512 | 512 | idem |
@@ -98,3 +98,14 @@ Le processus de test ne change jamais sa propre limite. Seul le binaire réel `b
 - Test : `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/tests/service_file_limit149_test.rs`
 - Rapport : `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/correctif-limite-fichiers149.md`
 - Aucun autre fichier modifié ; aucun Git, redémarrage ni modèle utilisé. Fichiers libérés.
+
+## Activation réelle par le principal, après ce contrôle isolé
+
+Le binaire signé build `0d5107afcf18` est installé. Le daemon et le pont ont été relancés individuellement.
+Le pont PID14501 expose322fils, contre63 avant. Il tient1295–1296descripteurs ; le daemon PID10624 en tient983.
+Les deux annoncent `soft=4096` avec le plafond dur inchangé. Deux observations successives confirment un état `running` frais.
+Aucune erreur `Too many open files` après leur ligne de démarrage corrigé. T3 PID60116/60228 est inchangé.
+Le pont réel est donc désormais vérifié pour ce budget de fichiers. La limite du test isolé reste historique.
+Le contrôle MCP hérité répond `identity_not_found` : ses variables d’attestation sont absentes. Les warnings `threadId` subsistent.
+Preuve : `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/limite-fichiers149-apres.json`.
+Les chemins du clone, de la cible Cargo et des TMPDIR de test/build deviennent historiques après le nettoyage du principal.
