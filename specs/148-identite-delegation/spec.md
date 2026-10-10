@@ -1,6 +1,6 @@
 # Session148 — Identité par session et délégation Bridget fluide
 
-Date : 2026-10-10. Statut : Approved / In Progress.
+Date : 2026-10-10. Statut : Implemented / livré sur disque, sans redémarrage.
 Accord : « ok on reste sur codex high, go ». Agent principal : Codex, effort high.
 
 ## Besoin et périmètre
@@ -104,6 +104,7 @@ synthétiques et celles utilisant un fournisseur réel sont distinguées.
 Session appelante attestée ; rattachement Bridget ; tâche liée au parent ; reçu de
 mission ; résultat final corrélé. Le daemon Bridget et ses fournisseurs déclarés
 suffisent. T3 peut être absent.
-Le profil GLM existe déjà et son authentification n'est pas copiée ni modifiée.
+Le profil GLM existe déjà. Son authentification n'est ni écrite dans un nouveau
+fichier ni modifiée. La recette privée réutilise l'accès existant en mémoire.
 La mission n'hérite pas implicitement de tout l'historique parent. Aucun calendrier,
 recrutement interprojet automatique ou nouveau panneau n'est ajouté.

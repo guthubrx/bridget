@@ -1,6 +1,6 @@
 # Implémentation148
 
-Statut : développement validé. Livraison en cours ; aucun processus148 activé.
+Statut : Implémentée et livrée sur disque. Aucun processus de production relancé.
 
 Le daemon porte une saga native durable. Le registre fixe le fournisseur, le
 modèle, l'effort et la posture avant lancement. La flotte gère les processus.
@@ -23,7 +23,7 @@ restrictions des enfants internes restent conservées. Le transport stateful
 capture et renvoie son identifiant de session HTTP, puis termine cette session.
 Le moteur natif ne consomme aucun outil d'orchestration T3.
 
-## Validation en cours
+## Validation achevée
 
 | Exigences | Scénarios associés |
 |---|---|
@@ -32,7 +32,7 @@ Le moteur natif ne consomme aucun outil d'orchestration T3.
 | FR015–FR019, SC006 | Capture avant ACK, attente des enfants, résultat stable, annulation et nettoyage. |
 | FR020–FR024 | Mission seule, exclusion des credentials enfant, guides, ressources bornées, production intacte. |
 | FR025–FR026 | Recette daemon/superviseur/wrapper sans serveur T3. |
-| SC007 | Tests ciblés, régressions, revues GLM et builds à finir avant livraison. |
+| SC007 | Tests ciblés, régressions, revues GLM et deux builds finaux réussis. |
 
 Les rapports indépendants sont conservés dans le dossier validation de cette
 session. La première revue GLM a trouvé le header HTTP manquant et le défaut
@@ -57,6 +57,11 @@ un appel, un enfant GLM 5.3, une tâche durable et un résultat corrélé unique
 Le modèle annoncé est exactement GLM 5.3 et le nettoyage est confirmé.
 Le parent est une fixture Codex, sans modèle Codex réel. Aucun serveur T3
 n'intervient dans le parcours natif. Le rapport et le reçu R2 sont archivés.
+
+Bridget est construit depuis le commit fusionné `347d788510b4` et installé avec
+sa signature valide. T3 `33f6d04e1164` est installé en `0.0.45-local.148` après
+2576 contrôles du paquet et un test SQLite sous Electron. Les sources sont
+poussées. Le reçu final précise les empreintes, sauvegardes et processus conservés.
 
 ## Limites connues
 

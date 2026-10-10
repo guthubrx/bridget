@@ -6,7 +6,8 @@ Rust synchrone, socket Unix, SQLite et façade MCP Bridget ; T3 TypeScript/Effec
 MCP HTTP authentifié côté connecteur. Réutiliser minreq, les credentials
 auxiliaires Bridget, le registre, la flotte et les exécutions Bridget ; aucune
 dépendance supplémentaire prévue. Le moteur Bridget ne dépend pas de T3.
-Travaux dans deux worktrees session148, jamais sur main. Les arbres147 restent intacts.
+Développement isolé dans deux worktrees session148, puis fusion des arbres propres.
+Livraison sur main Bridget et local/main-20261009 T3. Les preuves147 restent intactes.
 
 ## Diagnostic prouvé
 

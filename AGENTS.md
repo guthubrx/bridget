@@ -1,6 +1,13 @@
 <!-- SPECKIT START -->
 Plan actif session148 approuvée : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/148-identite-delegation/plan.md.
 Codex high, identité par session T3 et délégation Bridget en un appel. Aucun redémarrage réel.
+Session148 livrée sur disque le 2026-10-10 : code Bridget347d788510b4, T333f6d04e1164.
+Recette GLM 5.3 réelle validée sans T3 ; parent Codex synthétique, résultat corrélé unique.
+Application /Applications/T3 Code (Local).app en0.0.45-local.148 ; binaire Bridget signé remplacé.
+Les PID58468/57109/58394/58396 restent chargés sans relance ; aucune activation différée.
+Sources poussées vers github/main Bridget et fork/local/main-20261009 T3, jamais upstream.
+Reçu canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/148-identite-delegation/validation/final.md.
+Worktrees/branches propres148 et reliquat147 retirés ; preuves et sauvegardes conservées.
 Les checkpoints147 ci-dessous restent historiques.
 Session147 approuvée le 2026-10-08 : abonnement humain du panneau Bridget et
 sélection retenue par environnement/projet/conversation T3.
