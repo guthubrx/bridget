@@ -7,7 +7,7 @@
 - **Worktree T3** : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`
 - **Base Bridget** : `6807c22b7ada683f757486a6382aeda170ec68ab`
 - **Date de référence** : 2026-10-10. Date de début non relevée dans les sources.
-- **Statut global au 2026-10-10 : T001 à T042 validés au principal ; T043 à T045 en attente (commits, paquets et installation, reçu final). Non livré.** Ce bloc prévaut sur les listes « Ce qui est vrai » et « Ce qui n'est pas vrai » ci-dessous, qui datent de la ronde r3 et restent historiques. Synthèse : `validation/prelivraison149.md`.
+- **Statut global au 2026-10-10 : Livré sur disque, non activé. T001 à T045 validés ; reçu final validation/final.md.** Ce bloc prévaut sur les listes « Ce qui est vrai » et « Ce qui n'est pas vrai » ci-dessous, qui datent de la ronde r3 et restent historiques. Synthèse : `validation/prelivraison149.md`.
 
 **Ce qui est vrai :**
 

@@ -1,0 +1,230 @@
+[
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/000.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/001.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/002.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/003.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/node_modules/@cursor/sdk-darwin-arm64/vendor/tree-sitter-bash/binding.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/004.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/node_modules/@cursor/sdk-darwin-arm64/vendor/tree-sitter/binding.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/005.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/chrome_crashpad_handler",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/006.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/007.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/008.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/009.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@clerk/electron-passkeys-darwin-arm64/electron-passkeys.darwin-arm64.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/010.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@clerk/electron-passkeys/electron-passkeys.darwin-arm64.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/011.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@crowecawcaw/xa11y-darwin-arm64/xa11y.darwin-arm64.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/012.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@ff-labs/fff-bin-darwin-arm64/libfff_c.dylib",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/013.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/014.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/keyring/keyring.darwin-arm64.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/015.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/app.asar.unpacked/node_modules/@yuuang/ffi-rs-darwin-arm64/ffi-rs.darwin-arm64.node",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/016.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/node_modules/@cursor/sdk-darwin-arm64/bin/cursorsandbox",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/017.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/node_modules/@cursor/sdk-darwin-arm64/bin/rg",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/018.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/019.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Mantle.framework/Versions/A/Mantle",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/020.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/ReactiveObjC.framework/Versions/A/ReactiveObjC",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/021.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Squirrel.framework/Versions/A/Squirrel",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/022.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper (GPU).app/Contents/MacOS/T3 Code (Alpha) Helper (GPU)",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/023.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper (Plugin).app/Contents/MacOS/T3 Code (Alpha) Helper (Plugin)",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/024.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper (Renderer).app/Contents/MacOS/T3 Code (Alpha) Helper (Renderer)",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/025.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper.app/Contents/MacOS/T3 Code (Alpha) Helper",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/026.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Resources/resource-monitor/t3-resource-monitor",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/027.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/MacOS/T3 Code (Alpha)",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/028.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Electron Framework.framework",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/029.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Mantle.framework",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/030.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/ReactiveObjC.framework",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/031.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/Squirrel.framework",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/032.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper (GPU).app",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/033.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper (Plugin).app",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/034.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper (Renderer).app",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/035.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app/Contents/Frameworks/T3 Code (Alpha) Helper.app",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/036.plist"
+  },
+  {
+    "path": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app",
+    "wasSigned": true,
+    "entitlements": {},
+    "snapshot": "/Users/moi/.cache/t3-final149.K5dHqa/entitlements/037.plist"
+  }
+]

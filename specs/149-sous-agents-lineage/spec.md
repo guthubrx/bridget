@@ -5,9 +5,9 @@
 
 Spec: 149-sous-agents-lineage
 Titre: Sous-agents natifs Bridget visibles dans Lineage T3
-Statut: Validé en isolé (T001 à T042 validés au principal ; T043 à T045 en attente de livraison)
+Statut: Livré sur disque, non activé (reçu final : validation/final.md ; aucun redémarrage)
 Priorité: P1
-Tâches: 42/45 (93 %) selon le principal ; cases de tasks.md cochées par le principal
+Tâches: 45/45 validées et cochées par le principal
 Tests: 33 scénarios inventoriés, sans numérateur unique (niveaux U, P, R, M distincts : voir validation/proof-map149.md)
 
 Résumé:
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-149-sous-agents-lineage`
 **Created**: 2026-10-10
-**Status**: Validé en isolé (42/45 tâches validées au principal, livraison en attente)
+**Status**: Livré sur disque, non activé (45/45 tâches validées ; aucun redémarrage)
 **Priority**: P1
 **Dependencies**: SPEC-148
 

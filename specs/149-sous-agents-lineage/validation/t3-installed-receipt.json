@@ -1,0 +1,13 @@
+{
+  "application": "/Applications/T3 Code (Local).app",
+  "version": "0.0.45-local.149",
+  "sourceCommit": "f6f3d1998c686b20e316f304aff7f5df6a14592c",
+  "sha256AppAsar": "a66c7f2a13d9e32ca2260f188248bf91e265ed7789a143ea8fd84fb03ea0bd0e",
+  "signatureRc": 0,
+  "installedBytesExact": true,
+  "pidBirthBefore": "58394     1 Fri Oct  9 09:03:20 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n58396     1 Fri Oct  9 09:03:20 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n58468 58398 Fri Oct  9 09:03:22 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)\n",
+  "pidBirthAfter": "58394     1 Fri Oct  9 09:03:20 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n58396     1 Fri Oct  9 09:03:20 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n58468 58398 Fri Oct  9 09:03:22 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)\n",
+  "restarted": false,
+  "scheduledActivation": false,
+  "backup": "/Users/moi/.cache/bridget-install149.8atzwz"
+}

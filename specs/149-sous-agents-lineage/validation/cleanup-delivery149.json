@@ -1,0 +1,44 @@
+{
+  "removed": [
+    {
+      "path": "/Users/moi/.cache/t3-final149.K5dHqa/source",
+      "estimatedBytesRemoved": 7566770176
+    },
+    {
+      "path": "/Users/moi/.cache/t3-final149.K5dHqa/original",
+      "estimatedBytesRemoved": 931454976
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-final149.z6wlhfpx/source",
+      "estimatedBytesRemoved": 72364032
+    },
+    {
+      "path": "/private/tmp/b149.l0KEOR",
+      "estimatedBytesRemoved": 874139648
+    },
+    {
+      "path": "/private/tmp/b149.etllymvo",
+      "estimatedBytesRemoved": 0
+    },
+    {
+      "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target",
+      "estimatedBytesRemoved": 5175246848
+    }
+  ],
+  "estimatedTotalBytesRemoved": 14619975680,
+  "mergedWorktreesRemoved": [
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage",
+    "/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage"
+  ],
+  "branchesRemoved": [
+    "Bridget:session-149-sous-agents-lineage",
+    "T3:session-149-sous-agents-lineage"
+  ],
+  "foreignWorktreesPreserved": true,
+  "sharedT3NodeModulesPreserved": true,
+  "rollbackPreserved": "/Users/moi/.cache/bridget-install149.8atzwz",
+  "databasesTouched": false,
+  "scheduledActivationCreated": false,
+  "t3ProjectScheduledTasks": 0,
+  "restarted": false
+}

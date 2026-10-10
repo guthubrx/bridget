@@ -1,13 +1,19 @@
 <!-- SPECKIT START -->
-Session149 validée en environnement isolé : sous-agents natifs et Lineage T3.
-Droits hérités du parent sans grant neuf ; moteur autonome hors T3.
-GO principal après revue Sonnet r2 et recettes réseau r4 / Codex vivant r7.
-T001–T042 validées, T043–T045 livraison en cours. Rust1840PASS ; ancien banc
-p95 non conclu, limites documentées dans le reçu de pré-livraison.
-T3 intégré et poussé sur fork/local/main-20261009 : f6f3d1998c686b20e316f304aff7f5df6a14592c.
-Aucun fichier149 installé à ce checkpoint, aucun restart ou job différé.
-Plan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/plan.md.
-Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/prelivraison149.md.
+Session149 livrée sur disque le 2026-10-10 : 45/45 tâches validées et cochées.
+Sous-agents natifs autonomes hors T3 ; Lineage T3 avec statut, journal et résultat.
+Droits hérités du parent sans grant humain neuf, sans gain de droits.
+Sources Bridget : 072161262a7d4d6ea2e1305d546f115c634506d4, intégrées et poussées github/main.
+Sources T3 : f6f3d1998c686b20e316f304aff7f5df6a14592c, intégrées et poussées fork/local/main-20261009.
+Binaire /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget signé, build072161262a7d.
+Application /Applications/T3 Code (Local).app signée en0.0.45-local.149.
+PID58394/58396/58468 et leurs dates de naissance inchangés ; ancien code chargé.
+Aucun redémarrage ni activation différée ; prochaines relances utilisateur utilisent149.
+Rust1840PASS ; paquet2576PASS ; contrôle final Haiku21 vérificationsPASS.
+Ancien banc p95 non conclu et erreurs T3 préexistantes documentés ; aucun succès global inventé.
+Worktrees/branches149 propres retirés ; environ13,6Gio de fichiers temporaires retirés.
+Sauvegarde148 /Users/moi/.cache/bridget-install149.8atzwz conservée, aucune DB touchée.
+Reçu canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/final.md.
+Les chemins de WT/clones/stages dans les preuves antérieures sont historiques.
 Les checkpoints148 ci-dessous restent historiques.
 Plan session148 approuvée et livrée : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/148-identite-delegation/plan.md.
 Codex high, identité par session T3 et délégation Bridget en un appel. Aucun redémarrage réel.

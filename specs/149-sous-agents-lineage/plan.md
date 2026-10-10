@@ -2,7 +2,7 @@
 
 **Spec**: 149-sous-agents-lineage  
 **Date**: 2026-10-10  
-**Statut du plan**: réalisation et validation isolée approuvées par le principal ; 42/45 tâches validées. Livraison T043–T045 en cours. SOURCE_ONLY_APPROVE Sonnet r2 et recettes réseau r4 / Codex vivant r7 conservées. Aucun restart ni activation différée.
+**Statut du plan**: Livré sur disque, non activé ; 45/45 tâches validées au reçu final (validation/final.md). SOURCE_ONLY_APPROVE Sonnet r2 et recettes réseau r4 / Codex vivant r7 conservées. Aucun restart ni activation différée.
 **Accord utilisateur**: session149 acquis ; aucune nouvelle permission de session requise  
 **Dépendances**: sessions147 et148 livrées ; Lineage T3 existant
 

@@ -1,0 +1,16 @@
+{
+  "commit": "072161262a7d4d6ea2e1305d546f115c634506d4",
+  "version": "bridget 0.1.3",
+  "sha256": "6df86239b638dd83e29eb99640606e7e1f3ecb7b62e75cf33e6e781fdbc7a6f8",
+  "bytes": 17433504,
+  "sourceManifestUnchanged": true,
+  "signed": true,
+  "installed": false,
+  "buildId": "072161262a7d",
+  "buildScriptEnvironment": [
+    [
+      "BRIDGET_BUILD_ID",
+      "072161262a7d"
+    ]
+  ]
+}

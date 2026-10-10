@@ -1,0 +1,10 @@
+{
+  "source": {
+    "head": "f6f3d1998c686b20e316f304aff7f5df6a14592c",
+    "status": " M apps/desktop/package.json\n M apps/server/package.json\n M apps/web/package.json\n M packages/contracts/package.json\n"
+  },
+  "original": {
+    "head": "f6f3d1998c686b20e316f304aff7f5df6a14592c",
+    "status": ""
+  }
+}

@@ -1,3 +1,5 @@
+Note finale du principal : le typecheck web global conserve 10 erreurs préexistantes et zéro nouvelle erreur dans le périmètre149. Le « 0 » d’une ancienne section ci-dessous concerne le périmètre modifié et ne prouve pas un typecheck global sans erreur.
+
 # Session 149 - Journal de tâche Bridget : erreur locale `journal_unavailable` (haiku r1)
 
 ## Rectification du principal après lecture

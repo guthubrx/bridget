@@ -1,0 +1,11 @@
+{
+  "nativeStage": "/private/tmp/b149.l0KEOR/t3code-desktop-mac-stage-RSh9aq/app/dist/mac-arm64/T3 Code (Alpha).app",
+  "machObjects": 29,
+  "nestedContainers": 8,
+  "objectsSigned": 38,
+  "entitlementsPreservedExactly": true,
+  "identity": "ad hoc",
+  "strictDeepVerifyRc": 0,
+  "installed": false,
+  "restarted": false
+}

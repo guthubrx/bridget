@@ -1,8 +1,8 @@
 # Tâches — session149
 
-**Spec**: 149-sous-agents-lineage  
-**Date**: 2026-10-10  
-**Progression**: 42/45 ; T001–T042 validées au niveau de leurs preuves ; T043–T045 en cours de livraison  
+**Spec**: 149-sous-agents-lineage
+**Date**: 2026-10-10
+**Progression**: 45/45 ; T001–T045 validées ; livraison sur disque, sans redémarrage
 **Gates**: GO principal après SOURCE_ONLY_APPROVE Sonnet r2 et recettes finales réseau r4 / Codex réel r7. Héritage sans grant neuf, interop privée, journal réel, UI et reprise validés. Limites acceptées et niveaux réels/simulés consignés dans validation/prelivraison149.md. Aucun redémarrage de production.
 
 Les cases T001–T042 sont cochées par le principal après lecture des preuves liées au code exact. Les cases de livraison restent vides jusqu'à leurs résultats effectifs. Sol réalise le code complexe. Claude écrit les tests, fixtures et relectures : Sonnet 5.5 high pour permissions, reprise et tests complexes ; Haiku 5.5 medium pour docs et tests simples ; Haiku 5.5 high pour relectures ciblées. GLM 5.3 Flash reste le fournisseur produit des recettes réelles. Le principal réalise Git et la livraison. Les commandes, recettes et bases sont isolées. Aucun restart réel n'est autorisé.
@@ -68,9 +68,9 @@ Le plan commun est `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-so
 
 ## Phase5 — Sources et livraison sans activation
 
-- [ ] T043 [US7] Principal : créer les commits validés, intégrer les arbres propres, résoudre seulement les conflits du périmètre149 et pousser Bridget vers son dépôt et T3 vers le fork autorisé depuis `/Users/moi/Nextcloud/10.Scripts/64.bridget` et `/Users/moi/11.Repositories/t3code-local` ; aucune PR ni push upstream T3, auteur utilisateur seul et aucun trailer d'IA.
-- [ ] T044 [US7] Principal : construire les paquets finaux depuis les commits fusionnés validés, vérifier signatures/empreintes et remplacer seulement les fichiers Bridget et `/Applications/T3 Code (Local).app` selon l'autorisation existante ; conserver sauvegardes, code chargé et bases réelles ; aucune relance.
-- [ ] T045 [US7] Principal, avec contrôle Haiku 5.5 high : vérifier les PID/code chargés, l'absence de job d'activation différée, les fichiers installés et l'état final de Git ; écrire le reçu canonique dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/final.md` et nettoyer seulement les worktrees/branches149 propres après preuve ; anciens agents, journaux, bases et travaux étrangers conservés.
+- [x] T043 [US7] Principal : créer les commits validés, intégrer les arbres propres, résoudre seulement les conflits du périmètre149 et pousser Bridget vers son dépôt et T3 vers le fork autorisé depuis `/Users/moi/Nextcloud/10.Scripts/64.bridget` et `/Users/moi/11.Repositories/t3code-local` ; aucune PR ni push upstream T3, auteur utilisateur seul et aucun trailer d'IA.
+- [x] T044 [US7] Principal : construire les paquets finaux depuis les commits fusionnés validés, vérifier signatures/empreintes et remplacer seulement les fichiers Bridget et `/Applications/T3 Code (Local).app` selon l'autorisation existante ; conserver sauvegardes, code chargé et bases réelles ; aucune relance.
+- [x] T045 [US7] Principal, avec contrôle Haiku 5.5 high : vérifier les PID/code chargés, l'absence de job d'activation différée, les fichiers installés et l'état final de Git ; écrire le reçu canonique dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/final.md` et nettoyer seulement les worktrees/branches149 propres après preuve ; anciens agents, journaux, bases et travaux étrangers conservés.
 
 ## Dépendances et parallélisme
 
