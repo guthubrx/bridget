@@ -646,22 +646,35 @@ impl Client {
         thread_id: &str,
         turn_limit: u32,
     ) -> Result<ThreadDetail, ContractError> {
-        if self.v2.get().is_none() {
-            self.snapshot()?;
-        }
-        // Les identifiants ne doivent jamais devenir un fragment de route arbitraire.
-        if !thread_id
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':'))
+        if thread_id.is_empty()
+            || thread_id.len() > 2048
+            || matches!(thread_id, "." | "..")
+            || thread_id.chars().any(bridget_core::is_disallowed_control)
         {
             return Err(shape("thread_detail", "threadId"));
         }
+        // L'identifiant est opaque : `%3A` reste littéral après le décodage
+        // HTTP unique. Encoder chaque octet garantit un seul segment de route.
+        let mut segment = String::with_capacity(thread_id.len());
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        for byte in thread_id.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'~') {
+                segment.push(byte as char);
+            } else {
+                segment.push('%');
+                segment.push(HEX[(byte >> 4) as usize] as char);
+                segment.push(HEX[(byte & 15) as usize] as char);
+            }
+        }
+        if self.v2.get().is_none() {
+            self.snapshot()?;
+        }
         if self.uses_v2() {
             let suffix = if turn_limit <= 20 { "/bounded" } else { "" };
-            let path = format!("/api/orchestration/threads/{thread_id}{suffix}");
+            let path = format!("/api/orchestration/threads/{segment}{suffix}");
             return v2::parse_detail(&self.request("GET", &path, None)?, thread_id);
         }
-        let path = format!("/api/orchestration/threads/{thread_id}?turnLimit={turn_limit}");
+        let path = format!("/api/orchestration/threads/{segment}?turnLimit={turn_limit}");
         parse_thread_detail(&self.request("GET", &path, None)?)
     }
 
