@@ -1,0 +1,19 @@
+{
+  "observedAt": "2026-10-11T01:19:42.596707+02:00",
+  "daemonPid": 44728,
+  "bridgePid": 44934,
+  "t3ServerPid": 60228,
+  "launchdLimit": {
+    "soft": 256,
+    "hard": "unlimited"
+  },
+  "bridgeDescriptors": 255,
+  "exposedThreads": 63,
+  "perThread": {
+    "unixDescriptors": 3,
+    "receiptLockDescriptors": 1
+  },
+  "daemonBuild": "072161262a7d",
+  "T3Version": "0.0.45-local.149",
+  "packageRoot": "/Users/moi/.cache/bridget-fd149.eksbzxke"
+}
