@@ -48,6 +48,7 @@ pub mod referent_control;
 pub mod registry;
 pub mod reprise;
 pub mod runtime;
+mod service_limits;
 pub mod store;
 pub mod store_schema;
 pub mod t3code;

@@ -4479,6 +4479,7 @@ fn schedule_execution_recovery(
 
 /// Lance le daemon.
 pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
+    crate::service_limits::ensure_open_file_limit()?;
     let state_root = config.db_path.parent().ok_or("magasin sans racine")?;
     crate::environment::validate_existing_tree(state_root)?;
     crate::environment::ensure_private_directory(state_root)?;

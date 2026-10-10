@@ -1077,6 +1077,7 @@ fn notify_user(text: &str) {
 }
 
 fn serve(paths: &Paths) -> Result<(), String> {
+    crate::service_limits::ensure_open_file_limit()?;
     paths.ensure()?;
     let Some(token) = read_json::<TokenFile>(&paths.token())? else {
         return Err("non installé : lancer `bridget t3 install` d'abord".to_string());
