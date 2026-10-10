@@ -233,6 +233,7 @@ pub fn run() {
         "handoff" => cmd_handoff(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
+        "delegate-grant" => cmd_delegate_grant(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
         "relaunch" => cmd_relaunch(&args[2..]),
         "decommission" => cmd_decommission(&args[2..]),
@@ -661,6 +662,7 @@ fn print_usage() {
            thread <OP>            Fils partagés : create | add-members | list | show | post | read | ack | history | close (thread --help)\n  \
            handoff <OP>           Dossier de passation : preview | send, objet JSON sur stdin (--json-stdin [--json])\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
+           delegate-grant <N>     Autorise la délégation dans une racine (--cwd CHEMIN --posture discovery|development) [--revoke]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
            decommission <N>       Retire un équipier de la flotte visible\n  \
@@ -2479,6 +2481,96 @@ struct ParsedSpawnArgs {
     command_id: Option<String>,
     timeout_secs: i64,
     timeout_was_set: bool,
+}
+
+/// Politique racine native, réservée au même contrôle humain que les lancements.
+fn parse_delegate_grant(
+    args: &[String],
+) -> Result<
+    (
+        String,
+        String,
+        bridget_transport::protocol::SpawnPosture,
+        bool,
+    ),
+    String,
+> {
+    let target = args
+        .first()
+        .filter(|value| !value.is_empty() && !value.starts_with('-'))
+        .ok_or("delegate-grant attend un agent")?
+        .clone();
+    let mut cwd = None;
+    let mut posture = None;
+    let mut revoke = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--cwd" if cwd.is_none() => cwd = Some(option_value(args, &mut index, "--cwd")?),
+            "--posture" if posture.is_none() => {
+                posture = Some(
+                    match option_value(args, &mut index, "--posture")?.as_str() {
+                        "discovery" => bridget_transport::protocol::SpawnPosture::Discovery,
+                        "development" => bridget_transport::protocol::SpawnPosture::Development,
+                        _ => return Err("--posture attend discovery ou development".into()),
+                    },
+                );
+            }
+            "--revoke" if !revoke => revoke = true,
+            other => return Err(unknown_argument("delegate-grant", other)),
+        }
+        index += 1;
+    }
+    let cwd = cwd.ok_or("--cwd est obligatoire")?;
+    if !Path::new(&cwd).is_absolute() || cwd.chars().any(char::is_control) {
+        return Err("--cwd attend un chemin absolu sans caractère de contrôle".into());
+    }
+    Ok((
+        target,
+        cwd,
+        posture.ok_or("--posture est obligatoire")?,
+        revoke,
+    ))
+}
+
+fn cmd_delegate_grant(args: &[String]) {
+    let (target, cwd, posture, revoke) =
+        parse_delegate_grant(args).unwrap_or_else(|error| exit_argument_error(&error));
+    if !require_interactive_terminal("delegate-grant") {
+        std::process::exit(1);
+    }
+    let agent_id = if validate_agent_id(&target).is_ok() {
+        target
+    } else {
+        resolve_thread_name(&target).unwrap_or_else(|error| exit_argument_error(&error))
+    };
+    let request = WrapperToDaemon::NativeDelegation {
+        request: bridget_transport::protocol::NativeDelegationRequest::Grant {
+            agent_id,
+            cwd,
+            posture,
+            revoke,
+        },
+    };
+    match send_control_request(request) {
+        Ok(DaemonToWrapper::NativeDelegationResult { result }) => {
+            println!("{result}");
+            if !matches!(
+                result.get("status").and_then(serde_json::Value::as_str),
+                Some("granted" | "revoked")
+            ) {
+                std::process::exit(1);
+            }
+        }
+        Ok(other) => {
+            eprintln!("bridget delegate-grant : réponse inattendue : {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("bridget delegate-grant : résultat non confirmé : {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn cmd_spawn(args: &[String]) {
@@ -7145,6 +7237,63 @@ mod hook_tests {
 
     fn argv(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn delegation_grant_requires_explicit_root_and_closed_options() {
+        use bridget_transport::protocol::SpawnPosture;
+        assert_eq!(
+            parse_delegate_grant(&argv(&[
+                "Regional",
+                "--cwd",
+                "/tmp/project",
+                "--posture",
+                "development",
+                "--revoke"
+            ]))
+            .unwrap(),
+            (
+                "Regional".into(),
+                "/tmp/project".into(),
+                SpawnPosture::Development,
+                true
+            )
+        );
+        for args in [
+            argv(&[]),
+            argv(&["agent"]),
+            argv(&["agent", "--cwd", "relative", "--posture", "development"]),
+            argv(&["agent", "--cwd", "/tmp", "--posture", "full-access"]),
+            argv(&[
+                "agent",
+                "--cwd",
+                "/tmp",
+                "--posture",
+                "discovery",
+                "--cwd",
+                "/other",
+            ]),
+            argv(&[
+                "agent",
+                "--cwd",
+                "/tmp",
+                "--posture",
+                "discovery",
+                "--revoke",
+                "--revoke",
+            ]),
+            argv(&[
+                "agent",
+                "--cwd",
+                "/tmp",
+                "--posture",
+                "discovery",
+                "--owner",
+                "other",
+            ]),
+        ] {
+            assert!(parse_delegate_grant(&args).is_err(), "args={args:?}");
+        }
     }
 
     #[test]

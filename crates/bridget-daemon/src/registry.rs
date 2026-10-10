@@ -309,6 +309,103 @@ impl AgentRegistry {
         &self.source
     }
 
+    /// Sélection native exacte, bornée par le catalogue et la posture.
+    /// Le registre global et ses autres fournisseurs restent inchangés.
+    pub(crate) fn for_delegation(
+        &self,
+        agent_type: &str,
+        model: &str,
+        effort: Option<&str>,
+        posture: bridget_transport::protocol::SpawnPosture,
+    ) -> Result<Self, String> {
+        let source = self.get(agent_type)?;
+        let capabilities = source
+            .capabilities
+            .models
+            .get(model)
+            .ok_or_else(|| "model_unavailable".to_string())?;
+        if effort.is_some_and(|value| !capabilities.efforts.iter().any(|item| item == value)) {
+            return Err("effort_unavailable".into());
+        }
+        let mut scoped = self.for_spawn_posture(agent_type, posture)?;
+        let definition = scoped
+            .agents
+            .get_mut(agent_type)
+            .ok_or("provider_unavailable")?;
+        let mut args = Vec::new();
+        let mut index = 0;
+        while index < definition.args.len() {
+            let arg = &definition.args[index];
+            if matches!(
+                arg.as_str(),
+                "--model" | "--effort" | "--effort-level" | "-m"
+            ) {
+                index += 2;
+                continue;
+            }
+            if matches!(arg.as_str(), "-c" | "--config")
+                && definition.args.get(index + 1).is_some_and(|value| {
+                    ["model=", "model_reasoning_effort=", "effort="]
+                        .iter()
+                        .any(|key| value.starts_with(key))
+                })
+            {
+                index += 2;
+                continue;
+            }
+            if [
+                "model=",
+                "model_reasoning_effort=",
+                "effort=",
+                "--model=",
+                "--effort=",
+                "--effort-level=",
+                "--config=model=",
+                "--config=model_reasoning_effort=",
+                "--config=effort=",
+            ]
+            .iter()
+            .any(|key| arg.starts_with(key))
+            {
+                index += 1;
+                continue;
+            }
+            args.push(arg.clone());
+            index += 1;
+        }
+        match definition.protocol.as_str() {
+            "codex_app_server" => {
+                args.extend([
+                    "-c".into(),
+                    format!(
+                        "model={}",
+                        serde_json::to_string(model).map_err(|error| error.to_string())?
+                    ),
+                ]);
+                if let Some(effort) = effort {
+                    args.extend([
+                        "-c".into(),
+                        format!(
+                            "model_reasoning_effort={}",
+                            serde_json::to_string(effort).map_err(|error| error.to_string())?
+                        ),
+                    ]);
+                }
+            }
+            "claude_stream_json" => {
+                args.extend(["--model".into(), model.into()]);
+                if let Some(effort) = effort {
+                    args.extend(["--effort".into(), effort.into()]);
+                }
+            }
+            _ => return Err("delegation_protocol_unavailable".into()),
+        }
+        definition.args = args;
+        validate_launch_capabilities(agent_type, definition)
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(scoped)
+    }
+
     /// Instantané ordonné des types effectivement chargés par le daemon.
     pub fn known_types(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()

@@ -470,6 +470,15 @@ fn execute_tool_at_with_identity(
     let principal = identity.name.as_str();
     let instance_id = identity.instance_id.as_str();
     match name {
+        "bridget_capabilities"
+        | "bridget_delegate"
+        | "bridget_task_status"
+        | "bridget_task_cancel" => crate::delegation_mcp::execute(
+            identity,
+            name,
+            &Value::Object(arguments.clone()),
+            socket,
+        ),
         "bridget_send" => execute_send(identity, arguments, socket),
         "bridget_events" => {
             let request = serde_json::from_value(Value::Object(arguments.clone()))
@@ -1884,7 +1893,7 @@ fn initialize_result() -> Value {
 }
 
 fn tools() -> Vec<Value> {
-    vec![
+    let mut catalogue = vec![
         json!({
             "name": "bridget_read_artifact",
             "description": "Lire par fragments bornés le manifeste exact ou un blob lié à une version publiée. Portée de l'agent connecté, sans rendu ni exécution. next_offset fournit le curseur suivant ; digest désigne le contenu complet.",
@@ -2223,7 +2232,9 @@ fn tools() -> Vec<Value> {
                 "additionalProperties": false
             }
         }),
-    ]
+    ];
+    catalogue.extend(crate::delegation_mcp::tools());
+    catalogue
 }
 
 #[cfg(test)]
@@ -2309,7 +2320,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    20
+                    24
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -2591,6 +2602,10 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<BTreeSet<_>>();
         let expected = [
+            "bridget_capabilities",
+            "bridget_delegate",
+            "bridget_task_status",
+            "bridget_task_cancel",
             "bridget_cancel",
             "bridget_control_status",
             "bridget_dnd",

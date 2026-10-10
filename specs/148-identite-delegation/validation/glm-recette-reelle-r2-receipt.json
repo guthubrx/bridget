@@ -1,0 +1,30 @@
+{
+  "auth_route": "existing_gclaude_in_memory_ZAI_API_KEY",
+  "child_agent_id": "9c898d1a-5791-44d1-b7b2-1251ee4d8c9b",
+  "cleanup_confirmed": true,
+  "command_unchanged": true,
+  "glm": "réel",
+  "message_id": "fe75b47c-ffc1-4757-bbb1-b723a852086c",
+  "parent": "fixture native Codex, aucun modèle Codex exécuté",
+  "provider_models": [
+    "glm-5.3",
+    "glm-5.3",
+    "glm-5.3",
+    "glm-5.3",
+    "glm-5.3",
+    "glm-5.3"
+  ],
+  "requested_model": "glm-5.3",
+  "result_correlated": true,
+  "settings_unchanged": true,
+  "source_cli": {
+    "path": "/Users/moi/.local/share/claude/versions/2.1.296",
+    "sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+  },
+  "source_command": "/Users/moi/.local/bin/gclaude",
+  "source_command_sha256": "dd8dee5677e46fde677f6ba940cbc07294f50ff690a76878c1883b6805872a8e",
+  "source_registry": "/Users/moi/.cache/bridget-core/agents.json",
+  "source_settings": "/Users/moi/.claude-glm/settings.json",
+  "t3_used": false,
+  "task_id": "505be658-6986-434e-a5db-9142811b275e"
+}

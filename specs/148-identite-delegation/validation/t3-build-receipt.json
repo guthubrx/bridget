@@ -1,0 +1,116 @@
+{
+  "status": "ready_for_review_not_installed",
+  "nodeBuild": "24.13.1",
+  "pnpm": "11.10.0",
+  "toolchainReceipt": "/Users/moi/.cache/t3-final148.XnkCUZ/toolchain/verification.json",
+  "sourceCommit": "33f6d04e116430bf7f0011902d6af3868163f2d1",
+  "version": "0.0.45-local.148",
+  "commitEmbedded": "33f6d04e1164",
+  "nativeStage": "/private/tmp/b148.uWlU7B/t3code-desktop-mac-stage-nSSGGQ/app/dist/mac-arm64/T3 Code (Alpha).app",
+  "applicationCopy": "/Users/moi/.cache/t3-final148.XnkCUZ/staging/T3 Code (Local).app",
+  "zip": "/Users/moi/.cache/t3-final148.XnkCUZ/artifacts/T3-Code-0.0.45-local.148-arm64.zip",
+  "hashes": {
+    "zip": "1b3feb42bbfba8c162ca2c4e89d9ab10f5d5250c89152b17ca51374bcb05351c",
+    "asar": "60d306764354e331156d634293afaa9d749cc92b6818cc8a4f98892cc2370486",
+    "verifier": "2698d1c73c3cca594c4af07b818e38eedd1c6e4b7c20c3d2534a4e3b185f50c6"
+  },
+  "phases": {
+    "install": 0,
+    "rebuildNativeDependencies": 0,
+    "versions": 0,
+    "buildDesktop": 0,
+    "package": 0,
+    "privateSigning": 0,
+    "repackage": 0,
+    "extract": 0,
+    "signatureStage": 0,
+    "signatureCopy": 0,
+    "fullVerifier": 0,
+    "sqliteSmoke": 0
+  },
+  "verification": {
+    "receipt": "/Users/moi/.cache/t3-final148.XnkCUZ/verification.json",
+    "argv": [
+      "/Users/moi/.cache/t3-final148.XnkCUZ/toolchain/node-v24.13.1-darwin-arm64/bin/node",
+      "/Users/moi/.cache/t3-final148.XnkCUZ/verify-final.mjs",
+      "--commit",
+      "33f6d04e116430bf7f0011902d6af3868163f2d1",
+      "--version",
+      "0.0.45-local.148",
+      "--stage",
+      "/private/tmp/b148.uWlU7B/t3code-desktop-mac-stage-nSSGGQ/app/dist/mac-arm64/T3 Code (Alpha).app",
+      "--original",
+      "/Users/moi/.cache/t3-final148.XnkCUZ/original",
+      "--source",
+      "/Users/moi/.cache/t3-final148.XnkCUZ/source",
+      "--app",
+      "/Users/moi/.cache/t3-final148.XnkCUZ/staging/T3 Code (Local).app",
+      "--zip",
+      "/Users/moi/.cache/t3-final148.XnkCUZ/artifacts/T3-Code-0.0.45-local.148-arm64.zip"
+    ],
+    "command": "/Users/moi/.cache/t3-final148.XnkCUZ/toolchain/node-v24.13.1-darwin-arm64/bin/node /Users/moi/.cache/t3-final148.XnkCUZ/verify-final.mjs --commit 33f6d04e116430bf7f0011902d6af3868163f2d1 --version 0.0.45-local.148 --stage '/private/tmp/b148.uWlU7B/t3code-desktop-mac-stage-nSSGGQ/app/dist/mac-arm64/T3 Code (Alpha).app' --original /Users/moi/.cache/t3-final148.XnkCUZ/original --source /Users/moi/.cache/t3-final148.XnkCUZ/source --app '/Users/moi/.cache/t3-final148.XnkCUZ/staging/T3 Code (Local).app' --zip /Users/moi/.cache/t3-final148.XnkCUZ/artifacts/T3-Code-0.0.45-local.148-arm64.zip",
+    "passed": 2576,
+    "failed": 0,
+    "sourceFilesCompared": 27711,
+    "gitlinkCommitPointersCompared": 2,
+    "freshOutputFiles": 2377,
+    "completeAppFiles": 118,
+    "zipAppFilesCompared": 118,
+    "privateSourceChanges": [
+      "apps/desktop/package.json",
+      "apps/server/package.json",
+      "apps/web/package.json",
+      "packages/contracts/package.json"
+    ]
+  },
+  "signature": {
+    "nativeStage": "/private/tmp/b148.uWlU7B/t3code-desktop-mac-stage-nSSGGQ/app/dist/mac-arm64/T3 Code (Alpha).app",
+    "machObjects": 29,
+    "nestedContainers": 8,
+    "objectsSigned": 38,
+    "entitlementsPreservedExactly": true,
+    "identity": "ad hoc",
+    "strictDeepVerifyRc": 0,
+    "installed": false,
+    "restarted": false,
+    "bundleIdentifier": "com.t3tools.t3code",
+    "stageLog": "/Users/moi/.cache/t3-final148.XnkCUZ/signature-stage.log",
+    "copyLog": "/Users/moi/.cache/t3-final148.XnkCUZ/signature-copy.log"
+  },
+  "sqliteSmoke": {
+    "electron": "44.4.5",
+    "node": "24.21.0",
+    "modules": "149",
+    "sqliteVersion": "3.53.4",
+    "durableRowRead": true,
+    "quickCheck": "ok",
+    "guiStarted": false,
+    "serverStarted": false,
+    "modelCalled": false,
+    "stderrEmpty": true,
+    "database": "/Users/moi/.cache/t3-final148.XnkCUZ/sqlite-smoke-state/smoke.sqlite",
+    "log": "/Users/moi/.cache/t3-final148.XnkCUZ/sqlite-smoke.log"
+  },
+  "engineWarningsFinal": 0,
+  "warnings": [
+    "Web chunks exceed configured size warning threshold",
+    "dbus-next x11 import externalized in desktop build",
+    "Effect ConfigProvider import.meta replaced with empty object in CommonJS output"
+  ],
+  "limits": [
+    "No GUI, application server, provider model, production configuration or installation executed",
+    "Native real delegation validation remains a separate delivery gate controlled by the principal",
+    "Original unsigned ZIP/blockmap/copy preserved; no final update blockmap generated for this local ZIP",
+    "Read-only source proof compares all tracked non-gitlink files and the two gitlink pointers, not untracked source files"
+  ],
+  "history": {
+    "abortedNode26LogsSuffix": ".node26-aborted",
+    "unsignedZip": "/Users/moi/.cache/t3-final148.XnkCUZ/artifacts/T3-Code-0.0.45-local.148-arm64.zip.unsigned-original",
+    "unsignedBlockmap": "/Users/moi/.cache/t3-final148.XnkCUZ/artifacts/T3-Code-0.0.45-local.148-arm64.zip.blockmap.unsigned-original",
+    "initialSignatureFailure": "/Users/moi/.cache/t3-final148.XnkCUZ/signature-stage.log.unsigned-original",
+    "verifierGitlinkFailure": "/Users/moi/.cache/t3-final148.XnkCUZ/verification.gitlinks-rc1.json",
+    "oldVerifier": "/Users/moi/.cache/t3-final148.XnkCUZ/verify-final.mjs.pre-gitlink-fix"
+  },
+  "installed": false,
+  "restarted": false
+}

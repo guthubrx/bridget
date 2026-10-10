@@ -1,5 +1,7 @@
 <!-- SPECKIT START -->
-Plan actif canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/147-panneau-bridget-vivant/plan.md.
+Plan actif session148 approuvée : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/148-identite-delegation/plan.md.
+Codex high, identité par session T3 et délégation Bridget en un appel. Aucun redémarrage réel.
+Les checkpoints147 ci-dessous restent historiques.
 Session147 approuvée le 2026-10-08 : abonnement humain du panneau Bridget et
 sélection retenue par environnement/projet/conversation T3.
 Socles142/145/146 committés et fusionnés dans la livraison147 ; autres projets intacts.

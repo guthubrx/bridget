@@ -1,6 +1,6 @@
 ---
 name: bridget
-description: "Communiquer et coordonner les échanges entre agents avec Bridget : annuaire, messages, fils partagés et passations. À utiliser pour contacter un agent, demander une revue ou transmettre un résultat."
+description: "Communiquer, déléguer et coordonner avec Bridget : missions natives, annuaire, messages, fils partagés et passations. À utiliser pour créer un sous-agent, contacter un agent, demander une revue ou transmettre un résultat."
 ---
 
 # Communication entre agents
@@ -15,6 +15,46 @@ changer de namespace, installer une skill globale ou relancer un fournisseur pou
 envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
 ## Trouver puis envoyer
+
+### Déléguer une nouvelle mission — contrat 148
+
+Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts
+et postures accessibles. Puis appeler `bridget_delegate` avec `request_id`,
+`agent_type`, `model`, `task`, `cwd` absolu et `posture`. Fournir `effort` seulement
+si le catalogue le déclare. Bridget crée l'enfant, remet la mission et conserve
+la tâche. Aucun appel à l'orchestrateur T3 n'est nécessaire. Cette voie fonctionne
+aussi hors T3. Elle ne remplace pas un envoi à un agent déjà présent.
+
+Conserver le `task_id` rendu. Rejouer avec le même `request_id` et exactement
+les mêmes arguments si la réponse est perdue. Ne pas changer de fournisseur,
+de modèle ou de permissions pour contourner un refus. Une clé neuve crée une
+nouvelle mission. L'humain n'a pas à fournir d'UUID ni de fichier de suivi.
+
+Lire `bridget_task_status` pour consulter sa tâche. Le résultat corrélé revient
+automatiquement au parent. `waiting_for_children` signifie que la mission attend
+encore ses enfants. Une fin de tour seule ne produit pas de résultat.
+`bridget_task_cancel` annule la tâche et sa descendance active. Ces opérations
+refusent les tâches d'un autre parent. Les résultats publiés restent stables.
+Le catalogue annonce le délai maximal de réponse à la mission. Le reçu donne
+son échéance après remise ; un rejeu ne la prolonge pas. Son expiration produit
+`mission_reply_timeout`. Un timeout de transport ou d'attente n'annule rien.
+
+Le parent doit déjà avoir une identité et un projet attestés. L'enfant ne reçoit
+pas les credentials de session T3. Le catalogue annonce les refus de posture.
+La posture `development` nécessite des droits natifs attestés et un fournisseur
+qui possède un confinement adapté. Un grant humain peut être nécessaire pour
+un parent externe ; l'agent ne peut pas se l'accorder. Claude/GLM sans ce protocole
+restent limités à `discovery`. Ne pas annoncer une écriture impossible.
+Une révocation humaine reste fermée pour cet agent après changement d'instance.
+Seul un nouveau grant humain explicite la lève. Un parent encore connecté garde
+l'accès exclusif à sa tâche ; une nouvelle instance ne peut pas la reprendre.
+
+Dans T3, une preuve MCP privée est attachée à chaque session. Une preuve invalide
+produit `t3_session_unavailable` à l'appel suivant. Ne pas fournir une identité
+en argument, emprunter celle d'un autre fil ou contourner ce refus par la CLI.
+
+Les nouveaux outils exigent le binaire et les processus chargés en version148.
+Leur présence dans les sources ne prouve pas leur activation dans la session.
 
 Si l'outil MCP Bridget requis est présent (éventuellement différé), l'employer.
 Chercher aussi dans la découverte d'outils du harnais : `ToolSearch` si Claude
@@ -133,7 +173,7 @@ distincts. Ne pas élargir le sandbox pour contourner ce refus.
 
 Pour toute demande hors annuaire, envoi ou réponse liée de base, lire
 [la référence des commandes et accès 094–103](references/commandes.md) avant d'agir.
-Elle contient l'inventaire CLI complet, les seize outils Bridget, les procédures
+Elle contient l'inventaire CLI complet, les outils Bridget, les procédures
 d'artefacts et les limites de rechargement.
 
 ## Les demandes du quotidien
@@ -210,7 +250,7 @@ espaces blancs. Ne pas comparer naïvement les octets de la saisie brute ; un no
 différent au-delà de cette normalisation, un refus, une erreur ou une réponse
 incohérente ne vaut pas renommage réussi.
 
-Le catalogue fournisseur est une liste fermée de seize outils Bridget, pas une
+Le catalogue fournisseur est une liste fermée d'outils Bridget, pas une
 approbation MCP globale ni une autorisation le service compagnon. Un serveur MCP déjà vivant
 garde son ancien binaire et son ancien catalogue : ne pas inventer de commande de
 reload, tuer la conversation ou relancer le fournisseur pour le mettre à jour.
@@ -291,7 +331,7 @@ que tous sont déjà membres : aucun reçu écrit ni clé engagée. Une audience
 changée pendant la vérification est refusée (`audience_changed`) ; revalider
 la même demande plutôt que retirer son motif ou recruter ailleurs.
 
-Compatibilité : l'outil `bridget_thread` fait partie des seize outils du
+Compatibilité : l'outil `bridget_thread` fait partie des outils du
 catalogue ; un serveur MCP ancien ne l'expose pas et une capacité d'alerte
 n'atteste pas l'accès à l'outil. Un wrapper ancien publie et lit, mais n'est pas
 sollicité (`capability_unavailable`) ; rien n'est dégradé en message direct.

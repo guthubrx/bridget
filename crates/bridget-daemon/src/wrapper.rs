@@ -391,11 +391,73 @@ fn managed_resume_context(
     lines.push("Cette carte ne crée ni ne relance de mission : les messages et demandes Bridget restent l’autorité de communication.".to_string());
     bounded_resume_card(lines.join("\n"), RESUME_CARD_MAX_CHARS)
 }
+/// Instruction interne du Start natif, liée à l'instance neuve et à sa mission.
+/// Elle ne donne aucun droit et ne change aucune identité.
+pub(crate) const NATIVE_MISSION_BOOTSTRAP_ENV: &str = "BRIDGET_NATIVE_MISSION_BOOTSTRAP";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeMissionBootstrap {
+    pub instance_id: String,
+    pub mission_id: String,
+}
+
+struct DeferredNativeMissionContext {
+    mission_id: String,
+    card: String,
+}
+
+impl DeferredNativeMissionContext {
+    fn from_bootstrap(raw: &str, instance_id: &str, card: String) -> Option<Self> {
+        let bootstrap: NativeMissionBootstrap = serde_json::from_str(raw).ok()?;
+        if bootstrap.instance_id != instance_id
+            || uuid::Uuid::parse_str(&bootstrap.mission_id).is_err()
+        {
+            return None;
+        }
+        Some(Self {
+            mission_id: bootstrap.mission_id,
+            card,
+        })
+    }
+
+    fn project(&self, message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
+        let mut projected = message_for_provider(message);
+        if message.id == self.mission_id {
+            projected.body = format!("{}\n\nMission Bridget :\n{}", self.card, message.body);
+        }
+        projected
+    }
+}
+
+/// La carte accompagne seulement la mission ciblée. Le suivi durable reçoit
+/// toujours l'enveloppe d'origine ; seul le texte remis au fournisseur change.
+/// Un échec garde la carte pour la prochaine tentative d'injection.
+fn deliver_provider_message<S: Transport + ?Sized>(
+    transport: &mut S,
+    message: &bridget_core::BridgetMessage,
+    pending: &mut Option<DeferredNativeMissionContext>,
+) -> Result<(), String> {
+    if let Some(context) = pending
+        .as_ref()
+        .filter(|context| context.mission_id == message.id)
+    {
+        let projected = context.project(message);
+        deliver_injected_message(transport, &projected, "mission avec contexte natif")?;
+        *pending = None;
+        Ok(())
+    } else {
+        transport
+            .deliver(&message_for_provider(message))
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Point unique d'injection d'un message fabriqué par le wrapper. La garde de
 /// taille est ici et non chez l'appelant : un futur producteur passe par cette
 /// porte, ou il n'injecte pas. Un dépassement est refusé et journalisé, jamais
 /// tronqué en silence : le corps serait alors faux sans que personne le sache.
-fn deliver_injected_message<S: ManagedSession + ?Sized>(
+fn deliver_injected_message<S: Transport + ?Sized>(
     transport: &mut S,
     message: &bridget_core::BridgetMessage,
     label: &str,
@@ -4004,11 +4066,12 @@ fn launch_session_with_status(
         live_feed,
         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
     );
+    let mut deferred_native_context = None;
     if let (Some(_), Some(definition_digest)) =
         (managed_reporter.as_ref(), frozen_definition_digest)
     {
-        // La première injection de la session ressuscitée est une projection
-        // des sources durables, préparée avant toute lecture de remise daemon.
+        // Un nouvel enfant natif reçoit la carte avec sa mission exacte.
+        // Les autres sessions gardent leur carte de reprise indépendante.
         let worktree = std::env::current_dir()
             .map_err(|error| format!("worktree courant indisponible: {error}"))?;
         let resume = managed_resume_context(
@@ -4018,12 +4081,21 @@ fn launch_session_with_status(
             &definition.protocol,
             definition_digest,
         );
-        let resume_message = bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
-        let _ = deliver_injected_message(
-            transport.as_mut(),
-            &resume_message,
-            "injection de la carte de reprise",
-        );
+        deferred_native_context =
+            std::env::var(NATIVE_MISSION_BOOTSTRAP_ENV)
+                .ok()
+                .and_then(|raw| {
+                    DeferredNativeMissionContext::from_bootstrap(&raw, &instance_id, resume.clone())
+                });
+        if deferred_native_context.is_none() {
+            let resume_message =
+                bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
+            let _ = deliver_injected_message(
+                transport.as_mut(),
+                &resume_message,
+                "injection de la carte de reprise",
+            );
+        }
     }
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
@@ -4118,7 +4190,11 @@ fn launch_session_with_status(
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
                     idempotent_deliveries.record_historic(&message.id);
-                    if let Err(error) = transport.deliver(&message_for_provider(&message)) {
+                    if let Err(error) = deliver_provider_message(
+                        transport.as_mut(),
+                        &message,
+                        &mut deferred_native_context,
+                    ) {
                         idempotent_deliveries.historic_injection_failed(&message.id);
                         send_wrapper_message(
                             &writer,
@@ -4152,7 +4228,11 @@ fn launch_session_with_status(
                     if let Some(identity) = transport.provider_identity() {
                         publish_provider_context(&writer, &execution_bindings, &identity);
                     }
-                    if let Err(error) = transport.deliver(&message_for_provider(&message)) {
+                    if let Err(error) = deliver_provider_message(
+                        transport.as_mut(),
+                        &message,
+                        &mut deferred_native_context,
+                    ) {
                         idempotent_deliveries.historic_injection_failed(&message_id);
                         publish_execution_transition(
                             &writer,
@@ -4205,7 +4285,11 @@ fn launch_session_with_status(
                             delivery_id,
                         } => {
                             let message_id = message.id.clone();
-                            if let Err(error) = transport.deliver(&message_for_provider(&message)) {
+                            if let Err(error) = deliver_provider_message(
+                                transport.as_mut(),
+                                &message,
+                                &mut deferred_native_context,
+                            ) {
                                 send_wrapper_message(
                                     &writer,
                                     WrapperToDaemon::DeliveryRejected {
@@ -4427,6 +4511,9 @@ fn launch_session_with_status(
                         live_feed,
                         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
                     );
+                    // Le fournisseur relancé reçoit désormais la carte de reprise
+                    // normale. Ne pas la joindre à nouveau à une remise rejouée.
+                    deferred_native_context = None;
                     if let Some(definition_digest) = frozen_definition_digest {
                         let worktree =
                             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -4747,7 +4834,7 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 16] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 20] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
@@ -4764,6 +4851,10 @@ const BRIDGET_SAFE_MCP_TOOLS: [&str; 16] = [
     "bridget_runtime",
     "bridget_status",
     "bridget_control_status",
+    "bridget_capabilities",
+    "bridget_delegate",
+    "bridget_task_status",
+    "bridget_task_cancel",
 ];
 
 fn append_claude_allowed_tools(args: &mut Vec<String>) {
@@ -6171,6 +6262,100 @@ mod prompt_tests {
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
+
+    #[test]
+    fn native148_mission_context_requires_its_exact_managed_instance() {
+        use super::{DeferredNativeMissionContext, NativeMissionBootstrap};
+        let raw = serde_json::to_string(&NativeMissionBootstrap {
+            instance_id: "instance-child".into(),
+            mission_id: uuid::Uuid::new_v4().to_string(),
+        })
+        .unwrap();
+        assert!(
+            DeferredNativeMissionContext::from_bootstrap(&raw, "instance-child", "carte".into())
+                .is_some()
+        );
+        assert!(
+            DeferredNativeMissionContext::from_bootstrap(&raw, "instance-other", "carte".into())
+                .is_none()
+        );
+        assert!(
+            DeferredNativeMissionContext::from_bootstrap("{}", "instance-child", "carte".into())
+                .is_none()
+        );
+        let bad = serde_json::json!({"instance_id":"instance-child", "mission_id":"not-a-mission"})
+            .to_string();
+        assert!(
+            DeferredNativeMissionContext::from_bootstrap(&bad, "instance-child", "carte".into())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native148_mission_context_is_retained_until_success_and_preserves_envelope() {
+        use super::{DeferredNativeMissionContext, deliver_provider_message};
+        use bridget_transport::{Transport, TransportError};
+        #[derive(Default)]
+        struct Capture {
+            fail: bool,
+            delivered: Vec<bridget_core::BridgetMessage>,
+        }
+        impl Transport for Capture {
+            fn deliver(
+                &mut self,
+                message: &bridget_core::BridgetMessage,
+            ) -> Result<(), TransportError> {
+                if self.fail {
+                    return Err(TransportError::AgentDead);
+                }
+                self.delivered.push(message.clone());
+                Ok(())
+            }
+            fn is_alive(&self) -> bool {
+                !self.fail
+            }
+            fn connection_id(&self) -> &str {
+                "fixture"
+            }
+        }
+        let mission = bridget_core::BridgetMessage::new("parent", "child", "mission originale");
+        let canonical = serde_json::to_value(&mission).unwrap();
+        let mut context = Some(DeferredNativeMissionContext {
+            mission_id: mission.id.clone(),
+            card: "carte durable".into(),
+        });
+        let other = bridget_core::BridgetMessage::new("parent", "child", "autre remise");
+        let mut transport = Capture::default();
+        deliver_provider_message(&mut transport, &other, &mut context).unwrap();
+        assert_eq!(transport.delivered[0].body, other.body);
+        assert!(context.is_some());
+        transport.fail = true;
+        assert!(deliver_provider_message(&mut transport, &mission, &mut context).is_err());
+        assert!(context.is_some());
+        transport.fail = false;
+        deliver_provider_message(&mut transport, &mission, &mut context).unwrap();
+        assert!(context.is_none());
+        let mut projected = serde_json::to_value(&transport.delivered[1]).unwrap();
+        assert_eq!(
+            projected["body"],
+            "carte durable\n\nMission Bridget :\nmission originale"
+        );
+        projected["body"] = canonical["body"].clone();
+        assert_eq!(
+            projected, canonical,
+            "UUID, routage et corrélation restent exacts"
+        );
+        assert_eq!(
+            serde_json::to_value(&mission).unwrap(),
+            canonical,
+            "enveloppe durable inchangée"
+        );
+        deliver_provider_message(&mut transport, &mission, &mut context).unwrap();
+        assert_eq!(
+            transport.delivered[2].body, mission.body,
+            "pas de seconde carte"
+        );
+    }
 
     const BEFORE: &str = include_str!("../tests/fixtures/prompts/v1-before.txt");
     const AFTER: &str = include_str!("../tests/fixtures/prompts/v1-after.txt");
@@ -7728,7 +7913,11 @@ mod reconnect_tests {
                 "bridget_domain={approval_mode=\"approve\"},",
                 "bridget_runtime={approval_mode=\"approve\"},",
                 "bridget_status={approval_mode=\"approve\"},",
-                "bridget_control_status={approval_mode=\"approve\"}}}"
+                "bridget_control_status={approval_mode=\"approve\"},",
+                "bridget_capabilities={approval_mode=\"approve\"},",
+                "bridget_delegate={approval_mode=\"approve\"},",
+                "bridget_task_status={approval_mode=\"approve\"},",
+                "bridget_task_cancel={approval_mode=\"approve\"}}}"
             )
         );
     }
@@ -7757,6 +7946,10 @@ mod reconnect_tests {
             "bridget_runtime",
             "bridget_status",
             "bridget_control_status",
+            "bridget_capabilities",
+            "bridget_delegate",
+            "bridget_task_status",
+            "bridget_task_cancel",
         ] {
             assert!(
                 policy.contains(&format!("{name}={{approval_mode=\"approve\"}}")),
@@ -7765,6 +7958,25 @@ mod reconnect_tests {
         }
         assert!(policy.contains("default_tools_approval_mode=\"prompt\""));
         assert!(!policy.contains("guichet_delegate={approval_mode=\"approve\"}"));
+    }
+
+    #[test]
+    fn native148_claude_allows_native_delegation_without_global_mcp_approval() {
+        let mut args = Vec::new();
+        append_claude_allowed_tools(&mut args);
+        assert_eq!(args[0], "--allowedTools");
+        let permitted: Vec<_> = args[1].split(',').collect();
+        assert_eq!(permitted.len(), 20);
+        for tool in [
+            "bridget_capabilities",
+            "bridget_delegate",
+            "bridget_task_status",
+            "bridget_task_cancel",
+        ] {
+            assert!(permitted.contains(&format!("mcp__bridget__{tool}").as_str()));
+        }
+        assert!(!permitted.iter().any(|tool| tool.contains('*')));
+        assert!(!permitted.contains(&"mcp__bridget__guichet_delegate"));
     }
 
     #[test]

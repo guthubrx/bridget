@@ -48,6 +48,7 @@ de couverture.
 | `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par origine de tour attestée avec repli FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
 | `spawn` | CLI (humain ou agent) | Aucun outil MCP de supervision | Crée un équipier géré avec persistance et répertoire explicites. Un agent peut lancer en lecture seule (posture globale `discovery`, sans terminal) ; `--posture development` exige un terminal humain. |
+| `delegate-grant` | CLI humain (148) | Aucun outil MCP de grant | Accorde ou retire les droits natifs d'une instance dans une racine absolue, avec posture maximale explicite ; exige un terminal humain et le contrôle natif. Accepte un nom de fil ou UUID attesté. `--revoke` ferme les nouvelles demandes et l'héritage implicite. |
 | `stop` | CLI (humain ou agent) | Aucun outil MCP de supervision | Arrête un équipier géré désigné ; un agent n'arrête que les équipiers qu'il a lancés lui-même. |
 | `relaunch` | CLI humain | Aucun outil MCP de supervision | Relance un équipier arrêté avec sa définition figée ; ne change pas sa posture ni ses droits. |
 | `decommission` | CLI humain | Aucun outil MCP de supervision | Retire un équipier de la flotte visible en conservant l'historique ; décision propriétaire. |
@@ -94,8 +95,8 @@ Exception133 : un sous-agent interne T3 attesté ne peut utiliser que
 `bridget_who` et `bridget_send`, avec provenance enfant et routage du parent.
 Il n'a ni boîte de réception ni identité durable ; la réponse revient au parent.
 
-La politique fournisseur étendue en 100 autorise exactement les seize outils Bridget
-ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
+La politique fournisseur100, étendue en148, autorise la liste fermée des outils
+Bridget ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 
 - `bridget_send` — envoyer ou répondre avec corrélation et rejeu explicite.
@@ -114,6 +115,25 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_runtime` — déclarer son modèle et son effort, sans sélection fournisseur.
 - `bridget_status` — lire la santé assainie du daemon.
 - `bridget_control_status` — lire l'état de contrôle, le compte inbox et un historique borné.
+- `bridget_capabilities` — lire le catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent.
+- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task`, `cwd` absolu et `posture`, avec `effort` facultatif déclaré par le registre.
+- `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant.
+- `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id`.
+
+Ces quatre outils148 utilisent le moteur Bridget avec ou sans T3. Le profil
+Bridget `glm` ne se confond pas avec l'instance fournisseur T3 `claude_glm`.
+Conserver exactement `request_id` et les arguments sur un rejeu. Le résultat
+revient automatiquement au parent avec sa corrélation de mission. Une fin de
+tour ou un délai réseau ne constitue pas une fin de mission.
+
+Le catalogue conserve les limites de posture. Les droits humains explicites
+restent prioritaires. L'exception133 ci-dessus reste limitée aux deux outils
+`bridget_who` et `bridget_send` pour les enfants internes T3. Le catalogue indique
+`mission_reply_limit_secs` ; le reçu indique `mission_deadline_at` après remise.
+Ce délai durable ne se renouvelle pas sur retry. Son expiration produit
+`mission_reply_timeout`, distinct d'une attente de transport du parent.
+Une révocation humaine ferme l'agent après changement d'instance aussi. Seul
+un nouveau grant explicite la lève.
 
 Un champ de portée (`issuer_scope`) sert à corréler et borner certains contrats
 client ; il ne constitue pas à lui seul une authentification du daemon. Les

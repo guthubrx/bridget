@@ -7,7 +7,7 @@
 <p align="center">
   <strong>Le standard téléphonique de vos agents IA.</strong><br>
   Claude, Codex, Cursor, Gemini : ils se trouvent, se parlent, se passent le relais et retrouvent ce qui a été dit.<br>
-  Sur votre machine. Sans cloud, sans orchestrateur, sans dépenser un token de plus que nécessaire.
+  Sur votre machine. Sans orchestrateur externe, sans dépenser un token de plus que nécessaire.
 </p>
 
 <p align="center">
@@ -158,7 +158,7 @@ spontanés, et signale une seconde application T3 qui partagerait les mêmes don
    Codex ───────┤   socket Unix, JSONL, identité    │
    Cursor (T3) ─┼──────── attestée par connexion ───┤   daemon Rust ── SQLite (WAL, 0600)
    Gemini ──────┤                                   │        │
-   le service compagnon ──────┘                                   └─ MCP : 16 outils Bridget, schémas fermés
+   le service compagnon ──────┘                                   └─ MCP : outils Bridget, schémas fermés
                                                              │
                                           fédération SSH ────┘──── autre machine, même protocole
 ```

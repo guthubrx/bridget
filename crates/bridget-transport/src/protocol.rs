@@ -1995,6 +1995,37 @@ pub struct SpawnOwnership {
     pub max_depth: Option<usize>,
 }
 
+/// Aucun champ d'identité parent n'est accepté dans une demande de mission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeDelegationRequest {
+    Catalogue,
+    Delegate {
+        request_id: String,
+        agent_type: String,
+        model: String,
+        #[serde(default)]
+        effort: Option<String>,
+        task: String,
+        cwd: String,
+        posture: SpawnPosture,
+    },
+    Status {
+        task_id: String,
+    },
+    Cancel {
+        task_id: String,
+    },
+    /// Réservé au contrôle humain local ; jamais exposé comme outil d'agent.
+    Grant {
+        agent_id: String,
+        cwd: String,
+        posture: SpawnPosture,
+        #[serde(default)]
+        revoke: bool,
+    },
+}
+
 /// Événement cursé de la descendance d'un wrapper. Le parent est déduit de la
 /// connexion qui interroge et n'est donc jamais choisi par son pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2767,6 +2798,10 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    /// Délégation native : le propriétaire est toujours déduit de la connexion.
+    NativeDelegation {
+        request: NativeDelegationRequest,
+    },
     HumanThreadWatchV1 {
         request: HumanThreadWatchV1,
     },
@@ -3681,6 +3716,9 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    NativeDelegationResult {
+        result: serde_json::Value,
+    },
     HumanThreadWatchEvent {
         event: HumanThreadWatchEvent,
     },

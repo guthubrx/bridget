@@ -458,6 +458,14 @@ pub fn build_environment(
     env.entry("TMPDIR".to_string())
         .or_insert_with(|| OsString::from("/tmp"));
     for name in &definition.pass_env {
+        // Les credentials d'un montage MCP appartiennent à une session.
+        // Même pass_env explicite ne transmet jamais l'identité du parent.
+        if matches!(
+            name.as_str(),
+            "BRIDGET_T3_MCP_ENDPOINT" | "BRIDGET_T3_MCP_AUTHORIZATION"
+        ) {
+            continue;
+        }
         if let Some(value) = source.get(name) {
             env.insert(name.clone(), value.clone());
         }
@@ -628,6 +636,33 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native148_child_never_inherits_t3_session_credentials() {
+        let registry=super::AgentRegistry::from_json(r#"{"agents":{"fixture":{"command":"/bin/sh","pass_env":["BRIDGET_T3_MCP_ENDPOINT","BRIDGET_T3_MCP_AUTHORIZATION","SAFE_SETTING"]}}}"#,"/tmp/native-env148.json").unwrap();
+        let source = super::SourceEnvironment::from([
+            (
+                "HOME".into(),
+                std::ffi::OsString::from("/tmp/native148-home"),
+            ),
+            (
+                "BRIDGET_T3_MCP_ENDPOINT".into(),
+                std::ffi::OsString::from("http://127.0.0.1:1/mcp"),
+            ),
+            (
+                "BRIDGET_T3_MCP_AUTHORIZATION".into(),
+                std::ffi::OsString::from("private-session"),
+            ),
+            ("SAFE_SETTING".into(), std::ffi::OsString::from("retained")),
+        ]);
+        let environment =
+            super::build_environment(registry.get("fixture").unwrap(), &source).unwrap();
+        assert!(!environment.contains_key("BRIDGET_T3_MCP_ENDPOINT"));
+        assert!(!environment.contains_key("BRIDGET_T3_MCP_AUTHORIZATION"));
+        assert_eq!(
+            environment.get("SAFE_SETTING"),
+            Some(&std::ffi::OsString::from("retained"))
+        );
+    }
     use super::*;
     use crate::desired_state::DesiredStateStore;
     use crate::fleet::FleetConfig;

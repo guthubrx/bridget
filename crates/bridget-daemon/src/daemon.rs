@@ -1,6 +1,8 @@
 //! Daemon bridget — écoute sur socket locale Unix, route les messages
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
+mod native_delegation;
+
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
@@ -728,6 +730,7 @@ struct DaemonState {
     router: Router,
     circuit_breaker: CircuitBreaker,
     execution_store: ExecutionStore,
+    delegation_store: crate::delegation::DelegationStore,
     deduplicator: Deduplicator,
     envelope_guard: EnvelopeGuard,
     store: Store,
@@ -3060,6 +3063,7 @@ impl DaemonState {
             FleetConfig::from_env(),
         )?);
         let execution_store = ExecutionStore::open(&config.db_path)?;
+        let delegation_store = crate::delegation::DelegationStore::open(&config.db_path)?;
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         let (observation_tx, observation_lost) = observation_output();
@@ -3095,6 +3099,7 @@ impl DaemonState {
             envelope_guard: EnvelopeGuard::new(Duration::from_secs(config.quarantine_window)),
             store,
             execution_store,
+            delegation_store,
             idempotency,
             fleet,
             registry,
@@ -4643,6 +4648,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let now = std::time::Instant::now();
+
+            native_delegation::tick(&st_reminder);
 
             // Collecter les actions à faire
             let actions: Vec<ReminderAction> = {
@@ -8633,6 +8640,40 @@ fn handle_idempotent_send(
             return issue_response(&key, IdempotencyIssue::IdempotencyExpired);
         }
     };
+    let captured = match native_delegation::capture_reply(st, conn_id, &message) {
+        Ok(captured) => captured,
+        Err(error) => {
+            error!("capture native non persistée: {error}");
+            return DaemonToWrapper::Nack {
+                id: message.id.clone(),
+                reason: "native_result_not_persisted".into(),
+            };
+        }
+    };
+    if captured {
+        if st
+            .idempotency
+            .transition(
+                &key,
+                crate::idempotency::RecordState::Prepared,
+                crate::idempotency::RecordState::Dispatching,
+            )
+            .is_err()
+            || st
+                .idempotency
+                .finalize(
+                    &key,
+                    crate::idempotency::PublicResult::Accepted { expires_at },
+                )
+                .is_err()
+        {
+            return DaemonToWrapper::Nack {
+                id: message.id.clone(),
+                reason: "résultat capturé mais accusé non persisté".into(),
+            };
+        }
+        return issue_response(&key, IdempotencyIssue::Accepted { expires_at });
+    }
     // Les gardes ci-dessous peuvent consulter ou modifier les limites
     // historiques, mais seulement après la réservation d'une clé neuve.
     // Les gardes historiques restent applicables à une clé neuve,
@@ -14248,6 +14289,7 @@ fn handle_wrapper_message(
                 // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::NativeDelegation { .. }
                 | WrapperToDaemon::CommunicationProjectFact { .. }
                 | WrapperToDaemon::DirectoryScoped { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
@@ -14454,6 +14496,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::SpawnOrder {
                     posture: Some(_), ..
                 } => None, // Attribution humaine et capacité contrôlées au puits.
+                WrapperToDaemon::NativeDelegation { .. } => None, // Identité et droits au puits natif.
                 // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
                 //
                 // Le tiret bas précédent classait trois variantes et renvoyait
@@ -16273,6 +16316,9 @@ fn handle_wrapper_message(
                 }),
             }
         }
+        WrapperToDaemon::NativeDelegation { request } => {
+            Some(native_delegation::handle(conn_id, request, state))
+        }
         WrapperToDaemon::SpawnOrder {
             posture,
             agent_type,
@@ -17384,6 +17430,22 @@ fn handle_wrapper_message(
             }
 
             let logical_sender = bridge_msg.from.clone();
+            let captured = match native_delegation::capture_reply(&mut st, conn_id, &bridge_msg) {
+                Ok(captured) => captured,
+                Err(error) => {
+                    error!("capture native non persistée: {error}");
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: "native_result_not_persisted".into(),
+                    });
+                }
+            };
+            if captured {
+                return Some(DaemonToWrapper::Ack {
+                    id: bridge_msg.id.clone(),
+                    project_warnings: Vec::new(),
+                });
+            }
             let content_key = bridge_msg.content_key();
             let message_guard_id = bridge_msg.id.clone();
             let prepared = match prepare_dispatch(
@@ -17886,6 +17948,7 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::DeliveryRejected { id, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            native_delegation::rejected(&st, conn_id, &id, &reason);
             purge_expired_attach_sends(&mut st);
             if let Some(pending) = st.pending_attach_sends.remove(&id) {
                 let writer = st.connections.get(&pending.conn_id).cloned();

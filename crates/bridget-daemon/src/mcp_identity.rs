@@ -23,6 +23,7 @@ pub enum IdentityError {
     LegacyMarker,
     IdentityNotFound,
     DelegatedMcpOnly,
+    T3SessionUnavailable,
 }
 
 impl IdentityError {
@@ -32,6 +33,7 @@ impl IdentityError {
             Self::LegacyMarker => "legacy_marker",
             Self::IdentityNotFound => "identity_not_found",
             Self::DelegatedMcpOnly => "delegated_mcp_only",
+            Self::T3SessionUnavailable => "t3_session_unavailable",
         }
     }
 
@@ -47,6 +49,9 @@ impl IdentityError {
             }
             Self::DelegatedMcpOnly => {
                 "un sous-agent interne utilise uniquement les outils MCP Bridget bridget_who et bridget_send"
+            }
+            Self::T3SessionUnavailable => {
+                "la session T3 ou son rattachement Bridget n'est plus vérifiable ; vérifiez le connecteur puis réessayez depuis la session active"
             }
         }
     }
@@ -272,13 +277,15 @@ pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
 /// Résolution réservée à la façade MCP. Elle accepte la preuve enfant, sans la
 /// transformer en identité principale utilisable par la CLI.
 pub(crate) fn resolve_current_mcp_identity() -> Result<ResolvedIdentity, IdentityError> {
+    // Une preuve explicite refusée ferme l'appel avant toute lecture PID.
+    let session_identity = crate::t3code_mcp::resolve_current().transpose()?;
     let name_file = std::env::var_os("BRIDGET_AGENT_ID_FILE").map(PathBuf::from);
     let expected_instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
         .ok()
         .filter(|value| !value.is_empty());
     let namespace = crate::environment::Namespace::from_environment()
         .map_err(|_| IdentityError::IdentityNotFound)?;
-    resolve_identity_with_delegation_scoped(
+    let native_identity = resolve_identity_with_delegation_scoped(
         name_file.as_deref(),
         &namespace.root.join("agent-pids"),
         &namespace.root.join("delegated-pids"),
@@ -287,7 +294,54 @@ pub(crate) fn resolve_current_mcp_identity() -> Result<ResolvedIdentity, Identit
         &SystemProcessTree,
         Some(&namespace.root),
         true,
-    )
+    );
+    let delegated_marker_present = session_identity.is_some()
+        && native_identity.is_err()
+        && has_delegated_marker(
+            &namespace.root.join("delegated-pids"),
+            std::process::id(),
+            &SystemProcessTree,
+        );
+    combine_session_identity(session_identity, native_identity, delegated_marker_present)
+}
+
+fn has_delegated_marker(directory: &Path, pid: u32, processes: &impl ProcessTree) -> bool {
+    let mut current = Some(pid);
+    for _ in 0..MAX_ANCESTORS {
+        let Some(candidate) = current else { break };
+        match fs::symlink_metadata(directory.join(candidate.to_string())) {
+            Ok(_) => return true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return true,
+        }
+        current = processes
+            .parent(candidate)
+            .filter(|parent| *parent > 1 && *parent != candidate);
+    }
+    false
+}
+
+fn combine_session_identity(
+    session: Option<ResolvedIdentity>,
+    native: Result<ResolvedIdentity, IdentityError>,
+    delegated_marker_present: bool,
+) -> Result<ResolvedIdentity, IdentityError> {
+    match (session, native) {
+        (None, native) => native,
+        (Some(session), Ok(native)) => {
+            if session.name != native.name || session.instance_id != native.instance_id {
+                return Err(IdentityError::T3SessionUnavailable);
+            }
+            // Une preuve de session ne transforme pas un enfant interne connu
+            // en principal. La liste blanche MCP de sa filiation reste active.
+            Ok(ResolvedIdentity {
+                delegated_origin: native.delegated_origin,
+                ..session
+            })
+        }
+        (Some(_), Err(error)) if delegated_marker_present => Err(error),
+        (Some(session), Err(_)) => Ok(session),
+    }
 }
 
 /// Identifiant d'instance stable du wrapper qui héberge la façade MCP.
@@ -811,6 +865,46 @@ mod tests {
     const AGENT_B: &str = "da78fd70-41e8-424c-a88d-e29e2c5babcd";
 
     #[test]
+    fn session_proof_preserves_native_child_limits_and_rejects_conflicting_identity() {
+        let identity = |name: &str| ResolvedIdentity {
+            name: name.into(),
+            instance_id: format!("instance:{name}"),
+            delegated_origin: None,
+        };
+        let session = identity(AGENT_A);
+        let mut child = session.clone();
+        child.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "child:1".into(),
+        });
+        assert_eq!(
+            combine_session_identity(Some(session.clone()), Ok(child.clone()), true).unwrap(),
+            child
+        );
+        assert_eq!(
+            combine_session_identity(Some(session.clone()), Ok(identity(AGENT_B)), false),
+            Err(IdentityError::T3SessionUnavailable)
+        );
+        assert_eq!(
+            combine_session_identity(
+                Some(session.clone()),
+                Err(IdentityError::IdentityNotFound),
+                false
+            )
+            .unwrap(),
+            session.clone()
+        );
+        assert_eq!(
+            combine_session_identity(Some(session), Err(IdentityError::IdentityNotFound), true),
+            Err(IdentityError::IdentityNotFound)
+        );
+        assert_eq!(
+            combine_session_identity(None, Err(IdentityError::LegacyMarker), false),
+            Err(IdentityError::LegacyMarker)
+        );
+    }
+
+    #[test]
     fn spec099_preuve_privee_atomique_bornee_sans_symlink() {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("bg-proof-{}", uuid::Uuid::new_v4().simple()));
@@ -1066,6 +1160,12 @@ mod tests {
             (20, (200, 10)),
             (10, (100, 1)),
         ]));
+        assert!(has_delegated_marker(
+            &root.join("delegated-pids"),
+            42,
+            &tree
+        ));
+        assert!(!has_delegated_marker(&root.join("missing"), 42, &tree));
 
         for allow_delegated in [false, true] {
             assert_eq!(

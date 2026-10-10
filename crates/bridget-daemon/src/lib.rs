@@ -35,6 +35,8 @@ pub mod managers;
 pub use managed_supervisor::{
     GovernedContinuation, GovernedContinuationSource, reserve_governed_continuation,
 };
+pub(crate) mod delegation;
+pub(crate) mod delegation_mcp;
 pub mod mcp;
 pub mod mcp_identity;
 mod observation;
@@ -52,6 +54,7 @@ pub mod t3code;
 pub mod t3code_contract;
 mod t3code_contract_v2;
 pub(crate) mod t3code_identity;
+mod t3code_mcp;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
 pub mod threads;
