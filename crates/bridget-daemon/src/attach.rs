@@ -30,6 +30,111 @@ const RETIRED_SUBSCRIPTIONS_LIMIT: usize = 64;
 // Réserve 4 Kio au reçu/provenance/notices dans un résultat inférieur à 64 Kio.
 const JOURNAL_EXCERPT_BYTES: usize = 60 * 1024;
 
+/// Fenêtre humaine d'une tâche. Le chemin est résolu uniquement par le daemon.
+pub(crate) fn lineage_journal_page(directory: &Path, task_id: &str, after: u64, limit: u32) -> Result<serde_json::Value, bridget_transport::protocol::HumanLineageError> {
+    use bridget_transport::journal::{IncrementalJournalReader,JournalReadItem,resolve_window,current_host_date};
+    use bridget_transport::protocol::HumanLineageError as E;
+    if !(1..=100).contains(&limit) {return Err(E::InvalidRequest)}
+    crate::environment::validate_private_directory_if_present(directory).map_err(|_|E::JournalUnavailable)?;
+    let window=resolve_window(directory,&AttachWindow::Seq(after.saturating_add(1)),&current_host_date()).map_err(|_|E::JournalUnavailable)?;
+    if window.files.is_empty(){return Err(E::JournalUnavailable)}
+    if window.files.len()>256 {return Err(E::ResourceLimit)}
+    let mut events=Vec::new();let mut bytes=0usize;let mut next=after;let mut gap=None;let mut scanned=0usize;
+    for file in window.files {
+        crate::environment::validate_state_file(&file,false).map_err(|_|E::JournalUnavailable)?;
+        let mut reader=IncrementalJournalReader::new(file);
+        loop {
+            let before=reader.next_offset();
+            let items=reader.read_chunk(16*1024).map_err(|_|E::JournalUnavailable)?;
+            scanned+=reader.next_offset().saturating_sub(before) as usize;
+            if scanned>64*1024*1024{return Err(E::ResourceLimit)}
+            for item in items {
+                match item {
+                    JournalReadItem::Event(entry) if entry.seq>after=>{
+                        if events.len()>=limit as usize || (!events.is_empty() && bytes+entry.bytes.len()>16*1024) {
+                            return Ok(lineage_journal_result(task_id,events,next,false,gap));
+                        }
+                        if entry.seq>next.saturating_add(1) {
+                            gap=Some(serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":entry.seq-1,"reason":"journal_gap"}));
+                            return Ok(lineage_journal_result(task_id,events,entry.seq-1,false,gap));
+                        }
+                        next=entry.seq;
+                        if entry.bytes.len()>16*1024 {
+                            gap=Some(serde_json::json!({"from_seq":entry.seq,"to_seq":entry.seq,"reason":"entry_too_large"}));
+                            return Ok(lineage_journal_result(task_id,events,next,false,gap));
+                        }
+                        let value:serde_json::Value=serde_json::from_slice(&entry.bytes).map_err(|_|E::JournalUnavailable)?;
+                        if value["seq"].as_u64()!=Some(entry.seq){return Err(E::JournalUnavailable)}
+                        bytes+=entry.bytes.len();events.push(value);
+                    },
+                    JournalReadItem::Unreadable(_)=>return Err(E::JournalUnavailable),
+                    JournalReadItem::Oversized{seq:Some(seq),..} if seq>after=>{
+                        gap=Some(serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":seq,"reason":"entry_too_large"}));
+                        return Ok(lineage_journal_result(task_id,events,next.max(seq),false,gap));
+                    },
+                    JournalReadItem::Oversized{seq:None,..}=>return Err(E::JournalUnavailable),
+                    _=>{},
+                }
+            }
+            if reader.next_offset()==before {break}
+        }
+    }
+    Ok(lineage_journal_result(task_id,events,next,true,gap))
+}
+
+fn lineage_journal_result(task_id:&str,events:Vec<serde_json::Value>,next:u64,caught_up:bool,gap:Option<serde_json::Value>)->serde_json::Value {
+    serde_json::json!({"version":1,"status":"ok","task_id":task_id,"events":events,"next_seq":next,"caught_up":caught_up,"gap":gap})
+}
+
+/// Réutilise la négociation/reconstruction attach et le vrai AttachRelay du wrapper.
+pub(crate) fn lineage_journal_follow(
+    socket:&Path,child:&str,task_id:&str,after:u64,_limit:u32,
+    mut opened:impl FnMut(&UnixStream)->Result<(),bridget_transport::protocol::HumanLineageError>,
+    mut emit:impl FnMut(serde_json::Value)->Result<(),bridget_transport::protocol::HumanLineageError>,
+) -> Result<(),bridget_transport::protocol::HumanLineageError> {
+    use bridget_transport::protocol::HumanLineageError as E;
+    use crate::communication::client::DaemonConnection;
+    let mut connection=DaemonConnection::connect(socket).map_err(|_|E::JournalUnavailable)?;
+    if !matches!(connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Attach}).map_err(|_|E::JournalUnavailable)?,DaemonToWrapper::RoleAccepted{role:ConnectionRole::Attach}) {return Err(E::JournalUnavailable)}
+    opened(connection.read_stream())?;
+    let window=AttachWindow::Seq(after.saturating_add(1));
+    let mut state=AttachClientState::new(window.clone());state.subscription_requested();
+    let mut response=connection.exchange(&WrapperToDaemon::Subscribe{agent:child.into(),window}).map_err(|_|E::JournalUnavailable)?;
+    let mut next=after;let mut caught_up=false;
+    loop {
+        let outcome=state.dispatch(response).map_err(|_|E::JournalUnavailable)?;
+        if outcome.rejected.is_some() || outcome.reconnect || outcome.resubscribe.is_some(){return Err(E::JournalUnavailable)}
+        for event in outcome.events {
+            match event {
+                AttachEvent::Journal{seq,bytes,..} if seq>next=>{
+                    let gap=if seq>next.saturating_add(1){Some(serde_json::json!({"from_seq":next.saturating_add(1),"to_seq":seq-1,"reason":"journal_gap"}))}else{None};
+                    next=seq;
+                    if bytes.len()>16*1024 {
+                        emit(lineage_journal_result(task_id,Vec::new(),next,caught_up,Some(serde_json::json!({"from_seq":seq,"to_seq":seq,"reason":"entry_too_large"}))))?;
+                    }else{
+                        let value:serde_json::Value=serde_json::from_slice(&bytes).map_err(|_|E::JournalUnavailable)?;
+                        if value["seq"].as_u64()!=Some(seq){return Err(E::JournalUnavailable)}
+                        emit(lineage_journal_result(task_id,vec![value],next,caught_up,gap))?;
+                    }
+                },
+                AttachEvent::Gap{from_seq,to_seq,reason}=>{
+                    next=next.max(to_seq);
+                    emit(lineage_journal_result(task_id,Vec::new(),next,caught_up,Some(serde_json::json!({"from_seq":from_seq,"to_seq":to_seq,"reason":reason.unwrap_or_else(||"journal_gap".into()).chars().take(160).collect::<String>()}))))?;
+                },
+                AttachEvent::SnapshotCaughtUp{through_seq}=>{
+                    if state.reassembly.is_some(){return Err(E::JournalUnavailable)}
+                    next=next.max(through_seq.unwrap_or(next));caught_up=true;
+                    emit(lineage_journal_result(task_id,Vec::new(),next,true,None))?;
+                },
+                AttachEvent::JournalReadError{..}=>return Err(E::JournalUnavailable),
+                AttachEvent::End{..}=>return if caught_up {Ok(())}else{Err(E::JournalUnavailable)},
+                _=>{},
+            }
+        }
+        response=connection.read_stream_response(MAX_ATTACH_SERIALIZED_FRAME_BYTES).map_err(|_|E::JournalUnavailable)?;
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct JournalRequest {

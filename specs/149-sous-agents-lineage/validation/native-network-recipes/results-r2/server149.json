@@ -1,0 +1,315 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T14:30:48.412Z",
+ "finishedAt": "2026-10-10T14:31:20.320Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-ec6b18b5d468",
+  "sha256": "ec6b18b5d468dd0031eb6282da10bdc27cb38b7193f07b4a8b9107cbe92d8b0f"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "T036 serveur T3 réel <-> daemon natif",
+  "pass": 15,
+  "fail": 0,
+  "total": 15
+ },
+ "notes": {
+  "daemonPid": 80798,
+  "serverPid": 80965,
+  "stopDaemon": "stopped_by_sigterm",
+  "restartTaskStates": {
+   "before": [
+    [
+     "5cd45160-eaea-4660-aba9-e36aa8328613",
+     "working"
+    ],
+    [
+     "6889b862-e0d7-4d6e-8962-f08cdacac3e4",
+     "waiting_for_children"
+    ],
+    [
+     "7bdbcd86-9b0a-42d0-b743-975dbce4a50c",
+     "cancelled"
+    ],
+    [
+     "b630e8be-2c5e-4233-9aa3-352bed46fc16",
+     "result_available"
+    ]
+   ],
+   "after": [
+    [
+     "5cd45160-eaea-4660-aba9-e36aa8328613",
+     "failed"
+    ],
+    [
+     "6889b862-e0d7-4d6e-8962-f08cdacac3e4",
+     "waiting_for_children"
+    ],
+    [
+     "7bdbcd86-9b0a-42d0-b743-975dbce4a50c",
+     "cancelled"
+    ],
+    [
+     "b630e8be-2c5e-4233-9aa3-352bed46fc16",
+     "result_available"
+    ]
+   ]
+  },
+  "restartCounts": {
+   "startedBeforeCut": 4,
+   "startedAfterRestart": 4,
+   "promptsAfter": 4
+  },
+  "finalStates": [
+   "cancelled",
+   "result_available",
+   "failed",
+   "cancelled"
+  ],
+  "cancelReceipt": {
+   "version": 1,
+   "task_id": "6889b862-e0d7-4d6e-8962-f08cdacac3e4",
+   "status": "cancelling"
+  },
+  "finalCounts": {
+   "rows": 4,
+   "started": 4,
+   "prompts": 4,
+   "answered": 2,
+   "deliveries": {}
+  },
+  "serverDb": {
+   "virtualThreads": 4,
+   "providerCounts": {
+    "projection_runs": 0,
+    "projection_run_attempts": 0,
+    "projection_provider_turns": 0,
+    "projection_provider_sessions": 0,
+    "projection_provider_threads": 0,
+    "projection_provider_session_bindings": 0,
+    "projection_runtime_requests": 0,
+    "effect_outbox": 0,
+    "thread_launch_workflows": 0,
+    "projection_thread_messages": 0
+   }
+  },
+  "serverStop": "stopped_by_sigterm",
+  "daemonStop": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "V0",
+   "layer": "REEL",
+   "description": "serveur T3 réel démarré sur base privée, projet + deux conversations créés par RPC",
+   "pass": true,
+   "observed": {
+    "results": [
+     200,
+     "ok",
+     "ok"
+    ]
+   }
+  },
+  {
+   "id": "V1",
+   "layer": "REEL",
+   "description": "A : racine + enfant imbriqué (lien parent_task_id), modèle/protocole/posture du moteur ; la racine attend ses enfants (waiting_for_children), résultat retenu",
+   "pass": true,
+   "observed": {
+    "rootStatus": "waiting_for_children",
+    "nestedStatus": "working",
+    "tasks": 2
+   }
+  },
+  {
+   "id": "V2",
+   "layer": "REEL",
+   "description": "S149-19 via serveur T3 : B (même projet) ne voit que sa tâche, jamais celles de A",
+   "pass": true,
+   "observed": {
+    "b": [
+     "b630e8be"
+    ]
+   }
+  },
+  {
+   "id": "V3",
+   "layer": "REEL",
+   "description": "B ne peut ni show, ni journal, ni cancel la tâche de A (task_unavailable) ; token read ne peut pas cancel",
+   "pass": true,
+   "observed": {
+    "show": "task_unavailable",
+    "journal": "task_unavailable",
+    "cancel": "task_unavailable"
+   }
+  },
+  {
+   "id": "V3b",
+   "layer": "REEL",
+   "description": "scope : le jeton orchestration:read est refusé sur cancel (aucun effet natif)",
+   "pass": true,
+   "observed": {
+    "error": "EnvironmentAuthorizationError"
+   }
+  },
+  {
+   "id": "V4",
+   "layer": "REEL",
+   "description": "projection T3 : un fil virtuel marqué par tâche native (3, relation subagent) ; l'ensemble des conversations de premier niveau est identique avant/après lecture (aucune conversation créée par la lecture)",
+   "pass": true,
+   "observed": {
+    "virtual": 3,
+    "topLevelBefore": 3,
+    "topLevelAfter": 3,
+    "topTitles": [
+     "New thread",
+     "Conversation A",
+     "Conversation B"
+    ]
+   }
+  },
+  {
+   "id": "V5",
+   "layer": "REEL",
+   "description": "zéro effet fournisseur côté T3 : 0 run, 0 tentative, 0 tour, 0 session, 0 effet en attente, 0 message",
+   "pass": true,
+   "observed": {
+    "projection_runs": 0,
+    "projection_run_attempts": 0,
+    "projection_provider_turns": 0,
+    "projection_provider_sessions": 0,
+    "projection_provider_threads": 0,
+    "projection_provider_session_bindings": 0,
+    "projection_runtime_requests": 0,
+    "effect_outbox": 0,
+    "thread_launch_workflows": 0,
+    "projection_thread_messages": 0
+   }
+  },
+  {
+   "id": "V6",
+   "layer": "REEL",
+   "description": "tant que l'enfant imbriqué travaille, la racine n'expose aucun résultat (retenu) ; l'enfant lui-même n'a pas de résultat",
+   "pass": true,
+   "observed": {
+    "rootResult": null,
+    "nestedResult": null
+   }
+  },
+  {
+   "id": "V7",
+   "layer": "REEL",
+   "description": "journal réel de l'enfant actif lisible via T3 (événements du daemon, séquence ordonnée)",
+   "pass": true,
+   "observed": {
+    "events": 5,
+    "gap": null
+   }
+  },
+  {
+   "id": "V8",
+   "layer": "REEL",
+   "description": "bridget.lineage.watch via T3 : ready seq 0 premier, puis changed sans corps ni UUID après nouvelle tâche réelle",
+   "pass": true,
+   "observed": {
+    "statuses": [
+     "ready",
+     "changed"
+    ],
+    "keys": [
+     "version",
+     "generation",
+     "seq",
+     "status"
+    ]
+   }
+  },
+  {
+   "id": "V9",
+   "layer": "REEL",
+   "description": "cancel via T3 : reçu natif, rejeu identique, request_id sur autre tâche = envelope_mismatch ; tâche cancelled et PID enfant réellement terminé",
+   "pass": true,
+   "observed": {
+    "receipt": {
+     "version": 1,
+     "task_id": "7bdbcd86-9b0a-42d0-b743-975dbce4a50c",
+     "status": "cancelling"
+    },
+    "replaySame": true,
+    "mismatch": "envelope_mismatch",
+    "state": "cancelled",
+    "childPid": 81443,
+    "alive": false
+   }
+  },
+  {
+   "id": "V10",
+   "layer": "REEL",
+   "description": "l'annulation depuis T3 ne crée aucun run/tour/session fournisseur côté T3 (tables toujours à zéro)",
+   "pass": true,
+   "observed": {
+    "projection_runs": 0,
+    "projection_run_attempts": 0,
+    "projection_provider_turns": 0,
+    "projection_provider_sessions": 0,
+    "projection_provider_threads": 0,
+    "projection_provider_session_bindings": 0,
+    "projection_runtime_requests": 0,
+    "effect_outbox": 0,
+    "thread_launch_workflows": 0,
+    "projection_thread_messages": 0
+   }
+  },
+  {
+   "id": "V11",
+   "layer": "REEL",
+   "description": "110 lectures T3 -> daemon : aucun lancement, aucun tour, aucune mutation (états et updated_at identiques)",
+   "pass": true,
+   "observed": {
+    "before": {
+     "rows": 4,
+     "started": 4,
+     "prompts": 4,
+     "answered": 2,
+     "deliveries": {}
+    },
+    "after": {
+     "rows": 4,
+     "started": 4,
+     "prompts": 4,
+     "answered": 2,
+     "deliveries": {}
+    }
+   }
+  },
+  {
+   "id": "V12",
+   "layer": "REEL",
+   "description": "daemon coupé : T3 refuse explicitement (aucun contenu présenté comme courant)",
+   "pass": true,
+   "observed": {
+    "error": "binding_unavailable",
+    "message": "Bridget lineage is unavailable (binding_unavailable)."
+   }
+  },
+  {
+   "id": "V13",
+   "layer": "REEL",
+   "description": "reprise sans relance : même génération native, mêmes tâches, aucun fil virtuel en double côté T3",
+   "pass": true,
+   "observed": {
+    "sameGeneration": true,
+    "tasksBefore": 2,
+    "tasksAfter": 3,
+    "virtualThreadsAfter": 4
+   }
+  }
+ ],
+ "residualProcesses": []
+}

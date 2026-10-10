@@ -2,6 +2,7 @@
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
 mod native_delegation;
+mod native_lineage;
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::greffe_authorization::{
@@ -688,8 +689,12 @@ impl Drop for FixtureRoot {
 struct DaemonState {
     /// Suivis de consultation : aucune observation, mission ou donnée durable.
     human_thread_watches: HashMap<String, HumanThreadWatch>,
+    lineage_watches: HashMap<String, native_lineage::Watch>,
+    lineage_journals: HashMap<String, native_lineage::Journal>,
     /// Autorité éphémère : None interdit un fait contradictoire sur ce lien.
     t3_thread_bindings: HashMap<String, Option<String>>,
+    native_permission_facts: HashMap<String, (bridget_transport::protocol::ProviderPermissions,Option<String>)>,
+    native_permission_refusals: HashMap<String,String>,
     /// La projection projet historique ne conserve pas son origine.
     t3_project_connections: HashSet<String>,
     /// Fait de communication de la connexion primaire (None = ambigu).
@@ -3074,7 +3079,11 @@ impl DaemonState {
         )?;
         Ok(DaemonState {
             human_thread_watches: HashMap::new(),
+            lineage_watches: HashMap::new(),
+            lineage_journals: HashMap::new(),
             t3_thread_bindings: HashMap::new(),
+            native_permission_facts: HashMap::new(),
+            native_permission_refusals: HashMap::new(),
             t3_project_connections: HashSet::new(),
             observations,
             observation_sequences: HashMap::new(),
@@ -3213,8 +3222,11 @@ impl DaemonState {
     }
 
     fn revoke_identity_authorizations(&mut self, owner: &str) {
+        self.native_permission_facts.remove(owner);
+        self.native_permission_refusals.remove(owner);
         self.t3_thread_bindings.remove(owner);
         self.t3_project_connections.remove(owner);
+        native_lineage::invalidate(self);
         for watch in self
             .human_thread_watches
             .values_mut()
@@ -3877,6 +3889,7 @@ fn reserve_managed_recoveries(
     now: i64,
 ) -> Result<Vec<ManagedRecovery>, Box<dyn std::error::Error>> {
     state.recovering = true;
+    let native_children = native_delegation::prepare_restart(state)?;
     let mut absents = Vec::new();
     let roster_persistents = state.fleet.persistent_named();
     let candidates = state.fleet.recovery_candidates();
@@ -3898,6 +3911,9 @@ fn reserve_managed_recoveries(
     }
 
     for candidate in candidates {
+        if native_children.contains(&candidate.lease.name) {
+            continue;
+        }
         if candidate.lease.deadline_at <= now {
             let _ =
                 state
@@ -3927,6 +3943,9 @@ fn reserve_managed_recoveries(
     }
 
     for (name, equipier) in desired.equipiers {
+        if native_children.contains(&name) {
+            continue;
+        }
         if in_flight_names.contains(&name) {
             continue;
         }
@@ -4173,6 +4192,19 @@ fn schedule_idempotent_delivery_recovery(
     };
     let mut controls = Vec::new();
     for delivery in deliveries {
+        // Une remise native incertaine n'est jamais une autorisation de
+        // réexécuter sa mission, même sur la même instance reconnectée.
+        let native_mission = serde_json::from_slice::<bridget_core::BridgetMessage>(
+            &delivery.message_bytes,
+        ).map_err(|error| error.to_string()).and_then(|message|
+            state.delegation_store.for_mission(&message.id).map(|task| task.is_some()));
+        if !matches!(native_mission, Ok(false)) {
+            let _ = state.idempotency.mark_delivery_indeterminate(
+                &delivery.delivery_id, &delivery.recipient_instance_id,
+                delivery.delivery_generation,
+            );
+            continue;
+        }
         if let Err(error) =
             defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls)
         {
@@ -4217,6 +4249,18 @@ fn schedule_execution_recovery(
     let Some(parent_execution_id) = candidates.first() else {
         return;
     };
+    match state.delegation_store.for_child(agent_name) {
+        Ok(Some(task)) if *parent_execution_id == format!("execution-{}", task.mission) => {
+            // La saga native publie l'échec ou son résultat durable. La reprise
+            // ordinaire ne crée ni continuation ni remise de cette mission.
+            return;
+        }
+        Err(error) => {
+            error!("identité de mission native avant reprise illisible: {error}");
+            return;
+        }
+        _ => {}
+    }
     if candidates.len() > 1 {
         warn!(
             "reprise refusée pour {agent_name}: exécutions actives concurrentes {:?}",
@@ -4500,9 +4544,20 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         std::process::id()
     );
 
+    // Lire les autorités durables avant la réconciliation, sous le flock et
+    // le préflight privé. Aucun superviseur ni socket nouvelle n'est lancé.
+    let (managed_tx, managed_rx) = mpsc::channel();
+    let (managed_event_tx, managed_event_rx) = mpsc::channel();
+    let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx.clone())?));
+    let native_identities = {
+        let st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        native_delegation::restart_identities(&st)?
+    };
     let marker_store = ManagedMarkerStore::at_directory(state_root.join("managed"));
-    let reconciled =
-        marker_store.reconcile_stale_groups(MANAGED_STOP_FORCED_GRACE, MANAGED_STOP_POLL)?;
+    let reconciled = marker_store.reconcile_stale_groups_with_native(
+        MANAGED_STOP_FORCED_GRACE, MANAGED_STOP_POLL,
+        &native_identities, Duration::from_secs(8),
+    )?;
     if !reconciled.is_empty() {
         info!(
             "réconciliation: {} ancien(s) groupe(s) terminé(s): {}",
@@ -4550,9 +4605,6 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         warn!("ramasse-copies: thread détaché impossible: {error}");
     }
 
-    let (managed_tx, managed_rx) = mpsc::channel();
-    let (managed_event_tx, managed_event_rx) = mpsc::channel();
-    let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx.clone())?));
     let fleet = state
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -5004,6 +5056,12 @@ fn handle_connection(
                         .and_then(|kind| kind.as_str())
                         .map(str::to_owned)
                 });
+            if display_name_kind.as_deref()==Some("HumanLineage")
+                && (decode::<WrapperToDaemon>(line).is_err() || !serde_json::from_str::<serde_json::Value>(line).ok().is_some_and(|v|v.as_object().is_some_and(|o|o.len()==2))) {
+                writeln!(my_writer,"{}",encode(&DaemonToWrapper::HumanLineageResult {result:bridget_transport::protocol::HumanLineageError::InvalidRequest.result()})?)?;
+                my_writer.flush()?;
+                break;
+            }
             if display_name_kind.as_deref() == Some("HumanThreadViewV1")
                 && decode::<WrapperToDaemon>(line).is_err()
             {
@@ -5177,6 +5235,10 @@ fn handle_connection(
         st.terminal_sessions.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
         st.human_thread_watches.remove(&conn_id);
+        st.lineage_watches.remove(&conn_id);
+        if let Some(journal)=st.lineage_journals.remove(&conn_id) {
+            if let Some(socket)=journal.shutdown {let _=socket.shutdown(std::net::Shutdown::Both);}
+        }
         st.service_negotiations.remove(&conn_id);
         st.peer_uids.remove(&conn_id);
         st.coordination_subscriptions.remove(&conn_id);
@@ -8519,12 +8581,26 @@ struct IdempotentSendAdmission {
 
 fn handle_idempotent_send(
     conn_id: &str,
+    message: bridget_core::BridgetMessage,
+    message_id: String,
+    issued_at: i64,
+    admission: IdempotentSendAdmission,
+    st: &mut DaemonState,
+    controls: &mut Vec<DeferredControl>,
+) -> DaemonToWrapper {
+    handle_idempotent_send_with_result_authority(conn_id, message, message_id, issued_at,
+        admission, st, controls, None)
+}
+
+fn handle_idempotent_send_with_result_authority(
+    conn_id: &str,
     mut message: bridget_core::BridgetMessage,
     message_id: String,
     issued_at: i64,
     admission: IdempotentSendAdmission,
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
+    authority: Option<&native_delegation::RetainedResultAuthority>,
 ) -> DaemonToWrapper {
     // Session 102 : une alerte de fil n'est construite que par le daemon. Une
     // notice fournie par un client est neutralisée AVANT le canon d'idempotence,
@@ -8537,7 +8613,11 @@ fn handle_idempotent_send(
     // que l'on emprunte. Toute autre attribution exige une preuve.
     let human_from_bare_client = matches!(message.from.as_str(), "" | "human" | "humain")
         && !st.conn_names.contains_key(conn_id);
-    if !human_from_bare_client && !sender_is_authorized(st, conn_id, &message.from) {
+    if let Some(authority) = authority {
+        if let Err(reason) = native_delegation::authorize_retained_result(st, authority, conn_id, &message) {
+            return DaemonToWrapper::Nack { id: message_id, reason };
+        }
+    } else if !human_from_bare_client && !sender_is_authorized(st, conn_id, &message.from) {
         return DaemonToWrapper::Nack {
             id: message_id,
             reason: "identité expéditeur non attestée : rattachement auxiliaire requis".into(),
@@ -13661,7 +13741,9 @@ fn human_client_guard(
     }) {
         return Err(E::UnsupportedVersion);
     }
-    if crate::threads::canonical_uuid(t3_thread_id).is_none() {
+    let lineage=matches!(capability, ClientCapability::HumanLineageViewV1 | ClientCapability::HumanLineageWatchV1 | ClientCapability::HumanLineageCancelV1);
+    if (lineage && (t3_thread_id.is_empty() || t3_thread_id.len()>2048 || t3_thread_id.chars().any(bridget_core::is_disallowed_control)))
+        || (!lineage && crate::threads::canonical_uuid(t3_thread_id).is_none()) {
         return Err(E::InvalidRequest);
     }
     Ok(())
@@ -13840,6 +13922,7 @@ fn publish_human_name_change(st: &mut DaemonState, renamed: &HashSet<String>) {
 /// La file est sous verrou mutation ; son writer indépendant reste hors verrou.
 /// O(S*C), S<=128 ; exécuté à changement d'autorité, jamais sur minuterie.
 fn invalidate_human_authority(st: &mut DaemonState) {
+    native_lineage::invalidate(st);
     let connections: Vec<_> = st.human_thread_watches.keys().cloned().collect();
     for conn in connections {
         if let Err(code) = human_watch_guard(st, &conn) {
@@ -14017,6 +14100,7 @@ fn handle_wrapper_message(
 ) -> Option<DaemonToWrapper> {
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if native_lineage::invalid_message(&mut st,conn_id) {return None;}
         if let Some(watch) = st.human_thread_watches.get_mut(conn_id) {
             watch
                 .queue
@@ -14024,6 +14108,9 @@ fn handle_wrapper_message(
             let _ = watch.notify.try_send(());
             return None;
         }
+    }
+    if let WrapperToDaemon::HumanLineage {request}=&msg {
+        return native_lineage::handle(conn_id,request,state);
     }
     // Cette consultation n'exécute aucune maintenance d'attach, même refusée.
     if let WrapperToDaemon::HumanThreadWatchV1 { request } = &msg {
@@ -14040,7 +14127,10 @@ fn handle_wrapper_message(
     ) || matches!(&msg,WrapperToDaemon::ClientHello{capabilities,..}
             if capabilities.as_slice()==[ClientCapability::HumanThreadViewV1]
                 || capabilities.as_slice()==[ClientCapability::HumanThreadViewRecentV1]
-                || capabilities.as_slice()==[ClientCapability::HumanThreadWatchV1]);
+                || capabilities.as_slice()==[ClientCapability::HumanThreadWatchV1]
+                || capabilities.as_slice()==[ClientCapability::HumanLineageViewV1]
+                || capabilities.as_slice()==[ClientCapability::HumanLineageWatchV1]
+                || capabilities.as_slice()==[ClientCapability::HumanLineageCancelV1]);
     let human_client = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
@@ -14048,6 +14138,9 @@ fn handle_wrapper_message(
                 n.capabilities.as_slice() == [ClientCapability::HumanThreadViewV1]
                     || n.capabilities.as_slice() == [ClientCapability::HumanThreadViewRecentV1]
                     || n.capabilities.as_slice() == [ClientCapability::HumanThreadWatchV1]
+                    || n.capabilities.as_slice() == [ClientCapability::HumanLineageViewV1]
+                    || n.capabilities.as_slice() == [ClientCapability::HumanLineageWatchV1]
+                    || n.capabilities.as_slice() == [ClientCapability::HumanLineageCancelV1]
             })
     };
     if !human_client_handshake && !human_client {
@@ -14290,10 +14383,13 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::NativeDelegation { .. }
+                | WrapperToDaemon::NativeDelegationT3 { .. }
+                | WrapperToDaemon::NativePermissionFact { .. }
                 | WrapperToDaemon::CommunicationProjectFact { .. }
                 | WrapperToDaemon::DirectoryScoped { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
+                | WrapperToDaemon::HumanLineage { .. }
                 | WrapperToDaemon::HumanThreadViewV1 { .. }
                 | WrapperToDaemon::HumanThreadWatchV1 { .. }
                 | WrapperToDaemon::T3ThreadBindingFact { .. }
@@ -14496,7 +14592,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::SpawnOrder {
                     posture: Some(_), ..
                 } => None, // Attribution humaine et capacité contrôlées au puits.
-                WrapperToDaemon::NativeDelegation { .. } => None, // Identité et droits au puits natif.
+                WrapperToDaemon::NativeDelegation { .. } | WrapperToDaemon::NativeDelegationT3 { .. } => None, // Identité et droits au puits natif.
                 // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
                 //
                 // Le tiret bas précédent classait trois variantes et renvoyait
@@ -14517,8 +14613,10 @@ fn handle_wrapper_message(
                 // c'est le rôle Client qui l'emprunte (`daemon_identity`).
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::NativePermissionFact { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
+                | WrapperToDaemon::HumanLineage { .. }
                 | WrapperToDaemon::HumanThreadViewV1 { .. }
                 | WrapperToDaemon::HumanThreadWatchV1 { .. }
                 | WrapperToDaemon::T3ThreadBindingFact { .. }
@@ -14721,6 +14819,7 @@ fn handle_wrapper_message(
                 .set_source(conn_id, &agent, events, Instant::now());
             None
         }
+        WrapperToDaemon::HumanLineage {request} => native_lineage::handle(conn_id,&request,state),
         WrapperToDaemon::HumanThreadViewV1 { request } => {
             Some(handle_human_thread_view(conn_id, &request, state))
         }
@@ -16066,6 +16165,9 @@ fn handle_wrapper_message(
                             | ClientCapability::HumanThreadViewV1
                             | ClientCapability::HumanThreadViewRecentV1
                             | ClientCapability::HumanThreadWatchV1
+                            | ClientCapability::HumanLineageViewV1
+                            | ClientCapability::HumanLineageWatchV1
+                            | ClientCapability::HumanLineageCancelV1
                             | ClientCapability::CommunicationProjectsV1
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1
@@ -16318,6 +16420,32 @@ fn handle_wrapper_message(
         }
         WrapperToDaemon::NativeDelegation { request } => {
             Some(native_delegation::handle(conn_id, request, state))
+        }
+        WrapperToDaemon::NativeDelegationT3 { request, proof } => {
+            Some(native_delegation::handle_attested(conn_id,request,&proof,state))
+        }
+        WrapperToDaemon::NativePermissionFact { fact,request_id,observation_id,unavailable_code } => {
+            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            if st.auxiliary_connections.contains(conn_id)||live_connection_identity(&st,conn_id).is_none(){return None}
+            let allowed=fact.as_ref().is_some_and(|fact|
+                live_connection_identity(&st,conn_id).is_some_and(|(_,instance)|fact.provider_instance_id==instance
+                &&st.presences.get(&instance).is_some_and(|p|matches!(p.transport.as_str(),"codex_app_server"|"stdio"|"claude_pty"|"tmux")
+                    &&st.registry.get(&p.agent_type).is_ok_and(|definition|definition.protocol==fact.driver)))
+                &&request_id.as_ref().is_none_or(|id|!id.is_empty()&&id.len()<=128&&!id.chars().any(char::is_control))
+                &&st.native_permission_facts.get(conn_id).is_none_or(|(previous,_)|
+                    fact.provider_session_id!=previous.provider_session_id||fact.revision>=previous.revision)
+                &&bridget_transport::protocol::validate_permissions(fact,false).is_ok());
+            let accepted=allowed&&unavailable_code.is_none();
+            if accepted {
+                st.native_permission_facts.insert(conn_id.into(),(fact.unwrap(),request_id));
+                st.native_permission_refusals.remove(conn_id);
+            }else {
+                st.native_permission_facts.remove(conn_id);
+                let code=unavailable_code.filter(|code|matches!(code.as_str(),"permission_source_unavailable"|"settings_revision_changed"))
+                    .unwrap_or_else(||"permission_attestation_unavailable".into());
+                st.native_permission_refusals.insert(conn_id.into(),code);
+            }
+            observation_id.filter(|id|Uuid::parse_str(id).is_ok()).map(|observation_id|DaemonToWrapper::NativePermissionAcknowledged{observation_id,accepted})
         }
         WrapperToDaemon::SpawnOrder {
             posture,

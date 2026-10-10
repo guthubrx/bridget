@@ -1,0 +1,13 @@
+(node:48241) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:48290) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:48554) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+UI-NATIVE-READY /Users/moi/.cache/bridget149-native-interop.w9UAwP
+(node:59064) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:59467) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS UI.0 [REEL] fixture native tenue jusqu'au marqueur finish (serveur T3 réel + Vite + daemon réel r8)
+{"summary":{"title":"T040 UI web réelle native (r3)","pass":1,"fail":0,"total":1},"residualProcesses":1}

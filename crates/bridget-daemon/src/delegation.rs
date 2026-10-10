@@ -4,19 +4,40 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+#[path = "delegation_lineage.rs"]
+mod lineage;
+pub(crate) use lineage::ProjectionMutation;
+
 pub(crate) struct DelegationStore {
     conn: Connection,
+    changes: std::cell::RefCell<std::collections::BTreeMap<String, ProjectionMutation>>,
+    notify: std::sync::mpsc::SyncSender<()>,
+    receiver: std::cell::RefCell<Option<std::sync::mpsc::Receiver<()>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
+    #[serde(default)]
+    pub root_owner_agent_id: String,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub started_at: Option<i64>,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
     pub owner: String,
     pub owner_instance: String,
     pub origin_owner_instance: String,
     #[serde(default)]
     pub parent_execution_id: Option<String>,
     pub request: NativeDelegationRequest,
+    #[serde(default)]
+    pub permission_snapshot: Option<bridget_transport::protocol::NativePermissionSnapshot>,
+    #[serde(default)]
+    pub effective_posture: Option<SpawnPosture>,
     pub definition: ResolvedAgentDefinition,
     pub cwd: String,
     pub child: String,
@@ -59,7 +80,15 @@ impl DelegationStore {
             CREATE TABLE IF NOT EXISTS native_delegation_grants (
             owner_instance TEXT PRIMARY KEY, cwd TEXT NOT NULL, posture TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS native_delegation_revocations (agent_id TEXT PRIMARY KEY);")?;
-        Ok(Self { conn })
+        let (notify, receiver) = std::sync::mpsc::sync_channel(1);
+        let store = Self {
+            conn,
+            changes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            notify,
+            receiver: std::cell::RefCell::new(Some(receiver)),
+        };
+        store.initialize_lineage()?;
+        Ok(store)
     }
 
     #[cfg(test)]
@@ -99,21 +128,11 @@ impl DelegationStore {
     }
 
     pub fn insert(&self, task: &Task, request_id: &str, canonical: &[u8]) -> Result<(), String> {
-        let payload = serde_json::to_string(task).map_err(|error| error.to_string())?;
-        self.conn.execute("INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",
-            params![task.task_id, task.owner_instance, request_id, canonical, payload]).map_err(|error| error.to_string())?;
-        Ok(())
+        self.insert_projected(task, request_id, canonical)
     }
 
     pub fn save(&self, task: &Task) -> Result<(), String> {
-        let payload = serde_json::to_string(task).map_err(|error| error.to_string())?;
-        self.conn
-            .execute(
-                "UPDATE native_delegations SET payload=?2,owner_instance=?3 WHERE task_id=?1",
-                params![task.task_id, payload, task.owner_instance],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(())
+        self.save_projected(task)
     }
 
     pub fn get(&self, task_id: &str) -> Result<Option<Task>, String> {

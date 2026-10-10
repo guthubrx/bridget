@@ -14,6 +14,10 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+#[path = "../lineage_client.rs"]
+mod lineage;
+pub(crate) use lineage::human_lineage;
+
 pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
 pub(crate) fn deserialize_project_reason<'de, D: serde::Deserializer<'de>>(
@@ -919,6 +923,17 @@ pub(crate) struct DaemonConnection {
 }
 
 impl DaemonConnection {
+    pub(crate) fn read_stream(&self) -> &UnixStream { self.reader.get_ref() }
+
+    /// Flux déjà négocié : aucune échéance de tour, seulement un fragment borné.
+    pub(crate) fn read_stream_response(&mut self, max_bytes: usize) -> Result<DaemonToWrapper, ClientError> {
+        self.reader.get_ref().set_read_timeout(None).map_err(watch_output_error)?;
+        let line=bridget_transport::jsonl::read_unix_line(&mut self.reader,max_bytes,
+            bridget_transport::jsonl::LineDeadline::AfterFirstByte(Duration::from_secs(6)))
+            .map_err(watch_output_error)?.ok_or_else(watch_protocol_error)?;
+        serde_json::from_slice::<DaemonToWrapper>(&line).map_err(|_|watch_protocol_error())
+    }
+
     pub(crate) fn connect(socket: &Path) -> Result<Self, ClientError> {
         let deadline = Instant::now() + DAEMON_BUDGET;
         Self::connect_until(socket, deadline)

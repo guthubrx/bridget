@@ -402,6 +402,77 @@ pub(crate) struct NativeMissionBootstrap {
     pub mission_id: String,
 }
 
+// Seulement pour une mission native liée à l'instance de ce wrapper. Le
+// gestionnaire du signal ne fait qu'écrire un booléen ; le thread principal
+// ferme ensuite le transport qu'il possède, sans rechercher de PID externe.
+struct NativeTerminationSignal {
+    requested: Arc<AtomicBool>,
+    registration: signal_hook::SigId,
+}
+
+impl NativeTerminationSignal {
+    fn new() -> std::io::Result<Self> {
+        let requested = Arc::new(AtomicBool::new(false));
+        let registration = signal_hook::flag::register(libc::SIGTERM, requested.clone())?;
+        Ok(Self { requested, registration })
+    }
+
+    fn requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for NativeTerminationSignal {
+    fn drop(&mut self) {
+        signal_hook::low_level::unregister(self.registration);
+    }
+}
+
+// Codex publie --listen comme un alias vers son socket physique. Cet endpoint
+// fournisseur éphémère ne fait donc pas partie de l'état durable de Bridget.
+// Le wrapper conserve seul ce dossier, jusqu'à l'arrêt de SON serveur/TUI.
+struct CodexInteractiveEndpoint {
+    directory: PathBuf,
+    socket: PathBuf,
+    identity: (u64, u64),
+}
+
+impl CodexInteractiveEndpoint {
+    fn new() -> std::io::Result<Self> {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        // Chemin court pour SUN_LEN, indépendant d'un TMPDIR fourni au modèle.
+        let directory = std::fs::canonicalize("/tmp")?
+            .join(format!("bridget-codex-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        let metadata = std::fs::symlink_metadata(&directory)?;
+        let endpoint = Self {
+            socket: directory.join("s.sock"),
+            directory,
+            identity: (metadata.dev(), metadata.ino()),
+        };
+        crate::environment::validate_private_directory_if_present(&endpoint.directory)
+            .map_err(std::io::Error::other)?;
+        Ok(endpoint)
+    }
+}
+
+impl Drop for CodexInteractiveEndpoint {
+    fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        // Ne suivre ni retirer l'alias fournisseur. Le transport le retire
+        // après arrêt confirmé. Une erreur conserve l'endpoint pour diagnostic.
+        let absent = matches!(std::fs::symlink_metadata(&self.socket),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+        if absent && std::fs::symlink_metadata(&self.directory).is_ok_and(|metadata|
+            metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() }
+                && (metadata.dev(), metadata.ino()) == self.identity
+                && metadata.mode() & 0o077 == 0)
+        {
+            let _ = std::fs::remove_dir(&self.directory);
+        }
+    }
+}
+
 struct DeferredNativeMissionContext {
     mission_id: String,
     card: String,
@@ -2132,6 +2203,19 @@ pub fn launch(
     }
     final_args.extend(agent_args.iter().cloned());
 
+    let permission_observer=if mcp_enabled&&definition.protocol=="claude_stream_json" {
+        let mut owner_launch=definition.clone();owner_launch.command=agent_binary.into();
+        let emitter_writer=writer.clone();
+        crate::native_permission_observer::Observer::start(socket_path().parent().ok_or("socket sans racine")?,&owner_launch,&final_args,&instance_id,
+            Arc::new(move|message|send_wrapper_message(&emitter_writer,message))).map(Some).unwrap_or_else(|code|{
+                send_wrapper_message(&writer,WrapperToDaemon::NativePermissionFact{fact:None,request_id:None,observation_id:None,unavailable_code:Some(code)});None
+            })
+    }else{None};
+    let observer_acknowledgements=permission_observer.as_ref().map(|o|o.acknowledgement_sink());
+    if let Some(observer)=&permission_observer {
+        final_args.extend(["--settings".into(),observer.overlay().to_string_lossy().into_owned()]);
+    }
+
     // L'autorisation est déclarative : un type absent du registre est refusé
     // avant le spawn, avec les types disponibles et le fichier concerné.
     let _ = definition;
@@ -2152,6 +2236,7 @@ pub fn launch(
         .env("BRIDGET_AGENT_ID_FILE", &name_state_path)
         .env("BRIDGET_AGENT_DISPLAY_NAME", &my_display_name)
         .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id);
+    if let Some(profile)=&definition.claude_config_dir {command.env("CLAUDE_CONFIG_DIR",profile);}
     let spawned = if agent_type == "claude" {
         crate::claude_interactive::PtySession::spawn(command).map(InteractiveChild::Pty)
     } else {
@@ -2173,6 +2258,7 @@ pub fn launch(
     };
 
     let agent_pid = child.id();
+    if let Some(observer)=&permission_observer{observer.bind_provider(agent_pid)?;}
     // La voie de remise est fixée avant tout enregistrement de marqueur :
     // PTY possédé pour Claude, pane tmux attesté pour les autres types.
     let transport: Option<Box<dyn Transport>> = match &child {
@@ -2448,6 +2534,9 @@ pub fn launch(
             };
 
             match msg {
+                DaemonToWrapper::NativePermissionAcknowledged{observation_id,accepted}=>{
+                    if let Some(sink)=&observer_acknowledgements{crate::native_permission_observer::Observer::acknowledge(sink,observation_id,accepted);}
+                }
                 DaemonToWrapper::ProjectContextResult { .. } => {}
                 DaemonToWrapper::Deliver(bm) => {
                     info!(
@@ -2619,6 +2708,7 @@ pub fn launch(
 
     // 6. Attendre la fin de l'agent
     let status = child.wait()?;
+    drop(permission_observer);
     // `ephemeral_mcp_config` est libéré ici. Le garde RAII couvre également
     // toutes les sorties anticipées précédentes.
     drop(ephemeral_mcp_config);
@@ -3612,6 +3702,11 @@ fn spawn_managed_session_transport(
     instance_id: &str,
     socket: &Path,
 ) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
+    if let Some(policy)=std::env::var(crate::native_permissions::CHILD_POLICY_ENV).ok().map(|raw|serde_json::from_str::<serde_json::Value>(&raw)).transpose().map_err(|_|"permission_attestation_unavailable")? {
+        if let Some(context)=policy.get("launch_context"){
+            crate::native_permissions::recheck_context(context,definition,&std::env::current_dir()?,&crate::lifecycle::source_environment())?;
+        }
+    }
     match definition.protocol.as_str() {
         "acp" => {
             let options = AcpOptions {
@@ -3842,6 +3937,13 @@ fn launch_session_with_status(
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
     let definition = registry.get(agent_type)?;
+    let inherited_policy:Option<serde_json::Value>=std::env::var(crate::native_permissions::CHILD_POLICY_ENV).ok()
+        .map(|raw|serde_json::from_str(&raw)).transpose().map_err(|_|"permission_attestation_unavailable")?;
+    if let Some(policy)=&inherited_policy {
+        if let Some(context)=policy.get("launch_context") {
+            crate::native_permissions::recheck_context(context,definition,&std::env::current_dir()?,&crate::lifecycle::source_environment())?;
+        }
+    }
     if interactive.is_some() && definition.protocol != "codex_app_server" {
         return Err("Codex interactif requiert le pilote natif codex_app_server".into());
     }
@@ -3882,6 +3984,16 @@ fn launch_session_with_status(
         .as_ref()
         .map(|reporter| reporter.instance_id().to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let native_bootstrap = if managed_reporter.is_some() && interactive.is_none() {
+        std::env::var(NATIVE_MISSION_BOOTSTRAP_ENV).ok()
+            .and_then(|raw| serde_json::from_str::<NativeMissionBootstrap>(&raw).ok())
+            .filter(|bootstrap| bootstrap.instance_id == instance_id
+                && uuid::Uuid::parse_str(&bootstrap.mission_id).is_ok())
+    } else {
+        None
+    };
+    let native_termination = native_bootstrap.as_ref()
+        .map(|_| NativeTerminationSignal::new()).transpose()?;
     let name_state_path = instance_name_state_path(socket, &instance_id);
     if let Some(parent) = name_state_path.parent() {
         crate::environment::ensure_private_directory(parent)?;
@@ -3925,16 +4037,32 @@ fn launch_session_with_status(
     // application, managed-wrapper ignore permissions et n'injecte aucun
     // drapeau de contournement — la question d'autorisation arrive alors
     // alors que le réglage allow aurait dû l'éviter.
-    if interactive.is_none() {
+    if interactive.is_none() && inherited_policy.is_none() {
         apply_managed_permission_policy(
             definition.protocol.as_str(),
             definition.permissions.as_str(),
             &mut native_args,
         );
     }
+    // Capture the exact provider inputs before its first process is created.
+    let mut permission_launch=definition.clone();permission_launch.args=native_args.clone();
+    let permission_cwd=std::env::current_dir()?;
+    let permission_environment=crate::lifecycle::source_environment();
+    let captured_context=if definition.protocol=="claude_stream_json" {
+        crate::native_permissions::capture_context_with_env(&permission_launch,&permission_cwd,&permission_environment).map(Some)
+    }else{Ok(None)};
+    let mut native_launch_refusal=captured_context.as_ref().err().cloned();
+    let mut native_launch_context=captured_context.ok().flatten();
     let inherit_stderr = managed_reporter.is_some();
-    let codex_socket = state_root.join(format!("c-{}.sock", &instance_id[..12]));
+    let codex_endpoint = interactive.as_ref()
+        .map(|_| CodexInteractiveEndpoint::new()).transpose()?;
+    let codex_socket = codex_endpoint.as_ref()
+        .map(|endpoint| endpoint.socket.clone())
+        .unwrap_or_else(|| state_root.join(format!("c-{}.sock", &instance_id[..12])));
     let mut tui_binding = None;
+    if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {
+        return Err("mission native arrêtée avant le lancement du fournisseur".into());
+    }
     let mut transport: Box<dyn ManagedSession> = if let Some(launch) = interactive.as_mut() {
         let select = |threads: &[bridget_transport::codex_app_server::CodexThreadSummary]| {
             launch.select_thread(threads)
@@ -3988,6 +4116,11 @@ fn launch_session_with_status(
             socket,
         )?
     };
+    if native_launch_context.as_ref().is_some_and(|context|
+        crate::native_permissions::recheck_context_with_env(context,&permission_launch,&permission_cwd,&permission_environment).is_err()){
+        native_launch_context=None;
+        native_launch_refusal=Some("settings_revision_changed".into());
+    }
     let descriptor = transport.descriptor();
     let channel = connection_channel();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_with_domain_at(
@@ -4100,6 +4233,24 @@ fn launch_session_with_status(
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
     }
+    // Le retour thread/start ou thread/resume fournit déjà le fait effectif.
+    // Le publier avant la TUI : son prompt initial peut lancer une délégation.
+    let mut last_permission_fact = None;
+    if interactive.is_some() {
+        let observed = crate::native_permissions::observed_fact(
+            &instance_id, definition, native_launch_context.as_ref(), transport.as_ref(),
+        );
+        let observation = match observed {
+            Ok(fact) if native_launch_refusal.is_none() => (fact, None),
+            Ok(_) => (None, native_launch_refusal.clone()),
+            Err(code) => (None, Some(native_launch_refusal.clone().unwrap_or(code))),
+        };
+        send_wrapper_message(&writer, WrapperToDaemon::NativePermissionFact {
+            fact: observation.0.clone(), request_id: None, observation_id: None,
+            unavailable_code: observation.1.clone(),
+        });
+        last_permission_fact = Some(observation);
+    }
     // Après Register, identité durable et activation du journal : aucun
     // premier tour humain ne peut précéder l'abonnement Bridget au même fil.
     let bound_codex_thread = tui_binding.as_ref().map(|(thread_id, _)| thread_id.clone());
@@ -4141,6 +4292,15 @@ fn launch_session_with_status(
     let mut consecutive_fast_failures = 0_u32;
 
     loop {
+        if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {
+            break;
+        }
+        let observed=crate::native_permissions::observed_fact(&instance_id,definition,native_launch_context.as_ref(),transport.as_ref());
+        let observation=match observed{Ok(fact) if native_launch_refusal.is_none()=>(fact,None),Ok(_)=>(None,native_launch_refusal.clone()),Err(code)=>(None,Some(native_launch_refusal.clone().unwrap_or(code)))};
+        if last_permission_fact.as_ref()!=Some(&observation) {
+            send_wrapper_message(&writer,WrapperToDaemon::NativePermissionFact{fact:observation.0.clone(),request_id:None,observation_id:None,unavailable_code:observation.1.clone()});
+            last_permission_fact=Some(observation);
+        }
         if transport.is_alive()
             && consecutive_fast_failures > 0
             && last_provider_spawn.elapsed() >= Duration::from_secs(30)
@@ -4162,8 +4322,15 @@ fn launch_session_with_status(
             break;
         }
         let mut line = String::new();
-        match reader.read_line(&mut line) {
+        let read_result = reader.read_line(&mut line);
+        if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {
+            break;
+        }
+        match read_result {
             Ok(0) => {
+                if native_bootstrap.is_some() {
+                    break;
+                }
                 relay.reset_generation();
                 let Some((new_reader, registered_name)) = reconnect_managed_session(
                     socket,
@@ -4184,6 +4351,7 @@ fn launch_session_with_status(
                 };
                 reader = new_reader;
                 my_name = registered_name;
+                last_permission_fact=None;
                 last_heartbeat = Instant::now();
                 continue;
             }
@@ -4372,6 +4540,9 @@ fn launch_session_with_status(
             }
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
+                if native_bootstrap.is_some() {
+                    break;
+                }
                 relay.reset_generation();
                 let Some((new_reader, registered_name)) = reconnect_managed_session(
                     socket,
@@ -4392,6 +4563,7 @@ fn launch_session_with_status(
                 };
                 reader = new_reader;
                 my_name = registered_name;
+                last_permission_fact=None;
                 last_heartbeat = Instant::now();
                 continue;
             }
@@ -4412,7 +4584,11 @@ fn launch_session_with_status(
                 break;
             }
             let persistent_relaunch =
-                interactive.is_none() && std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some();
+                interactive.is_none()
+                    && std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some()
+                    // Une mission native ne change jamais de fournisseur
+                    // après un échec. La saga conserve son état terminal.
+                    && std::env::var_os(NATIVE_MISSION_BOOTSTRAP_ENV).is_none();
             if !persistent_relaunch {
                 break;
             }
@@ -4475,6 +4651,12 @@ fn launch_session_with_status(
             ) {
                 Ok(new_transport) => {
                     transport = new_transport;
+                    last_permission_fact=None;
+                    if native_launch_context.as_ref().is_some_and(|context|
+                        crate::native_permissions::recheck_context_with_env(context,&permission_launch,&permission_cwd,&permission_environment).is_err()){
+                        native_launch_context=None;
+                        native_launch_refusal=Some("settings_revision_changed".into());
+                    }
                     let adapter_pid = transport.process_id();
                     match crate::managed_process::process_birth(adapter_pid) {
                         Ok(birth) => {
@@ -4546,6 +4728,11 @@ fn launch_session_with_status(
             }
         }
     }
+    // Le fournisseur natif ne doit pas rester actif pendant le drain du
+    // relais, ni se reconnecter à un daemon qui a déjà déclaré sa mission perdue.
+    if let Some(bootstrap) = native_bootstrap.as_ref() {
+        transport.stop_native_mission(&bootstrap.mission_id);
+    }
     relay.shutdown();
     let tui_result = native_tui
         .as_ref()
@@ -4571,7 +4758,14 @@ fn launch_session_with_status(
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
     // Le pilote garde sa socket si la disparition de son groupe n'est pas
     // confirmée. Ne pas transformer ce diagnostic de récupération en exit 0.
-    if interactive.is_some() && codex_socket.try_exists().map_err(|e| e.to_string())? {
+    let codex_endpoint_retained = if interactive.is_some() {
+        match std::fs::symlink_metadata(&codex_socket) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error.into()),
+        }
+    } else { false };
+    if codex_endpoint_retained {
         return Err(format!(
             "nettoyage du serveur Codex non confirmé ; socket conservée : {}",
             codex_socket.display()
@@ -4736,7 +4930,11 @@ fn apply_managed_mcp(
                 "--mcp-config".to_string(),
                 config.path().display().to_string(),
             ]);
-            append_claude_allowed_tools(args);
+            // Les droits d'un enfant149 sont déjà figés. Le montage MCP
+            // ne lui ajoute aucune règle d'approbation absente du parent.
+            if std::env::var_os(crate::native_permissions::CHILD_POLICY_ENV).is_none() {
+                append_claude_allowed_tools(args);
+            }
             Ok(Some(config))
         }
         // Le pilote app-server relit bien les serveurs déclarés dans la

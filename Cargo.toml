@@ -19,4 +19,4 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["asm"] }

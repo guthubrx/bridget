@@ -1,0 +1,14 @@
+(node:46030) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:46079) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS T3out.1 [REEL] pendant la panne de T3 (SIGTERM du serveur) : lecture (liste) servie, annulation native de la tâche en attente (cancelled, PID enfant terminé), la tâche lente va à son terme et son résultat est remis UNE fois, lecture du résultat servie
+PASS T3out.2 [REEL] ZÉRO tour T3 provoqué par ces effets : l'espion du pair Codex de T3 ne voit AUCUN nouveau `turn/start`, `thread/start` ni nouveau processus (compteurs identiques avant/pendant la panne, T3 étant arrêté) ; aucune tâche Bridget n'a créé de run T3
+PASS T3out.3 [REEL] montage MCP de T3 fermé pendant la panne (status et nouvelle admission : t3_session_unavailable), aucun lancement pour la nouvelle requête
+(node:47170) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:47208) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS T3out.4 [REEL] T3 revenu : la lecture Lineage servie par T3 montre la tâche annulée et la tâche terminée ; aucun nouveau lancement ni tour côté Bridget (prompts inchangés)
+PASS T3out.5 [OBS] OBSERVATION (ni PASS ni FAIL) : trames du pair Codex de T3 vues après le redémarrage de T3 (reprise propre de T3, indépendante de Bridget)
+{"summary":{"title":"Panne T3 après admission : zéro tour T3 (r3)","pass":5,"fail":0,"total":5},"residualProcesses":0}

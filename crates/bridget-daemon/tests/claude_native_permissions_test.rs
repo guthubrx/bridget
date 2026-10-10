@@ -393,6 +393,11 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         "bridget_journal",
         "bridget_thread",
         "bridget_handoff",
+        // Session148 : outils natifs de délégation (commit 347d7885).
+        "bridget_capabilities",
+        "bridget_delegate",
+        "bridget_task_status",
+        "bridget_task_cancel",
     ]
     .map(|name| format!("mcp__bridget__{name}"))
     .into_iter()

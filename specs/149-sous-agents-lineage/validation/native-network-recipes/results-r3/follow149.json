@@ -1,0 +1,215 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:36:37.966Z",
+ "finishedAt": "2026-10-10T17:37:09.697Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "O5/G8 journal --follow (r3)",
+  "pass": 7,
+  "fail": 0,
+  "total": 7
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.oW70bO",
+  "daemonPid": 44559,
+  "f1": {
+   "lines": 17,
+   "linesWithEvents": 16,
+   "events": 16,
+   "firstSeq": 1,
+   "lastSeq": 16,
+   "arrivalSpanMs": 8067,
+   "caughtUp": 13,
+   "gaps": [],
+   "midSnapshot": {
+    "lines": 17,
+    "events": 16,
+    "last": 16
+   },
+   "kinds": [
+    "turn_start",
+    "prompt_dispatched",
+    "update"
+   ],
+   "sample": [
+    [
+     "event",
+     "message_id",
+     "payload",
+     "seq",
+     "session_id",
+     "ts",
+     "v"
+    ],
+    [
+     "event",
+     "message_id",
+     "payload",
+     "seq",
+     "session_id",
+     "ts",
+     "v"
+    ],
+    [
+     "event",
+     "message_id",
+     "payload",
+     "seq",
+     "session_id",
+     "ts",
+     "v"
+    ]
+   ]
+  },
+  "resources": {
+   "baseline": {
+    "fds": 30,
+    "threads": 8,
+    "processes": 2
+   },
+   "duringOpen": {
+    "fds": 40,
+    "threads": 12,
+    "processes": 2
+   },
+   "afterClose": {
+    "fds": 30,
+    "threads": 8,
+    "processes": 2
+   },
+   "stop1": "stopped_by_sigterm",
+   "stop2": "stopped_by_sigterm"
+  },
+  "f3": {
+   "cancelErr": false,
+   "events": 16,
+   "exited": 2,
+   "lastLine": {
+    "status": "error",
+    "code": "journal_unavailable"
+   }
+  },
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "F1",
+   "layer": "REEL",
+   "description": "suivi réel : les événements arrivent avec `seq` strictement croissant, CONTIGU, sans doublon ; `next_seq` ne régresse jamais ; aucune lacune annoncée ; au moins un `caught_up` ; les appends arrivent en DIRECT (plusieurs lignes étalées sur plus de 3 s)",
+   "pass": true,
+   "observed": {
+    "events": 16,
+    "strictlyIncreasing": true,
+    "contiguous": true,
+    "noDup": true,
+    "nextMono": true,
+    "gaps": 0,
+    "caughtUp": 13,
+    "linesWithEvents": 16,
+    "arrivalSpanMs": 8067,
+    "first": 1,
+    "last": 16
+   }
+  },
+  {
+   "id": "F2",
+   "layer": "REEL",
+   "description": "égalité : les `seq` reçus en direct sont EXACTEMENT ceux de la lecture ponctuelle (non-follow) de la même tâche, sans perte ni ajout",
+   "pass": true,
+   "observed": {
+    "followed": 16,
+    "oneShot": 16,
+    "firstOneShot": 1,
+    "lastOneShot": 16
+   }
+  },
+  {
+   "id": "F3",
+   "layer": "REEL",
+   "description": "reprise `--after-seq K` : le 2e suivi ne rend que des `seq` > K, sans doublon ni trou, et couvre exactement la suite connue de la lecture ponctuelle",
+   "pass": true,
+   "observed": {
+    "K": 9,
+    "resumed": 7,
+    "expected": 7,
+    "first": 10,
+    "last": 16
+   }
+  },
+  {
+   "id": "F4",
+   "layer": "REEL",
+   "description": "humains silencieux : pendant tout le suivi (deux suivis, ~20 s), le parent ne reçoit AUCUNE remise, la tâche reste `working` (lecture sans effet de bord), aucun nouveau lancement",
+   "pass": true,
+   "observed": {
+    "deliveriesBefore": 0,
+    "deliveriesDuring": 0,
+    "state": "working",
+    "starts": 1
+   }
+  },
+  {
+   "id": "F5",
+   "layer": "REEL",
+   "description": "fermeture : après l'arrêt des deux suivis (SIGTERM individuel vérifié), les descripteurs ouverts, threads et processus du daemon reviennent au niveau de base (tolérance 0 descripteur, 0 processus) ; en cours de suivi, ils avaient augmenté",
+   "pass": true,
+   "observed": {
+    "baseline": {
+     "fds": 30,
+     "threads": 8,
+     "processes": 2
+    },
+    "duringOpen": {
+     "fds": 40,
+     "threads": 12,
+     "processes": 2
+    },
+    "afterClose": {
+     "fds": 30,
+     "threads": 8,
+     "processes": 2
+    }
+   }
+  },
+  {
+   "id": "F6",
+   "layer": "REEL",
+   "description": "à la fin de vie de la tâche (cancel), un suivi ouvert reçoit des `seq` contigus sans doublon et ne laisse aucune ressource : après son arrêt, descripteurs/processus au niveau de base",
+   "pass": true,
+   "observed": {
+    "events": 16,
+    "exited": 2,
+    "cancelErr": false
+   }
+  },
+  {
+   "id": "F7",
+   "layer": "REEL",
+   "description": "après annulation et arrêt du dernier suivi : plus aucun processus de fixture hors daemon, descripteurs revenus au niveau de base ou en dessous",
+   "pass": true,
+   "observed": {
+    "baseline": {
+     "fds": 30,
+     "threads": 8,
+     "processes": 2
+    },
+    "finalRes": {
+     "fds": 27,
+     "threads": 7,
+     "processes": 0
+    }
+   }
+  }
+ ],
+ "residualProcesses": []
+}

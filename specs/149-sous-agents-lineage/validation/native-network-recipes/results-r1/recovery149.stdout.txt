@@ -1,0 +1,26 @@
+PASS R1.1 [REEL] retry : 20 rejeux (10 en vol, 10 après la fin) -> même task_id, même enfant, même message_id ; 1 lancement, 1 tour, 1 remise corrélée
+PASS R1.2 [REEL] même request_id avec une autre enveloppe -> envelope_mismatch, aucune mutation, aucun lancement
+PASS R1.3 [REEL] Lineage montre un seul enfant pour ce request_id (pas de doublon)
+PASS R7.1 [REEL] nested actif : le tour de l'enfant est fini mais la racine n'expose ni statut result_available ni résultat tant que le petit-enfant travaille ; aucune remise au parent
+PASS R7.2 [REEL] la lignée est durable : parent_task_id et propriétaire racine stables (la racine appartient à A, le petit-enfant à l'enfant)
+PASS R7.3 [REEL] quand le petit-enfant a fini : la racine devient result_available, UNE seule remise corrélée à A ; le résultat du petit-enfant n'est pas remis à A
+PASS R2.1 [REEL] un autre fil (B) ne peut ni annuler ni lire la tâche de A : task_unavailable, tâche et processus inchangés
+PASS R2.2 [REEL] cancel de la racine : racine + descendant actif cancelled, PID des deux enfants réellement terminés, zéro fournisseur résiduel, aucune remise de résultat
+PASS R2.3 [REEL] cancel rejoué : idempotent (même état cancelled, aucune erreur, aucun nouveau lancement)
+PASS R4.1 [REEL] identité inconnue : token forgé, absence totale d'identité, fil sans binding -> refus explicites ; aucune identité voisine empruntée, aucune ligne, aucun lancement
+PASS R3.1 [REEL] parent extérieur : le fil B voit zéro tâche de A (liste, show), compteurs et base inchangés
+PASS R5.1 [REEL] refus fournisseur : tâche failed avec erreur explicite, 1 seul lancement, 1 seul tour (pas de reprise ni de substitution de modèle/fournisseur), 1 notification d'échec, Lineage failed
+PASS R5.2 [REEL] le rejeu de la requête refusée rend l'échec mémorisé sans nouveau lancement
+PASS R5.3 [REEL] modèle ou fournisseur absent du registre : refus nommé à l'admission, aucun lancement, aucune substitution
+PASS R8.1 [REEL] droits réduits (parent devient readOnly) : le rejeu de l'ancienne requête rend la même tâche et le même résultat, sans nouveau lancement ; son snapshot reste dangerFullAccess
+PASS R8.2 [REEL] droits réduits : une NOUVELLE requête development est refusée (permission_not_inherited) avant tout lancement ; une requête héritée reçoit le sandbox readOnly (jamais l'ancien full-access)
+PASS R8.3 [REEL] fait retiré, puis session tournée : aucun rejeu n'entraîne de lancement ni de nouvelle remise ; l'ancien credential est refusé ; sans fait (v1) la lecture/le rejeu de l'identité 148 ne relance rien
+PASS R6.1 [REEL] T3 en panne après admission : la mission admise (enfant déjà lancé) va à son terme sans T3, résultat remis UNE fois à A, PID enfant sans relance
+PASS R6.2 [REEL] T3 en panne : l'annulation reste native (CLI Lineage) -> tâche cancelled et PID de l'enfant réellement terminé ; la lecture native reste servie
+PASS R6.3 [REEL] T3 en panne : le montage MCP T3 est fermé (status et nouvelle admission refusés t3_session_unavailable), zéro ligne et zéro lancement ajoutés, aucun repli PID
+PASS R6.4 [REEL] T3 revenu : l'ancien credential reste refusé (registre perdu) ; avec un credential neuf + fait, le rejeu de la requête admise avant la panne rend la MÊME tâche, sans relance
+PASS R9.1 [REEL] reprise du daemon, missions terminées : mêmes task_id/child/message, mêmes états (result_available, cancelled, failed), aucun nouveau lancement, aucun fournisseur survivant à l'arrêt
+PASS R9.1b [REEL] reprise du daemon : aucune remise déjà accusée (ACK) n'est rejouée au parent reconnecté
+FAIL R9.2 [REEL] mission EN VOL coupée par l'arrêt du daemon : l'état est explicite (failed + erreur) ET la mission n'est pas exécutée une seconde fois par un enfant relancé (1 seul tour portant la mission)
+     observé: {"taskState":"failed","error":"unreachable","missionPrompts":2,"distinctProviderPids":2,"startsBefore":12,"startsAfter":13,"parentNotices":1}
+{"summary":{"title":"T039 scénarios dégradés 149","pass":23,"fail":1,"total":24},"residualProcesses":0}

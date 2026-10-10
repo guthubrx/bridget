@@ -222,6 +222,7 @@ impl CodexActKind {
 }
 
 struct ReaderContext {
+    permission_observation:Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,
     cwd: String,
     waiters: Waiters,
     observations: Arc<(Mutex<Observations>, Condvar)>,
@@ -254,6 +255,7 @@ fn sandbox_posture_from_args(args: &[String]) -> &'static str {
 }
 
 pub struct CodexAppServerTransport {
+    permission_observation:Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,
     connection_id: String,
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
@@ -339,10 +341,13 @@ impl CodexAppServerTransport {
             ));
         }
         let mut command = Command::new(&options.command);
+        crate::protocol::recheck_frozen_inputs(&options.command,environment).map_err(TransportError::DeliveryFailed)?;
         validate_endpoint_bootstrap(&options, interactive_socket.is_some())?;
         command
             .args(&options.args)
             .envs(environment.iter().cloned())
+            .env_remove("BRIDGET_NATIVE_CHILD_POLICY")
+            .env_remove("BRIDGET_NATIVE_PERMISSION_SOURCES")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(if inherit_stderr {
@@ -430,9 +435,11 @@ impl CodexAppServerTransport {
         ));
         let pending_request = Arc::new(Mutex::new(None));
         let selected_thread = Arc::new(Mutex::new(None));
+        let permission_observation=Arc::new(Mutex::new(None));
         let reader_handle = spawn_reader(
             lines,
             ReaderContext {
+                permission_observation:permission_observation.clone(),
                 cwd: std::env::current_dir()
                     .ok()
                     .and_then(|p| p.into_os_string().into_string().ok())
@@ -590,6 +597,7 @@ impl CodexAppServerTransport {
                         "thread/start Codex ne retourne pas thread.id".to_string(),
                     )
                 })?;
+            observe_native_permissions(&permission_observation,&thread_id,&thread.value);
             if matches!(&options.thread_bootstrap,
                 CodexThreadBootstrap::Resume { thread_id: requested } if requested != &thread_id)
             {
@@ -636,6 +644,7 @@ impl CodexAppServerTransport {
         let child = Arc::new(Mutex::new(child));
         let busy = Arc::new(AtomicBool::new(false));
         let worker_handle = spawn_worker(Worker {
+            native_policy:std::env::var("BRIDGET_NATIVE_CHILD_POLICY").ok().and_then(|raw|serde_json::from_str(&raw).ok()),
             queue: queue.clone(),
             writer: writer.clone(),
             waiters: waiters.clone(),
@@ -670,6 +679,7 @@ impl CodexAppServerTransport {
             },
         );
         Ok(Self {
+            permission_observation,
             connection_id: format!("codex-app-server-{pid}"),
             alive,
             shutdown_started: AtomicBool::new(false),
@@ -917,6 +927,7 @@ impl Transport for CodexAppServerTransport {
 }
 
 impl ManagedSession for CodexAppServerTransport {
+    fn provider_permissions(&self)->Option<(String,Value,u64,Option<String>)>{self.permission_observation.lock().unwrap_or_else(|e|e.into_inner()).clone()}
     fn select_runtime(
         &mut self,
         selection: crate::protocol::RuntimeSelection,
@@ -1103,6 +1114,30 @@ impl ManagedSession for CodexAppServerTransport {
         self.shutdown();
     }
 
+    fn stop_native_mission(&self, message_id: &str) {
+        // cancel_delivery passe par le worker. shutdown ferme son alive avant
+        // qu'il puisse lire ce canal : l'arrêt natif interrompt donc le tour
+        // exact directement, tant que le writer fournisseur est encore ouvert.
+        let turn = self.active_detail.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().filter(|detail| detail.message_id == message_id)
+            .and_then(|detail| detail.turn_id.clone()
+                .map(|turn| (detail.thread_id.clone(), turn)));
+        // Fermer l'admission avant le contrôle fournisseur : sa réponse ne
+        // doit pas permettre au worker de prendre une nouvelle remise.
+        self.alive.store(false, Ordering::SeqCst);
+        let (queue, wake) = &*self.queue;
+        queue.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        wake.notify_all();
+        if let Some((thread_id, turn_id)) = turn {
+            let _ = request_with_timeout(
+                &self.writer, &self.waiters, &self.next_id,
+                "turn/interrupt", json!({"threadId": thread_id, "turnId": turn_id}),
+                INTERRUPT_REQUEST_TIMEOUT,
+            );
+        }
+        self.shutdown();
+    }
+
     fn is_busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
             || self
@@ -1116,6 +1151,7 @@ impl ManagedSession for CodexAppServerTransport {
 }
 
 struct Worker {
+    native_policy:Option<Value>,
     interactive: bool,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     writer: Writer,
@@ -1327,11 +1363,17 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     // L'enveloppe est une projection fournisseur ; le corps durable reste intact.
     let body = communication_prompt(message, worker.interactive);
     let prompt = private_prompt(instructions.as_deref(), &body);
-    let params = json!({
+    let mut params = json!({
         "threadId": worker.thread_id,
         "clientUserMessageId": message.id,
         "input": [{ "type": "text", "text": &prompt }],
     });
+    if let Some(policy)=&worker.native_policy {
+        params["approvalPolicy"]=policy["approval_policy"].clone();
+        params["approvalsReviewer"]=policy["approvals_reviewer"].clone();
+        params["sandboxPolicy"]=policy["sandbox_policy"].clone();
+        params["cwd"]=json!(std::env::current_dir().map_err(|_|"cwd_unavailable")?);
+    }
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -1357,6 +1399,26 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
         }
     }
     Err("saturation Codex persistante".to_string())
+}
+
+fn observe_native_permissions(observation:&Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,session:&str,value:&Value){
+    let mut observed=observation.lock().unwrap_or_else(|e|e.into_inner());
+    let previous=observed.as_ref().filter(|o|o.0==session);
+    let mut policy=previous.map(|o|o.1.clone()).unwrap_or_else(||json!({"kind":"codex"}));
+    for (field,source) in [("approval_policy","approvalPolicy"),("approvals_reviewer","approvalsReviewer"),("sandbox_policy","sandboxPolicy")]{
+        if let Some(value)=value.get(source).or_else(||if source=="sandboxPolicy"{value.get("sandbox")}else{None}){
+            policy[field]=value.clone();
+        }
+    }
+    let cwd=match value.get("cwd"){
+        Some(value)=>value.as_str().map(str::to_owned),
+        None=>previous.and_then(|o|o.3.clone()),
+    };
+    let complete=["approval_policy","approvals_reviewer","sandbox_policy"].iter().all(|k|policy.get(*k).is_some());
+    if complete {
+        let revision=previous.map(|o|o.2.saturating_add(u64::from(o.1!=policy||o.3!=cwd))).unwrap_or(1);
+        *observed=Some((session.into(),policy,revision,cwd));
+    }
 }
 
 fn wait_for_turn(
@@ -2635,6 +2697,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
 
 fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandle<()> {
     let ReaderContext {
+        permission_observation,
         cwd,
         waiters,
         observations,
@@ -2798,6 +2861,13 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .clone();
+                    if let Some(thread_id)=selected.as_deref(){
+                        if value.pointer("/params/threadId").and_then(Value::as_str)==Some(thread_id){
+                            if let Some(settings)=value.pointer("/params/threadSettings"){
+                                observe_native_permissions(&permission_observation,thread_id,settings);
+                            }
+                        }
+                    }
                     if value.pointer("/params/threadId").and_then(Value::as_str)
                         == selected.as_deref()
                         && let Some(model) = value
@@ -3783,6 +3853,7 @@ mod tests {
                 sandbox_posture: "complete",
                 interactive: true,
                 selected_thread: Arc::new(Mutex::new(Some("thread".into()))),
+                permission_observation: Arc::new(Mutex::new(None)),
             },
         );
         let serial = AtomicU64::new(0);
@@ -4087,6 +4158,7 @@ mod tests {
                 sandbox_posture: "complete",
                 interactive: true,
                 selected_thread: Arc::new(Mutex::new(Some("parent-thread".into()))),
+                permission_observation: Arc::new(Mutex::new(None)),
             },
         );
         let send_and_wait = |raw: &str| {

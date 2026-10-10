@@ -1,0 +1,169 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:37:20.807Z",
+ "finishedAt": "2026-10-10T17:37:48.526Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "Panne T3 après admission : zéro tour T3 (r3)",
+  "pass": 5,
+  "fail": 0,
+  "total": 5
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.iMCVbj",
+  "daemonPid": 45919,
+  "before": {
+   "frames": {
+    "turnStart": 1,
+    "threadStart": 1,
+    "spawns": 2
+   },
+   "runs": 1,
+   "sessions": 1,
+   "admitted": [
+    "queued",
+    "queued"
+   ]
+  },
+  "t3Stop": "stopped_by_sigterm",
+  "during": {
+   "list": [
+    [
+     "74954ee5",
+     "working"
+    ],
+    [
+     "c612e8e8",
+     "working"
+    ]
+   ],
+   "cancel": {
+    "status": "cancelling",
+    "task_id": "c612e8e8-b187-46b9-a6aa-a27b862b2c48",
+    "version": 1
+   },
+   "cancelledState": "cancelled",
+   "slowState": "result_available",
+   "deliveries": 1,
+   "showResult": "fixture149-answer:o2",
+   "frames": {
+    "turnStart": 1,
+    "threadStart": 1,
+    "spawns": 2
+   }
+  },
+  "back": {
+   "framesBack": {
+    "turnStart": 1,
+    "threadStart": 1,
+    "spawns": 3
+   },
+   "lineage": [
+    [
+     "74954ee5",
+     "result_available"
+    ],
+    [
+     "c612e8e8",
+     "cancelled"
+    ]
+   ],
+   "t3SelfRecovery": "turn/start vus après le redémarrage de T3 = comportement propre de T3, pas un effet Bridget"
+  },
+  "t3StopFinal": "stopped_by_sigterm",
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "T3out.1",
+   "layer": "REEL",
+   "description": "pendant la panne de T3 (SIGTERM du serveur) : lecture (liste) servie, annulation native de la tâche en attente (cancelled, PID enfant terminé), la tâche lente va à son terme et son résultat est remis UNE fois, lecture du résultat servie",
+   "pass": true,
+   "observed": {
+    "t3Stop": "stopped_by_sigterm",
+    "listed": true,
+    "cancelCode": 0,
+    "cancelled": "cancelled",
+    "waitPidAlive": false,
+    "slow": "result_available",
+    "deliveries": 1,
+    "result": "fixture149-answer:o2"
+   }
+  },
+  {
+   "id": "T3out.2",
+   "layer": "REEL",
+   "description": "ZÉRO tour T3 provoqué par ces effets : l'espion du pair Codex de T3 ne voit AUCUN nouveau `turn/start`, `thread/start` ni nouveau processus (compteurs identiques avant/pendant la panne, T3 étant arrêté) ; aucune tâche Bridget n'a créé de run T3",
+   "pass": true,
+   "observed": {
+    "before": {
+     "turnStart": 1,
+     "threadStart": 1,
+     "spawns": 2
+    },
+    "during": {
+     "turnStart": 1,
+     "threadStart": 1,
+     "spawns": 2
+    }
+   }
+  },
+  {
+   "id": "T3out.3",
+   "layer": "REEL",
+   "description": "montage MCP de T3 fermé pendant la panne (status et nouvelle admission : t3_session_unavailable), aucun lancement pour la nouvelle requête",
+   "pass": true,
+   "observed": {
+    "status": "t3_session_unavailable",
+    "delegate": "t3_session_unavailable"
+   }
+  },
+  {
+   "id": "T3out.4",
+   "layer": "REEL",
+   "description": "T3 revenu : la lecture Lineage servie par T3 montre la tâche annulée et la tâche terminée ; aucun nouveau lancement ni tour côté Bridget (prompts inchangés)",
+   "pass": true,
+   "observed": {
+    "statuses": [
+     "result_available",
+     "cancelled"
+    ],
+    "promptsUnchanged": true
+   }
+  },
+  {
+   "id": "T3out.5",
+   "layer": "OBS",
+   "description": "OBSERVATION (ni PASS ni FAIL) : trames du pair Codex de T3 vues après le redémarrage de T3 (reprise propre de T3, indépendante de Bridget)",
+   "pass": true,
+   "observed": {
+    "before": {
+     "turnStart": 1,
+     "threadStart": 1,
+     "spawns": 2
+    },
+    "during": {
+     "turnStart": 1,
+     "threadStart": 1,
+     "spawns": 2
+    },
+    "afterT3Restart": {
+     "turnStart": 1,
+     "threadStart": 1,
+     "spawns": 3
+    }
+   }
+  }
+ ],
+ "residualProcesses": []
+}

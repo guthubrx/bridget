@@ -23,6 +23,9 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "cli_lineage.rs"]
+mod lineage;
+
 /// Fonction générique pour lancer un agent wrapper (M-001)
 fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
     let (name, rest) = extract_wrapper_args(args);
@@ -151,6 +154,17 @@ pub fn run() {
     }
 
     let cmd = &args[1];
+    if cmd=="__native-permission-observer" {
+        if let Err(code)=crate::native_permission_observer::hook(&args[2..]) {
+            println!("{}",serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":code}}));
+        }
+        return;
+    }
+
+    if cmd == "lineage" {
+        lineage::run(&args[2..]);
+        return;
+    }
 
     // Voie humaine froide : avant création d'état, registre et identité.
     if cmd == "thread" && args.get(2).is_some_and(|arg| arg == "watch") {

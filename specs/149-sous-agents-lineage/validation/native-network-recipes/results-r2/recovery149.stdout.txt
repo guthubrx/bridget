@@ -1,0 +1,44 @@
+PASS R1.1 [REEL] retry : 20 rejeux (10 en vol, 10 après la fin) -> même task_id, même enfant, même message_id ; 1 lancement, 1 tour, 1 remise corrélée
+PASS R1.2 [REEL] même request_id avec une autre enveloppe -> envelope_mismatch, aucune mutation, aucun lancement
+PASS R1.3 [REEL] Lineage montre un seul enfant pour ce request_id (pas de doublon)
+PASS R7.1 [REEL] nested actif : le tour de l'enfant est fini mais la racine n'expose ni statut result_available ni résultat tant que le petit-enfant travaille ; aucune remise au parent
+PASS R7.2 [REEL] la lignée est durable : parent_task_id et propriétaire racine stables (la racine appartient à A, le petit-enfant à l'enfant)
+PASS R7.3 [REEL] quand le petit-enfant a fini : la racine devient result_available, UNE seule remise corrélée à A ; le résultat du petit-enfant n'est pas remis à A
+PASS R2.1 [REEL] un autre fil (B) ne peut ni annuler ni lire la tâche de A : task_unavailable, tâche et processus inchangés
+PASS R2.2 [REEL] cancel de la racine : racine + descendant actif cancelled, PID des deux enfants réellement terminés, zéro fournisseur résiduel, aucune remise de résultat
+PASS R2.3 [REEL] cancel rejoué : idempotent (même état cancelled, aucune erreur, aucun nouveau lancement)
+[16:39:40.929] WARN (#869): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+[16:39:40.939] WARN (#870): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+PASS R4.1 [REEL] identité inconnue : token forgé, absence totale d'identité, fil sans binding -> refus explicites ; aucune identité voisine empruntée, aucune ligne, aucun lancement
+PASS R3.1 [REEL] parent extérieur : le fil B voit zéro tâche de A (liste, show), compteurs et base inchangés
+PASS R5.1 [REEL] refus fournisseur : tâche failed avec erreur explicite, 1 seul lancement, 1 seul tour (pas de reprise ni de substitution de modèle/fournisseur), 1 notification d'échec, Lineage failed
+PASS R5.2 [REEL] le rejeu de la requête refusée rend l'échec mémorisé sans nouveau lancement
+PASS R5.3 [REEL] modèle ou fournisseur absent du registre : refus nommé à l'admission, aucun lancement, aucune substitution
+PASS R8.1 [REEL] droits réduits (parent devient readOnly) : le rejeu de l'ancienne requête rend la même tâche et le même résultat, sans nouveau lancement ; son snapshot reste dangerFullAccess
+PASS R8.2 [REEL] droits réduits : une NOUVELLE requête development est refusée (permission_not_inherited) avant tout lancement ; une requête héritée reçoit le sandbox readOnly (jamais l'ancien full-access)
+[16:39:55.211] WARN (#1139): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+PASS R8.3 [REEL] fait retiré, puis session tournée : aucun rejeu n'entraîne de lancement ni de nouvelle remise ; l'ancien credential est refusé ; sans fait (v1) la lecture/le rejeu de l'identité 148 ne relance rien
+PASS R8.4 [REEL] O1 (comportement exact, G-P-07(b)) : fait retiré puis session tournée - (1) le montage MCP privé de l'ancien credential est fermé EN BLOC (rejeu, status ET identité : t3_session_unavailable, jamais v1) ; (2) un credential neuf qui n'a jamais eu de fait reçoit v1 et lit/rejoue la tâche admise (148) ; (3) la lecture humaine Lineage native (gardes147) lit la tâche admise, résultat intact
+PASS R6.1 [REEL] T3 en panne après admission : la mission admise (enfant déjà lancé) va à son terme sans T3, résultat remis UNE fois à A, PID enfant sans relance
+PASS R6.2 [REEL] T3 en panne : l'annulation reste native (CLI Lineage) -> tâche cancelled et PID de l'enfant réellement terminé ; la lecture native reste servie
+PASS R6.3 [REEL] T3 en panne : le montage MCP T3 est fermé (status et nouvelle admission refusés t3_session_unavailable), zéro ligne et zéro lancement ajoutés, aucun repli PID
+[16:40:04.498] WARN (#1335): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+PASS R6.4 [REEL] T3 revenu : l'ancien credential reste refusé (registre perdu) ; avec un credential neuf + fait, le rejeu de la requête admise avant la panne rend la MÊME tâche, sans relance
+PASS R9.1 [REEL] reprise du daemon, missions terminées : mêmes task_id/child/message, mêmes états (result_available, cancelled, failed), aucun nouveau lancement, aucun fournisseur survivant à l'arrêt
+PASS R9.1b [REEL] reprise du daemon : aucune remise déjà accusée (ACK) n'est rejouée au parent reconnecté
+PASS R9.2.a [REEL] mission EN VOL, vrai SIGTERM du daemon puis relance : la tâche est failed/unreachable DÈS le démarrage (avant la reconnexion du parent), sans attente de 2 s ni reprise
+PASS R9.2.b [REEL] la mission n'est portée que par UN tour et UN PID : 1 prompt NONCE_i1, 1 PID distinct (celui d'avant la coupure, mort), aucun fournisseur vivant à 7 s ni à 15 s (un survivant immédiat est tracé dans survivorsAfterDaemonStop)
+PASS R9.2.c [REEL] starts avant = après : aucun nouvel enfant (compteur de lancements fournisseur inchangé à t0, 7 s et 15 s) ; aucun événement started/prompt après la relance
+PASS R9.2.d [REEL] UNE notice d'échec failed/unreachable remise au parent reconnecté (pas de résultat, pas de rejeu), état final failed + erreur explicite
+PASS R9.2.e [REEL] le rejeu de la requête interrompue rend la MÊME tâche failed, sans nouveau lancement (pas de substitution silencieuse)
+PASS R9.3 [REEL] admission coupée par SIGTERM avant toute mission (état durable `starting`, 0 prompt) : après relance la tâche est failed/unreachable, 0 mission envoyée (0 prompt), 0 enfant relancé, 1 notice d'échec ; `queued` seul n'a pas pu être exposé en réel
+PASS R9.4 [REEL] racine en attente de son petit-enfant, vrai SIGTERM + relance : l'attente de la racine reste durable (waiting_for_children), le petit-enfant en vol devient failed/unreachable, AUCUN nouvel enfant ni nouveau tour (m1 et m1g : 1 prompt chacun)
+FAIL R9.4.b [REEL] OBSERVATION : la racine retenue (résultat déjà capturé) sort de waiting_for_children (result_available ou failed) dans les 40 s après relance, une fois son seul descendant failed/unreachable ; sinon le parent n'a ni résultat ni échec
+     observé: {"waitedMs":40062,"rawState":"waiting_for_children","hasRetainedResult":true,"resultSent":false,"mcpStatus":"waiting_for_children","mcpResultPresent":false,"lineageStatus":"ok","noticesToParent":0}
+PASS R9.4.c [SIMULE] DIAGNOSTIC (mutation de la base privée) : cause prouvée - quand l'exécution `running` du petit-enfant mort passe à failed, la racine quitte waiting_for_children (result_available, résultat retenu intact) ; c'est donc l'exécution laissée `running` par la relance qui bloque l'attente
+FAIL R9.4.d [SIMULE] DIAGNOSTIC : une fois la racine débloquée, son résultat retenu est remis UNE fois au parent (result_sent vrai, 1 remise corrélée)
+     observé: {"resultSentFlag":false,"stateAfter4s":"result_available","rootState":"result_available","rootResult":"fixture149-answer:m1","deliveriesToParent":0}
+PASS R9.4.e [REEL] la 2e racine, bloquée de la même façon et non mutée, ne se termine que par le cancel du parent : cancelled, zéro fournisseur vivant, aucun nouveau tour (m2 et m2g : 1 prompt chacun) - le résultat retenu est perdu
+PASS R9.6 [REEL] mort du fournisseur natif en vol (SIGTERM d'UN PID vérifié, daemon vivant) : aucune relance par la flotte ni le wrapper (starts inchangé, 1 seul tour, 0 fournisseur vivant), la tâche devient terminale (failed) avec erreur explicite et UNE notice d'échec
+PASS R9.5 [REEL] sur tout le rejeu (plusieurs SIGTERM + relances du daemon) chaque mission (nonce) a été portée par au plus UN tour fournisseur : aucune mission exécutée deux fois
+{"summary":{"title":"T039 scénarios dégradés 149","pass":35,"fail":2,"total":37},"residualProcesses":0}

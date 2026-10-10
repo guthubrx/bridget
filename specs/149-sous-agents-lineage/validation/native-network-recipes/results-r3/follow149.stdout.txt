@@ -1,0 +1,8 @@
+PASS F1 [REEL] suivi réel : les événements arrivent avec `seq` strictement croissant, CONTIGU, sans doublon ; `next_seq` ne régresse jamais ; aucune lacune annoncée ; au moins un `caught_up` ; les appends arrivent en DIRECT (plusieurs lignes étalées sur plus de 3 s)
+PASS F2 [REEL] égalité : les `seq` reçus en direct sont EXACTEMENT ceux de la lecture ponctuelle (non-follow) de la même tâche, sans perte ni ajout
+PASS F3 [REEL] reprise `--after-seq K` : le 2e suivi ne rend que des `seq` > K, sans doublon ni trou, et couvre exactement la suite connue de la lecture ponctuelle
+PASS F4 [REEL] humains silencieux : pendant tout le suivi (deux suivis, ~20 s), le parent ne reçoit AUCUNE remise, la tâche reste `working` (lecture sans effet de bord), aucun nouveau lancement
+PASS F5 [REEL] fermeture : après l'arrêt des deux suivis (SIGTERM individuel vérifié), les descripteurs ouverts, threads et processus du daemon reviennent au niveau de base (tolérance 0 descripteur, 0 processus) ; en cours de suivi, ils avaient augmenté
+PASS F6 [REEL] à la fin de vie de la tâche (cancel), un suivi ouvert reçoit des `seq` contigus sans doublon et ne laisse aucune ressource : après son arrêt, descripteurs/processus au niveau de base
+PASS F7 [REEL] après annulation et arrêt du dernier suivi : plus aucun processus de fixture hors daemon, descripteurs revenus au niveau de base ou en dessous
+{"summary":{"title":"O5/G8 journal --follow (r3)","pass":7,"fail":0,"total":7},"residualProcesses":0}

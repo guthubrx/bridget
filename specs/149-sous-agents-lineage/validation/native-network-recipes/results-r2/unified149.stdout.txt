@@ -1,0 +1,8 @@
+PASS U0 [REEL] une seule instance T3 (bin.ts) : la session Codex réelle de T3 (ProviderSessionManager + adaptateur V2) reçoit un credential MCP émis PAR CE SERVEUR - l'URL MCP de thread/start est l'origine même du serveur qui sert Lineage - et le tour démarre (turn/start)
+PASS U1 [REEL] bridget_session v2 sur le serveur réel : le fait de permissions est celui publié par l'adaptateur Codex RÉEL (driver codex_app_server, cwd = racine du projet, mode full-access du fil) - la recette n'a rien forgé
+PASS U2 [REEL] le credential émis par T3 pilote le daemon natif : identité résolue (bridget_who), admission héritée en full-access sans refus, enfant lancé (PID compté), résultat remis une fois au parent
+PASS U3 [REEL] Lineage servi par la MÊME instance T3 : la racine (en attente), son enfant imbriqué et la tâche terminée sont listés avec modèle, protocole et posture issus du vrai fait ; rien d'un autre fil
+PASS U4 [REEL] projection T3 : le parent a UN vrai run (créé par T3) ; les fils enfants Bridget sont des fils virtuels sans aucun run ; une seule session fournisseur (celle du parent)
+PASS U5 [REEL] cancel Lineage depuis la même instance T3 : reçu natif, racine + enfant imbriqué cancelled, PID enfant réellement terminé ; le run du parent côté T3 n'a pas changé
+PASS U6 [REEL] interruption du run par T3 (vrai arrêt de session) : le credential émis ne donne plus d'identité ni d'admission (refus nommé), aucun enfant lancé pour la requête suivante
+{"summary":{"title":"T036 instance T3 unique (credential MCP + Lineage)","pass":7,"fail":0,"total":7},"residualProcesses":0}

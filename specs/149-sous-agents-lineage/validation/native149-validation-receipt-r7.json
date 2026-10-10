@@ -1,0 +1,94 @@
+{
+ "schema": "bridget149-validation-receipt-additional/1",
+ "session": 149,
+ "round": "r7",
+ "producedBy": "Claude Sonnet 5.5 high (tester)",
+ "producedAt": "2026-10-10",
+ "supplements": "native149-release-receipt-r6.json",
+ "doesNotOverwrite": [
+  "native-tests-sonnet-r6.md",
+  "native149-release-receipt-r6.json",
+  "native149-debug-receipt.json"
+ ],
+ "productionSourceFingerprint": {
+  "value": "6cc9a2be1dd3e60d59e4035574ebbb767095fc235f0a691b8481125ceb1f367f",
+  "fileCount": 111,
+  "unchangedFromR6": true,
+  "newerProductionSources": 0
+ },
+ "sourceFingerprint": {
+  "value": "d44190ab30d1ed66861c7f10640507d921f87339a2298dd115edce8808574f3f",
+  "fileCount": 198,
+  "previousR6": "ebed6dc3f35c65b89114257efeab3ce8f5802c0bc92a247f1166db602893edcf",
+  "onlyDifference": "crates/bridget-daemon/tests/capabilities_integration_test.rs"
+ },
+ "testFile": {
+  "path": "crates/bridget-daemon/tests/capabilities_integration_test.rs",
+  "sha256": "8e903026434673ff20abec746f3aeb0785cd8be215cfd083471435336bf8cd4e",
+  "diff": "native-fixture-sqlite-r7.diff",
+  "insertions": 18,
+  "deletions": 1
+ },
+ "rootCause": "racine de fixture /tmp/bcap-<pid>-<nonce> non unique : horloge a resolution microseconde, 3 tests en threads du meme pid ; 11 echecs / 400 executions = 11 collisions de racine detectees",
+ "fix": "compteur AtomicU64 dans le nom de racine + controle positif generation/posture apres referent_control::set",
+ "binaries": {
+  "debugSha256": "620e729fca53c621a4a7be784fa948ba813768764e3cf518e030ef60c0cf4fd2",
+  "releaseSha256": "abfb346e23ccf51dad41b90658d475e5cbab321c9865dfd9e778a24d37c8c138",
+  "rebuilt": false,
+  "copied": false,
+  "immutable": true
+ },
+ "tests": {
+  "capabilitiesFile": {
+   "pass": 3,
+   "fail": 0
+  },
+  "isolatedLoopSerial": {
+   "runs": 800,
+   "pass": 800,
+   "fail": 0
+  },
+  "isolatedLoopParallel6": {
+   "runs": 600,
+   "pass": 600,
+   "fail": 0
+  },
+  "daemonFull": {
+   "command": "cargo test -p bridget-daemon --offline --no-fail-fast",
+   "log": "native-r7-daemon.log",
+   "logSha256": "eddd434c3bf4c6c288b5da90a4dc3a66f6549810364ea4f1eea5b5a4ba8d112a",
+   "executables": 79,
+   "pass": 1478,
+   "fail": 0,
+   "ignored": 61,
+   "rustTestThreads": "default"
+  },
+  "transportFullFromR6": {
+   "log": "native-r6-final-transport.log",
+   "pass": 328,
+   "fail": 0,
+   "ignored": 2,
+   "sourceUnchanged": true
+  },
+  "aggregate": {
+   "pass": 1806,
+   "fail": 0,
+   "ignored": 63,
+   "note": "agregation de deux executions distinctes (daemon r7 + transport r6), pas un seul passage"
+  }
+ },
+ "env": {
+  "CARGO_TARGET_DIR": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target",
+  "CARGO_BUILD_JOBS": 2,
+  "CARGO_INCREMENTAL": 0,
+  "offline": true,
+  "TMPDIR": "/tmp/b149t-r7",
+  "umask": "077"
+ },
+ "report": "native-fixture-sqlite-sonnet-r7.md",
+ "notVerified": [
+  "charge runtime globale",
+  "verrous reels",
+  "autres fichiers de tests avec le meme motif pid+nonce"
+ ]
+}

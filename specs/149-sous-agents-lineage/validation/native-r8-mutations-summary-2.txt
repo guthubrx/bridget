@@ -1,0 +1,12 @@
+F0-temoin-sans-mutation rc= 0 tests= 10 echecs= 0
+F10-attente-descendants-ignore-les-fermes rc= 101 tests= 10 echecs= 1
+    ECHEC native149_f2_ligne_de_reprise_d_une_mission_native_perdue_ne_bloque_pas_la_racine ... FAILED
+O1-wrapper-sans-gestionnaire-sigterm rc= 101 tests= 4 echecs= 1
+    ECHEC test native149_sigterm_du_wrapper_natif_arrete_le_fournisseur_sans_reconnexion ... FAILED
+O2-wrapper-natif-sans-stop_native_mission rc= 0 tests= 4 echecs= 0
+O3-wrapper-natif-se-reconnecte-sur-eof rc= 101 tests= 4 echecs= 1
+    ECHEC test native149_eof_du_daemon_arrete_le_wrapper_natif_et_son_fournisseur ... FAILED
+O4-wrapper-sigterm-sans-sortie-de-boucle rc= 0 tests= 4 echecs= 0
+T0-temoin-transport rc= 0 tests= 5 echecs= 0
+T2-codex-stop_native-sans-fermeture-admission rc= 0 tests= 5 echecs= 0
+T4-defaut-managed-stop_native-sans-annulation rc= 0 tests= 5 echecs= 0

@@ -16,11 +16,12 @@ envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
 ## Trouver puis envoyer
 
-### Déléguer une nouvelle mission — contrat 148
+### Déléguer une nouvelle mission - contrat 149
 
 Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts
 et postures accessibles. Puis appeler `bridget_delegate` avec `request_id`,
-`agent_type`, `model`, `task`, `cwd` absolu et `posture`. Fournir `effort` seulement
+`agent_type`, `model`, `task` et `cwd` absolu. `posture` est facultatif : sans lui,
+l'enfant hérite de la politique prouvée du parent. Fournir `effort` seulement
 si le catalogue le déclare. Bridget crée l'enfant, remet la mission et conserve
 la tâche. Aucun appel à l'orchestrateur T3 n'est nécessaire. Cette voie fonctionne
 aussi hors T3. Elle ne remplace pas un envoi à un agent déjà présent.
@@ -40,21 +41,26 @@ son échéance après remise ; un rejeu ne la prolonge pas. Son expiration produ
 `mission_reply_timeout`. Un timeout de transport ou d'attente n'annule rien.
 
 Le parent doit déjà avoir une identité et un projet attestés. L'enfant ne reçoit
-pas les credentials de session T3. Le catalogue annonce les refus de posture.
-La posture `development` nécessite des droits natifs attestés et un fournisseur
-qui possède un confinement adapté. Un grant humain peut être nécessaire pour
-un parent externe ; l'agent ne peut pas se l'accorder. Claude/GLM sans ce protocole
-restent limités à `discovery`. Ne pas annoncer une écriture impossible.
-Une révocation humaine reste fermée pour cet agent après changement d'instance.
-Seul un nouveau grant humain explicite la lève. Un parent encore connecté garde
-l'accès exclusif à sa tâche ; une nouvelle instance ne peut pas la reprendre.
+pas les credentials de session T3. Le catalogue annonce les refus par posture.
+Sans posture, l'enfant hérite de la politique prouvée du parent ; aucun grant
+n'est demandé. La posture `development` exige une politique parent qui permet
+l'écriture et une cible compatible. Un parent en `workspaceWrite` vers Claude ou
+GLM est refusé (`provider_confinement_unavailable`). Sans preuve de droits, seule
+une demande explicite `discovery` utilise la voie 148 avec un grant humain existant ; l'agent ne peut pas
+se l'accorder. Une révocation humaine reste fermée pour cet agent après changement
+d'instance, héritage compris. Seul un nouveau grant humain explicite la lève. Un
+parent encore vivant garde sa tâche. Une nouvelle instance ne la reprend qu'après la
+fin de l'ancienne, si le daemon reconnaît la même identité et une autorisation valable.
 
 Dans T3, une preuve MCP privée est attachée à chaque session. Une preuve invalide
-produit `t3_session_unavailable` à l'appel suivant. Ne pas fournir une identité
+produit `t3_session_unavailable` à l'appel suivant. Un credential retiré, révoqué ou
+tourné ferme tous les outils Bridget de la session avec le même code. Ne pas fournir une identité
 en argument, emprunter celle d'un autre fil ou contourner ce refus par la CLI.
 
-Les nouveaux outils exigent le binaire et les processus chargés en version148.
-Leur présence dans les sources ne prouve pas leur activation dans la session.
+Les comportements 149 (héritage, posture facultative) exigent le binaire et les
+processus chargés en version 149. Leur présence dans les sources ne prouve pas leur
+activation dans la session. Le suivi humain passe par `bridget lineage` dans un
+terminal, avec `--t3-thread` et `--project-root` ; ce n'est pas un outil MCP.
 
 Si l'outil MCP Bridget requis est présent (éventuellement différé), l'employer.
 Chercher aussi dans la découverte d'outils du harnais : `ToolSearch` si Claude

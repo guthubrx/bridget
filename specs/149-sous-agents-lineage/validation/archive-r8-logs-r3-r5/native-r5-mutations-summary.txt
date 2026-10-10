@@ -1,0 +1,35 @@
+M0-temoin-sans-mutation rc= 0
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M1-prepare_restart-sans-echec rc= 101
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... FAILED
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... FAILED
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M2-reconnexion-rejoue-la-remise-native rc= 101
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... FAILED
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M3-reprise-execution-generique rc= 101
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... FAILED
+M4-flotte-sans-exclusion-natifs rc= 0
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M5-natifs-restent-running rc= 101
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... FAILED
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M45-exclusion-et-running-retires rc= 101
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... FAILED
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... FAILED
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok

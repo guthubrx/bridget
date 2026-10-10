@@ -1,0 +1,480 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T20:07:18.751Z",
+ "finishedAt": "2026-10-10T20:08:13.350Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-abc850858975",
+  "sha256": "abc850858975fb5c7d733eb052be4fff6e3cb24537ce8b7d4475019b79abf6d8"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "F3 clôture CAS de l'exécution avant `cancelled` (r4)",
+  "pass": 4,
+  "fail": 0,
+  "total": 4
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.dMsmZc",
+  "daemonPid": 75293,
+  "f31": {
+   "cancel": {
+    "path": "cli",
+    "ok": true,
+    "mcpRefusal": "native_delegation_refused",
+    "cliCode": 0
+   },
+   "inv": {
+    "violations": 0,
+    "samples": 135,
+    "last": {
+     "nested": "cancelled",
+     "exec": "failed",
+     "reason": "provider_failed"
+    },
+    "seen": [
+     "cancelling/starting",
+     "cancelled/failed"
+    ],
+    "firstCancelledAtMs": 123,
+    "execAtFirstCancelled": "failed"
+   },
+   "fin": {
+    "nested": "cancelled",
+    "exec": [
+     "failed",
+     "provider_failed"
+    ],
+    "root": "result_available"
+   }
+  },
+  "f32Before": {
+   "cancel": {
+    "path": "cli",
+    "ok": true,
+    "mcpRefusal": "native_delegation_refused",
+    "cliCode": 0
+   },
+   "window": {
+    "n": "cancelling",
+    "e": "starting",
+    "reason": null
+   },
+   "tables": {
+    "tasks": [
+     {
+      "id": "b0bca42a",
+      "parent": null,
+      "state": "result_available",
+      "error": null,
+      "sent": true,
+      "cleanup": true
+     },
+     {
+      "id": "b30a7b25",
+      "parent": null,
+      "state": "result_available",
+      "error": null,
+      "sent": true,
+      "cleanup": true
+     },
+     {
+      "id": "a26e702d",
+      "parent": "b30a7b25",
+      "state": "cancelled",
+      "error": null,
+      "sent": false,
+      "cleanup": true
+     },
+     {
+      "id": "bd2a6848",
+      "parent": null,
+      "state": "waiting_for_children",
+      "error": null,
+      "sent": false,
+      "cleanup": false
+     },
+     {
+      "id": "e3314e52",
+      "parent": "bd2a6848",
+      "state": "cancelling",
+      "error": null,
+      "sent": false,
+      "cleanup": false
+     }
+    ],
+    "execs": [
+     {
+      "id": "execution-5c4f7555",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-fcfc5c3a",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-a57716da",
+      "state": "failed",
+      "reason": "provider_failed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-00405260",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-2b1c5e1e",
+      "state": "starting",
+      "reason": null,
+      "rev": 0,
+      "gen": "1"
+     }
+    ],
+    "links": [
+     {
+      "id": "4157bb26",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "cb0f79b6",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "b4ab09dd",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "09564ac8",
+      "role": "native_delegate",
+      "state": "open",
+      "revision": 1
+     },
+     {
+      "id": "c5593a7f",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     }
+    ]
+   }
+  },
+  "f32After": {
+   "inv": {
+    "violations": 0,
+    "samples": 223,
+    "last": {
+     "nested": "cancelled",
+     "exec": "unreachable",
+     "reason": "native_cancelled_restart"
+    },
+    "seen": [
+     "cancelling/unreachable",
+     "cancelled/unreachable"
+    ],
+    "firstCancelledAtMs": 911,
+    "execAtFirstCancelled": "unreachable"
+   },
+   "tables": {
+    "tasks": [
+     {
+      "id": "b0bca42a",
+      "parent": null,
+      "state": "result_available",
+      "error": null,
+      "sent": true,
+      "cleanup": true
+     },
+     {
+      "id": "b30a7b25",
+      "parent": null,
+      "state": "result_available",
+      "error": null,
+      "sent": true,
+      "cleanup": true
+     },
+     {
+      "id": "a26e702d",
+      "parent": "b30a7b25",
+      "state": "cancelled",
+      "error": null,
+      "sent": false,
+      "cleanup": true
+     },
+     {
+      "id": "bd2a6848",
+      "parent": null,
+      "state": "result_available",
+      "error": null,
+      "sent": true,
+      "cleanup": true
+     },
+     {
+      "id": "e3314e52",
+      "parent": "bd2a6848",
+      "state": "cancelled",
+      "error": null,
+      "sent": false,
+      "cleanup": true
+     }
+    ],
+    "execs": [
+     {
+      "id": "execution-5c4f7555",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-fcfc5c3a",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-a57716da",
+      "state": "failed",
+      "reason": "provider_failed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-00405260",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-2b1c5e1e",
+      "state": "unreachable",
+      "reason": "native_cancelled_restart",
+      "rev": 1,
+      "gen": "1"
+     }
+    ],
+    "links": [
+     {
+      "id": "4157bb26",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "cb0f79b6",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "b4ab09dd",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "09564ac8",
+      "role": "native_delegate",
+      "state": "open",
+      "revision": 1
+     },
+     {
+      "id": "c5593a7f",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     }
+    ]
+   }
+  },
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "F3.1",
+   "layer": "REEL",
+   "description": "daemon sain : le descendant annulé devient `cancelled` ; à chaque échantillon (100 ms) l'exécution n'est JAMAIS active quand la tâche est `cancelled` (clôture CAS AVANT) ; exécution finale non active ; racine débloquée",
+   "pass": true,
+   "observed": {
+    "cancel": {
+     "path": "cli",
+     "ok": true,
+     "mcpRefusal": "native_delegation_refused",
+     "cliCode": 0
+    },
+    "inv": {
+     "violations": 0,
+     "samples": 135,
+     "last": {
+      "nested": "cancelled",
+      "exec": "failed",
+      "reason": "provider_failed"
+     },
+     "seen": [
+      "cancelling/starting",
+      "cancelled/failed"
+     ],
+     "firstCancelledAtMs": 123,
+     "execAtFirstCancelled": "failed"
+    },
+    "fin": {
+     "nested": "cancelled",
+     "exec": [
+      "failed",
+      "provider_failed"
+     ],
+     "root": "result_available"
+    }
+   }
+  },
+  {
+   "id": "F3.2.a",
+   "layer": "REEL",
+   "description": "fenêtre atteinte par l'API : le descendant est `cancelling` avec exécution durable ACTIVE, racine `waiting_for_children`",
+   "pass": true,
+   "observed": {
+    "window": {
+     "n": "cancelling",
+     "e": "starting",
+     "reason": null
+    },
+    "root": "waiting_for_children"
+   }
+  },
+  {
+   "id": "F3.2.b",
+   "layer": "REEL",
+   "description": "après coupure en pleine annulation : le descendant est `cancelled`, son exécution est FERMÉE (non active) - jamais `cancelled` avec exécution active à aucun échantillon ; la racine n'attend plus (`result_available`), résultat remis UNE fois ; aucun nouveau lancement",
+   "pass": true,
+   "observed": {
+    "nested": "cancelled",
+    "exec": [
+     "unreachable",
+     "native_cancelled_restart",
+     1
+    ],
+    "root": "result_available",
+    "deliveries": 1,
+    "inv": {
+     "violations": 0,
+     "seen": [
+      "cancelling/unreachable",
+      "cancelled/unreachable"
+     ],
+     "firstCancelledAtMs": 911
+    },
+    "startsDelta": 0
+   }
+  },
+  {
+   "id": "F3.2.c",
+   "layer": "REEL",
+   "description": "exécution terminale `completed` (témoin) INCHANGÉE (état, motif, révision, génération) ; aucune exécution terminale rouverte ; trois tables capturées avant/après (voir notes)",
+   "pass": true,
+   "observed": {
+    "completedBefore": [
+     "completed",
+     "completed",
+     2
+    ],
+    "completedAfter": [
+     "completed",
+     "completed",
+     2
+    ],
+    "execsAfter": [
+     {
+      "id": "execution-5c4f7555",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-fcfc5c3a",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-a57716da",
+      "state": "failed",
+      "reason": "provider_failed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-00405260",
+      "state": "completed",
+      "reason": "completed",
+      "rev": 2,
+      "gen": "1"
+     },
+     {
+      "id": "execution-2b1c5e1e",
+      "state": "unreachable",
+      "reason": "native_cancelled_restart",
+      "rev": 1,
+      "gen": "1"
+     }
+    ],
+    "linksAfter": [
+     {
+      "id": "4157bb26",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "cb0f79b6",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "b4ab09dd",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     },
+     {
+      "id": "09564ac8",
+      "role": "native_delegate",
+      "state": "open",
+      "revision": 1
+     },
+     {
+      "id": "c5593a7f",
+      "role": "native_delegate",
+      "state": "closed",
+      "revision": 2
+     }
+    ]
+   }
+  }
+ ],
+ "residualProcesses": []
+}

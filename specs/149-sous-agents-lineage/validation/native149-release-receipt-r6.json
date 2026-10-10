@@ -1,0 +1,306 @@
+{
+  "schema": "native149-release-receipt/1",
+  "session": "149-sous-agents-lineage",
+  "producedBy": "testeur Sonnet 5.5 high (claudeAgent), ronde r6",
+  "producedAt": "2026-10-10",
+  "supersedes": null,
+  "headCommit": "6807c22b7ada683f757486a6382aeda170ec68ab",
+  "worktreeClean": false,
+  "sourceFingerprint": {
+    "algorithm": "sha256 de la concaténation (séparateur \\n) des lignes 'chemin\\0sha256(fichier)' triées par chemin ; fichiers .rs/.toml/Cargo.lock de crates/ + Cargo.toml/Cargo.lock racine, tests inclus",
+    "value": "ebed6dc3f35c65b89114257efeab3ce8f5802c0bc92a247f1166db602893edcf",
+    "fileCount": 198,
+    "note": "arbre actuel (198 fichiers, avec le fichier de vecteurs neuf)",
+    "atBuildTime": {
+      "value": "d74042b2fe451353f98435a257f97f19bb69a52d1635e599fb7d1afbe8cf725f",
+      "fileCount": 197,
+      "note": "empreinte au moment des builds (avant ajout du fichier de vecteurs)"
+    },
+    "previousR5": "e9b0eb9ffed3635b112dcb3b7d871bfdaf59e0d23c85f7f4817190b149950d22",
+    "r5Reproduced": {
+      "value": "e9b0eb9ffed3635b112dcb3b7d871bfdaf59e0d23c85f7f4817190b149950d22",
+      "method": "Cargo.toml de HEAD + Cargo.lock sauvegardé, tout le reste de l'arbre actuel : égal à l'empreinte r5, donc seuls Cargo.toml et Cargo.lock ont changé depuis r5 (hors fichier de test neuf)"
+    }
+  },
+  "productionSourceFingerprint": {
+    "algorithm": "idem, fichiers de tests exclus (chemins contenant /tests/ ou finissant par _test.rs/_tests.rs ; les blocs #[cfg(test)] inline restent comptés)",
+    "value": "6cc9a2be1dd3e60d59e4035574ebbb767095fc235f0a691b8481125ceb1f367f",
+    "fileCount": 111,
+    "previousR5": "65403980d033e2859591f8b455be191a2e27ade809517c4f40c20a2c6930b049",
+    "note": "inclut Cargo.toml et Cargo.lock (modifiés) ; aucun .rs de production modifié depuis r5"
+  },
+  "binary": {
+    "profile": "release",
+    "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target/release/bridget",
+    "stableCopy": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-abfb346e23cc",
+    "stableCopySha256Prefix": "abfb346e23cc",
+    "sha256": "abfb346e23ccf51dad41b90658d475e5cbab321c9865dfd9e778a24d37c8c138",
+    "sizeBytes": 17457520,
+    "version": "bridget 0.1.3",
+    "arch": "Mach-O 64-bit arm64",
+    "builtAt": "2026-10-10T15:55:56+0200",
+    "buildCommand": "cargo build --release -p bridget-daemon --bins --offline (CARGO_TARGET_DIR externe)",
+    "buildLog": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-build-release.log",
+    "buildDuration": "138 s",
+    "installed": false,
+    "release": true,
+    "releaseCandidateOnly": true,
+    "claimsT037": false,
+    "claimsT036_T039": false,
+    "noProductionSourceNewerThanBinary": true,
+    "productionSourcesNewerThanBinary": [],
+    "codesign": "adhoc, linker-signed ; codesign -v OK (signature privée, aucun Developer ID, aucune notarisation)",
+    "sha2Backend": "aarch64 matériel (feature asm, cpufeatures à l'exécution)",
+    "rootTargetRelease": "non utilisé : aucun target/release à la racine du dépôt",
+    "installPath": "aucun : pas de copie dans /Applications ni dans le repo",
+    "pairedDebug": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-620e729fca53",
+    "note": "candidat privé uniquement ; recettes T037-T039 non faites"
+  },
+  "env": {
+    "CARGO_TARGET_DIR": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "umask": "077 (indispensable : sans lui config-149 est créé 0755 et refusé EnvUnfit)",
+    "TMPDIR": "/tmp/b149t-r6 (APFS interne, 0700, hors /Users/moi)",
+    "RUST_TEST_THREADS": "défaut (nombre de coeurs)"
+  },
+  "tests": {
+    "commands": [
+      "cargo test -p bridget-transport --offline --no-fail-fast",
+      "cargo test -p bridget-daemon --offline --no-fail-fast",
+      "cargo test -p bridget-transport --offline --test permission_source_revision_vectors149_test",
+      "cargo test -p bridget-daemon --lib --offline native_permission_observer149 -- --test-threads=1",
+      "cargo test -p bridget-daemon --lib --offline native149",
+      "cargo test -p bridget-daemon --lib --offline native_delegation_permissions149",
+      "cargo test -p bridget-daemon --offline --test native_provider_death149_test",
+      "cargo test -p bridget-daemon --offline --test capabilities_integration_test (x5)"
+    ],
+    "logs": {
+      "daemon": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-final-daemon.log",
+      "transport": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-final-transport.log",
+      "vectors": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-vectors.log",
+      "observerSerial": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-observer-serial.log",
+      "native149": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-native149.log",
+      "r9StartupLib": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-r9-startup-lib.log",
+      "providerDeath": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-provider-death.log",
+      "capabilitiesReruns": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r6-capabilities-reruns.log"
+    },
+    "total": {
+      "passed": 1805,
+      "failed": 1,
+      "ignored": 63
+    },
+    "byCrate": {
+      "bridget-daemon": {
+        "passed": 1477,
+        "failed": 1,
+        "ignored": 61,
+        "executables": 79
+      },
+      "bridget-transport": {
+        "passed": 328,
+        "failed": 0,
+        "ignored": 2,
+        "executables": 11
+      }
+    },
+    "deltaVsR5": {
+      "passed": "+2 (1803 -> 1805)",
+      "failed": "+1 (0 -> 1, flocon fixture)",
+      "note": "+3 tests de vecteurs SHA-256 (transport) ; daemon 1478 -> 1477 PASS + 1 FAIL (même total 1478)"
+    },
+    "failures": [
+      {
+        "test": "modele_non_declare_est_refuse_avant_processus_et_ordre_durable",
+        "file": "crates/bridget-daemon/tests/capabilities_integration_test.rs:151",
+        "error": "SqliteFailure DatabaseBusy (database is locked) dans le préalable de fixture (referent_control::set sur une connexion rusqlite brute après Store::open)",
+        "classification": "flocon de fixture sous charge machine (load average ~13), fichier et module non modifiés, sans lien SHA",
+        "evidence": "5/5 PASS en rejeu isolé de ce binaire ; passé en r5 ; aucun lien avec le backend de hachage (échec avant tout hachage)",
+        "status": "non reproduit, NON déclaré vert dans la suite complète"
+      }
+    ],
+    "observerSerial": {
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    "native149Lib": {
+      "passed": 45,
+      "failed": 0,
+      "ignored": 0
+    },
+    "r9StartupLib": {
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "note": "contient les 5 tests R9 de démarrage/reconnexion"
+    },
+    "providerDeath149": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "newTests": {
+      "file": "crates/bridget-transport/tests/permission_source_revision_vectors149_test.rs",
+      "count": 3,
+      "sha256": "93f96b95776a9414f47f7ad49cafb97f8603e237f5be3bac58413b4367b79ae8",
+      "content": [
+        "vecteurs FIPS 180-2 (vide, abc, 448 bits, 1 000 000 x a)",
+        "16 longueurs (1..1000003) encadrant blocs de 64 o, remplissage 55/56 et lecture 65536 o ; références hashlib + shasum identiques",
+        "contenu de même taille à mtime restauré refusé (recheck)"
+      ],
+      "mutationCheck": "lecteur tronqué à 65535 o dans une copie jetable : 2 des 3 tests échouent (le test 3 n'est pas concerné)"
+    },
+    "notes": [
+      "aucun modèle réel ; T036-T039 non déduites",
+      "le client du hook est le vrai binaire mais le fournisseur (ACK) est simulé dans le banc de latence"
+    ]
+  },
+  "sourceFileDigests": {
+    "keyProductionFiles": {
+      "crates/bridget-daemon/src/wrapper.rs": "e838a821c0af01a2809dd4e5e13ad372bd05fd334974f31b4fc548a0f576fd2b",
+      "crates/bridget-daemon/src/native_permissions.rs": "4149844bb0264ace3fc11413c65c064c6de1886875694305b05a31a66824abc0",
+      "crates/bridget-daemon/src/native_permission_observer.rs": "3fe349f8ced14c59339d7a0613078a8bc0b8f30f0c144f2b0af5eb0cdf6069a6",
+      "crates/bridget-daemon/src/daemon/native_delegation.rs": "5da3619eef877b991f6e42623c558f9a3b508dc6315e8629d5204d06e785092a",
+      "crates/bridget-daemon/src/daemon/native_lineage.rs": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "crates/bridget-daemon/src/delegation_lineage.rs": "0cca8085d5e49ac9a72df3393c8ae42845b0170e755e99d19fc38b13105d8953",
+      "crates/bridget-transport/src/native_permissions.rs": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "crates/bridget-transport/src/claude_stream_json.rs": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "Cargo.toml": "52293175462770fc5d52722391c952428c9c3a40dad2472e527042042d3aab42",
+      "Cargo.lock": "df6a077c8d74cbb959156b57d06ae2738c9ad4872076d3abd8a5c48ef702c7b3"
+    },
+    "allChangedOrUntrackedSources": {
+      "crates/bridget-daemon/src/attach.rs": "2c9518374598476425d739d209b36462c40f11bc5214b1537e15f448ed726dd5",
+      "crates/bridget-daemon/src/cli.rs": "9017573b7142879909efaf1d41d99ddf2e65c1b44f09a03a1ee0fe0dc110fc2a",
+      "crates/bridget-daemon/src/cli_lineage.rs": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "crates/bridget-daemon/src/communication/client.rs": "c38ef972463779a59c00c6ace610e0369e1a8e40ed2ce732b0c974854da6cd6b",
+      "crates/bridget-daemon/src/daemon.rs": "04d5aca335b12c1eccccd4044a668cbe17592319a45ea4e0e10253b304618c0b",
+      "crates/bridget-daemon/src/daemon/native_delegation.rs": "5da3619eef877b991f6e42623c558f9a3b508dc6315e8629d5204d06e785092a",
+      "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "ea25851dd4609bec5c9f6ddcbbdce35222d1c7ebb6901a631231823a823d3774",
+      "crates/bridget-daemon/src/daemon/native_lineage.rs": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "5985c11057d98aab38f6af2bb0697678680b347e2737109af6ccea2f23269c16",
+      "crates/bridget-daemon/src/delegation.rs": "e1590c3f8754ae09ad809949b14225da88f919e1e113d483d12e74db853fea56",
+      "crates/bridget-daemon/src/delegation_lineage.rs": "0cca8085d5e49ac9a72df3393c8ae42845b0170e755e99d19fc38b13105d8953",
+      "crates/bridget-daemon/src/delegation_lineage_tests.rs": "39b3c4ce101ad7af7d5184a786b0f80dc48f95bbd7c6b642b3914924d0e31c47",
+      "crates/bridget-daemon/src/delegation_mcp.rs": "81745fb0b152a9d65981b730b106b1c6d69caeab4e98cfa3218efbda73144f16",
+      "crates/bridget-daemon/src/lib.rs": "a36170c10f4a517a5fb1f50edcdb8f5ad712836d9f5a1ebabd58f96446689e5f",
+      "crates/bridget-daemon/src/lineage_client.rs": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "crates/bridget-daemon/src/native_permission_observer.rs": "3fe349f8ced14c59339d7a0613078a8bc0b8f30f0c144f2b0af5eb0cdf6069a6",
+      "crates/bridget-daemon/src/native_permission_observer149_tests.rs": "ab9d90341e2b3c76e12c69added1f5eb5edc8fe90d186dffb54e1d300cf98779",
+      "crates/bridget-daemon/src/native_permissions.rs": "4149844bb0264ace3fc11413c65c064c6de1886875694305b05a31a66824abc0",
+      "crates/bridget-daemon/src/native_permissions149_tests.rs": "357dea4cc055f63e0ce24f82ce7cc53e661efad0df4a16ae5429affbdd5cfcfe",
+      "crates/bridget-daemon/src/registry.rs": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+      "crates/bridget-daemon/src/t3code_contract.rs": "5c15ef90cde3dfdb1a2d9fb24e176cd23633c44af876e5f18e168463edf76cf0",
+      "crates/bridget-daemon/src/t3code_contract_v2.rs": "93ec3e3350cb09f389f035ab7f7940ca7ceaca5a54f27e57b6510519af872a56",
+      "crates/bridget-daemon/src/t3code_mcp.rs": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "crates/bridget-daemon/src/wrapper.rs": "e838a821c0af01a2809dd4e5e13ad372bd05fd334974f31b4fc548a0f576fd2b",
+      "crates/bridget-daemon/tests/claude_native_permissions_test.rs": "3fcecfc731aa7a66d9fa15d3430c178954d7ad6ddf2330bc7187a275e0173404",
+      "crates/bridget-daemon/tests/lineage_cli_test.rs": "2a9f650e9aa58edafb6be5e8634efb1b62d197e11b05353c8b108f60897dfa8a",
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": "2ba6f037cf36dbad725030fb39323b4091f04f78bf1fe13078a6e0a1c0832d35",
+      "crates/bridget-daemon/tests/native_provider_death149_test.rs": "3429c207ab2710f2c00e2c816fdd4d341787f44f06b09f0e8199f8f2f1e19b52",
+      "crates/bridget-daemon/tests/spec102_threads_test.rs": "1aa9ea5c4059f7d2b3b1fc6143b055fd36838ad1dc2b71db0dd0c18f5a6bd118",
+      "crates/bridget-transport/src/claude_stream_json.rs": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "crates/bridget-transport/src/codex_app_server.rs": "4a36668c08f2cf4fd12af9c7941b905d97e0937b0ea2eb2163fec698869326d5",
+      "crates/bridget-transport/src/lineage_protocol.rs": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "crates/bridget-transport/src/managed_session.rs": "4803530bda5ece671df542f26f2d56d4b14c387b4a95983e54cc23e2a187427e",
+      "crates/bridget-transport/src/native_permissions.rs": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "crates/bridget-transport/src/protocol.rs": "ec42ebdca4c22eead4277fc1d342d66e0d087171537b06ed583e6379fbdfd5ed",
+      "crates/bridget-transport/tests/lineage_contract_test.rs": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "crates/bridget-transport/tests/native_permissions149_e2e.rs": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "crates/bridget-transport/tests/native_permissions149_test.rs": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e"
+    },
+    "newTestFiles": {
+      "crates/bridget-transport/tests/permission_source_revision_vectors149_test.rs": "93f96b95776a9414f47f7ad49cafb97f8603e237f5be3bac58413b4367b79ae8"
+    }
+  },
+  "gitDiffScoped": {
+    "command": "git diff HEAD -- crates",
+    "sha256": "572681855690f77c911965d58afa08db0e23fc893568cf281fecb905c766f8b5",
+    "note": "identique à r5 ; le nouveau fichier de test est non suivi",
+    "manifestDiff": {
+      "command": "git diff HEAD -- Cargo.toml Cargo.lock",
+      "sha256": "dde4ff763ced10f2fabf053217dfcc1f910cffb0bfd3f2d59752515a06b8c332",
+      "stat": "Cargo.lock +10, Cargo.toml 1 ligne modifiée"
+    }
+  },
+  "dependencyChange": {
+    "change": "Cargo.toml : sha2 = \"0.10\" -> sha2 = { version = \"0.10\", features = [\"asm\"] } (1 ligne, Sol)",
+    "cargoLockDelta": {
+      "addedPackages": [
+        {
+          "name": "sha2-asm",
+          "version": "0.6.4",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "checksum": "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab",
+          "crateFileSha256Verified": true,
+          "dependencies": [
+            "cc"
+          ]
+        }
+      ],
+      "modifiedPackages": [
+        {
+          "name": "sha2",
+          "version": "0.10.9",
+          "change": "dépendance ajoutée : sha2-asm"
+        }
+      ],
+      "unchangedExamples": {
+        "sha2": "0.10.9 a7507d81…",
+        "cpufeatures": "0.2.17 59ed5838…",
+        "cc": "1.4.2 5d262e14…"
+      },
+      "diffStat": "Cargo.lock : +10 lignes, 0 suppression ; aucune autre version modifiée",
+      "method": "cargo fetch (non offline) avec lock existant : une seule résolution ajoutée ; sauvegarde du lock r5 dans specs/…/validation/Cargo.lock.r5-avant-sha2-asm",
+      "lockBeforeSha256": "8dfbec1de1f3d437b12a66583adc8957d0084c18ab869418d2fc4360d6ae8737",
+      "lockAfterSha256": "df6a077c8d74cbb959156b57d06ae2738c9ad4872076d3abd8a5c48ef702c7b3",
+      "networkFetch": "index crates.io + téléchargement de sha2-asm-0.6.4.crate (seul crate téléchargé)"
+    },
+    "sha2Source": {
+      "registry": "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.10.9",
+      "featureAsm": "Cargo.toml:49 asm = [\"sha2-asm\"]",
+      "selection": "src/sha256.rs:24 cfg(all(feature = \"asm\", target_arch = \"aarch64\")) -> aarch64",
+      "aarch64Backend": "src/sha256/aarch64.rs:13 cpufeatures::new!(sha2_hwcap, \"sha2\") : détection à l'exécution, repli sur sha256::soft"
+    },
+    "sha2AsmUsedOnAarch64": false,
+    "note": "Sur aarch64 sha2 0.10.9 n'appelle pas sha2-asm : le backend matériel est en asm inline dans sha2 lui-même. sha2-asm est compilé (build.rs + cc) mais n'est pas référencé ni lié dans le binaire."
+  },
+  "hardwareBackendEvidence": {
+    "rule": "llvm-objdump --mattr=+sha2,+crypto -d sur le binaire",
+    "r5_ec6b18b5d468": {
+      "sha256h2": 0,
+      "sha256su0": 0,
+      "sha256su1": 0,
+      "symbole": "sha2::sha256::soft::compress"
+    },
+    "r6_debug_620e729fca53": {
+      "sha256h2": 8,
+      "sha256su0": 4,
+      "sha256su1": 4,
+      "symboles": [
+        "sha2::sha256::aarch64::sha2_hwcap::get",
+        "sha2::sha256::aarch64::sha256_compress",
+        "sha2::sha256::aarch64::compress"
+      ]
+    },
+    "r6_release_abfb346e23cc": {
+      "sha256h2": 16,
+      "sha256su0": 12,
+      "sha256su1": 12
+    },
+    "machine": "Apple M3 Max, hw.optional.arm.FEAT_SHA256=1"
+  },
+  "benchmark": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/hash-latency149.md",
+    "data": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/hash-latency149-data.json",
+    "helperMedianMsPerFullRead240664432Bytes": {
+      "debug_r5": 7339,
+      "debug_r6": 2103,
+      "release_r6": 118,
+      "release_r5_ref": 539,
+      "debug_r6_sha2_opt3_prive": 115
+    },
+    "shasum_native_r4_ms": 1200
+  },
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage"
+}

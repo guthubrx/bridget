@@ -327,8 +327,23 @@ impl AgentRegistry {
         if effort.is_some_and(|value| !capabilities.efforts.iter().any(|item| item == value)) {
             return Err("effort_unavailable".into());
         }
-        let mut scoped = self.for_spawn_posture(agent_type, posture)?;
-        let definition = scoped
+        let scoped = self.for_spawn_posture(agent_type, posture)?;
+        scoped.pin_delegation_model(agent_type,model,effort)
+    }
+
+    /// Les droits sont construits au puits natif depuis un fait attesté.
+    pub(crate) fn for_inherited_delegation(&self,agent_type:&str,model:&str,effort:Option<&str>,policy:&serde_json::Value)->Result<Self,String> {
+        let source=self.get(agent_type)?;
+        let capabilities=source.capabilities.models.get(model).ok_or("model_unavailable")?;
+        if effort.is_some_and(|value|!capabilities.efforts.iter().any(|item|item==value)){return Err("effort_unavailable".into())}
+        let mut definition=source.clone();
+        definition.permissions="deny".into();
+        crate::native_permissions::apply_child_arguments(&definition.protocol,policy,&mut definition.args)?;
+        Self{agents:BTreeMap::from([(agent_type.into(),definition)]),source:self.source.clone()}.pin_delegation_model(agent_type,model,effort)
+    }
+
+    fn pin_delegation_model(mut self,agent_type:&str,model:&str,effort:Option<&str>)->Result<Self,String> {
+        let definition = self
             .agents
             .get_mut(agent_type)
             .ok_or("provider_unavailable")?;
@@ -403,7 +418,7 @@ impl AgentRegistry {
         definition.args = args;
         validate_launch_capabilities(agent_type, definition)
             .map_err(|error| format!("{error:?}"))?;
-        Ok(scoped)
+        Ok(self)
     }
 
     /// Instantané ordonné des types effectivement chargés par le daemon.

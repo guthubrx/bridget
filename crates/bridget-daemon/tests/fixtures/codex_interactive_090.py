@@ -17,6 +17,7 @@ import signal
 import shutil
 import socket
 import sqlite3
+import stat
 import struct
 import subprocess
 import sys
@@ -99,9 +100,52 @@ def main():
     query_counts = {}
     deadline = time.monotonic() + (180 if live or human_resume else 80)
 
+    # Session 149 : l'alias de socket du serveur Codex n'est plus dans
+    # BRIDGET_HOME. Il vit dans /tmp/bridget-codex-<uuid>/s.sock, répertoire
+    # privé que le wrapper possède jusqu'à l'arrêt de SON serveur. Le harnais
+    # retrouve le chemin par l'argument --listen du fils direct du wrapper, et
+    # garde chaque alias vu pour prouver sa disparition.
+    alias_seen = set()
+    alias_scan_at = [0.0]
+
+    def codex_sockets():
+        try:
+            wrapper_pid = (root / "wrapper.pid").read_text().strip()
+        except (FileNotFoundError, ValueError):
+            return []
+        listing = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+        found = []
+        for line in listing.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and fields[1] == wrapper_pid and "app-server" in fields[2]:
+                match = re.search(r"--listen unix://(\S+)", fields[2])
+                if match:
+                    found.append(pathlib.Path(match.group(1)))
+        alias_seen.update(found)
+        return sorted(found)
+
+    def assert_alias_contract(path):
+        directory = path.parent
+        info = directory.lstat()
+        prefix = os.path.realpath("/tmp") + "/bridget-codex-"  # /private/tmp sous macOS
+        assert str(path).startswith(prefix), f"alias hors du préfixe attendu {prefix}* : {path}"
+        assert state not in path.parents and home not in path.parents, f"alias dans BRIDGET_HOME/HOME : {path}"
+        assert stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700 and info.st_uid == os.getuid(), "répertoire d'alias non privé"
+        assert not any(state.glob("c-*.sock")), "ancien alias c-*.sock dans BRIDGET_HOME"
+
+    def assert_aliases_cleaned(expected_seen=True):
+        assert alias_seen or not expected_seen, "aucun alias observé : le témoin positif manque"
+        for path in alias_seen:
+            assert not path.exists(), f"socket d'alias survivante : {path}"
+            assert not path.parent.exists(), f"répertoire d'alias survivant : {path.parent}"
+        assert not any(state.glob("c-*.sock")), "alias c-*.sock dans BRIDGET_HOME"
+
     def tick(enforce_deadline=True):
         if enforce_deadline and time.monotonic() >= deadline:
             raise TimeoutError("budget global 090 dépassé")
+        if time.monotonic() - alias_scan_at[0] > 0.2:
+            alias_scan_at[0] = time.monotonic()
+            codex_sockets()
         descriptors = [master] + ([attach.stdout.fileno()] if attach and attach.poll() is None else [])
         for fd in select.select(descriptors, [], [], 0.025)[0]:
             data = os.read(fd, 65536)
@@ -245,7 +289,8 @@ def main():
             menu_children = subprocess.check_output(["/usr/bin/pgrep", "-P", (root / "wrapper.pid").read_text()]).decode().split()
             assert menu_children, "aucun app-server réel au menu"
             assert not json.loads(cli("agents", "--json", "--global")), "présence avant choix humain"
-            menu_socket = next(state.glob("c-*.sock"))
+            menu_socket = next(iter(codex_sockets()))
+            assert_alias_contract(menu_socket)
             menu_observer = probe.Client(str(menu_socket))
             assert menu_observer.rpc("thread/loaded/list", {})["result"]["data"] == [], "fil provisoire créé pour le menu"
             menu_observer.socket.close()
@@ -260,7 +305,7 @@ def main():
             tick()
             assert wrapper.returncode != 0
             assert not json.loads(cli("agents", "--json", "--global"))
-            assert not list(state.glob("c-*.sock"))
+            assert_aliases_cleaned(expected_seen=selection == "--menu-cancel")
             if selection == "--menu-cancel":
                 for pid in menu_children:
                     assert subprocess.run(["/bin/ps", "-p", pid, "-o", "pid="], capture_output=True).returncode != 0, f"serveur survivant {pid}"
@@ -273,14 +318,15 @@ def main():
             until(lambda: wrapper.poll() is not None, "fil absent refusé avant présence")
             assert wrapper.returncode != 0
             assert not json.loads(cli("agents", "--json", "--global")), "présence fabriquée après échec de reprise"
-            assert not list(state.glob("c-*.sock")), "socket privée survivante"
+            assert_aliases_cleaned(expected_seen=False)
             assert terminal_restored()
             assert b"thread/resume" in transcript, transcript.decode(errors="replace")
             print("missing_resume_refused_without_presence_or_socket", flush=True)
             return
-        until(lambda: bool(list(state.glob("c-*.sock"))), "socket Codex")
+        until(lambda: bool(codex_sockets()), "socket Codex")
         until(lambda: b"Bridget :" in transcript, "inscription et journal prêts")
-        socket_path = next(state.glob("c-*.sock"))
+        socket_path = next(iter(codex_sockets()))
+        assert_alias_contract(socket_path)
         observer = probe.Client(str(socket_path))
         threads = observer.rpc("thread/loaded/list", {})["result"]["data"]
         assert len(threads) == 1, threads
@@ -313,7 +359,7 @@ def main():
 
             def refused_launch(arguments, expected):
                 # Vrai second terminal, mais refus exigé AVANT tout app-server.
-                sockets_before = set(state.glob("c-*.sock"))
+                sockets_before = set(codex_sockets())
                 with sqlite3.connect(state / "bridget.db") as database:
                     profiles_before = database.execute("SELECT agent_id, display_name FROM agent_profiles ORDER BY agent_id").fetchall()
                 reject_master, reject_slave = os.openpty()
@@ -322,7 +368,7 @@ def main():
                 try:
                     _, stderr = child.communicate(timeout=8)
                     assert child.returncode != 0 and expected in stderr.decode(), stderr.decode()
-                    assert set(state.glob("c-*.sock")) == sockets_before, "second fournisseur démarré malgré refus"
+                    assert set(codex_sockets()) == sockets_before, "second fournisseur démarré malgré refus"
                     with sqlite3.connect(state / "bridget.db") as database:
                         assert database.execute("SELECT agent_id, display_name FROM agent_profiles ORDER BY agent_id").fetchall() == profiles_before
                 finally:
@@ -373,7 +419,8 @@ def main():
                     env=environment, cwd=root, stdin=slave, stdout=slave, stderr=slave, preexec_fn=own_terminal)
                 until(lambda: b"Bridget :" in transcript and b"fixture" in transcript
                     and (b"context" in transcript or b"shortcuts" in transcript), "reprise réelle sans UUID Bridget : " + restart_mode)
-                socket_path = next(state.glob("c-*.sock"))
+                socket_path = next(iter(codex_sockets()))
+                assert_alias_contract(socket_path)
                 observer = probe.Client(str(socket_path))
                 loaded = observer.rpc("thread/loaded/list", {})["result"]["data"]
                 agent = next(a for a in json.loads(cli("agents", "--json", "--global")) if a["state"] == "connected")
@@ -699,6 +746,7 @@ def main():
         os.write(master, b"\x03\x03")
         until(lambda: wrapper.poll() is not None, "sortie native")
         assert not socket_path.exists(), "socket privée orpheline"
+        assert_aliases_cleaned()
         assert terminal_restored(), "termios non restauré"
         print("terminal_restored_and_socket_removed", flush=True)
     finally:

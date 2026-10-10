@@ -1,5 +1,15 @@
 <!-- SPECKIT START -->
-Plan actif session148 approuvée : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/148-identite-delegation/plan.md.
+Session149 validée en environnement isolé : sous-agents natifs et Lineage T3.
+Droits hérités du parent sans grant neuf ; moteur autonome hors T3.
+GO principal après revue Sonnet r2 et recettes réseau r4 / Codex vivant r7.
+T001–T042 validées, T043–T045 livraison en cours. Rust1840PASS ; ancien banc
+p95 non conclu, limites documentées dans le reçu de pré-livraison.
+T3 intégré et poussé sur fork/local/main-20261009 : f6f3d1998c686b20e316f304aff7f5df6a14592c.
+Aucun fichier149 installé à ce checkpoint, aucun restart ou job différé.
+Plan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/plan.md.
+Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/prelivraison149.md.
+Les checkpoints148 ci-dessous restent historiques.
+Plan session148 approuvée et livrée : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/148-identite-delegation/plan.md.
 Codex high, identité par session T3 et délégation Bridget en un appel. Aucun redémarrage réel.
 Session148 livrée sur disque le 2026-10-10 : code Bridget347d788510b4, T333f6d04e1164.
 Recette GLM 5.3 réelle validée sans T3 ; parent Codex synthétique, résultat corrélé unique.

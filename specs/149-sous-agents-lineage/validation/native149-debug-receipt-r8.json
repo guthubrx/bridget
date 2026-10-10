@@ -1,0 +1,314 @@
+{
+ "session": "149-sous-agents-lineage",
+ "producedBy": "testeur Sonnet 5.5 high (claudeAgent), ronde r8",
+ "producedAt": "2026-10-10",
+ "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage",
+ "headCommit": "6807c22b7ada683f757486a6382aeda170ec68ab",
+ "worktreeClean": false,
+ "sourceFingerprint": {
+  "algorithm": "sha256 de la concaténation (séparateur \\n) des lignes 'chemin\\0sha256(fichier)' triées par chemin ; fichiers .rs/.toml/Cargo.lock de crates/ + Cargo.toml/Cargo.lock racine, tests inclus",
+  "value": "1b8ed0269943968a12a1a859776f7bf938da1353cf66fcd6e2a7fe4c10dbe4f9",
+  "fileCount": 200,
+  "previousR7": "d44190ab30d1ed66861c7f10640507d921f87339a2298dd115edce8808574f3f",
+  "previousR7FileCount": 198,
+  "note": "stable pendant les deux builds (avant == après, voir native-r8-fingerprint-before-build.json / after-build.json) ; +2 fichiers = les deux nouveaux fichiers de test"
+ },
+ "productionSourceFingerprint": {
+  "algorithm": "idem, fichiers de tests exclus",
+  "value": "3943009ca82db59d850d913b55b18c7a0a17c91c3143ffaeb39ee6cdd600526d",
+  "fileCount": 111,
+  "previousR7": "6cc9a2be1dd3e60d59e4035574ebbb767095fc235f0a691b8481125ceb1f367f",
+  "note": "différence r7 -> r8 = les corrections de Sol sur 5 fichiers de production ; aucun fichier de production modifié par le testeur (empreinte identique en début et fin de ronde)"
+ },
+ "sourceChanges": {
+  "sinceR6": [
+   {
+    "path": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+    "sha256R6": "5da3619eef877b991f6e42623c558f9a3b508dc6315e8629d5204d06e785092a",
+    "sha256R8": "ea4e4316a796f62a74a035aebd13fac18f8b201c1df73ad14fb4d2808ad97ee6",
+    "kind": "production"
+   },
+   {
+    "path": "crates/bridget-daemon/src/daemon.rs",
+    "sha256R6": "04d5aca335b12c1eccccd4044a668cbe17592319a45ea4e0e10253b304618c0b",
+    "sha256R8": "7815b19971f4eaa7051c90d2dd1f90ee3c5642566f906de8c047dd91f947c28b",
+    "kind": "production"
+   },
+   {
+    "path": "crates/bridget-daemon/src/wrapper.rs",
+    "sha256R6": "e838a821c0af01a2809dd4e5e13ad372bd05fd334974f31b4fc548a0f576fd2b",
+    "sha256R8": "28e92599eee1bb03017fdc8f5c730c4137609e668d862178bd05642dcc7c8a0b",
+    "kind": "production"
+   },
+   {
+    "path": "crates/bridget-transport/src/codex_app_server.rs",
+    "sha256R6": "4a36668c08f2cf4fd12af9c7941b905d97e0937b0ea2eb2163fec698869326d5",
+    "sha256R8": "b9b68ad5cb386483433a1ac329f9aff568a8a36b94ab8486493e6820fa0f4420",
+    "kind": "production"
+   },
+   {
+    "path": "crates/bridget-transport/src/managed_session.rs",
+    "sha256R6": "4803530bda5ece671df542f26f2d56d4b14c387b4a95983e54cc23e2a187427e",
+    "sha256R8": "42dfa0a2fce380fdf2c2b6d6dcf922410cde7b76f57ed0b0ff43420903be2862",
+    "kind": "production"
+   },
+   {
+    "path": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+    "sha256R6": "ea25851dd4609bec5c9f6ddcbbdce35222d1c7ebb6901a631231823a823d3774",
+    "sha256R8": "ea9f12a327941c43815c40a6abc14e09dc5a4d31142f1bdd8c576c4b370b9da5",
+    "kind": "test (ajout en fin de fichier, début octet-identique à r6)"
+   }
+  ],
+  "newTestFilesR8": [
+   {
+    "path": "crates/bridget-daemon/tests/native_wrapper_stop149_test.rs",
+    "sha256": "e1e37e6d3461723f88c29724da8a78a5b5377e02419888181690001978f5f15d",
+    "tests": 4,
+    "content": "vrai wrapper géré, faux daemon, faux fournisseur ACP en groupe indépendant : SIGTERM natif, EOF natif, témoins ordinaires"
+   },
+   {
+    "path": "crates/bridget-transport/tests/native_stop149_test.rs",
+    "sha256": "b125240a00820b35690e8c3c0dd908c48ac3c07a21bc36c20ce453580bf895d8",
+    "tests": 5,
+    "content": "faux app-server Codex stdio : stop_native_mission (tour exact, idempotence, admission fermée, mission étrangère) + témoin stop ordinaire"
+   },
+   {
+    "path": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs (fin de fichier)",
+    "sha256": "ea9f12a327941c43815c40a6abc14e09dc5a4d31142f1bdd8c576c4b370b9da5",
+    "tests": 10,
+    "content": "F2 : réparation running->unreachable, terminal jamais rouvert, mauvais agent, CAS périmé, propriétaire hors ligne puis reconnexion et rejeu, autorité retenue champ par champ, message externe sans capacité, réponse réelle capturée, mission engagée + ordinaire intact, ligne de reprise"
+   }
+  ],
+  "productionFilesTouchedByTester": []
+ },
+ "env": {
+  "CARGO_TARGET_DIR": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target",
+  "CARGO_BUILD_JOBS": "2",
+  "CARGO_INCREMENTAL": "0",
+  "CARGO_NET_OFFLINE": "true (--offline)",
+  "umask": "077",
+  "TMPDIR": "/tmp/b149t-r8 (APFS interne, 0700, hors /Users/moi)",
+  "RUST_TEST_THREADS": "défaut"
+ },
+ "lockfile": {
+  "cargoUpdate": false,
+  "newDependency": false,
+  "cargoLockSha256": "df6a077c8d74cbb959156b57d06ae2738c9ad4872076d3abd8a5c48ef702c7b3",
+  "cargoTomlSha256": "52293175462770fc5d52722391c952428c9c3a40dad2472e527042042d3aab42",
+  "note": "inchangés depuis r6 (df6a077c…02c7b3 pour le lock)"
+ },
+ "tests": {
+  "commands": [
+   "cargo test -p bridget-transport --offline --no-fail-fast",
+   "cargo test -p bridget-daemon --offline --no-fail-fast",
+   "cargo test -p bridget-transport --offline --test permission_source_revision_vectors149_test",
+   "cargo test -p bridget-daemon --lib --offline native_permission_observer149 -- --test-threads=1",
+   "cargo test -p bridget-daemon --lib --offline native149",
+   "cargo test -p bridget-daemon --lib --offline native_delegation_permissions149",
+   "cargo test -p bridget-daemon --offline --test native_provider_death149_test",
+   "cargo test -p bridget-daemon --offline --test native_wrapper_stop149_test",
+   "cargo test -p bridget-transport --offline --test native_stop149_test",
+   "cargo test -p bridget-daemon --lib --offline native149_f2 (x15)",
+   "cargo test -p bridget-transport --offline --test native_stop149_test (x8)",
+   "cargo test -p bridget-daemon --offline --test native_wrapper_stop149_test (x4)"
+  ],
+  "logs": {
+   "transport": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-final-transport.log",
+   "daemon": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-final-daemon.log",
+   "vectors": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-vectors.log",
+   "observerSerial": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-observer-serial.log",
+   "native149": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-native149.log",
+   "r9StartupLib": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-r9-startup-lib.log",
+   "providerDeath": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-provider-death.log",
+   "wrapperStop": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-wrapper-stop.log",
+   "transportStop": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-transport-stop.log",
+   "repetitions": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-repetitions.log"
+  },
+  "logSha256": {
+   "transport": "ff26f65e434fd002442019f7339e4948c4951f9c24102f042930254dca8680c2",
+   "daemon": "580fd6c93b6c2847bb3b973fba290a44f58b7031a999501ecb0d0adddd81a361"
+  },
+  "byCrate": {
+   "bridget-daemon": {
+    "executables": 80,
+    "passed": 1492,
+    "failed": 0,
+    "ignored": 61
+   },
+   "bridget-transport": {
+    "executables": 12,
+    "passed": 333,
+    "failed": 0,
+    "ignored": 2
+   }
+  },
+  "focused": {
+   "vectors": {
+    "executables": 1,
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0
+   },
+   "observerSerial": {
+    "executables": 1,
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0
+   },
+   "native149Lib": {
+    "executables": 1,
+    "passed": 55,
+    "failed": 0,
+    "ignored": 0
+   },
+   "r9StartupLib": {
+    "executables": 1,
+    "passed": 23,
+    "failed": 0,
+    "ignored": 0
+   },
+   "providerDeath149": {
+    "executables": 1,
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0
+   },
+   "wrapperStop149": {
+    "executables": 1,
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0
+   },
+   "transportStop149": {
+    "executables": 1,
+    "passed": 5,
+    "failed": 0,
+    "ignored": 0
+   }
+  },
+  "repetitions": {
+   "f2x15": {
+    "pass": 15,
+    "fail": 0
+   },
+   "transportStopX8": {
+    "pass": 8,
+    "fail": 0
+   },
+   "wrapperStopX4": {
+    "pass": 4,
+    "fail": 0
+   }
+  },
+  "previous": {
+   "r7": {
+    "daemon": {
+     "passed": 1478,
+     "failed": 0,
+     "ignored": 61
+    },
+    "transportR6": {
+     "passed": 328,
+     "failed": 0,
+     "ignored": 2
+    },
+    "aggregate": {
+     "passed": 1806
+    }
+   }
+  },
+  "total": {
+   "passed": 1825,
+   "failed": 0,
+   "ignored": 63
+  },
+  "delta": {
+   "daemon": "+14 PASS (1478 -> 1492) : +10 F2, +4 wrapper natif",
+   "transport": "+5 PASS (328 -> 333) : +5 stop_native_mission",
+   "executables": "daemon 79 -> 80, transport 11 -> 12",
+   "aggregate": "1825 PASS (r7 : 1806) = +19"
+  }
+ },
+ "mutationOracles": {
+  "tool": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-mutate.py",
+  "method": "copie jetable /tmp/b149t-r8/mut + cible Cargo séparée bridget149-target-mut ; un motif unique remplacé par mutation ; arbre de travail jamais modifié",
+  "summaries": [
+   "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-mutations-summary.txt",
+   "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-mutations-summary-2.txt",
+   "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-mutations-summary-3.txt"
+  ],
+  "killed": [
+   "F1",
+   "F2",
+   "F3",
+   "F4",
+   "F5",
+   "F6",
+   "F7",
+   "F8",
+   "F9",
+   "F10",
+   "O1",
+   "O3",
+   "T1",
+   "T2",
+   "T3"
+  ],
+  "survivors": [
+   {
+    "id": "O2",
+    "mutation": "retrait de transport.stop_native_mission dans le wrapper",
+    "verdict": "équivalent dans ce banc : transport.stop() suit après relay.shutdown() ; seul le délai de drain du relais change, absent d'un wrapper ACP sans relais"
+   },
+   {
+    "id": "O4",
+    "mutation": "retrait du contrôle du signal juste après read_line",
+    "verdict": "équivalent dans ce banc : le contrôle en tête de boucle sort au tour suivant ; seule la lecture d'une trame arrivée en même temps que le signal change"
+   },
+   {
+    "id": "T4",
+    "mutation": "stop_native_mission par défaut sans cancel_delivery",
+    "verdict": "non observable de façon déterministe : ACP shutdown() écrit déjà session/cancel avant de tuer le fournisseur"
+   }
+  ]
+ },
+ "schema": "native149-debug-receipt/1",
+ "supersedes": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native149-debug-receipt.json (r6, conservé)",
+ "binary": {
+  "profile": "debug",
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target/debug/bridget",
+  "stableCopy": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-833a030545c3",
+  "stableCopySha256Prefix": "833a030545c3",
+  "sha256": "833a030545c324339013486d2ed7056ad7aec892bac38765f35b4ae8bb6af8a6",
+  "sizeBytes": 54076872,
+  "version": "bridget 0.1.3",
+  "arch": "Mach-O 64-bit arm64",
+  "installed": false,
+  "release": false,
+  "mode": "0700",
+  "codesign": "adhoc, linker-signed ; codesign -v OK (signature privée)",
+  "noProductionSourceNewerThanBinary": true,
+  "productionSourcesNewerThanBinary": [],
+  "rootTargetRelease": "non utilisé : aucun target/release à la racine du dépôt",
+  "installPath": "aucun",
+  "claimsT036_T039": false,
+  "builtAt": "2026-10-10T18:49+0200",
+  "buildCommand": "cargo build -p bridget-daemon --bins --offline",
+  "buildLog": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r8-build-debug.log",
+  "buildDuration": "20,5 s",
+  "pairedRelease": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "immutablePreviousCopies": {
+   "debug r6": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-620e729fca53 (sha 620e729fca53c621…, vérifié inchangé)",
+   "debug r5": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-ec6b18b5d468 (sha ec6b18b5d468dd00…, vérifié inchangé)",
+   "debug r4": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-823e8a5fab8a (inchangé)",
+   "debug r3": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-ed5e28bc8ddc (inchangé)",
+   "release r6": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-abfb346e23cc (sha abfb346e23ccf51d…, vérifié inchangé)"
+  },
+  "containsR8Code": [
+   "wrapper natif : NativeTerminationSignal / sortie coopérative SIGTERM + stop_native_mission",
+   "prepare_restart : fermeture CAS de l'exécution (native_execution_mismatch)",
+   "autorité de résultat retenu (native_result_authority_revoked)",
+   "ManagedSession::stop_native_mission + surcharge Codex"
+  ]
+ }
+}

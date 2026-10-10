@@ -1,0 +1,48 @@
+{
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6",
+  "equalsReceiptR8": true
+ },
+ "productionFingerprintNow": "4fa56fcac7b37220f4d27cf15a8cdd94c8e434d92d86261b32a508a901f3adfa",
+ "productionFingerprintReceiptR8": "3943009ca82db59d850d913b55b18c7a0a17c91c3143ffaeb39ee6cdd600526d",
+ "productionEqualsReceipt": false,
+ "sourcesNewerThanBinary": [
+  [
+   "19:19:03",
+   "crates/bridget-daemon/src/wrapper.rs",
+   "49f3a304d9504fe6"
+  ]
+ ],
+ "t3": {
+  "head": "33f6d04e116430bf7f0011902d6af3868163f2d1",
+  "diffHeadSha16": "59a54267ce7c1d2a",
+  "expectedDiffHeadSha16": "59a54267ce7c1d2a"
+ },
+ "recipeTools": {
+  "check-r3.sh": "9d08d7f74721e4c1",
+  "codex149.py": "7de49a1b3edc6a73",
+  "codex149b.py": "0c12a3aab2f3e6bf",
+  "codexspy.mjs": "0c50f2a56f8e48bd",
+  "common149.ts": "e273956be66a6e1d",
+  "craft-queued.py": "ec3dfe93994dcaba",
+  "e2e3-149.ts": "ff48229cff657b65",
+  "exec-lag149.ts": "26ac7b2a523d93ae",
+  "fingerprints-r3.py": "03f255051b41632e",
+  "fingerprints.py": "dc984faf39a2af93",
+  "follow149.ts": "202b6ae4ffd861cf",
+  "fx.mjs": "1009ca8741d9b1d0",
+  "interop149.ts": "b50b79934605c585",
+  "o4-149.ts": "2e1037799e444d23",
+  "outage149.ts": "b4eab0a5e10804fe",
+  "provider149.py": "cdcefa2b742738fd",
+  "recovery149.ts": "e607f5360f25c377",
+  "run-r3.sh": "e6b1c764627d83f9",
+  "server149.ts": "74750ab4d51f097c",
+  "t3host.ts": "10b96a42ed8a9750",
+  "t3server.ts": "964ec57a055d8180",
+  "ui-native149.ts": "5bfce39ff73079db",
+  "unified149.ts": "d51280ed1a886ebe"
+ },
+ "checkedAt": "2026-10-10T19:51:49+0200"
+}

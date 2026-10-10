@@ -1,0 +1,355 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:30:32.503Z",
+ "finishedAt": "2026-10-10T17:32:29.604Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "E3d fenêtre résultat capturé / exécution active (r3)",
+  "pass": 4,
+  "fail": 0,
+  "total": 4
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.ARjSev",
+  "daemonPid": 20685,
+  "part1": {
+   "tasks": 12,
+   "lags": [
+    {
+     "id": "88c8e79c",
+     "resultMs": 719,
+     "closedMs": 719,
+     "lagMs": 0
+    },
+    {
+     "id": "80df1191",
+     "resultMs": 719,
+     "closedMs": 719,
+     "lagMs": 0
+    },
+    {
+     "id": "be656e49",
+     "resultMs": 824,
+     "closedMs": 824,
+     "lagMs": 0
+    },
+    {
+     "id": "01ea0cf5",
+     "resultMs": 877,
+     "closedMs": 877,
+     "lagMs": 0
+    },
+    {
+     "id": "5b1d5b2a",
+     "resultMs": 1092,
+     "closedMs": 1092,
+     "lagMs": 0
+    },
+    {
+     "id": "e2389c9f",
+     "resultMs": 2060,
+     "closedMs": 2006,
+     "lagMs": -54
+    },
+    {
+     "id": "a85b08e3",
+     "resultMs": 2060,
+     "closedMs": 2006,
+     "lagMs": -54
+    },
+    {
+     "id": "198fc674",
+     "resultMs": 2060,
+     "closedMs": 2006,
+     "lagMs": -54
+    },
+    {
+     "id": "f1fd4d87",
+     "resultMs": 2060,
+     "closedMs": 2006,
+     "lagMs": -54
+    },
+    {
+     "id": "3acd4631",
+     "resultMs": 2060,
+     "closedMs": 2060,
+     "lagMs": 0
+    },
+    {
+     "id": "13b911d2",
+     "resultMs": 2991,
+     "closedMs": 2991,
+     "lagMs": 0
+    },
+    {
+     "id": "38c5691c",
+     "resultMs": 2991,
+     "closedMs": 2991,
+     "lagMs": 0
+    }
+   ],
+   "maxLagMs": 0,
+   "final": [
+    [
+     "88c8e79c",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "80df1191",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "be656e49",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "01ea0cf5",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "5b1d5b2a",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "e2389c9f",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "a85b08e3",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "198fc674",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "f1fd4d87",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "3acd4631",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "13b911d2",
+     "result_available",
+     "completed",
+     true
+    ],
+    [
+     "38c5691c",
+     "result_available",
+     "completed",
+     true
+    ]
+   ]
+  },
+  "part2": {
+   "attempts": [
+    {
+     "attempt": 1,
+     "windowSeen": false
+    },
+    {
+     "attempt": 2,
+     "windowSeen": false
+    },
+    {
+     "attempt": 3,
+     "windowSeen": false
+    },
+    {
+     "attempt": 4,
+     "windowSeen": false
+    },
+    {
+     "attempt": 5,
+     "windowSeen": false
+    },
+    {
+     "attempt": 6,
+     "windowSeen": false
+    }
+   ]
+  },
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "L1",
+   "layer": "REEL",
+   "description": "sans coupure : toute tâche qui a son résultat voit son exécution durable CLOSE (aucune exécution restée active après 25 s), 12 tâches (6 racines + 6 descendants) toutes `result_available` et remises",
+   "pass": true,
+   "observed": {
+    "tasks": 12,
+    "notClosed": [],
+    "maxLagMs": 0
+   }
+  },
+  {
+   "id": "L2",
+   "layer": "OBS",
+   "description": "OBSERVATION : décalage maximal entre la capture du résultat et la clôture de l'exécution durable, sans coupure (ms) - mesure, ni PASS ni FAIL",
+   "pass": true,
+   "observed": {
+    "maxLagMs": 0,
+    "lags": [
+     {
+      "id": "88c8e79c",
+      "resultMs": 719,
+      "closedMs": 719,
+      "lagMs": 0
+     },
+     {
+      "id": "80df1191",
+      "resultMs": 719,
+      "closedMs": 719,
+      "lagMs": 0
+     },
+     {
+      "id": "be656e49",
+      "resultMs": 824,
+      "closedMs": 824,
+      "lagMs": 0
+     },
+     {
+      "id": "01ea0cf5",
+      "resultMs": 877,
+      "closedMs": 877,
+      "lagMs": 0
+     },
+     {
+      "id": "5b1d5b2a",
+      "resultMs": 1092,
+      "closedMs": 1092,
+      "lagMs": 0
+     },
+     {
+      "id": "e2389c9f",
+      "resultMs": 2060,
+      "closedMs": 2006,
+      "lagMs": -54
+     },
+     {
+      "id": "a85b08e3",
+      "resultMs": 2060,
+      "closedMs": 2006,
+      "lagMs": -54
+     },
+     {
+      "id": "198fc674",
+      "resultMs": 2060,
+      "closedMs": 2006,
+      "lagMs": -54
+     },
+     {
+      "id": "f1fd4d87",
+      "resultMs": 2060,
+      "closedMs": 2006,
+      "lagMs": -54
+     },
+     {
+      "id": "3acd4631",
+      "resultMs": 2060,
+      "closedMs": 2060,
+      "lagMs": 0
+     },
+     {
+      "id": "13b911d2",
+      "resultMs": 2991,
+      "closedMs": 2991,
+      "lagMs": 0
+     },
+     {
+      "id": "38c5691c",
+      "resultMs": 2991,
+      "closedMs": 2991,
+      "lagMs": 0
+     }
+    ]
+   }
+  },
+  {
+   "id": "L3",
+   "layer": "OBS",
+   "description": "OBSERVATION : la fenêtre « résultat capturé / exécution encore active » a été atteinte par l'API puis coupée par un SIGTERM réel du daemon",
+   "pass": true,
+   "observed": {
+    "attempts": 6,
+    "windowSeen": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   }
+  },
+  {
+   "id": "L4",
+   "layer": "OBS",
+   "description": "fenêtre non atteinte en 6 essais : aucune conclusion tirée (non prouvé)",
+   "pass": true,
+   "observed": {
+    "attempts": [
+     {
+      "attempt": 1,
+      "windowSeen": false
+     },
+     {
+      "attempt": 2,
+      "windowSeen": false
+     },
+     {
+      "attempt": 3,
+      "windowSeen": false
+     },
+     {
+      "attempt": 4,
+      "windowSeen": false
+     },
+     {
+      "attempt": 5,
+      "windowSeen": false
+     },
+     {
+      "attempt": 6,
+      "windowSeen": false
+     }
+    ]
+   }
+  }
+ ],
+ "residualProcesses": []
+}

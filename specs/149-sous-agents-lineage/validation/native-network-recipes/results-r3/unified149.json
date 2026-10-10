@@ -1,0 +1,250 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:47:54.141Z",
+ "finishedAt": "2026-10-10T17:48:32.108Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "summary": {
+  "title": "T036 instance T3 unique (credential MCP + Lineage)",
+  "pass": 7,
+  "fail": 0,
+  "total": 7
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.N0yM5w",
+  "daemonPid": 77126,
+  "serverPid": 77131,
+  "spyMethods": [
+   "argv",
+   "initialize",
+   "initialized",
+   "account/read",
+   "skills/list",
+   "model/list",
+   "account/rateLimits/read",
+   "argv",
+   "initialize",
+   "initialized",
+   "config/read",
+   "thread/start",
+   "turn/start"
+  ],
+  "mcpEndpoint": "http://127.0.0.1:15756/mcp",
+  "sessionEnvelope": {
+   "version": 2,
+   "keys": [
+    "environmentId",
+    "permissions",
+    "providerInstanceId",
+    "providerSessionId",
+    "threadId",
+    "version"
+   ],
+   "permissions": {
+    "keys": [
+     "cwd",
+     "driver",
+     "interaction_mode",
+     "provider_instance_id",
+     "provider_policy",
+     "provider_session_id",
+     "revision",
+     "run_id",
+     "runtime_mode",
+     "source",
+     "version"
+    ],
+    "runtime_mode": "full-access",
+    "driver": "codex_app_server",
+    "cwd": "/private/tmp/b149n.c6ALw6/work",
+    "sandbox": "dangerFullAccess",
+    "source": "provider_turn"
+   }
+  },
+  "spyMethodsAfterInterrupt": [
+   "argv",
+   "initialize",
+   "initialized",
+   "account/read",
+   "skills/list",
+   "model/list",
+   "account/rateLimits/read",
+   "argv",
+   "initialize",
+   "initialized",
+   "config/read",
+   "thread/start",
+   "turn/start",
+   "turn/interrupt"
+  ],
+  "revocation": {
+   "interrupt": "ok",
+   "sessionAfter": "200:parent_not_active",
+   "delegateAfter": "t3_session_unavailable",
+   "u3Prompts": 0,
+   "runsStatusAfter": [
+    {
+     "status": "interrupted"
+    }
+   ]
+  },
+  "finalCounts": {
+   "rows": 3,
+   "started": 3,
+   "prompts": 4,
+   "answered": 3,
+   "deliveries": {}
+  },
+  "hostname": "monordinateur",
+  "t3Stop": "stopped_by_sigterm",
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "U0",
+   "layer": "REEL",
+   "description": "une seule instance T3 (bin.ts) : la session Codex réelle de T3 (ProviderSessionManager + adaptateur V2) reçoit un credential MCP émis PAR CE SERVEUR - l'URL MCP de thread/start est l'origine même du serveur qui sert Lineage - et le tour démarre (turn/start)",
+   "pass": true,
+   "observed": {
+    "dispatch": "ok",
+    "endpoint": "http://127.0.0.1:15756/mcp",
+    "sameOriginAsLineage": true,
+    "methods": [
+     "initialize",
+     "initialized",
+     "account/read",
+     "skills/list",
+     "model/list",
+     "account/rateLimits/read",
+     "initialize",
+     "initialized",
+     "config/read",
+     "thread/start",
+     "turn/start"
+    ],
+    "spawnedPeers": 2
+   }
+  },
+  {
+   "id": "U1",
+   "layer": "REEL",
+   "description": "bridget_session v2 sur le serveur réel : le fait de permissions est celui publié par l'adaptateur Codex RÉEL (driver codex_app_server, cwd = racine du projet, mode full-access du fil) - la recette n'a rien forgé",
+   "pass": true,
+   "observed": {
+    "version": 2,
+    "keys": [
+     "environmentId",
+     "permissions",
+     "providerInstanceId",
+     "providerSessionId",
+     "threadId",
+     "version"
+    ],
+    "permissions": {
+     "keys": [
+      "cwd",
+      "driver",
+      "interaction_mode",
+      "provider_instance_id",
+      "provider_policy",
+      "provider_session_id",
+      "revision",
+      "run_id",
+      "runtime_mode",
+      "source",
+      "version"
+     ],
+     "runtime_mode": "full-access",
+     "driver": "codex_app_server",
+     "cwd": "/private/tmp/b149n.c6ALw6/work",
+     "sandbox": "dangerFullAccess",
+     "source": "provider_turn"
+    }
+   }
+  },
+  {
+   "id": "U2",
+   "layer": "REEL",
+   "description": "le credential émis par T3 pilote le daemon natif : identité résolue (bridget_who), admission héritée en full-access sans refus, enfant lancé (PID compté), résultat remis une fois au parent",
+   "pass": true,
+   "observed": {
+    "whoErr": false,
+    "d1": "queued",
+    "d2": "queued",
+    "state": "result_available",
+    "deliveries": 1
+   }
+  },
+  {
+   "id": "U3",
+   "layer": "REEL",
+   "description": "Lineage servi par la MÊME instance T3 : la racine (en attente), son enfant imbriqué et la tâche terminée sont listés avec modèle, protocole et posture issus du vrai fait ; rien d'un autre fil",
+   "pass": true,
+   "observed": {
+    "tasks": 3,
+    "root": "waiting_for_children",
+    "nested": "working",
+    "posture": "development"
+   }
+  },
+  {
+   "id": "U4",
+   "layer": "REEL",
+   "description": "projection T3 : le parent a UN vrai run (créé par T3) ; les fils enfants Bridget sont des fils virtuels sans aucun run ; une seule session fournisseur (celle du parent)",
+   "pass": true,
+   "observed": {
+    "runs": [
+     [
+      "89000000",
+      "running"
+     ]
+    ],
+    "virtual": 3,
+    "providerSessions": 1
+   }
+  },
+  {
+   "id": "U5",
+   "layer": "REEL",
+   "description": "cancel Lineage depuis la même instance T3 : reçu natif, racine + enfant imbriqué cancelled, PID enfant réellement terminé ; le run du parent côté T3 n'a pas changé",
+   "pass": true,
+   "observed": {
+    "receipt": {
+     "version": 1,
+     "task_id": "b11e801e-829d-487c-8ecc-eb4bb7aa4e63",
+     "status": "cancelling"
+    },
+    "rootState": "cancelled",
+    "nestedPid": 77501,
+    "nestedAlive": false,
+    "runsUnchanged": true
+   }
+  },
+  {
+   "id": "U6",
+   "layer": "REEL",
+   "description": "interruption du run par T3 (vrai arrêt de session) : le credential émis ne donne plus d'identité ni d'admission (refus nommé), aucun enfant lancé pour la requête suivante",
+   "pass": true,
+   "observed": {
+    "interrupt": "ok",
+    "sessionAfter": "200:parent_not_active",
+    "delegateAfter": "t3_session_unavailable",
+    "u3Prompts": 0,
+    "runsStatusAfter": [
+     {
+      "status": "interrupted"
+     }
+    ]
+   }
+  }
+ ],
+ "residualProcesses": []
+}

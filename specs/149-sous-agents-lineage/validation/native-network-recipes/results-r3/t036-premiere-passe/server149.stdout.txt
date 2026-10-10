@@ -1,0 +1,20 @@
+(node:28769) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:28917) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PASS V0 [REEL] serveur T3 réel démarré sur base privée, projet + deux conversations créés par RPC
+PASS V1 [REEL] A : racine + enfant imbriqué (lien parent_task_id), modèle/protocole/posture du moteur ; la racine attend ses enfants (waiting_for_children), résultat retenu
+PASS V2 [REEL] S149-19 via serveur T3 : B (même projet) ne voit que sa tâche, jamais celles de A
+PASS V3 [REEL] B ne peut ni show, ni journal, ni cancel la tâche de A (task_unavailable) ; token read ne peut pas cancel
+PASS V3b [REEL] scope : le jeton orchestration:read est refusé sur cancel (aucun effet natif)
+PASS V4 [REEL] projection T3 : un fil virtuel marqué par tâche native (3, relation subagent) ; l'ensemble des conversations de premier niveau est identique avant/après lecture (aucune conversation créée par la lecture)
+PASS V5 [REEL] zéro effet fournisseur côté T3 : 0 run, 0 tentative, 0 tour, 0 session, 0 effet en attente, 0 message
+PASS V6 [REEL] tant que l'enfant imbriqué travaille, la racine n'expose aucun résultat (retenu) ; l'enfant lui-même n'a pas de résultat
+PASS V7 [REEL] journal réel de l'enfant actif lisible via T3 (événements du daemon, séquence ordonnée)
+PASS V8 [REEL] bridget.lineage.watch via T3 : ready seq 0 premier, puis changed sans corps ni UUID après nouvelle tâche réelle
+PASS V9 [REEL] cancel via T3 : reçu natif, rejeu identique, request_id sur autre tâche = envelope_mismatch ; tâche cancelled et PID enfant réellement terminé
+PASS V10 [REEL] l'annulation depuis T3 ne crée aucun run/tour/session fournisseur côté T3 (tables toujours à zéro)
+PASS V11 [REEL] 110 lectures T3 -> daemon : aucun lancement, aucun tour, aucune mutation (états et updated_at identiques)
+PASS V12 [REEL] daemon coupé : T3 refuse explicitement (aucun contenu présenté comme courant)
+PASS V13 [REEL] reprise sans relance : même génération native, mêmes tâches, aucun fil virtuel en double côté T3
+{"summary":{"title":"T036 serveur T3 réel <-> daemon natif","pass":15,"fail":0,"total":15},"residualProcesses":0}

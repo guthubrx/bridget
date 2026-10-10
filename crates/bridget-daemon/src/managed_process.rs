@@ -1188,6 +1188,18 @@ impl ManagedMarkerStore {
         timeout: Duration,
         poll_interval: Duration,
     ) -> Result<Vec<String>, ManagedProcessError> {
+        self.reconcile_stale_groups_with_native(timeout, poll_interval, &BTreeMap::new(), Duration::ZERO)
+    }
+
+    /// Seule la réconciliation du daemon fournit ces identités depuis la saga
+    /// native et le lien durable de flotte. Aucun nom ou PID déclaré par RPC.
+    pub(crate) fn reconcile_stale_groups_with_native(
+        &self,
+        timeout: Duration,
+        poll_interval: Duration,
+        native_identities: &BTreeMap<String, ManagedIdentity>,
+        native_grace: Duration,
+    ) -> Result<Vec<String>, ManagedProcessError> {
         let entries = match fs::read_dir(&self.directory) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1216,6 +1228,8 @@ impl ManagedMarkerStore {
         names.sort();
 
         let mut reconciled = Vec::with_capacity(names.len());
+        let mut native_groups = Vec::new();
+        let mut ordinary_groups = Vec::new();
         for name in names {
             let marker = self.load(&name)?;
             validate_identity(&ManagedIdentity {
@@ -1223,6 +1237,15 @@ impl ManagedMarkerStore {
                 command_id: marker.command_id.clone(),
                 generation: marker.generation,
             })?;
+            if let Some(expected) = native_identities.get(&name)
+                && (marker.instance_id != expected.instance_id
+                    || marker.command_id != expected.command_id
+                    || marker.generation != expected.generation)
+            {
+                return Err(ManagedProcessError::InvalidStatus(format!(
+                    "identité native du marqueur incohérente pour {name}"
+                )));
+            }
             if marker.pgid == 0 {
                 return Err(ManagedProcessError::InvalidStatus(format!(
                     "marqueur géré incomplet pour {name}"
@@ -1241,6 +1264,41 @@ impl ManagedMarkerStore {
                 Err(error) => return Err(error.into()),
             };
             if birth != marker.birth || !group_exists(marker.pgid)? {
+                self.remove(&name)?;
+                reconciled.push(name);
+                continue;
+            }
+            if native_identities.contains_key(&name) {
+                native_groups.push((name, marker));
+            } else {
+                ordinary_groups.push((name, marker));
+            }
+        }
+        // Tous les wrappers natifs reçoivent le signal avant l'attente. Une
+        // seule échéance couvre le lot ; aucune escalade SIGKILL ne peut tuer
+        // leur wrapper avant qu'il ferme SON transport fournisseur.
+        let native_deadline = Instant::now() + native_grace;
+        for (_, marker) in &native_groups {
+            // Recontrôler la naissance juste avant le signal, après lecture
+            // des autres marqueurs. Un PID recyclé ne reçoit aucun signal.
+            match process_birth(marker.pgid) {
+                Ok(birth) if birth == marker.birth => signal_group(marker.pgid, libc::SIGTERM)?,
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        for (name, marker) in ordinary_groups {
+            // La classification en lot ne permet pas de signaler un PID qui
+            // a été recyclé pendant le traitement des marqueurs précédents.
+            let same_birth = match process_birth(marker.pgid) {
+                Ok(birth) => birth == marker.birth,
+                Err(error) if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) => false,
+                Err(error) => return Err(error.into()),
+            };
+            if !same_birth || !group_exists(marker.pgid)? {
                 self.remove(&name)?;
                 reconciled.push(name);
                 continue;
@@ -1264,6 +1322,23 @@ impl ManagedMarkerStore {
             self.remove(&name)?;
             reconciled.push(name);
         }
+        for (name, marker) in native_groups {
+            let same_birth = match process_birth(marker.pgid) {
+                Ok(birth) => birth == marker.birth,
+                Err(error) if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) => false,
+                Err(error) => return Err(error.into()),
+            };
+            if same_birth && !wait_group_gone(marker.pgid,
+                native_deadline.saturating_duration_since(Instant::now()), poll_interval)? {
+                return Err(ManagedProcessError::InvalidStatus(format!(
+                    "arrêt coopératif natif incomplet pour {name} (pgid {})", marker.pgid
+                )));
+            }
+            self.remove(&name)?;
+            reconciled.push(name);
+        }
+        reconciled.sort();
         Ok(reconciled)
     }
 

@@ -115,8 +115,8 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_runtime` — déclarer son modèle et son effort, sans sélection fournisseur.
 - `bridget_status` — lire la santé assainie du daemon.
 - `bridget_control_status` — lire l'état de contrôle, le compte inbox et un historique borné.
-- `bridget_capabilities` — lire le catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent.
-- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task`, `cwd` absolu et `posture`, avec `effort` facultatif déclaré par le registre.
+- `bridget_capabilities` — lire le catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent, avec `inherit`, `development` et leurs motifs de refus.
+- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent.
 - `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant.
 - `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id`.
 
@@ -126,8 +126,8 @@ Conserver exactement `request_id` et les arguments sur un rejeu. Le résultat
 revient automatiquement au parent avec sa corrélation de mission. Une fin de
 tour ou un délai réseau ne constitue pas une fin de mission.
 
-Le catalogue conserve les limites de posture. Les droits humains explicites
-restent prioritaires. L'exception133 ci-dessus reste limitée aux deux outils
+Le catalogue conserve les limites de posture. L'héritage 149 ne demande aucun
+grant. Les droits humains explicites restent prioritaires. L'exception133 ci-dessus reste limitée aux deux outils
 `bridget_who` et `bridget_send` pour les enfants internes T3. Le catalogue indique
 `mission_reply_limit_secs` ; le reçu indique `mission_deadline_at` après remise.
 Ce délai durable ne se renouvelle pas sur retry. Son expiration produit

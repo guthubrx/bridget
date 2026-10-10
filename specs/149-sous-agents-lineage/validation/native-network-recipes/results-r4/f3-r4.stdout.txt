@@ -1,0 +1,5 @@
+PASS F3.1 [REEL] daemon sain : le descendant annulé devient `cancelled` ; à chaque échantillon (100 ms) l'exécution n'est JAMAIS active quand la tâche est `cancelled` (clôture CAS AVANT) ; exécution finale non active ; racine débloquée
+PASS F3.2.a [REEL] fenêtre atteinte par l'API : le descendant est `cancelling` avec exécution durable ACTIVE, racine `waiting_for_children`
+PASS F3.2.b [REEL] après coupure en pleine annulation : le descendant est `cancelled`, son exécution est FERMÉE (non active) - jamais `cancelled` avec exécution active à aucun échantillon ; la racine n'attend plus (`result_available`), résultat remis UNE fois ; aucun nouveau lancement
+PASS F3.2.c [REEL] exécution terminale `completed` (témoin) INCHANGÉE (état, motif, révision, génération) ; aucune exécution terminale rouverte ; trois tables capturées avant/après (voir notes)
+{"summary":{"title":"F3 clôture CAS de l'exécution avant `cancelled` (r4)","pass":4,"fail":0,"total":4},"residualProcesses":0}

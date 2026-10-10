@@ -1,0 +1,5 @@
+R0-temoin-daemon rc= 0 tests= 17 echecs= 0
+E4-filiation-sans-controle-lien-delegation rc= 101 tests= 17 echecs= 1
+    ECHEC native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l_enfant ... FAILED
+O7-escalade-sigkill-native rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_aucune_escalade_native_marqueur_conserve_et_wrapper_vivant_apres_la_grace ... FAILED

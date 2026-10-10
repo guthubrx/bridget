@@ -3,6 +3,7 @@ use super::*;
 use crate::delegation::Task;
 use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, SpawnPosture};
 use serde_json::{Value, json};
+use std::path::Path;
 const MISSION_REPLY_LIMIT_SECS: i64 = 3600;
 
 enum ParentPermission {
@@ -34,6 +35,36 @@ fn failure(code: &str) -> Value {
     json!({"status":"refused","code":code})
 }
 
+fn parent_fact(st:&DaemonState,owner:&str,instance:&str,request_id:Option<&str>,attested:Option<&bridget_transport::protocol::ProviderPermissions>)->Result<Option<bridget_transport::protocol::ProviderPermissions>,String>{
+    // Une révocation directe conserve le refus148, avant toute attestation.
+    if st.delegation_store.revoked_agent(owner)?||st.delegation_store.revoked(instance)?{return Err("delegation_grant_required".into())}
+    if let Some(parent)=st.delegation_store.for_child(owner)? {
+        if st.delegation_store.revoked_agent(&parent.root_owner_agent_id)?{return Err("permission_not_inherited".into())}
+        if st.managed_by_instance.get(instance)!=Some(&parent.task_id)
+            || st.fleet.resolved_definition_for_command(&parent.task_id).is_none_or(|d|d.digest!=parent.definition.digest)
+            || st.fleet.agent_link_for_child(instance).map_err(|e|e.to_string())?.is_none_or(|link|link.delegation_id.as_deref()!=Some(parent.task_id.as_str())) {return Err("parent_task_unavailable".into())}
+        if let Some(snapshot)=parent.permission_snapshot{
+            return Ok(Some(bridget_transport::protocol::ProviderPermissions{
+                version:1,source:"native_wrapper".into(),run_id:parent.mission,provider_session_id:parent.child.clone(),provider_instance_id:instance.into(),revision:1,
+                driver:parent.definition.protocol,cwd:parent.cwd,runtime_mode:crate::native_permissions::runtime_mode(&snapshot.child_policy).into(),
+                interaction_mode:if snapshot.child_policy["permission_mode"]=="plan"||snapshot.child_policy["sandbox_policy"]["type"]=="readOnly"{"plan"}else{"default"}.into(),provider_policy:snapshot.child_policy,
+            }))
+        }
+    }
+    if let Some(fact)=attested{return Ok(Some(fact.clone()))}
+    let mut facts=st.native_permission_facts.iter().filter(|(conn,(fact,scope))|
+        (scope.is_none()||scope.as_deref()==request_id)&&fact.provider_instance_id==instance&&!st.auxiliary_connections.contains(*conn)
+        &&live_connection_identity(st,conn)==Some((owner.into(),instance.into())));
+    let first=facts.next().map(|(_,f)|f.0.clone());
+    if facts.next().is_some(){return Err("permission_attestation_unavailable".into())}
+    if first.is_none(){
+        for (connection,code) in &st.native_permission_refusals{
+            if !st.auxiliary_connections.contains(connection)&&live_connection_identity(st,connection)==Some((owner.into(),instance.into())){return Err(code.clone())}
+        }
+    }
+    Ok(first)
+}
+
 fn task_view(task: &Task) -> Value {
     let (agent_type, model, effort, cwd, posture) = match &task.request {
         NativeDelegationRequest::Delegate {
@@ -49,7 +80,7 @@ fn task_view(task: &Task) -> Value {
     let _ = cwd;
     json!({"version":1,"task_id":task.task_id,"status":task.state,
         "child_agent_id":task.child,"message_id":task.mission,
-        "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":posture,
+        "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
         "mission_deadline_at":task.mission_deadline_at,
         "result":if task.state=="result_available" {task.result.as_deref()} else {None},"error":task.error})
 }
@@ -230,6 +261,23 @@ pub(super) fn handle(
     request: NativeDelegationRequest,
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
+    handle_with_fact(conn,request,None,None,state)
+}
+
+pub(super) fn handle_attested(conn:&str,request:NativeDelegationRequest,proof:&bridget_transport::protocol::NativePermissionProof,state:&Arc<Mutex<DaemonState>>)->DaemonToWrapper {
+    // HTTP hors verrou. La connexion, le fil et le projet sont revérifiés
+    // après la réponse authentifiée, au même puits que l'admission durable.
+    let attested=crate::t3code_mcp::reattest(proof);
+    let proof=match attested{Ok(p)=>p,Err(_)=>return DaemonToWrapper::NativeDelegationResult{result:failure("permission_attestation_unavailable")}};
+    let valid={let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let expected=(crate::t3code::stable_uuid(&proof.thread_id),crate::t3code::stable_uuid(&format!("instance:{}",proof.thread_id)));
+        live_connection_identity(&st,conn)==Some(expected.clone())
+            && human_authority_guard(&st,&proof.thread_id,&agent_communication_project(&st,&expected.0)).is_ok()};
+    if !valid{return DaemonToWrapper::NativeDelegationResult{result:failure("permission_attestation_unavailable")}}
+    handle_with_fact(conn,request,proof.permissions,Some(&proof.thread_id),state)
+}
+
+fn handle_with_fact(conn:&str,request:NativeDelegationRequest,fact:Option<bridget_transport::protocol::ProviderPermissions>,thread:Option<&str>,state:&Arc<Mutex<DaemonState>>)->DaemonToWrapper {
     // Résoudre Git hors du verrou, puis comparer avec le fait vivant au puits.
     let candidate_project = if let NativeDelegationRequest::Delegate { cwd, .. } = &request {
         let host = state
@@ -252,7 +300,15 @@ pub(super) fn handle(
     );
     let result = {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
-        match handle_locked_with_project(conn, request, candidate_project.as_ref(), &mut st) {
+        if let Some(thread)=thread{
+            let owner=crate::t3code::stable_uuid(thread);
+            let expected=(owner.clone(),crate::t3code::stable_uuid(&format!("instance:{thread}")));
+            if live_connection_identity(&st,conn)!=Some(expected)
+                ||human_authority_guard(&st,thread,&agent_communication_project(&st,&owner)).is_err(){
+                return DaemonToWrapper::NativeDelegationResult{result:failure("permission_attestation_unavailable")};
+            }
+        }
+        match handle_locked_with_project(conn, request, candidate_project.as_ref(), fact.as_ref(), &mut st) {
             Ok(result) => result,
             Err(code) => failure(&code),
         }
@@ -269,13 +325,14 @@ fn handle_locked(
     request: NativeDelegationRequest,
     st: &mut DaemonState,
 ) -> Result<Value, String> {
-    handle_locked_with_project(conn, request, None, st)
+    handle_locked_with_project(conn, request, None, None, st)
 }
 
 fn handle_locked_with_project(
     conn: &str,
     request: NativeDelegationRequest,
     candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
     st: &mut DaemonState,
 ) -> Result<Value, String> {
     if let NativeDelegationRequest::Grant {
@@ -317,18 +374,22 @@ fn handle_locked_with_project(
     match &request {
         NativeDelegationRequest::Catalogue => {
             let permission = root_permission(st, &owner, &instance)?;
+            let fact=parent_fact(st,&owner,&instance,None,attested)?;
             let entries: Vec<Value> = st.registry.resolved_definitions()?.into_iter()
                 .filter(|(name,_)|!name.starts_with("__"))
                 .map(|(name,definition)| {
                     let discovery = st.registry.for_spawn_posture(&name,SpawnPosture::Discovery).is_ok();
-                    let development = permission.as_ref().is_some_and(|permission|permission.maximum()==SpawnPosture::Development)
-                        && st.registry.for_spawn_posture(&name,SpawnPosture::Development).is_ok();
+                    let inherited=fact.as_ref().ok_or_else(||"permission_attestation_unavailable".to_string()).and_then(|fact|
+                        crate::native_permissions::child_policy(fact,st.registry.get(&name)?,Path::new(&fact.cwd),&st.source_env,None));
+                    let development=fact.as_ref().ok_or_else(||"permission_attestation_unavailable".to_string()).and_then(|fact|
+                        crate::native_permissions::child_policy(fact,st.registry.get(&name)?,Path::new(&fact.cwd),&st.source_env,Some(SpawnPosture::Development)));
                     json!({"agent_type":name,"protocol":definition.protocol,"models":definition.capabilities.models,
-                        "discovery":discovery && permission.is_some(),"development":development,
-                        "development_refusal":if development {None} else if definition.protocol!="codex_app_server" {Some("development_protocol_unavailable")} else {Some("development_grant_required")}})
+                        "inherit":inherited.is_ok(),"inherit_refusal":inherited.err(),
+                        "discovery":discovery && (permission.is_some()||fact.is_some()),"development":development.as_ref().is_ok_and(|(_,p)|*p==SpawnPosture::Development),
+                        "development_refusal":development.err()})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"cwd_root":permission.as_ref().and_then(ParentPermission::root),"cwd_scope":permission.as_ref().map(ParentPermission::scope),"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS}),
+                json!({"version":1,"providers":entries,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS}),
             )
         }
         NativeDelegationRequest::Delegate {
@@ -356,17 +417,27 @@ fn handle_locked_with_project(
                 recover_owner(st, &mut saved, &owner, &instance)?;
                 return Ok(task_view(&saved));
             }
-            let frozen_cwd =
-                authorize_cwd(st, &owner, &instance, cwd, *posture, candidate_project)?;
+            let fact=parent_fact(st,&owner,&instance,Some(request_id),attested)?;
+            let frozen_cwd=if let Some(fact)=&fact{
+                let path=std::fs::canonicalize(cwd).map_err(|_|"cwd_unavailable")?;
+                let root=std::fs::canonicalize(&fact.cwd).map_err(|_|"cwd_unavailable")?;
+                if !path.is_dir()||!path.starts_with(&root){return Err("cwd_outside_parent_project".into())}
+                path
+            }else if *posture==Some(SpawnPosture::Discovery){
+                authorize_cwd(st,&owner,&instance,cwd,SpawnPosture::Discovery,candidate_project)?
+            }else{return Err("permission_attestation_unavailable".into())};
             crate::communication::project_scope(
                 agent_communication_project(st, &owner).as_ref(),
                 candidate_project,
                 "native-child",
                 None,
             )?;
-            let scoped =
-                st.registry
-                    .for_delegation(agent_type, model, effort.as_deref(), *posture)?;
+            let (scoped,permission_snapshot,effective_posture)=if let Some(fact)=fact{
+                let target=st.registry.get(agent_type)?;
+                let (policy,effective)=crate::native_permissions::child_policy(&fact,target,&frozen_cwd,&st.source_env,*posture)?;
+                let scoped=st.registry.for_inherited_delegation(agent_type,model,effort.as_deref(),&policy)?;
+                (scoped,Some(crate::native_permissions::snapshot(&owner,&instance,fact,policy,&frozen_cwd)),Some(effective))
+            }else{(st.registry.for_delegation(agent_type,model,effort.as_deref(),SpawnPosture::Discovery)?,None,Some(SpawnPosture::Discovery))};
             let tasks = st.delegation_store.tasks()?;
             if tasks.len() >= 4096
                 || tasks.iter().filter(|task| !task.terminal()).count() >= 128
@@ -386,13 +457,34 @@ fn handle_locked_with_project(
             if executions.len() > 1 {
                 return Err("parent_execution_ambiguous".into());
             }
+            let (root_owner_agent_id,parent_task_id)=match st.delegation_store.for_child(&owner)? {
+                Some(mut parent)=>{
+                    if st.managed_by_instance.get(&instance)!=Some(&parent.task_id)
+                        || st.fleet.resolved_definition_for_command(&parent.task_id)
+                            .is_none_or(|d|d.digest!=parent.definition.digest)
+                        || !recover_child(st,&mut parent,&instance)? {
+                        return Err("parent_task_unavailable".into());
+                    }
+                    let link=st.fleet.agent_link_for_child(&instance).map_err(|e|e.to_string())?.ok_or("parent_task_unavailable")?;
+                    if link.delegation_id.as_deref()!=Some(parent.task_id.as_str()) {return Err("parent_task_unavailable".into())}
+                    st.delegation_store.parent_lineage(&parent)?
+                },
+                None=>(owner.clone(),None),
+            };
             let record = Task {
                 task_id: task_id.clone(),
+                root_owner_agent_id,
+                parent_task_id,
+                updated_at: unix_timestamp(),
+                started_at: None,
+                completed_at: None,
                 owner,
                 owner_instance: instance.clone(),
                 origin_owner_instance: instance,
                 parent_execution_id: executions.into_iter().next(),
                 request: request.clone(),
+                permission_snapshot,
+                effective_posture,
                 definition: scoped.resolved_definition(agent_type)?,
                 cwd: frozen_cwd.to_string_lossy().into_owned(),
                 child: Uuid::new_v4().to_string(),
@@ -440,6 +532,7 @@ fn handle_locked_with_project(
 }
 
 fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
+    if st.delegation_store.revoked_agent(&task.owner)?||st.delegation_store.revoked_agent(&task.root_owner_agent_id)?||st.delegation_store.revoked(&task.owner_instance)?{return Err("permission_not_inherited".into())}
     let NativeDelegationRequest::Delegate {
         agent_type,
         posture,
@@ -454,8 +547,16 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
         return Err("cwd_changed".into());
     }
     let registry = AgentRegistry::from_resolved(agent_type, &task.definition)?;
+    if let Some(snapshot)=&task.permission_snapshot {
+        for context in crate::native_permissions::snapshot_contexts(snapshot){bridget_transport::protocol::recheck_permission_context_sources(&context)?;}
+        if let Some(context)=snapshot.child_policy.get("launch_context"){
+            crate::native_permissions::recheck_context(context,registry.get(agent_type)?,Path::new(&task.cwd),&st.source_env)?;
+        }
+    }
     let order = FleetSpawnOrder {
-        posture: Some(*posture),
+        // La définition héritée est déjà figée. Une nouvelle conversion de
+        // posture réduirait silencieusement sa politique fournisseur.
+        posture: if task.permission_snapshot.is_some(){None}else{*posture},
         agent_type: agent_type.clone(),
         project: None,
         requested_name: Some(task.child.clone()),
@@ -491,6 +592,10 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     .map_err(|error| error.to_string())?
     {
         SpawnDecision::Ready(mut prepared) => {
+            if let Some(snapshot)=&task.permission_snapshot {
+                prepared.env.insert(crate::native_permissions::CHILD_POLICY_ENV.into(),serde_json::to_string(&snapshot.child_policy).map_err(|e|e.to_string())?.into());
+                prepared.env.insert(crate::native_permissions::CHILD_SOURCES_ENV.into(),serde_json::to_string(&crate::native_permissions::snapshot_contexts(snapshot)).map_err(|e|e.to_string())?.into());
+            }
             prepared.env.insert(
                 crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV.into(),
                 serde_json::to_string(&crate::wrapper::NativeMissionBootstrap {
@@ -555,6 +660,59 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     Ok(())
 }
 
+// Cette capacité ne provient d'aucune trame. Seule la saga la construit pour
+// relayer un résultat qu'elle a déjà capturé sous l'identité vivante de l'enfant.
+pub(super) struct RetainedResultAuthority {
+    task_id: String,
+}
+
+pub(super) fn authorize_retained_result(
+    st: &DaemonState,
+    authority: &RetainedResultAuthority,
+    conn: &str,
+    message: &bridget_core::BridgetMessage,
+) -> Result<(), String> {
+    let invalid = || "native_result_invalid".to_string();
+    let task = st.delegation_store.get(&authority.task_id)?.ok_or_else(invalid)?;
+    let child_instance = task.child_instance.as_ref().ok_or_else(invalid)?;
+    if task.state != "result_available" || task.result.as_deref() != Some(message.body.as_str())
+        || message.body.trim().is_empty() || message.body.len() > 262144
+        || message.id != format!("native-result-{}", task.task_id)
+        || message.from != task.child || message.to != task.owner
+        || message.in_reply_to.as_deref() != Some(task.mission.as_str())
+        || message.reply || message.intent.is_some()
+        || conn != format!("native-delegation:{}", message.id)
+        || st.connections.contains_key(conn) || !st.auxiliary_connections.contains(conn)
+        || st.conn_names.get(conn) != Some(&task.child)
+        || st.conn_instances.get(conn) != Some(child_instance)
+        || !st.client_negotiations.get(conn).is_some_and(|client|
+            client.issuer_scope == crate::communication::issuer_scope(&task.task_id))
+    {
+        return Err(invalid());
+    }
+    if st.delegation_store.revoked_agent(&task.owner)?
+        || st.delegation_store.revoked_agent(&task.root_owner_agent_id)?
+        || st.delegation_store.revoked(&task.owner_instance)? {
+        return Err("native_result_authority_revoked".into());
+    }
+    let owner_route = st.router.get_agent(&task.owner).ok_or("native_result_owner_offline")?;
+    if st.communication_projects.get(&owner_route.connection_id).is_some_and(|fact| fact.2) {
+        return Err("native_result_authority_revoked".into());
+    }
+    if live_connection_identity(st, &owner_route.connection_id)
+        != Some((task.owner.clone(), task.owner_instance.clone()))
+        || !can_own_task(st, &task, &task.owner, &task.owner_instance)? {
+        return Err("native_result_owner_unavailable".into());
+    }
+    if st.presences.get(&task.owner_instance).is_some_and(|p| p.transport == "t3code") {
+        let thread = st.t3_thread_bindings.get(&owner_route.connection_id)
+            .and_then(Option::as_deref).ok_or("native_result_owner_unavailable")?;
+        human_authority_guard(st, thread, &agent_communication_project(st, &task.owner))
+            .map_err(|_| "native_result_owner_unavailable".to_string())?;
+    }
+    Ok(())
+}
+
 fn send_as(
     st: &mut DaemonState,
     owner: &str,
@@ -563,6 +721,19 @@ fn send_as(
     message: bridget_core::BridgetMessage,
     issued_at: i64,
     controls: &mut Vec<DeferredControl>,
+) -> DaemonToWrapper {
+    send_as_with_result_authority(st, owner, instance, task_scope, message, issued_at, controls, None)
+}
+
+fn send_as_with_result_authority(
+    st: &mut DaemonState,
+    owner: &str,
+    instance: &str,
+    task_scope: &str,
+    message: bridget_core::BridgetMessage,
+    issued_at: i64,
+    controls: &mut Vec<DeferredControl>,
+    authority: Option<&RetainedResultAuthority>,
 ) -> DaemonToWrapper {
     // Identité interne dérivée de la saga admise. Jamais créée depuis un payload externe.
     let conn = format!("native-delegation:{}", message.id);
@@ -577,7 +748,7 @@ fn send_as(
             capabilities: vec![ClientCapability::SendIdempotent],
         },
     );
-    let response = handle_idempotent_send(
+    let response = handle_idempotent_send_with_result_authority(
         &conn,
         message.clone(),
         message.id.clone(),
@@ -588,6 +759,7 @@ fn send_as(
         },
         st,
         controls,
+        authority,
     );
     st.conn_names.remove(&conn);
     st.conn_instances.remove(&conn);
@@ -650,6 +822,133 @@ pub(super) fn rejected(st: &DaemonState, conn: &str, mission: &str, reason: &str
     if let Err(error) = st.delegation_store.save(&task) {
         error!("délégation native refus non persisté: {error}");
     }
+}
+
+/// Autorités de bootstrap natif issues de l'admission propriétaire. Le
+/// marqueur fournit la naissance PID ; la saga et les deux liens de flotte
+/// prouvent qu'il s'agit du wrapper natif de CETTE mission, pas d'un nom RPC.
+pub(super) fn restart_identities(
+    st: &DaemonState,
+) -> Result<std::collections::BTreeMap<String, ManagedIdentity>, String> {
+    let desired = st.fleet.desired_fleet().map_err(|error| error.to_string())?;
+    let mut identities = std::collections::BTreeMap::new();
+    for task in st.delegation_store.tasks()? {
+        match st.marker_store.load(&task.child) {
+            Ok(_) => {}
+            Err(crate::managed_process::ManagedProcessError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            return Err("native_restart_identity_mismatch".into());
+        };
+        let instance = task.child_instance.as_deref().ok_or("native_restart_identity_mismatch")?;
+        let entry = desired.equipiers.get(&task.child).ok_or("native_restart_identity_mismatch")?;
+        let persisted_link = entry.agent_link.as_ref().ok_or("native_restart_identity_mismatch")?;
+        let link = st.fleet.agent_link_for_child(instance).map_err(|error| error.to_string())?
+            .ok_or("native_restart_identity_mismatch")?;
+        if entry.command_id != task.task_id
+            || &entry.agent_type != agent_type
+            || entry.cwd != Path::new(&task.cwd)
+            || entry.resolved_definition.as_ref() != Some(&task.definition)
+            || link.child_instance_id != instance
+            || (link.parent_instance_id != task.origin_owner_instance
+                && link.parent_instance_id != task.owner_instance)
+            || link.delegation_id.as_deref() != Some(task.task_id.as_str())
+            || link.role != "native_delegate"
+            || persisted_link.link_id != link.link_id
+            || (persisted_link.parent_instance_id != task.origin_owner_instance
+                && persisted_link.parent_instance_id != task.owner_instance)
+            || persisted_link.delegation_id != link.delegation_id
+            || persisted_link.role != link.role
+        {
+            return Err("native_restart_identity_mismatch".into());
+        }
+        identities.insert(task.child, ManagedIdentity {
+            instance_id: instance.into(), command_id: task.task_id, generation: entry.generation,
+        });
+    }
+    Ok(identities)
+}
+
+/// Une tâche imbriquée queued n'a pas encore de fournisseur. Son propriétaire
+/// est pourtant perdu définitivement si la filiation désigne une instance
+/// native déjà lancée : cette instance est exclue de toute reprise.
+fn queued_owner_lost(st: &DaemonState, task: &Task) -> Result<bool, String> {
+    let Some(parent_id) = task.parent_task_id.as_deref() else { return Ok(false) };
+    let parent = st.delegation_store.get(parent_id)?.ok_or("parent_task_unavailable")?;
+    let instance = parent.child_instance.as_deref().ok_or("native_owner_identity_mismatch")?;
+    let link = st.fleet.agent_link_for_child(instance).map_err(|error| error.to_string())?
+        .ok_or("native_owner_identity_mismatch")?;
+    if parent.child != task.owner
+        || instance != task.owner_instance
+        || instance != task.origin_owner_instance
+        || parent.root_owner() != task.root_owner()
+        || link.child_instance_id != instance
+        || (link.parent_instance_id != parent.origin_owner_instance
+            && link.parent_instance_id != parent.owner_instance)
+        || link.delegation_id.as_deref() != Some(parent.task_id.as_str())
+        || link.role != "native_delegate"
+    {
+        return Err("native_owner_identity_mismatch".into());
+    }
+    Ok(true)
+}
+
+/// Fermer seulement la ligne de mission exacte, par comparaison atomique.
+/// Une exécution déjà terminale (notamment completed) n'est jamais rouverte.
+fn close_lost_execution(st: &DaemonState, task: &Task, reason: &str) -> Result<(), String> {
+    let execution_id = format!("execution-{}", task.mission);
+    let Some(target) = st.execution_store.execution_control_target(&execution_id)
+        .map_err(|error| error.to_string())? else { return Ok(()) };
+    if target.target_agent != task.child {
+        return Err("native_execution_mismatch".into());
+    }
+    let snapshot = target.snapshot;
+    if matches!(snapshot.state.as_str(), "queued" | "starting" | "running"
+        | "waiting_approval" | "waiting_user_input" | "interrupting") {
+        match st.execution_store.transition_if_current(&execution_id, &snapshot.state,
+            snapshot.revision, snapshot.generation, "unreachable", reason, unix_timestamp())
+            .map_err(|error| error.to_string())? {
+            ConditionalTransition::Applied(_) => {}
+            _ => return Err("native_execution_changed".into()),
+        }
+    }
+    Ok(())
+}
+
+/// La flotte ordinaire peut reprendre ses agents persistants. Un enfant natif
+/// appartient à sa saga : rejouer un tour engagé après une coupure est interdit.
+pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, String> {
+    let mut children = HashSet::new();
+    let running: HashSet<String> = st.fleet.desired_fleet()
+        .map_err(|error| error.to_string())?.equipiers.into_iter()
+        .filter(|(_, entry)| entry.lifecycle_state == DesiredLifecycleState::Running)
+        .map(|(name, _)| name).collect();
+    for mut task in st.delegation_store.tasks()? {
+        children.insert(task.child.clone());
+        if matches!(task.state.as_str(), "starting" | "mission_pending" | "working")
+            || (task.state == "queued" && queued_owner_lost(st, &task)?)
+        {
+            task.state = "failed".into();
+            task.error = Some("unreachable".into());
+        }
+        if task.state == "failed" && task.error.as_deref() == Some("unreachable") {
+            close_lost_execution(st, &task, "daemon_restart")?;
+            st.delegation_store.save(&task)?;
+        }
+        if matches!(task.state.as_str(), "cancelled" | "cancelling") {
+            // La réconciliation des groupes est achevée avant cette fonction.
+            // Cette instance native ne peut donc plus reprendre sa mission.
+            close_lost_execution(st, &task, "native_cancelled_restart")?;
+        }
+        // Les résultats déjà capturés et l'attente des descendants restent
+        // durables. Aucun nouveau fournisseur ne doit porter la même mission.
+        if running.contains(&task.child) {
+            st.fleet.mark_stopped(&task.child).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(children)
 }
 
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
@@ -787,7 +1086,41 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     .get_agent(&task.owner)
                     .and_then(|route| st.conn_instances.get(&route.connection_id))
                     == Some(&task.owner_instance);
+            // L'absence temporaire du destinataire ne maintient pas une
+            // attente de descendants déjà terminés. Le résultat reste durable.
+            if task.state == "waiting_for_children" {
+                let busy = match descendants_busy(&st, &task) {
+                    Ok(busy) => busy,
+                    Err(error) => {
+                        task.state = "failed".into();
+                        task.error = Some(format!("native_descendants_unavailable:{error}")
+                            .chars().take(1024).collect());
+                        let _ = st.delegation_store.save(&task);
+                        continue;
+                    }
+                };
+                let active = tasks.iter().any(|child| {
+                    Some(&child.owner_instance) == task.child_instance.as_ref() && !child.terminal()
+                }) || busy;
+                if !active {
+                    if task.result.as_ref().is_none_or(|body| body.trim().is_empty() || body.len() > 262144)
+                        || task.child_instance.is_none() {
+                        task.state = "failed".into();
+                        task.error = Some("native_result_invalid".into());
+                    } else {
+                        task.state = "result_available".into();
+                    }
+                    if let Err(error) = st.delegation_store.save(&task) {
+                        error!("résultat natif non publié: {error}");
+                        continue;
+                    }
+                }
+            }
             if !parent_live {
+                if task.state == "result_available" && !task.result_sent {
+                    task.error = Some("native_result_owner_offline".into());
+                    let _ = st.delegation_store.save(&task);
+                }
                 continue;
             }
             if matches!(task.state.as_str(), "queued" | "starting")
@@ -868,20 +1201,11 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 task.error = Some(snapshot.state);
                 let _ = st.delegation_store.save(&task);
             }
-            if task.state == "waiting_for_children" {
-                let active = tasks.iter().any(|child| {
-                    Some(&child.owner_instance) == task.child_instance.as_ref() && !child.terminal()
-                }) || descendants_busy(&st, &task).unwrap_or(true);
-                if !active {
-                    task.state = "result_available".into();
-                    if let Err(error) = st.delegation_store.save(&task) {
-                        error!("résultat natif non publié: {error}");
-                        continue;
-                    }
-                }
-            }
             if task.state == "result_available" && !task.result_sent {
                 let Some(child_instance) = task.child_instance.as_deref() else {
+                    task.state = "failed".into();
+                    task.error = Some("native_result_invalid".into());
+                    let _ = st.delegation_store.save(&task);
                     continue;
                 };
                 let mut response = bridget_core::BridgetMessage::new(
@@ -891,47 +1215,69 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 );
                 response.id = format!("native-result-{}", task.task_id);
                 response.in_reply_to = Some(task.mission.clone());
-                let key = crate::idempotency::IdempotencyKey::new(
-                    crate::communication::issuer_scope(&task.task_id),
-                    crate::idempotency::OperationKind::Send,
-                    response.id.clone(),
+                // Même un replay vérifie la tâche durable et son destinataire
+                // actuel avant de consulter la clé idempotente existante.
+                let authority = RetainedResultAuthority { task_id: task.task_id.clone() };
+                let result = send_as_with_result_authority(
+                    &mut st,
+                    &task.child,
+                    child_instance,
+                    &task.task_id,
+                    response,
+                    task.created_at,
+                    &mut controls,
+                    Some(&authority),
                 );
-                let replayed = key.as_ref().ok().is_some_and(|key| {
-                    matches!(
-                        st.idempotency.lookup(key, unix_timestamp()),
-                        Ok(crate::idempotency::LookupResult::Accepted { .. })
-                    ) || (matches!(
-                        st.idempotency.lookup(key, unix_timestamp()),
-                        Ok(crate::idempotency::LookupResult::OutcomeUnknown { .. })
-                    ) && st.idempotency.send_delivery(key).ok().flatten().is_some())
-                });
-                let result = if replayed {
-                    None
-                } else {
-                    Some(send_as(
-                        &mut st,
-                        &task.child,
-                        child_instance,
-                        &task.task_id,
-                        response,
-                        task.created_at,
-                        &mut controls,
-                    ))
-                };
-                if replayed
-                    || matches!(
-                        result,
-                        Some(DaemonToWrapper::IdempotencyResult {
+                if matches!(
+                        &result,
+                        DaemonToWrapper::IdempotencyResult {
                             issue: IdempotencyIssue::Accepted { .. }
-                                | IdempotencyIssue::OutcomeUnknown { .. },
+                                | IdempotencyIssue::OutcomeUnknown { delivery_id: Some(_), .. },
                             ..
-                        })
+                        }
                     )
                 {
                     task.result_sent = true;
+                    task.error = None;
                     if st.delegation_store.save(&task).is_err() {
                         task.result_sent = false;
                     }
+                } else {
+                    match result {
+                        DaemonToWrapper::Nack { reason, .. } => {
+                            if matches!(reason.as_str(), "native_result_invalid" | "native_result_authority_revoked") {
+                                task.state = "failed".into();
+                            }
+                            task.error = Some(reason.chars().take(1024).collect());
+                        }
+                        DaemonToWrapper::IdempotencyResult {
+                            issue: IdempotencyIssue::Rejected { category, reason, .. }, ..
+                        } => {
+                            task.state = "failed".into();
+                            task.error = Some(format!("{category}:{reason}").chars().take(1024).collect());
+                        }
+                        DaemonToWrapper::IdempotencyResult {
+                            issue: IdempotencyIssue::EnvelopeMismatch, ..
+                        } => {
+                            task.state = "failed".into();
+                            task.error = Some("native_result_invalid".into());
+                        }
+                        DaemonToWrapper::IdempotencyResult {
+                            issue: IdempotencyIssue::Orphaned { reason, .. }, ..
+                        } => {
+                            task.state = "failed".into();
+                            task.error = Some(reason.chars().take(1024).collect());
+                        }
+                        DaemonToWrapper::IdempotencyResult {
+                            issue: IdempotencyIssue::IdempotencyExpired
+                                | IdempotencyIssue::InvalidIssuedAt, ..
+                        } => {
+                            task.state = "failed".into();
+                            task.error = Some("native_result_delivery_expired".into());
+                        }
+                        _ => { task.error = Some("native_result_delivery_pending".into()); }
+                    }
+                    let _ = st.delegation_store.save(&task);
                 }
             }
             if task.state == "result_available" && task.result_sent && !task.cleanup_done {
@@ -949,6 +1295,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
 }
 
 fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
+    if st.delegation_store.descendants(&task.task_id)?.iter().any(|child|!child.terminal()) {
+        return Ok(true);
+    }
     let Some(instance) = task.child_instance.clone() else {
         return Ok(false);
     };
@@ -988,12 +1337,32 @@ fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
                         .map(|(name, _)| name.clone())
                 });
             if let Some(name) = name {
-                if !st
-                    .execution_store
+                let executions = st.execution_store
                     .recoverable_execution_ids_for_agent(&name)
-                    .map_err(|error| error.to_string())?
-                    .is_empty()
-                    || st
+                    .map_err(|error| error.to_string())?;
+                let mut active_execution = false;
+                for execution_id in executions {
+                    // Une ancienne interruption de contrôle peut garder une
+                    // ligne de reprise après la clôture exacte au redémarrage.
+                    // Elle ne ressuscite pas une mission native perdue.
+                    let closed_native = if let Some(mission) = execution_id.strip_prefix("execution-") {
+                        st.delegation_store.for_mission(mission)?.is_some_and(|child|
+                            child.child == name
+                                && child.child_instance.as_deref() == Some(link.child_instance_id.as_str())
+                                && (child.state == "cancelled"
+                                    || (child.state == "failed"
+                                        && child.error.as_deref() == Some("unreachable"))))
+                            && st.execution_store.execution_snapshot(&execution_id)
+                                .map_err(|error| error.to_string())?
+                                .is_some_and(|snapshot| matches!(snapshot.state.as_str(),
+                                    "failed" | "unreachable" | "interrupted"))
+                    } else { false };
+                    if !closed_native {
+                        active_execution = true;
+                        break;
+                    }
+                }
+                if active_execution || st
                         .presences
                         .get(&link.child_instance_id)
                         .is_some_and(|presence| presence.state == "busy")
@@ -1012,34 +1381,16 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
     let mut names = vec![task.child.clone()];
     {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
-        let Ok(tasks) = st.delegation_store.tasks() else {
+        let Ok(tasks) = st.delegation_store.descendants(&task.task_id) else {
             return;
         };
         let mut instances = vec![task.child_instance.clone()];
-        for _ in 0..8 {
-            let children: Vec<Task> = tasks
-                .iter()
-                .filter(|candidate| {
-                    instances.iter().any(|instance| {
-                        instance.as_deref() == Some(candidate.owner_instance.as_str())
-                    })
-                })
-                .cloned()
-                .collect();
-            let mut added = false;
-            for mut child in children {
-                if !names.contains(&child.child) {
-                    names.push(child.child.clone());
-                    instances.push(child.child_instance.clone());
-                    added = true;
-                }
-                if !child.terminal() {
-                    child.state = "cancelling".into();
-                    let _ = st.delegation_store.save(&child);
-                }
-            }
-            if !added {
-                break;
+        for mut child in tasks {
+            names.push(child.child.clone());
+            instances.push(child.child_instance.clone());
+            if !child.terminal() {
+                child.state="cancelling".into();
+                let _=st.delegation_store.save(&child);
             }
         }
         // Les liens flotte couvrent aussi les descendants créés par la CLI
@@ -1103,9 +1454,22 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
         if let Ok(tasks) = st.delegation_store.tasks() {
             for mut entry in tasks {
-                if names.contains(&entry.child) && entry.state == "cancelling" {
-                    entry.state = "cancelled".into();
-                    let _ = st.delegation_store.save(&entry);
+                if names.contains(&entry.child)
+                    && matches!(entry.state.as_str(), "cancelling" | "cancelled")
+                {
+                    // Tous les arrêts ci-dessus sont confirmés. Ne publier la
+                    // fin de l'annulation qu'après la clôture CAS de sa mission.
+                    if let Err(error) = close_lost_execution(&st, &entry, "native_cancelled") {
+                        error!("annulation native: clôture d'exécution refusée: {error}");
+                        continue;
+                    }
+                    if entry.state == "cancelling" {
+                        entry.state = "cancelled".into();
+                        if let Err(error) = st.delegation_store.save(&entry) {
+                            error!("annulation native non persistée: {error}");
+                            continue;
+                        }
+                    }
                 }
                 if names.contains(&entry.child) && entry.terminal() {
                     entry.cleanup_done = true;
@@ -1170,7 +1534,7 @@ mod tests {
             effort: Some("high".into()),
             task: "Inspecte les faits locaux".into(),
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
-            posture: SpawnPosture::Development,
+            posture: Some(SpawnPosture::Discovery),
         }
     }
     fn cleanup(config: &DaemonConfig) {
@@ -1286,7 +1650,7 @@ mod tests {
                 unreachable!()
             };
             *path = cwd.to_string_lossy().into_owned();
-            *posture = SpawnPosture::Discovery;
+            *posture = Some(SpawnPosture::Discovery);
             let DaemonToWrapper::NativeDelegationResult { result } =
                 handle("conn-1", request, &shared)
             else {
@@ -1303,7 +1667,7 @@ mod tests {
             unreachable!()
         };
         *cwd = foreign.to_string_lossy().into_owned();
-        *posture = SpawnPosture::Discovery;
+        *posture = Some(SpawnPosture::Discovery);
         let DaemonToWrapper::NativeDelegationResult { result } =
             handle("conn-1", outsider, &shared)
         else {
@@ -1323,7 +1687,7 @@ mod tests {
             unreachable!()
         };
         *cwd = repo.to_string_lossy().into_owned();
-        *posture = SpawnPosture::Discovery;
+        *posture = Some(SpawnPosture::Discovery);
         let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", revoked, &shared)
         else {
             panic!("refus attendu")
@@ -1347,7 +1711,7 @@ mod tests {
             unreachable!()
         };
         *cwd = worktree.to_string_lossy().into_owned();
-        *posture = SpawnPosture::Discovery;
+        *posture = Some(SpawnPosture::Discovery);
         let DaemonToWrapper::NativeDelegationResult { result } =
             handle("conn-1", outside_root, &shared)
         else {
@@ -1628,7 +1992,7 @@ mod tests {
         st.communication_projects
             .insert("conn-1".into(), (Some(parent.clone()), Some(parent), false));
         let error =
-            handle_locked_with_project("conn-1", request("other-project"), Some(&other), &mut st)
+            handle_locked_with_project("conn-1", request("other-project"), Some(&other), None, &mut st)
                 .unwrap_err();
         assert!(error.starts_with("cross_project_reason_required"));
         assert!(st.delegation_store.tasks().unwrap().is_empty());
@@ -1650,6 +2014,7 @@ mod tests {
         };
         let mut descendant = root.clone();
         descendant.task_id = Uuid::new_v4().to_string();
+        descendant.parent_task_id = Some(root.task_id.clone());
         descendant.owner = root.child.clone();
         descendant.owner_instance = root.child_instance.clone().unwrap();
         descendant.origin_owner_instance = descendant.owner_instance.clone();
@@ -1859,14 +2224,21 @@ mod tests {
                 false,
             )
             .unwrap();
+        // Contrat 149 : development sans fait attesté n'ouvre jamais de grant
+        // humain, il rend permission_attestation_unavailable (ancien oracle
+        // 148 : development_grant_required).
+        let mut dev = request("dev");
+        if let NativeDelegationRequest::Delegate { posture, .. } = &mut dev {
+            *posture = Some(SpawnPosture::Development);
+        }
         assert_eq!(
-            handle_locked("conn-1", request("dev"), &mut st).unwrap_err(),
-            "development_grant_required"
+            handle_locked("conn-1", dev, &mut st).unwrap_err(),
+            "permission_attestation_unavailable"
         );
         let mut outside = request("outside");
         if let NativeDelegationRequest::Delegate { cwd, posture, .. } = &mut outside {
             *cwd = "/".into();
-            *posture = SpawnPosture::Discovery;
+            *posture = Some(SpawnPosture::Discovery);
         }
         assert_eq!(
             handle_locked("conn-1", outside, &mut st).unwrap_err(),
@@ -2052,9 +2424,12 @@ mod tests {
         assert!(glm["models"]["glm/custom-exact"].is_object());
         assert_eq!(glm["discovery"], true);
         assert_eq!(glm["development"], false);
+        // Contrat 149 : sans fait attesté, le refus development du catalogue est
+        // permission_attestation_unavailable (ancien oracle 148 :
+        // development_protocol_unavailable).
         assert_eq!(
             glm["development_refusal"],
-            "development_protocol_unavailable"
+            "permission_attestation_unavailable"
         );
         let job = NativeDelegationRequest::Delegate {
             request_id: "glm".into(),
@@ -2063,7 +2438,7 @@ mod tests {
             effort: None,
             task: "Analyse les faits".into(),
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
-            posture: SpawnPosture::Discovery,
+            posture: Some(SpawnPosture::Discovery),
         };
         handle_locked("conn-1", job, &mut st).unwrap();
         let shared = Arc::new(Mutex::new(st));
@@ -2186,7 +2561,9 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .maximum(),
-                SpawnPosture::Development
+                // Sans fait attesté, la mission 149 est admise en discovery
+                // (ancien oracle 148 : development hérité).
+                SpawnPosture::Discovery
             );
             st.delegation_store
                 .grant(
@@ -2331,3 +2708,7 @@ mod tests {
         cleanup(&config);
     }
 }
+
+#[cfg(test)]
+#[path = "native_delegation_permissions149_tests.rs"]
+mod native_delegation_permissions149_tests;

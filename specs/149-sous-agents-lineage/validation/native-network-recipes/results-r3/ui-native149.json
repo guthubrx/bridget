@@ -1,0 +1,72 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:38:05.286Z",
+ "finishedAt": "2026-10-10T17:43:16.534Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "T040 UI web réelle native (r3)",
+  "pass": 1,
+  "fail": 0,
+  "total": 1
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.w9UAwP",
+  "daemonPid": 48142,
+  "admitted": [
+   "queued",
+   "queued",
+   "queued"
+  ],
+  "t3Restart": "stopped_by_sigterm",
+  "viteExit": "SIGTERM",
+  "t3Stop": "stopped_by_sigterm",
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [
+    {
+     "pid": 61691,
+     "ppid": 17469,
+     "kind": "other",
+     "command": "/opt/homebrew/bin/zsh -c source /Users/moi/.claude/shell-snapshots/snapshot-zsh-1791651400897-oyup0s.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_G"
+    }
+   ],
+   "sigtermed": [],
+   "remainingAfter": [
+    {
+     "pid": 61691,
+     "ppid": 17469,
+     "kind": "other",
+     "command": "/opt/homebrew/bin/zsh -c source /Users/moi/.claude/shell-snapshots/snapshot-zsh-1791651400897-oyup0s.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_G"
+    }
+   ]
+  }
+ },
+ "checks": [
+  {
+   "id": "UI.0",
+   "layer": "REEL",
+   "description": "fixture native tenue jusqu'au marqueur finish (serveur T3 réel + Vite + daemon réel r8)",
+   "pass": true,
+   "observed": {
+    "admitted": [
+     "queued",
+     "queued",
+     "queued"
+    ]
+   }
+  }
+ ],
+ "residualProcesses": [
+  {
+   "pid": 61691,
+   "ppid": 17469,
+   "kind": "other",
+   "command": "/opt/homebrew/bin/zsh -c source /Users/moi/.claude/shell-snapshots/snapshot-zsh-1791651400897-oyup0s.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_G"
+  }
+ ]
+}

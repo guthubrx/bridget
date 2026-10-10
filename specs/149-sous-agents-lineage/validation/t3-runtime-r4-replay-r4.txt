@@ -1,0 +1,28 @@
+# groupe forgedread
+PASS ZR-list contexte forgé (projectId étranger + fil réel), list : refus project_mismatch, aucun effet => code=project_mismatch
+PASS ZR-show contexte forgé (projectId étranger + fil réel), show : refus project_mismatch, aucun effet => code=project_mismatch
+PASS ZR-journalRead contexte forgé (projectId étranger + fil réel), journalRead : refus project_mismatch, aucun effet => code=project_mismatch
+PASS ZR-watch contexte forgé (projectId étranger + fil réel), watch : refus project_mismatch, aucun effet => code=project_mismatch
+PASS ZR-journalStream contexte forgé (projectId étranger + fil réel), journalStream : refus project_mismatch, aucun effet => code=project_mismatch
+PASS ZR-cancelOperate contexte forgé (projectId étranger + fil réel), cancelOperate : refus project_mismatch, aucun effet => code=project_mismatch
+PASS ZR-all 6 appels forgés (scope read + operate) : 0 événement, drapeaux de disponibilité identiques => delta={} flags_avant=00000000-0000-4000-8000-000000000999|17|1|virt1=5|virt0=130|n=135|root2=1 flags_après=00000000-0000-4000-8000-000000000999|17|1|virt1=5|virt0=130|n=135|root2=1
+PASS ZR-ok  contexte VRAI juste après : list réussit, racine toujours disponible, même état => flags=00000000-0000-4000-8000-000000000999|17|1|virt1=5|virt0=130|n=135|root2=1
+# groupe forgedroot
+PASS ZT-inconnue racine inconnue : refusé (binding_unavailable) sur list/show/watch/journal, 0 mutation => codes=binding_unavailable,binding_unavailable,binding_unavailable,binding_unavailable delta={} flags=intacts
+PASS ZT-virtuelle racine virtuelle (fil enfant utilisé comme racine) : refusé (binding_unavailable) sur list/show/watch/journal, 0 mutation => codes=binding_unavailable,binding_unavailable,binding_unavailable,binding_unavailable delta={} flags=intacts
+# groupe forgedtask
+PASS ZK-1   tâche CONNUE retirée du magasin + projet forgé : project_mismatch, ce fil enfant n'est PAS invalidé => code=project_mismatch T3=1 delta={}
+PASS ZK-2   UUID de tâche inconnu, contexte vrai : task_unavailable, 0 mutation => code=task_unavailable delta={}
+PASS ZK-3   contexte VRAI + tâche connue retirée : task_unavailable, ce fil seul passe indisponible, racine intacte => T3=0 racine=1
+PASS ZK-4   reprise complète : T3 redevient disponible => T3=1
+# groupe genuine
+PASS ZG-1   VRAI contexte + project_mismatch NATIF (daemon, autre root) : la racine réelle passe indisponible => code=project_mismatch racine=0 {"thread.metadata-updated":5}
+PASS ZG-1r  project_mismatch natif : reprise COMPLÈTE au seq courant du magasin, racine redevient disponible, aucun fil en double => filigrane=17 seq_magasin=17 racine=1 {"thread.metadata-updated":5}
+PASS ZG-2   VRAI contexte + invalid_output (magasin illisible) : racine indisponible => code=invalid_output racine=0
+PASS ZG-2r  invalid_output : reprise COMPLÈTE au seq courant du magasin, racine redevient disponible, aucun fil en double => filigrane=17 seq_magasin=17 racine=1 {"thread.metadata-updated":5}
+PASS ZG-3   VRAI contexte + timeout (daemon lent 8 s > 6 s) : racine indisponible => code=timeout racine=0
+PASS ZG-3r  timeout : reprise COMPLÈTE au seq courant du magasin, racine redevient disponible, aucun fil en double => filigrane=19 seq_magasin=19 racine=1 {"thread.metadata-updated":5}
+PASS ZG-4   VRAI contexte + journal_unavailable : local, racine intacte (portée non élargie) => code=journal_unavailable
+# groupe deleted
+PASS ZD-1   OBSERVATION (limite fixture : le fil T5 n'est jamais lié, 1re lecture non ok) - fil hôte supprimé : binding_unavailable, racine principale intacte => création={"value":{"sequence":1165}} liaison=invalid_output T5_avant= suppression={"value":{"sequence":1166}} après=binding_unavailable T5_après= racine_principale=1 {}
+TOTAL pass=22 fail=0 finding=0

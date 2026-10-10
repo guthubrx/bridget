@@ -1,0 +1,256 @@
+{
+ "schema": "archive-index/1",
+ "archivedBy": "testeur Sonnet 5.5 high, ronde r8",
+ "archivedAt": "2026-10-10",
+ "reason": "journaux bruts des rondes r3 a r5 ; les rapports .md et reçus .json correspondants restent en place et citent ces noms de fichier",
+ "originalDirectory": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation",
+ "archiveDirectory": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/archive-r8-logs-r3-r5",
+ "kept_in_place": [
+  "rapports native-*-sonnet-r*.md",
+  "reçus native149-*-receipt*.json",
+  "outils native-r5-mutate.py et native-r5-fingerprint.py",
+  "journaux r6, r7 et r8"
+ ],
+ "files": [
+  {
+   "name": "native-r3-build-debug-2.log",
+   "bytes": 210,
+   "sha256": "032241d078b4df6f6c8ccdc86bb504aec492af1717453d48e5c1051d0eb37534"
+  },
+  {
+   "name": "native-r3-build-debug-final.log",
+   "bytes": 210,
+   "sha256": "352da81adb7dfc772dee7346bb7e7b69668274996967b33706602a60a9a32f46"
+  },
+  {
+   "name": "native-r3-build-debug.log",
+   "bytes": 353,
+   "sha256": "e19bdaf8de1dc7e2b4991c584eab4392d4fad7eeafdb976079b16a2fa4a4a272"
+  },
+  {
+   "name": "native-r3-cli-lineage-2.log",
+   "bytes": 783,
+   "sha256": "0cf2f126842e5615d57bf80d5c06efc78764344b2cf0fcb29b6901947158239b"
+  },
+  {
+   "name": "native-r3-cli-lineage.log",
+   "bytes": 1797,
+   "sha256": "728d8be8ff57572829bca108db3d3655cf1d2a90559e796446722440fc7bf3c1"
+  },
+  {
+   "name": "native-r3-compile-1.log",
+   "bytes": 2723,
+   "sha256": "c16a3c61e8576cc5869e0ddf6fbeb7520e14aea67a7796b3dcdd0b67ea71f46d"
+  },
+  {
+   "name": "native-r3-compile-2.log",
+   "bytes": 1763,
+   "sha256": "777398731445cc7fd66fd5a4d83ceaced7ee9a4b774cacadc58f5208d00bcc12"
+  },
+  {
+   "name": "native-r3-compile-3.log",
+   "bytes": 14851,
+   "sha256": "b7e53779f409674d543d8352a24c2bc8082fed51c3e23952ca36ba904adc74fc"
+  },
+  {
+   "name": "native-r3-daemon-all.log",
+   "bytes": 173610,
+   "sha256": "0aa5adac722436f458b2b52524914d530c0c65d8c5b0fc62a5af3d173a733df1"
+  },
+  {
+   "name": "native-r3-daemon-lib-2.log",
+   "bytes": 26340,
+   "sha256": "ab60ff1ce182c24e4c248963f374670184c86b35ff6363cfb7e7f50f7fe09ce2"
+  },
+  {
+   "name": "native-r3-daemon-lib-3.log",
+   "bytes": 22509,
+   "sha256": "a09636f179b9051fd1d7e1701a2eb7eab02a3923ec3b368d349d8699d0dfd83c"
+  },
+  {
+   "name": "native-r3-daemon-lib-4.log",
+   "bytes": 15021,
+   "sha256": "faf54584b01f49fdbd0c9c12ec5963c85b3d2cc71d3d8789bd6866cb015e4da0"
+  },
+  {
+   "name": "native-r3-daemon-lib-5.log",
+   "bytes": 8732,
+   "sha256": "2cb090715066705c44f9b15dddcce3039d9b9c96cff0fef737178e30dd89470d"
+  },
+  {
+   "name": "native-r3-daemon-lib-6.log",
+   "bytes": 1831,
+   "sha256": "4e6b1c8cce08e452595ad6a3e098c951449222bb4c432345b32407c2569f7f9c"
+  },
+  {
+   "name": "native-r3-daemon-lib-7.log",
+   "bytes": 2058,
+   "sha256": "44934c8a24d0fdb8890e67abd4fbac73422254286640b768d5a26a3db7edaeb1"
+  },
+  {
+   "name": "native-r3-daemon-lib.log",
+   "bytes": 144269,
+   "sha256": "47d7e132c65b4be73664b36eb61b758cf721037918a22f3b3a18e8559a55274a"
+  },
+  {
+   "name": "native-r3-final-all.log",
+   "bytes": 202287,
+   "sha256": "80083522780c3133d2fc25d2d879474f02544c08fe086ec5629f8f298492b500"
+  },
+  {
+   "name": "native-r3-transport-all.log",
+   "bytes": 31010,
+   "sha256": "9607d4da1eb7bbe32a6b37bceffb1800e1686fe79b3e90765b33e9d6cdb740dc"
+  },
+  {
+   "name": "native-r3-wrapper-reconnect.log",
+   "bytes": 7089,
+   "sha256": "dd83e747135b91ee20087ce0d2b231387afc28fdcd4e4972866953eb74b4d85a"
+  },
+  {
+   "name": "native-r4-build-debug.log",
+   "bytes": 210,
+   "sha256": "6885d7023cf4c51f43140fbf86d415df5791a4da52f6efa2dbf399e46ddca8a8"
+  },
+  {
+   "name": "native-r4-final-daemon.log",
+   "bytes": 164704,
+   "sha256": "df913a10039d22526d5512a66419fa65e1e4a13f19d0991c40d56f3345d1c476"
+  },
+  {
+   "name": "native-r4-final-transport.log",
+   "bytes": 30867,
+   "sha256": "34aaf0194d84bf76864eacc9aa4d693dfa568ce85462c5d1271511b07bc2f487"
+  },
+  {
+   "name": "native-r4-observer-serial.log",
+   "bytes": 1831,
+   "sha256": "60e977fd7b11588c2bd77a7f7b4c091280d7969ee659e13d52e93959e2e7258a"
+  },
+  {
+   "name": "native-r4-sample-managed.txt",
+   "bytes": 117197,
+   "sha256": "a27a2424bfd211b21d21c4481dba3e95d2f5b937aa1465f7d45a2f7915f47024"
+  },
+  {
+   "name": "native-r4-sample-wrapper.txt",
+   "bytes": 121387,
+   "sha256": "0d820e42ee2bd24502667595f3cf576b61be89a0d3259d83d7cbb7268ebe542c"
+  },
+  {
+   "name": "native-r4-step1-native-delegation.log",
+   "bytes": 3668,
+   "sha256": "ec53f29bb05a409cd660bb64cfa194af038392775f6f0595962feb2f6b1630be"
+  },
+  {
+   "name": "native-r4-step1-native149.log",
+   "bytes": 7652,
+   "sha256": "b94b60e2c01279f51c5b5643ae0d4798ad04ba38dec28acd888cec79678a5e08"
+  },
+  {
+   "name": "native-r4-step1-rerun.log",
+   "bytes": 7586,
+   "sha256": "ed61858e3319938b54d026176dc061e023b4e8a4fbc332058cd4af1a249b315d"
+  },
+  {
+   "name": "native-r4-step3-old-tests.log",
+   "bytes": 969,
+   "sha256": "1fb2d35496641c70ddc965466b9ec45371d750824204b4a0c2d76239112be742"
+  },
+  {
+   "name": "native-r5-build-debug.log",
+   "bytes": 210,
+   "sha256": "2facd4c5ca08f006fbbe220628ceb1d9a0131daa15897d6a33419bb978b13c63"
+  },
+  {
+   "name": "native-r5-final-daemon.log",
+   "bytes": 167340,
+   "sha256": "16e56319110338351ca7b8c2fff4a9fda5592e7978bf2432cabf26856711b258"
+  },
+  {
+   "name": "native-r5-final-transport.log",
+   "bytes": 30866,
+   "sha256": "dc4b948fe409d9764b18a08cedce81b8fb23dce841cf1359b66a0bbd95783911"
+  },
+  {
+   "name": "native-r5-mutation-M0-temoin-sans-mutation.log",
+   "bytes": 1223,
+   "sha256": "1e6026ade3e6625d427cb06ebe6afb19d6c3273b561f2de6d3995f84eb8774c5"
+  },
+  {
+   "name": "native-r5-mutation-M1-prepare_restart-sans-echec.log",
+   "bytes": 2746,
+   "sha256": "7641d21791b19b0b5862847eccb87f49b751b27a8e140aa00c1021e13bf04ee1"
+  },
+  {
+   "name": "native-r5-mutation-M2-reconnexion-rejoue-la-remise-native.log",
+   "bytes": 1866,
+   "sha256": "ca2a0c9695f94e22e83f5e2b84a591e56884e7d4d060f167829ac0bc500d7f2b"
+  },
+  {
+   "name": "native-r5-mutation-M3-reprise-execution-generique.log",
+   "bytes": 1854,
+   "sha256": "0a511f8fbcd81babb491239004dc0cd4ad50c982c045b2c5f542e8b269bdcc3c"
+  },
+  {
+   "name": "native-r5-mutation-M4-flotte-sans-exclusion-natifs.log",
+   "bytes": 2178,
+   "sha256": "fce824e2d5cfc49b09d3ded1eedb02f4828473261ce0d95868fb354e385b1f3b"
+  },
+  {
+   "name": "native-r5-mutation-M45-exclusion-et-running-retires.log",
+   "bytes": 3726,
+   "sha256": "06dab36379863f8ba08c5e6a36906c90c46dddb73fdf4c67b21b30e241dcd29d"
+  },
+  {
+   "name": "native-r5-mutation-M5-natifs-restent-running.log",
+   "bytes": 1949,
+   "sha256": "244423b671e447420cdac7f5b678bf95e14b6075fa5b1068dc550ccded8a9fbf"
+  },
+  {
+   "name": "native-r5-mutation-M6-wrapper-relance-natif.log",
+   "bytes": 1172,
+   "sha256": "eef39ebfbbeda0139d623f745e405ba1bb639a94f0f0f00da50fd477036b646a"
+  },
+  {
+   "name": "native-r5-mutations-summary-2.txt",
+   "bytes": 1678,
+   "sha256": "013fa968672263c992146b6fbb95fb28dbbb54fedd4e8b6c156ff30c64ce063a"
+  },
+  {
+   "name": "native-r5-mutations-summary.txt",
+   "bytes": 2920,
+   "sha256": "f44f4374c9d84b3367808a5be43889c66fc65661538a5938f759b0c54a4d1071"
+  },
+  {
+   "name": "native-r5-observer-serial.log",
+   "bytes": 1831,
+   "sha256": "6e6d9a92b511be0d25f3ead68273bc8b17d8d04f293fe42c3a0b487b232a8f73"
+  },
+  {
+   "name": "native-r5-step1-new-recovery-1.log",
+   "bytes": 3600,
+   "sha256": "748f5984796960b32991a69a373fdecce7544a755528517aad9d1b15efe043ac"
+  },
+  {
+   "name": "native-r5-step1-new-recovery-2.log",
+   "bytes": 1120,
+   "sha256": "0ae4936434c8eff4634f00df748007303dd62b8cce17a28c41b35c667074e29b"
+  },
+  {
+   "name": "native-r5-step2-provider-death-1.log",
+   "bytes": 1167,
+   "sha256": "7b74ea05b36ea81c52c531fe2fbca6bcc6d59ad4884003274a04c9096ca79f86"
+  },
+  {
+   "name": "native-r5-step2-provider-death-2.log",
+   "bytes": 687,
+   "sha256": "51dab23b6ca90e4fdfdba462ddb7a6ae558e47c304c53801d07ac5f46efa375f"
+  },
+  {
+   "name": "native-r5-step3-native-targeted.log",
+   "bytes": 10056,
+   "sha256": "27127f5c50da3a09aeef98d45669d59c0614576d16567d9caeae575427a77610"
+  }
+ ]
+}

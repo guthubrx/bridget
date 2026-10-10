@@ -1,0 +1,195 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T20:03:44.843Z",
+ "finishedAt": "2026-10-10T20:03:56.108Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-abc850858975",
+  "sha256": "abc850858975fb5c7d733eb052be4fff6e3cb24537ce8b7d4475019b79abf6d8"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "O4.6 redémarrage rapide, fournisseur à interruption bloquée (r4)",
+  "pass": 6,
+  "fail": 0,
+  "total": 6
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.LhJlCa",
+  "daemon1Pid": 55973,
+  "before": {
+   "taskState": "working",
+   "daemon1": 55973,
+   "wrapperPid": 55994,
+   "providerPid": 55999,
+   "wrapper": {
+    "ppid": 55973,
+    "pgid": 55994,
+    "birth": "Sat Oct 10 22:03:45 2026"
+   },
+   "provider": {
+    "ppid": 55994,
+    "pgid": 55999,
+    "birth": "Sat Oct 10 22:03:45 2026"
+   },
+   "markers": [
+    "abbeceb4-c540-487d-a0ee-d018fac06c7d.json"
+   ],
+   "startsBefore": 1
+  },
+  "after": {
+   "stopped": "stopped_by_sigterm",
+   "daemon1GoneMs": 1100,
+   "wrapperAliveAtDaemonGone": true,
+   "providerAliveAtDaemonGone": true,
+   "daemon2Pid": 56485,
+   "startError": null,
+   "daemon2ReadyMs": 4083,
+   "startDurationMs": 2983,
+   "wrapperAliveAtDaemon2Ready": false,
+   "providerAliveAtDaemon2Ready": false,
+   "wrapperDeadMs": 4076,
+   "providerDeadMs": 4076,
+   "events": [
+    {
+     "event": "sigterm",
+     "atS": 4.07,
+     "ignored": false
+    }
+   ],
+   "prompts": 1,
+   "startsAfter": 1,
+   "task": {
+    "state": "failed",
+    "error": "unreachable",
+    "sent": false
+   },
+   "exec": {
+    "state": "unreachable",
+    "reason": "daemon_restart"
+   },
+   "markersAfter": [],
+   "live": [],
+   "daemon2LogHints": [
+    "[BRIDGET] PID file écrit avec verrou exclusif: /Users/moi/.cache/bridget149-native-interop.LhJlCa/state/bridget.pid (PID 56485)",
+    "[2026-10-10T20:03:52Z INFO  bridget_daemon::daemon] bridget daemon écoute sur /Users/moi/.cache/bridget149-native-interop.LhJlCa/state/bridget.sock"
+   ]
+  },
+  "samplesCount": 193,
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "O4r4.0",
+   "layer": "REEL",
+   "description": "arbre avant coupure : daemon -> wrapper (groupe propre) -> fournisseur fermé (groupe PROPRE, ppid = wrapper) ; tâche `working` ; un marqueur de wrapper natif présent",
+   "pass": true,
+   "observed": {
+    "before": {
+     "taskState": "working",
+     "daemon1": 55973,
+     "wrapperPid": 55994,
+     "providerPid": 55999,
+     "wrapper": {
+      "ppid": 55973,
+      "pgid": 55994,
+      "birth": "Sat Oct 10 22:03:45 2026"
+     },
+     "provider": {
+      "ppid": 55994,
+      "pgid": 55999,
+      "birth": "Sat Oct 10 22:03:45 2026"
+     },
+     "markers": [
+      "abbeceb4-c540-487d-a0ee-d018fac06c7d.json"
+     ],
+     "startsBefore": 1
+    }
+   }
+  },
+  {
+   "id": "O4r4.1",
+   "layer": "REEL",
+   "description": "SIGTERM du daemon (PID individuel vérifié) : le daemon sort et le wrapper est encore vivant à ce moment (arrêt coopératif en cours, pas tué par le daemon)",
+   "pass": true,
+   "observed": {
+    "stopped": "stopped_by_sigterm",
+    "daemon1GoneMs": 1100,
+    "wrapperAliveAtDaemonGone": true,
+    "providerAliveAtDaemonGone": true
+   }
+  },
+  {
+   "id": "O4r4.2",
+   "layer": "REEL",
+   "description": "relance immédiate : le nouveau daemon n'est prêt qu'APRÈS la mort du wrapper (attente coopérative), au plus 8 s après le SIGTERM du fournisseur ; aucun SIGKILL imposé (le fournisseur a reçu `sigterm` de son wrapper, non ignoré)",
+   "pass": true,
+   "observed": {
+    "startError": null,
+    "wrapperDeadMs": 4076,
+    "daemon2ReadyMs": 4083,
+    "startDurationMs": 2983,
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.07,
+      "ignored": false
+     }
+    ]
+   }
+  },
+  {
+   "id": "O4r4.3",
+   "layer": "REEL",
+   "description": "aucun orphelin : wrapper ET fournisseur morts avant 8,5 s ; plus aucun processus de la fixture 3 s plus tard",
+   "pass": true,
+   "observed": {
+    "wrapperDeadMs": 4076,
+    "providerDeadMs": 4076,
+    "live": []
+   }
+  },
+  {
+   "id": "O4r4.4",
+   "layer": "REEL",
+   "description": "aucun doublon : UN seul prompt (nonce), aucun nouveau lancement de fournisseur après la relance",
+   "pass": true,
+   "observed": {
+    "prompts": 1,
+    "startsBefore": 1,
+    "startsAfter": 1
+   }
+  },
+  {
+   "id": "O4r4.5",
+   "layer": "OBS",
+   "description": "OBSERVATION : état durable après relance (tâche, exécution, marqueurs) - ne compte ni PASS ni FAIL",
+   "pass": true,
+   "observed": {
+    "task": {
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false
+    },
+    "exec": {
+     "state": "unreachable",
+     "reason": "daemon_restart"
+    },
+    "markersBefore": [
+     "abbeceb4-c540-487d-a0ee-d018fac06c7d.json"
+    ],
+    "markersAfter": [],
+    "daemon2LogHints": [
+     "[BRIDGET] PID file écrit avec verrou exclusif: /Users/moi/.cache/bridget149-native-interop.LhJlCa/state/bridget.pid (PID 56485)",
+     "[2026-10-10T20:03:52Z INFO  bridget_daemon::daemon] bridget daemon écoute sur /Users/moi/.cache/bridget149-native-interop.LhJlCa/state/bridget.sock"
+    ]
+   }
+  }
+ ],
+ "residualProcesses": []
+}

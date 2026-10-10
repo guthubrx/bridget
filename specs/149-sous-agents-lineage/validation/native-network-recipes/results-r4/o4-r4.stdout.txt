@@ -1,0 +1,7 @@
+PASS O4r4.0 [REEL] arbre avant coupure : daemon -> wrapper (groupe propre) -> fournisseur fermé (groupe PROPRE, ppid = wrapper) ; tâche `working` ; un marqueur de wrapper natif présent
+PASS O4r4.1 [REEL] SIGTERM du daemon (PID individuel vérifié) : le daemon sort et le wrapper est encore vivant à ce moment (arrêt coopératif en cours, pas tué par le daemon)
+PASS O4r4.2 [REEL] relance immédiate : le nouveau daemon n'est prêt qu'APRÈS la mort du wrapper (attente coopérative), au plus 8 s après le SIGTERM du fournisseur ; aucun SIGKILL imposé (le fournisseur a reçu `sigterm` de son wrapper, non ignoré)
+PASS O4r4.3 [REEL] aucun orphelin : wrapper ET fournisseur morts avant 8,5 s ; plus aucun processus de la fixture 3 s plus tard
+PASS O4r4.4 [REEL] aucun doublon : UN seul prompt (nonce), aucun nouveau lancement de fournisseur après la relance
+PASS O4r4.5 [OBS] OBSERVATION : état durable après relance (tâche, exécution, marqueurs) - ne compte ni PASS ni FAIL
+{"summary":{"title":"O4.6 redémarrage rapide, fournisseur à interruption bloquée (r4)","pass":6,"fail":0,"total":6},"residualProcesses":0}

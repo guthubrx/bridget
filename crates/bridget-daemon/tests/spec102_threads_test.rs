@@ -1278,7 +1278,10 @@ fn spec102_v34_migration_base_pre102_et_contraintes_effectives() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(version, 2, "migration additive de la session136");
+    assert_eq!(
+        version, 3,
+        "migration additive de la session147 (membres), après la session136"
+    );
     let idempotence: i64 = conn
         .query_row(
             "SELECT MAX(version) FROM idempotency_schema_migrations",
@@ -2467,12 +2470,28 @@ fn spec102_v33_parite_cli_mcp() {
         .iter()
         .find(|t| t["name"] == "bridget_thread")
         .expect("outil bridget_thread au catalogue");
+    // Ensemble exact : session147 a ajouté `add_members` (commit 82f4abeb).
+    let actions = thread_tool["inputSchema"]["properties"]["action"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| action.as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
-        thread_tool["inputSchema"]["properties"]["action"]["enum"]
-            .as_array()
-            .unwrap()
-            .len(),
-        8
+        actions,
+        [
+            "create",
+            "add_members",
+            "list",
+            "show",
+            "post",
+            "read",
+            "ack",
+            "history",
+            "close"
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
     );
     assert_eq!(thread_tool["inputSchema"]["additionalProperties"], false);
 

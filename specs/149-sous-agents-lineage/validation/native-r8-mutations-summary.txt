@@ -1,0 +1,37 @@
+F0-temoin-sans-mutation rc= 0 tests= 9 echecs= 0
+F1-prepare_restart-sans-fermeture-execution rc= 101 tests= 9 echecs= 5
+    ECHEC native149_f2_proprietaire_hors_ligne_garde_le_resultat_en_attente_puis_livre_une_seule_fois ... FAILED
+    ECHEC native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_reste_intact ... FAILED
+    ECHEC native149_f2_descendant_perdu_en_running_est_ferme_puis_la_racine_livre_son_vrai_resultat_une_fois ... FAILED
+    ECHEC native149_f2_execution_terminale_n_est_jamais_rouverte_au_redemarrage ... FAILED
+    ECHEC native149_f2_reponse_reelle_capturee_survit_au_redemarrage_et_au_descendant_perdu ... FAILED
+F2-prepare_restart-rouvre-les-terminaux rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_execution_terminale_n_est_jamais_rouverte_au_redemarrage ... FAILED
+F3-agent-different-accepte rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_execution_d_un_autre_agent_est_refusee_sans_etre_modifiee ... FAILED
+F4-autorite-sans-controle-du-corps rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_autorite_retenue_recoupe_chaque_champ_du_resultat ... FAILED
+F5-autorite-sans-controle-destinataire rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_autorite_retenue_recoupe_chaque_champ_du_resultat ... FAILED
+F6-autorite-sans-revocation rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_autorite_retenue_recoupe_chaque_champ_du_resultat ... FAILED
+F7-proprietaire-hors-ligne-faux-result_sent rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_proprietaire_hors_ligne_garde_le_resultat_en_attente_puis_livre_une_seule_fois ... FAILED
+F8-garde-expediteur-par-defaut-relache rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_message_externe_au_meme_format_ne_recoit_aucune_capacite_privee ... FAILED
+F9-autorite-sans-controle-du-proprietaire-vivant rc= 101 tests= 9 echecs= 1
+    ECHEC native149_f2_autorite_retenue_recoupe_chaque_champ_du_resultat ... FAILED
+F10-attente-descendants-ignore-les-fermes rc= 0 tests= 9 echecs= 0
+O1-wrapper-sans-gestionnaire-sigterm rc= 0 tests= 4 echecs= 0
+O2-wrapper-natif-sans-stop_native_mission rc= 0 tests= 4 echecs= 0
+O3-wrapper-natif-se-reconnecte-sur-eof rc= 101 tests= 4 echecs= 1
+    ECHEC test native149_eof_du_daemon_arrete_le_wrapper_natif_et_son_fournisseur ... FAILED
+O4-wrapper-sigterm-sans-sortie-de-boucle rc= 0 tests= 4 echecs= 0
+T0-temoin-transport rc= 0 tests= 5 echecs= 0
+T1-codex-stop_native-sans-interrupt rc= 101 tests= 5 echecs= 2
+    ECHEC test native149_stop_native_est_idempotent ... FAILED
+    ECHEC test native149_stop_native_interrompt_le_tour_exact_puis_arrete_le_fournisseur ... FAILED
+T2-codex-stop_native-sans-fermeture-admission rc= 0 tests= 5 echecs= 0
+T3-codex-stop_native-interrompt-un-autre-tour rc= 101 tests= 5 echecs= 1
+    ECHEC test native149_stop_native_d_une_autre_mission_n_interrompt_pas_le_tour_actif ... FAILED
+T4-defaut-managed-stop_native-sans-annulation rc= 0 tests= 5 echecs= 0

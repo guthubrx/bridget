@@ -11,6 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -119,7 +120,16 @@ fn root() -> PathBuf {
         .as_nanos();
     // Le socket daemon ajoute `state/bridget.sock` : un préfixe court
     // évite de transformer cette couture en faux rouge SUN_LEN.
-    let root = PathBuf::from(format!("/tmp/bcap-{}-{nonce:x}", std::process::id()));
+    // Les tests de ce fichier tournent en threads d'un même processus et
+    // l'horloge a une résolution d'une microseconde : deux racines pouvaient
+    // porter le même nonce et partager la même base (DatabaseBusy, messages
+    // croisés). Le compteur rend la racine unique par construction.
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let root = PathBuf::from(format!(
+        "/tmp/bcap-{}-{nonce:x}-{sequence}",
+        std::process::id()
+    ));
     bridget_daemon::environment::Namespace::resolve(
         Some(root.join("state")),
         None,
@@ -150,6 +160,13 @@ fn root() -> PathBuf {
     )
     .unwrap()
     .unwrap();
+    // Contrôle positif : la précondition est bien posée avant toute demande.
+    let posed = bridget_daemon::referent_control::read(&connection).unwrap();
+    assert_eq!(posed.generation, initial.generation + 1);
+    assert_eq!(
+        posed.agent_posture,
+        Some(bridget_transport::protocol::AgentPosture::Complete)
+    );
     root
 }
 

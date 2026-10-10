@@ -1,0 +1,56 @@
+R0-temoin-daemon rc= 0 tests= 17 echecs= 0
+E1-file-native-non-fermee rc= 101 tests= 17 echecs= 3
+    ECHEC native149_e2_proprietaire_hors_ligne_garde_le_resultat_puis_livre_une_fois_a_la_reconnexion ... FAILED
+    ECHEC native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l_enfant ... FAILED
+    ECHEC native149_e2_enfant_en_file_au_proprietaire_perdu_echoue_et_la_racine_livre_son_vrai_resultat_une_fois ... FAILED
+E2-filiation-sans-controle-racine rc= 101 tests= 17 echecs= 1
+    ECHEC native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l_enfant ... FAILED
+E3-filiation-sans-controle-origine rc= 101 tests= 17 echecs= 1
+    ECHEC native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l_enfant ... FAILED
+E4-filiation-sans-controle-lien-delegation rc= 0 tests= 17 echecs= 0
+F1-annulee-non-fermee-au-redemarrage rc= 101 tests= 17 echecs= 4
+    ECHEC native149_f3_une_tache_annulee_a_execution_interrompue_ne_bloque_pas_la_racine ... FAILED
+    ECHEC native149_f3_annulation_et_execution_active_sont_fermees_une_fois_au_redemarrage ... FAILED
+    ECHEC native149_f3_execution_d_un_autre_agent_refuse_la_fermeture_d_une_tache_annulee ... FAILED
+    ECHEC native149_f3_execution_terminale_d_une_tache_annulee_n_est_jamais_rouverte ... FAILED
+F2-cancel-tree-sans-fermeture rc= 101 tests= 17 echecs= 1
+    ECHEC native149_f3_cancel_tree_ferme_l_execution_exacte_avant_de_publier_cancelled ... FAILED
+F3-filtre-annulee-retire rc= 101 tests= 17 echecs= 1
+    ECHEC native149_f3_une_tache_annulee_a_execution_interrompue_ne_bloque_pas_la_racine ... FAILED
+O1-natif-traite-comme-ordinaire rc= 101 tests= 17 echecs= 5
+    ECHEC native149_o4_aucune_escalade_native_marqueur_conserve_et_wrapper_vivant_apres_la_grace ... FAILED
+    ECHEC native149_o4_lot_mixte_garde_la_grace_native_et_l_escalade_ordinaire ... FAILED
+    ECHEC native149_o4_wrapper_natif_recoit_sigterm_et_sort_de_lui_meme_sans_sigkill ... FAILED
+    ECHEC native149_o4_la_grace_est_commune_tous_les_wrappers_natifs_recoivent_sigterm_avant_l_attente ... FAILED
+    ECHEC native149_o4_les_identites_de_demarrage_viennent_de_la_saga_et_pilotent_l_arret_cooperatif ... FAILED
+O2-grace-native-nulle rc= 101 tests= 17 echecs= 5
+    ECHEC native149_o4_la_grace_est_commune_tous_les_wrappers_natifs_recoivent_sigterm_avant_l_attente ... FAILED
+    ECHEC native149_o4_aucune_escalade_native_marqueur_conserve_et_wrapper_vivant_apres_la_grace ... FAILED
+    ECHEC native149_o4_lot_mixte_garde_la_grace_native_et_l_escalade_ordinaire ... FAILED
+    ECHEC native149_o4_wrapper_natif_recoit_sigterm_et_sort_de_lui_meme_sans_sigkill ... FAILED
+    ECHEC native149_o4_les_identites_de_demarrage_viennent_de_la_saga_et_pilotent_l_arret_cooperatif ... FAILED
+O3-identite-instance-ignoree rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_identite_native_incoherente_refuse_avant_tout_signal_meme_pour_un_autre_groupe ... FAILED
+O4-identite-commande-ignoree rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_identite_native_incoherente_refuse_avant_tout_signal_meme_pour_un_autre_groupe ... FAILED
+O5-identite-generation-ignoree rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_identite_native_incoherente_refuse_avant_tout_signal_meme_pour_un_autre_groupe ... FAILED
+O6-envoi-natif-sequentiel rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_la_grace_est_commune_tous_les_wrappers_natifs_recoivent_sigterm_avant_l_attente ... FAILED
+O7-escalade-sigkill-native rc= 0 tests= 17 echecs= 0
+O8-ordinaire-sans-escalade rc= 101 tests= 17 echecs= 2
+    ECHEC native149_o4_lot_mixte_garde_la_grace_native_et_l_escalade_ordinaire ... FAILED
+    ECHEC native149_o4_groupe_ordinaire_garde_sigterm_puis_sigkill_apres_sa_moitie_de_delai ... FAILED
+I1-identite-sans-controle-cwd rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur ... FAILED
+I2-identite-sans-controle-definition rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur ... FAILED
+I3-identite-sans-controle-type rc= 101 tests= 17 echecs= 1
+    ECHEC native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur ... FAILED
+A0-temoin-alias rc= 0 tests= 2 echecs= 0
+A1-alias-sans-controle-de-mode rc= 101 tests= 2 echecs= 1
+    ECHEC test native149_alias_dangereux_est_refuse_avant_tout_lancement_et_laisse_l_existant_intact ... FAILED
+A2-alias-occupe-accepte rc= 101 tests= 2 echecs= 1
+    ECHEC test native149_alias_dangereux_est_refuse_avant_tout_lancement_et_laisse_l_existant_intact ... FAILED
+A3-alias-parent-lien-suivi rc= 101 tests= 2 echecs= 1
+    ECHEC test native149_alias_dangereux_est_refuse_avant_tout_lancement_et_laisse_l_existant_intact ... FAILED

@@ -1,0 +1,169 @@
+{
+ "schema": "native149-debug-receipt/1",
+ "session": "149-sous-agents-lineage",
+ "producedBy": "testeur Sonnet 5.5 high (claudeAgent), ronde r4",
+ "producedAt": "2026-10-10",
+ "supersedes": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native149-debug-receipt-r3.json (binaire ed5e28bc8ddc, antérieur au correctif Sol de native_delegation.rs:40)",
+ "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage",
+ "headCommit": "6807c22b7ada683f757486a6382aeda170ec68ab",
+ "worktreeClean": false,
+ "sourceFingerprint": {
+  "algorithm": "sha256 de la concaténation (séparateur \\n) des lignes 'chemin\\0sha256(fichier)' triées par chemin ; fichiers .rs/.toml/Cargo.lock de crates/ + Cargo.toml/Cargo.lock racine, tests inclus",
+  "value": "e6f45086b23974604667c93d3b34755d7d73dc5dadbe4dde94c1e09f34285408",
+  "fileCount": 196
+ },
+ "productionSourceFingerprint": {
+  "algorithm": "idem, fichiers de tests exclus (chemins contenant /tests/ ou finissant par _test.rs/_tests.rs ; les blocs #[cfg(test)] inline restent comptés)",
+  "value": "e0d86f016f1fbb06d485c13ff863a639a2ed3daef29b8be4247797e1d7a3f215",
+  "fileCount": 111
+ },
+ "binary": {
+  "profile": "debug",
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target/debug/bridget",
+  "stableCopy": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-823e8a5fab8a",
+  "sha256": "823e8a5fab8abe38fcb439d8fda98d929622dae3751ff8f629d306744379328b",
+  "sizeBytes": 53993512,
+  "version": "bridget 0.1.3",
+  "arch": "Mach-O 64-bit arm64",
+  "builtAt": "2026-10-10T14:08:24+0200",
+  "buildCommand": "cargo build -p bridget-daemon --bins --offline",
+  "buildLog": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r4-build-debug.log",
+  "installed": false,
+  "release": false,
+  "noProductionSourceNewerThanBinary": true,
+  "productionSourcesNewerThanBinary": [],
+  "includesCorrectionSolRevocation": {
+   "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+   "lines": "40-42",
+   "note": "révocation directe -> delegation_grant_required ; descendant de racine révoquée -> permission_not_inherited"
+  },
+  "includesWrapperInitialFactBeforeNativeTuiStart": {
+   "file": "crates/bridget-daemon/src/wrapper.rs",
+   "publishLines": "4148-4167",
+   "nativeTuiStartLine": 4184,
+   "sourceSha256": "b599f8bb28ad2e587ef3aa8a43c48c1cda639afe71dc1ecc13c1cecc2b455e65"
+  }
+ },
+ "env": {
+  "CARGO_TARGET_DIR": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target",
+  "CARGO_BUILD_JOBS": "2",
+  "CARGO_INCREMENTAL": "0",
+  "umask": "077 (indispensable : sans lui config-149 est créé 0755 et refusé EnvUnfit)",
+  "TMPDIR": "/tmp/b149t-r4 (APFS interne, 0700, hors /Users/moi)",
+  "RUST_TEST_THREADS": "défaut (nombre de coeurs)"
+ },
+ "tests": {
+  "commands": [
+   "cargo test -p bridget-daemon --offline --no-fail-fast",
+   "cargo test -p bridget-transport --offline --no-fail-fast",
+   "cargo test -p bridget-daemon --lib --offline -- native_permission_observer149 --test-threads=1"
+  ],
+  "logs": {
+   "daemon": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r4-final-daemon.log",
+   "transport": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r4-final-transport.log",
+   "observerSerial": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/native-r4-observer-serial.log"
+  },
+  "total": {
+   "passed": 1796,
+   "failed": 0,
+   "ignored": 63
+  },
+  "byCrate": {
+   "bridget-daemon": {
+    "passed": 1471,
+    "failed": 0,
+    "ignored": 61,
+    "executables": 78
+   },
+   "bridget-transport": {
+    "passed": 325,
+    "failed": 0,
+    "ignored": 2,
+    "executables": 10
+   }
+  },
+  "observerSerial": {
+   "passed": 10,
+   "failed": 0,
+   "ignored": 0
+  },
+  "owned149": {
+   "transportP": {
+    "native_permissions149_test": "8/8",
+    "native_permissions149_e2e": "5/5"
+   },
+   "transportL": {
+    "lineage_contract_test": "6/6"
+   },
+   "daemonP": {
+    "native_permissions149_tests": "13/13",
+    "native_permission_observer149_tests": "10/10",
+    "native_delegation_permissions149_tests": "8/8"
+   },
+   "daemonL": {
+    "delegation_lineage_tests": "10/10",
+    "native_lineage_tests": "9/9",
+    "lineage_cli_test": "3/3 (1 ignored = support::performance_daemon_worker)"
+   },
+   "legacy148Fixtures": {
+    "native_delegation::tests::native148": "19 pass / 0 FAIL"
+   }
+  },
+  "failures": [],
+  "notes": [
+   "r3 annonçait transport 326 : somme erronée, les logs r3 donnent 325/0/2 (identiques par exécutable à r4)",
+   "fixtures claude = copie de /bin/echo : aucune preuve modèle ; T037/T038 restent à faire"
+  ]
+ },
+ "sourceFileDigests": {
+  "keyProductionFiles": {
+   "crates/bridget-daemon/src/wrapper.rs": "b599f8bb28ad2e587ef3aa8a43c48c1cda639afe71dc1ecc13c1cecc2b455e65",
+   "crates/bridget-daemon/src/native_permissions.rs": "4149844bb0264ace3fc11413c65c064c6de1886875694305b05a31a66824abc0",
+   "crates/bridget-daemon/src/native_permission_observer.rs": "3fe349f8ced14c59339d7a0613078a8bc0b8f30f0c144f2b0af5eb0cdf6069a6",
+   "crates/bridget-daemon/src/daemon/native_delegation.rs": "fc62f33dbdb339add0d4de333550dbfa8c1637c1a281aeab8685a202772dc0d9",
+   "crates/bridget-daemon/src/daemon/native_lineage.rs": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+   "crates/bridget-daemon/src/delegation_lineage.rs": "0cca8085d5e49ac9a72df3393c8ae42845b0170e755e99d19fc38b13105d8953",
+   "crates/bridget-transport/src/native_permissions.rs": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+   "crates/bridget-transport/src/claude_stream_json.rs": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5"
+  },
+  "allChangedOrUntrackedSources": {
+   "crates/bridget-daemon/src/attach.rs": "2c9518374598476425d739d209b36462c40f11bc5214b1537e15f448ed726dd5",
+   "crates/bridget-daemon/src/cli.rs": "9017573b7142879909efaf1d41d99ddf2e65c1b44f09a03a1ee0fe0dc110fc2a",
+   "crates/bridget-daemon/src/cli_lineage.rs": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+   "crates/bridget-daemon/src/communication/client.rs": "c38ef972463779a59c00c6ace610e0369e1a8e40ed2ce732b0c974854da6cd6b",
+   "crates/bridget-daemon/src/daemon.rs": "f135cadb9f4345a44dcd55e8b5b9d44f6a5e4ab1f3df5efd8635c6a7d3b0784e",
+   "crates/bridget-daemon/src/daemon/native_delegation.rs": "fc62f33dbdb339add0d4de333550dbfa8c1637c1a281aeab8685a202772dc0d9",
+   "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "107c9e7c7104c8a58cf4be1dca3ce9355d1610984437c3958322b973f87edfad",
+   "crates/bridget-daemon/src/daemon/native_lineage.rs": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+   "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "5985c11057d98aab38f6af2bb0697678680b347e2737109af6ccea2f23269c16",
+   "crates/bridget-daemon/src/delegation.rs": "e1590c3f8754ae09ad809949b14225da88f919e1e113d483d12e74db853fea56",
+   "crates/bridget-daemon/src/delegation_lineage.rs": "0cca8085d5e49ac9a72df3393c8ae42845b0170e755e99d19fc38b13105d8953",
+   "crates/bridget-daemon/src/delegation_lineage_tests.rs": "39b3c4ce101ad7af7d5184a786b0f80dc48f95bbd7c6b642b3914924d0e31c47",
+   "crates/bridget-daemon/src/delegation_mcp.rs": "81745fb0b152a9d65981b730b106b1c6d69caeab4e98cfa3218efbda73144f16",
+   "crates/bridget-daemon/src/lib.rs": "a36170c10f4a517a5fb1f50edcdb8f5ad712836d9f5a1ebabd58f96446689e5f",
+   "crates/bridget-daemon/src/lineage_client.rs": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+   "crates/bridget-daemon/src/native_permission_observer.rs": "3fe349f8ced14c59339d7a0613078a8bc0b8f30f0c144f2b0af5eb0cdf6069a6",
+   "crates/bridget-daemon/src/native_permission_observer149_tests.rs": "ab9d90341e2b3c76e12c69added1f5eb5edc8fe90d186dffb54e1d300cf98779",
+   "crates/bridget-daemon/src/native_permissions.rs": "4149844bb0264ace3fc11413c65c064c6de1886875694305b05a31a66824abc0",
+   "crates/bridget-daemon/src/native_permissions149_tests.rs": "357dea4cc055f63e0ce24f82ce7cc53e661efad0df4a16ae5429affbdd5cfcfe",
+   "crates/bridget-daemon/src/registry.rs": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+   "crates/bridget-daemon/src/t3code_contract.rs": "5c15ef90cde3dfdb1a2d9fb24e176cd23633c44af876e5f18e168463edf76cf0",
+   "crates/bridget-daemon/src/t3code_contract_v2.rs": "93ec3e3350cb09f389f035ab7f7940ca7ceaca5a54f27e57b6510519af872a56",
+   "crates/bridget-daemon/src/t3code_mcp.rs": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+   "crates/bridget-daemon/src/wrapper.rs": "b599f8bb28ad2e587ef3aa8a43c48c1cda639afe71dc1ecc13c1cecc2b455e65",
+   "crates/bridget-daemon/tests/claude_native_permissions_test.rs": "3fcecfc731aa7a66d9fa15d3430c178954d7ad6ddf2330bc7187a275e0173404",
+   "crates/bridget-daemon/tests/lineage_cli_test.rs": "2a9f650e9aa58edafb6be5e8634efb1b62d197e11b05353c8b108f60897dfa8a",
+   "crates/bridget-daemon/tests/native_delegation_e2e.rs": "2ba6f037cf36dbad725030fb39323b4091f04f78bf1fe13078a6e0a1c0832d35",
+   "crates/bridget-daemon/tests/spec102_threads_test.rs": "1aa9ea5c4059f7d2b3b1fc6143b055fd36838ad1dc2b71db0dd0c18f5a6bd118",
+   "crates/bridget-transport/src/claude_stream_json.rs": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+   "crates/bridget-transport/src/codex_app_server.rs": "4a36668c08f2cf4fd12af9c7941b905d97e0937b0ea2eb2163fec698869326d5",
+   "crates/bridget-transport/src/lineage_protocol.rs": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+   "crates/bridget-transport/src/managed_session.rs": "4803530bda5ece671df542f26f2d56d4b14c387b4a95983e54cc23e2a187427e",
+   "crates/bridget-transport/src/native_permissions.rs": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+   "crates/bridget-transport/src/protocol.rs": "ec42ebdca4c22eead4277fc1d342d66e0d087171537b06ed583e6379fbdfd5ed",
+   "crates/bridget-transport/tests/lineage_contract_test.rs": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+   "crates/bridget-transport/tests/native_permissions149_e2e.rs": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+   "crates/bridget-transport/tests/native_permissions149_test.rs": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e"
+  }
+ }
+}

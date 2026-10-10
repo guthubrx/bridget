@@ -61,6 +61,12 @@ pub(crate) fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
         .get_mut("threads")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid("threads"))?;
+    let ordinary=std::mem::take(threads).into_iter().filter_map(|thread| {
+        match crate::t3code_contract::is_native_projection(&thread) {
+            Ok(true)=>None,Ok(false)=>Some(Ok(thread)),Err(error)=>Some(Err(error)),
+        }
+    }).collect::<Result<Vec<_>,_>>()?;
+    *threads=ordinary;
     for thread in threads {
         let status = string(thread, "status")?;
         let run_id = nullable_string(thread, "latestRunId")?;

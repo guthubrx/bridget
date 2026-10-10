@@ -1,0 +1,126 @@
+
+// ===== BENCH PRIVÉ session149 r6 (hash-latency149) =====================
+// Ajouté UNIQUEMENT dans des copies jetables /tmp/b149t-r6/ws-r5 et ws-r6 à
+// la fin de crates/bridget-daemon/src/native_permission_observer149_tests.rs.
+// Jamais dans l'arbre de travail. Aucun modèle : le CLI Claude réel est
+// seulement haché (jamais exécuté) ; le client du hook est le vrai binaire
+// `bridget __native-permission-observer` de la build mesurée, le côté
+// fournisseur (ACK du daemon) est SIMULÉ : l'ACK part dès que le fait arrive.
+//
+// Lancement : BENCH_* voir tools/run-bench.sh ;
+//   cargo test -p bridget-daemon --lib --locked --offline bench149 -- --ignored --exact --nocapture
+
+fn bench_ms(d: Duration) -> f64 {
+    (d.as_secs_f64() * 1000.0 * 10.0).round() / 10.0
+}
+
+fn bench_stats(values: &[f64]) -> Value {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    json!({"runs": values, "min": sorted[0], "median": sorted[sorted.len() / 2], "max": sorted[sorted.len() - 1]})
+}
+
+fn bench_definition(command: &str, args: &[&str], root: &Path) -> AgentDefinition {
+    let mut d = definition(root);
+    d.command = command.into();
+    d.args = args.iter().map(|s| s.to_string()).collect();
+    d
+}
+
+fn bench_variant(label: &str, command: &str, args: &[&str], root: &Path, client: &Path) -> Value {
+    let definition = bench_definition(command, args, root);
+    let cwd = std::env::current_dir().unwrap();
+    let mut env = crate::lifecycle::source_environment();
+    env.insert("CLAUDE_CONFIG_DIR".into(), root.into());
+    let mut capture = vec![];
+    let mut context = Value::Null;
+    for _ in 0..3 {
+        let t = Instant::now();
+        context = native_permissions::capture_context_with_env(&definition, &cwd, &env).unwrap();
+        capture.push(bench_ms(t.elapsed()));
+    }
+    let mut recheck = vec![];
+    for _ in 0..3 {
+        let t = Instant::now();
+        native_permissions::recheck_context_with_env(&context, &definition, &cwd, &env).unwrap();
+        recheck.push(bench_ms(t.elapsed()));
+    }
+    // Hook complet : vrai client, ACK simulé immédiat.
+    let (emit, rx) = collector();
+    let t_start = Instant::now();
+    let observer = Observer::start(root, &definition, &[], "instance-bench", emit).unwrap();
+    let observer_start = bench_ms(t_start.elapsed());
+    let (_, nonce) = overlay_identity(&observer);
+    let socket = socket_argument(&observer);
+    let mut hooks = vec![];
+    for i in 0..3 {
+        let payload = json!({
+            "permission_mode": "default", "session_id": "sess-bench", "prompt_id": "prompt-bench",
+            "cwd": cwd.to_string_lossy(), "tool_name": "mcp__bridget__bridget_delegate",
+            "tool_input": {"request_id": format!("req-bench-{i}")}, "hook_event_name": "PreToolUse",
+        });
+        let mut child = Command::new(client)
+            .args(["__native-permission-observer", socket.as_str(), nonce.as_str()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        observer.bind_provider(child.id()).unwrap();
+        let t0 = Instant::now();
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(payload.to_string().as_bytes()).unwrap();
+        }
+        let (fact_ms, observation) = match rx.recv_timeout(Duration::from_secs(180)).unwrap() {
+            WrapperToDaemon::NativePermissionFact { observation_id, unavailable_code, .. } => (bench_ms(t0.elapsed()), (observation_id, unavailable_code)),
+            autre => panic!("événement inattendu : {autre:?}"),
+        };
+        if let Some(id) = observation.0.clone() {
+            Observer::acknowledge(&observer.acknowledgement_sink(), id, true);
+        }
+        let output = child.wait_with_output().unwrap();
+        let client_ms = bench_ms(t0.elapsed());
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let decision = if stdout.is_empty() { "allow".to_string() } else { stdout };
+        hooks.push(json!({"fact_published_ms": fact_ms, "client_done_ms": client_ms, "unavailable_code": observation.1, "client_decision": decision}));
+    }
+    drop(observer);
+    json!({"variant": label, "command": command, "capture_ms": bench_stats(&capture), "recheck_ms": bench_stats(&recheck),
+           "observer_start_ms": observer_start, "hook_flow": hooks})
+}
+
+#[test]
+#[ignore]
+fn bench149_latence_hachage_cli_reel() {
+    let cli = PathBuf::from(std::env::var("BENCH_CLI").unwrap());
+    let client = PathBuf::from(std::env::var("BENCH_CLIENT_BIN").unwrap());
+    let expected = format!("sha256:{}", std::env::var("BENCH_EXPECTED_SHA").unwrap());
+    let label = std::env::var("BENCH_LABEL").unwrap();
+    let gclaude = std::env::var("BENCH_GCLAUDE").ok();
+    let mut helper = vec![];
+    for _ in 0..5 {
+        let t = Instant::now();
+        let revision = bridget_transport::protocol::permission_source_revision(&cli, 512 * 1024 * 1024).unwrap();
+        helper.push(bench_ms(t.elapsed()));
+        assert_eq!(revision, expected, "SHA-256 du CLI réel inattendu");
+    }
+    let root = std::env::temp_dir().join(format!("bf-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]));
+    fs::create_dir_all(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(&cli, bin.join("claude")).unwrap();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    // SAFETY : test ignoré lancé seul (--exact), aucun autre thread de test.
+    unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
+    let mut variants = vec![bench_variant("direct-claude", "claude", &[], &root, &client)];
+    if let Some(gclaude) = gclaude {
+        variants.push(bench_variant("gclaude-glm", &gclaude, &["--model", "glm-5.3-flash", "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions"], &root, &client));
+    }
+    let report = json!({"label": label, "cli": cli, "cli_expected": expected, "helper_5_reads_ms": bench_stats(&helper), "variants": variants});
+    println!("BENCH149 {}", report);
+    let _ = fs::remove_dir_all(&root);
+}

@@ -1,0 +1,21 @@
+M0-temoin-sans-mutation rc= 0
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise ... ok
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+M4-flotte-sans-exclusion-natifs rc= 101
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+    native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise ... FAILED
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M45-exclusion-et-running-retires rc= 101
+    native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise ... FAILED
+    native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+    native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... FAILED
+    native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... FAILED
+    native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+M6-wrapper-relance-natif rc= 101
+    test native149_temoin_fournisseur_ordinaire_tue_est_relance ... ok
+    test native149_fournisseur_natif_tue_n_est_jamais_relance ... FAILED

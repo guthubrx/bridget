@@ -1,0 +1,4 @@
+test native149_recheck_refuse_un_contenu_de_meme_taille_a_mtime_restaure ... ok
+test native149_revision_vecteurs_fips_180_2 ... FAILED
+test native149_revision_vecteurs_externes_aux_bords_de_bloc_et_de_lecture ... FAILED
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

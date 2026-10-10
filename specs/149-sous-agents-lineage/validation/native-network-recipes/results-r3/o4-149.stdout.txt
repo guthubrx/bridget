@@ -1,0 +1,11 @@
+PASS O4.0 [REEL] arbre de processus cohérent pour les 3 cas : le fournisseur est un enfant DIRECT du wrapper (ppid = PID wrapper) et dirige son PROPRE groupe de processus (pgid = son PID, différent de celui du wrapper) ; le wrapper est un enfant du daemon
+PASS O4.1 [REEL] la variable d'amorce native (condition d'installation du gestionnaire SIGTERM du wrapper) est dans l'environnement du wrapper en vol (lue par `ps eww`, nom seulement)
+PASS O4.2 [REEL] A (coopératif) : après SIGTERM du daemon, le wrapper interrompt le tour EXACT (turn/interrupt avec l'identifiant du tour) puis le fournisseur s'arrête ; le battement cesse (dernier battement <= 4 s après T0) ; aucun processus restant
+PASS O4.3 [REEL] B (fournisseur bloquant qui ne lit pas stdin) : le fournisseur est arrêté PAR le wrapper (événement `sigterm` du fournisseur) dans une borne <= 6 s, sans survivre jusqu'à la fin naturelle de son tour (20 s)
+PASS O4.4 [REEL] C (fournisseur qui ignore SIGTERM 8 s) : borne effective mesurée ; le fournisseur reçoit SIGTERM du wrapper et s'arrête au plus tard à la fin de sa fenêtre (8 s) + 3 s, sans orphelin durable
+FAIL O4.6 [REEL] B1 (fournisseur bloquant) + relance IMMÉDIATE du daemon : aucun orphelin au-delà de 6 s (exigence) - le wrapper ne doit pas être tué avant d'avoir arrêté son fournisseur
+     observé: {"restartedAtMs":1633,"wrapperDeadMs":1611,"providerDeadMs":18311,"events":[],"live":[]}
+PASS O4.7 [REEL] A1 (fournisseur coopératif) + relance IMMÉDIATE du daemon : aucun orphelin au-delà de 6 s ; le tour exact est interrompu
+PASS O4.8 [REEL] B2 (fournisseur bloquant) + relance du daemon APRÈS 6 s (le wrapper a fini seul) : aucun orphelin au-delà de 6 s
+PASS O4.5 [REEL] après la mort de chaque fournisseur, plus aucun processus de la fixture et plus aucune ligne d'évidence ne s'ajoute (zéro processus possédé, zéro écriture)
+{"summary":{"title":"O4 fournisseur natif et arrêt du daemon (r3)","pass":8,"fail":1,"total":9},"residualProcesses":0}

@@ -277,7 +277,7 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
         effort: Some("high".into()),
         task: task.into(),
         cwd: root.to_string_lossy().into_owned(),
-        posture: SpawnPosture::Discovery,
+        posture: Some(SpawnPosture::Discovery),
     }
 }
 

@@ -4,6 +4,13 @@
 //! - WrapperToDaemon : ce que le wrapper envoie au daemon
 //! - DaemonToWrapper : ce que le daemon envoie au wrapper
 
+#[path = "lineage_protocol.rs"]
+mod lineage_protocol;
+pub use lineage_protocol::*;
+#[path = "native_permissions.rs"]
+mod native_permissions;
+pub use native_permissions::*;
+
 use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -185,6 +192,9 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    HumanLineageViewV1,
+    HumanLineageWatchV1,
+    HumanLineageCancelV1,
     /// Ajout de lecteurs, distinct des publications et des sollicitations.
     ThreadMembersV1,
     /// Invalidation humaine sans contenu, distincte des observations agents.
@@ -2008,7 +2018,8 @@ pub enum NativeDelegationRequest {
         effort: Option<String>,
         task: String,
         cwd: String,
-        posture: SpawnPosture,
+        #[serde(default)]
+        posture: Option<SpawnPosture>,
     },
     Status {
         task_id: String,
@@ -2146,6 +2157,7 @@ impl IdentityCredential {
     pub fn new(value: String) -> Self {
         Self(value)
     }
+    pub fn expose_for_attestation(&self) -> &str { &self.0 }
 }
 
 impl std::fmt::Debug for IdentityCredential {
@@ -2801,6 +2813,25 @@ pub enum WrapperToDaemon {
     /// Délégation native : le propriétaire est toujours déduit de la connexion.
     NativeDelegation {
         request: NativeDelegationRequest,
+    },
+    /// Preuve privée T3 ; jamais acceptée dans les arguments d'un outil MCP.
+    NativeDelegationT3 {
+        request: NativeDelegationRequest,
+        proof: NativePermissionProof,
+    },
+    /// Observation du fournisseur par la connexion primaire de son wrapper.
+    NativePermissionFact {
+        fact: Option<ProviderPermissions>,
+        #[serde(default)]
+        request_id: Option<String>,
+        #[serde(default)]
+        observation_id: Option<String>,
+
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unavailable_code: Option<String>,
+    },
+    HumanLineage {
+        request: HumanLineageRequest,
     },
     HumanThreadWatchV1 {
         request: HumanThreadWatchV1,
@@ -3716,8 +3747,15 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    NativePermissionAcknowledged { observation_id:String, accepted:bool },
     NativeDelegationResult {
         result: serde_json::Value,
+    },
+    HumanLineageResult {
+        result: serde_json::Value,
+    },
+    HumanLineageWatchEvent {
+        event: HumanLineageWatchEvent,
     },
     HumanThreadWatchEvent {
         event: HumanThreadWatchEvent,

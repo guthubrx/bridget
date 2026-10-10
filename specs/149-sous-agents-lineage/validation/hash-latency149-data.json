@@ -1,0 +1,986 @@
+{
+ "note": "mesures brutes hash-latency149 ; helper = permission_source_revision(CLI r\u00e9el 240664432 o, 5 lectures) ; capture/recheck = capture_context_with_env/recheck_context_with_env x3 ; hook_flow = vrai client __native-permission-observer, fournisseur simul\u00e9 (ACK imm\u00e9diat) x3 ; unit\u00e9s ms",
+ "runs": {
+  "A1-debug-r5": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 7343.5,
+    "median": 7324.1,
+    "min": 7300.8,
+    "runs": [
+     7300.8,
+     7334.0,
+     7324.1,
+     7343.5,
+     7309.6
+    ]
+   },
+   "label": "A1-debug-r5",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 15129.4,
+      "median": 14996.2,
+      "min": 14665.0,
+      "runs": [
+       14996.2,
+       15129.4,
+       14665.0
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 14665.9,
+       "fact_published_ms": 14665.8,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 14651.7,
+       "fact_published_ms": 14651.7,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 14660.0,
+       "fact_published_ms": 14659.9,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 14640.8,
+     "recheck_ms": {
+      "max": 14720.1,
+      "median": 14700.3,
+      "min": 14608.9,
+      "runs": [
+       14700.3,
+       14720.1,
+       14608.9
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 7341.9,
+      "median": 7329.1,
+      "min": 7326.2,
+      "runs": [
+       7326.2,
+       7341.9,
+       7329.1
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 7322.3,
+       "fact_published_ms": 7322.3,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 7301.5,
+       "fact_published_ms": 7301.4,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 7363.3,
+       "fact_published_ms": 7363.3,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 7312.2,
+     "recheck_ms": {
+      "max": 7344.2,
+      "median": 7317.9,
+      "min": 7311.6,
+      "runs": [
+       7311.6,
+       7344.2,
+       7317.9
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "A2-debug-r6": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 2185.7,
+    "median": 2123.5,
+    "min": 2095.3,
+    "runs": [
+     2123.5,
+     2185.7,
+     2095.3,
+     2110.7,
+     2134.7
+    ]
+   },
+   "label": "A2-debug-r6",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 4281.7,
+      "median": 4234.9,
+      "min": 4210.7,
+      "runs": [
+       4281.7,
+       4234.9,
+       4210.7
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 4230.4,
+       "fact_published_ms": 4230.3,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 4198.6,
+       "fact_published_ms": 4198.6,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 4263.5,
+       "fact_published_ms": 4263.5,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 4212.5,
+     "recheck_ms": {
+      "max": 4218.4,
+      "median": 4217.3,
+      "min": 4190.7,
+      "runs": [
+       4190.7,
+       4218.4,
+       4217.3
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 2136.3,
+      "median": 2121.2,
+      "min": 2081.8,
+      "runs": [
+       2121.2,
+       2136.3,
+       2081.8
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 2088.8,
+       "fact_published_ms": 2087.7,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 2134.3,
+       "fact_published_ms": 2133.2,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 2112.3,
+       "fact_published_ms": 2111.4,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 2140.7,
+     "recheck_ms": {
+      "max": 2130.7,
+      "median": 2124.6,
+      "min": 2117.6,
+      "runs": [
+       2130.7,
+       2124.6,
+       2117.6
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "A3-release-r6": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 118.3,
+    "median": 117.6,
+    "min": 116.9,
+    "runs": [
+     118.3,
+     117.5,
+     117.8,
+     117.6,
+     116.9
+    ]
+   },
+   "label": "A3-release-r6",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 261.3,
+      "median": 235.7,
+      "min": 235.0,
+      "runs": [
+       261.3,
+       235.0,
+       235.7
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 239.1,
+       "fact_published_ms": 238.3,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 236.7,
+       "fact_published_ms": 235.8,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 251.5,
+       "fact_published_ms": 237.9,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 242.8,
+     "recheck_ms": {
+      "max": 236.5,
+      "median": 235.4,
+      "min": 234.9,
+      "runs": [
+       235.4,
+       234.9,
+       236.5
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 118.4,
+      "median": 117.7,
+      "min": 117.5,
+      "runs": [
+       117.5,
+       117.7,
+       118.4
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 120.6,
+       "fact_published_ms": 119.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 120.9,
+       "fact_published_ms": 120.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 120.6,
+       "fact_published_ms": 120.0,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 121.5,
+     "recheck_ms": {
+      "max": 118.6,
+      "median": 118.0,
+      "min": 117.5,
+      "runs": [
+       118.0,
+       117.5,
+       118.6
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "A4-release-r5-ref": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 557.8,
+    "median": 540.9,
+    "min": 538.3,
+    "runs": [
+     538.3,
+     557.8,
+     540.9,
+     541.0,
+     539.4
+    ]
+   },
+   "label": "A4-release-r5-ref",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 1104.5,
+      "median": 1078.6,
+      "min": 1076.1,
+      "runs": [
+       1104.5,
+       1078.6,
+       1076.1
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 1082.4,
+       "fact_published_ms": 1081.4,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 1118.4,
+       "fact_published_ms": 1117.6,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 1077.7,
+       "fact_published_ms": 1077.0,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 1121.3,
+     "recheck_ms": {
+      "max": 1109.2,
+      "median": 1083.3,
+      "min": 1080.6,
+      "runs": [
+       1109.2,
+       1080.6,
+       1083.3
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 560.2,
+      "median": 540.7,
+      "min": 538.3,
+      "runs": [
+       538.3,
+       540.7,
+       560.2
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 543.8,
+       "fact_published_ms": 542.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 557.4,
+       "fact_published_ms": 556.5,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 543.2,
+       "fact_published_ms": 542.5,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 546.4,
+     "recheck_ms": {
+      "max": 541.7,
+      "median": 540.6,
+      "min": 540.4,
+      "runs": [
+       541.7,
+       540.4,
+       540.6
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "B1-release-r5-ref": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 541.2,
+    "median": 539.0,
+    "min": 537.5,
+    "runs": [
+     538.5,
+     537.5,
+     539.0,
+     539.5,
+     541.2
+    ]
+   },
+   "label": "B1-release-r5-ref",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 1098.4,
+      "median": 1076.5,
+      "min": 1076.2,
+      "runs": [
+       1076.5,
+       1098.4,
+       1076.2
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 1080.8,
+       "fact_published_ms": 1079.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 1116.6,
+       "fact_published_ms": 1115.7,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 1086.2,
+       "fact_published_ms": 1085.2,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 1084.7,
+     "recheck_ms": {
+      "max": 1097.3,
+      "median": 1096.2,
+      "min": 1079.5,
+      "runs": [
+       1097.3,
+       1079.5,
+       1096.2
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 573.7,
+      "median": 539.6,
+      "min": 539.5,
+      "runs": [
+       539.6,
+       539.5,
+       573.7
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 550.4,
+       "fact_published_ms": 549.5,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 544.0,
+       "fact_published_ms": 543.3,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 544.1,
+       "fact_published_ms": 543.4,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 561.2,
+     "recheck_ms": {
+      "max": 539.6,
+      "median": 538.7,
+      "min": 538.4,
+      "runs": [
+       539.6,
+       538.7,
+       538.4
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "B2-release-r6": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 117.8,
+    "median": 117.6,
+    "min": 116.9,
+    "runs": [
+     117.8,
+     117.7,
+     117.6,
+     116.9,
+     117.4
+    ]
+   },
+   "label": "B2-release-r6",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 236.6,
+      "median": 234.5,
+      "min": 234.4,
+      "runs": [
+       234.5,
+       234.4,
+       236.6
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 241.1,
+       "fact_published_ms": 240.4,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 237.4,
+       "fact_published_ms": 236.4,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 238.6,
+       "fact_published_ms": 237.6,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 241.4,
+     "recheck_ms": {
+      "max": 249.9,
+      "median": 236.7,
+      "min": 235.0,
+      "runs": [
+       235.0,
+       249.9,
+       236.7
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 119.3,
+      "median": 118.9,
+      "min": 117.8,
+      "runs": [
+       118.9,
+       119.3,
+       117.8
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 120.8,
+       "fact_published_ms": 120.3,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 120.7,
+       "fact_published_ms": 119.7,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 120.7,
+       "fact_published_ms": 119.8,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 125.4,
+     "recheck_ms": {
+      "max": 121.1,
+      "median": 117.7,
+      "min": 117.3,
+      "runs": [
+       117.3,
+       117.7,
+       121.1
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "B3-debug-r6": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 2125.1,
+    "median": 2090.8,
+    "min": 2085.9,
+    "runs": [
+     2089.4,
+     2125.1,
+     2085.9,
+     2093.3,
+     2090.8
+    ]
+   },
+   "label": "B3-debug-r6",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 4251.8,
+      "median": 4243.2,
+      "min": 4224.3,
+      "runs": [
+       4251.8,
+       4224.3,
+       4243.2
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 4209.9,
+       "fact_published_ms": 4209.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 4217.1,
+       "fact_published_ms": 4217.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 4178.3,
+       "fact_published_ms": 4178.3,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 4232.9,
+     "recheck_ms": {
+      "max": 4202.7,
+      "median": 4195.9,
+      "min": 4180.6,
+      "runs": [
+       4195.9,
+       4180.6,
+       4202.7
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 2119.4,
+      "median": 2117.4,
+      "min": 2101.4,
+      "runs": [
+       2101.4,
+       2119.4,
+       2117.4
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 2088.7,
+       "fact_published_ms": 2087.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 2115.9,
+       "fact_published_ms": 2115.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 2088.8,
+       "fact_published_ms": 2087.9,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 2093.8,
+     "recheck_ms": {
+      "max": 2137.2,
+      "median": 2129.5,
+      "min": 2119.4,
+      "runs": [
+       2137.2,
+       2129.5,
+       2119.4
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "B4-debug-r5": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 7402.6,
+    "median": 7370.5,
+    "min": 7324.0,
+    "runs": [
+     7352.8,
+     7381.3,
+     7324.0,
+     7402.6,
+     7370.5
+    ]
+   },
+   "label": "B4-debug-r5",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 14683.2,
+      "median": 14675.3,
+      "min": 14609.5,
+      "runs": [
+       14609.5,
+       14675.3,
+       14683.2
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 14670.0,
+       "fact_published_ms": 14670.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 14638.9,
+       "fact_published_ms": 14638.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 14728.2,
+       "fact_published_ms": 14728.2,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 14700.1,
+     "recheck_ms": {
+      "max": 14732.8,
+      "median": 14717.2,
+      "min": 14674.0,
+      "runs": [
+       14732.8,
+       14674.0,
+       14717.2
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 7362.1,
+      "median": 7337.3,
+      "min": 7294.6,
+      "runs": [
+       7337.3,
+       7362.1,
+       7294.6
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 7355.9,
+       "fact_published_ms": 7355.9,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 7338.5,
+       "fact_published_ms": 7338.5,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"permission_attestation_unavailable\"}}",
+       "client_done_ms": 7319.8,
+       "fact_published_ms": 7319.8,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 7319.8,
+     "recheck_ms": {
+      "max": 7366.4,
+      "median": 7348.3,
+      "min": 7346.7,
+      "runs": [
+       7366.4,
+       7348.3,
+       7346.7
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  },
+  "C1-debug-r6-sha2opt3-prive": {
+   "cli": "/Users/moi/.local/share/claude/versions/2.1.296",
+   "cli_expected": "sha256:c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+   "helper_5_reads_ms": {
+    "max": 118.6,
+    "median": 115.2,
+    "min": 114.1,
+    "runs": [
+     115.2,
+     115.2,
+     115.0,
+     118.6,
+     114.1
+    ]
+   },
+   "label": "C1-debug-r6-sha2opt3-prive",
+   "variants": [
+    {
+     "capture_ms": {
+      "max": 230.0,
+      "median": 229.4,
+      "min": 226.4,
+      "runs": [
+       229.4,
+       230.0,
+       226.4
+      ]
+     },
+     "command": "claude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 228.8,
+       "fact_published_ms": 228.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 227.8,
+       "fact_published_ms": 227.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 228.7,
+       "fact_published_ms": 227.9,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 231.7,
+     "recheck_ms": {
+      "max": 226.1,
+      "median": 225.6,
+      "min": 224.0,
+      "runs": [
+       226.1,
+       224.0,
+       225.6
+      ]
+     },
+     "variant": "direct-claude"
+    },
+    {
+     "capture_ms": {
+      "max": 114.6,
+      "median": 114.4,
+      "min": 112.7,
+      "runs": [
+       114.6,
+       112.7,
+       114.4
+      ]
+     },
+     "command": "/Users/moi/.local/bin/gclaude",
+     "hook_flow": [
+      {
+       "client_decision": "allow",
+       "client_done_ms": 128.8,
+       "fact_published_ms": 128.0,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 118.5,
+       "fact_published_ms": 117.7,
+       "unavailable_code": null
+      },
+      {
+       "client_decision": "allow",
+       "client_done_ms": 117.6,
+       "fact_published_ms": 116.9,
+       "unavailable_code": null
+      }
+     ],
+     "observer_start_ms": 137.4,
+     "recheck_ms": {
+      "max": 115.3,
+      "median": 115.1,
+      "min": 114.5,
+      "runs": [
+       115.3,
+       115.1,
+       114.5
+      ]
+     },
+     "variant": "gclaude-glm"
+    }
+   ]
+  }
+ }
+}

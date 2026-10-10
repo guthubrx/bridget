@@ -9,7 +9,7 @@ use std::path::Path;
 pub(crate) fn tools() -> Vec<Value> {
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]}},"required":["request_id","agent_type","model","task","cwd","posture"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ]
@@ -63,9 +63,10 @@ pub(crate) fn execute(
             },
             task: string("task")?,
             cwd: string("cwd")?,
-            posture: match string("posture")?.as_str() {
-                "discovery" => SpawnPosture::Discovery,
-                "development" => SpawnPosture::Development,
+            posture: match args.get("posture") {
+                None => None,
+                Some(Value::String(value)) if value=="discovery" => Some(SpawnPosture::Discovery),
+                Some(Value::String(value)) if value=="development" => Some(SpawnPosture::Development),
                 _ => return Err(ClientError::InvalidParams("posture invalide".into())),
             },
         },
@@ -78,7 +79,11 @@ pub(crate) fn execute(
         _ => unreachable!(),
     };
     let mut connection = registered_connection(&identity.name, &identity.instance_id, socket)?;
-    match connection.exchange(&WrapperToDaemon::NativeDelegation { request })? {
+    let message=match crate::t3code_mcp::private_proof() {
+        Some(proof)=>WrapperToDaemon::NativeDelegationT3{request,proof},
+        None=>WrapperToDaemon::NativeDelegation{request},
+    };
+    match connection.exchange(&message)? {
         DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
             Err(ClientError::Technical {
                 code: "native_delegation_refused",

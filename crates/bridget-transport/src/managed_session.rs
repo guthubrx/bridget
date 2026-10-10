@@ -275,6 +275,9 @@ fn continuation_fallback(
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    /// Politique réellement annoncée par le fournisseur, et sa session.
+    /// Aucune valeur de repli ne donne de droits si le pilote ne l'observe pas.
+    fn provider_permissions(&self)->Option<(String,serde_json::Value,u64,Option<String>)>{None}
     /// Choix explicite de session, sans tour caché. Le défaut refuse : aucun
     /// adaptateur ne simule une commande de modèle par un prompt.
     fn select_runtime(
@@ -348,6 +351,13 @@ pub trait ManagedSession: Transport {
     }
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool;
     fn stop(&self);
+    /// Arrêt du seul fournisseur détenu par une mission native perdue.
+    /// Certains pilotes doivent interrompre le tour avant leur drain gracieux.
+    /// Le chemin ordinaire `stop` garde sa sémantique existante.
+    fn stop_native_mission(&self, message_id: &str) {
+        self.cancel_delivery(message_id, "wrapper natif arrêté");
+        self.stop();
+    }
     fn is_busy(&self) -> bool;
 }
 

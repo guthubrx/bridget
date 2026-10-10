@@ -1,0 +1,5 @@
+PASS L1 [REEL] sans coupure : toute tâche qui a son résultat voit son exécution durable CLOSE (aucune exécution restée active après 25 s), 12 tâches (6 racines + 6 descendants) toutes `result_available` et remises
+PASS L2 [OBS] OBSERVATION : décalage maximal entre la capture du résultat et la clôture de l'exécution durable, sans coupure (ms) - mesure, ni PASS ni FAIL
+PASS L3 [OBS] OBSERVATION : la fenêtre « résultat capturé / exécution encore active » a été atteinte par l'API puis coupée par un SIGTERM réel du daemon
+PASS L4 [OBS] fenêtre non atteinte en 6 essais : aucune conclusion tirée (non prouvé)
+{"summary":{"title":"E3d fenêtre résultat capturé / exécution active (r3)","pass":4,"fail":0,"total":4},"residualProcesses":0}

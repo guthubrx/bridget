@@ -9,12 +9,28 @@ const MAX_RESPONSE: u64 = 64 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SessionProof {
-    version: u8,
-    environment_id: String,
-    thread_id: String,
-    provider_session_id: String,
-    provider_instance_id: String,
+pub(crate) struct SessionProof {
+    pub version: u8,
+    pub environment_id: String,
+    pub thread_id: String,
+    pub provider_session_id: String,
+    pub provider_instance_id: String,
+    #[serde(default)]
+    pub permissions: Option<bridget_transport::protocol::ProviderPermissions>,
+}
+
+pub(crate) fn private_proof() -> Option<bridget_transport::protocol::NativePermissionProof> {
+    Some(bridget_transport::protocol::NativePermissionProof {
+        endpoint:std::env::var("BRIDGET_T3_MCP_ENDPOINT").ok()?,
+        authorization:bridget_transport::protocol::IdentityCredential::new(std::env::var("BRIDGET_T3_MCP_AUTHORIZATION").ok()?),
+    })
+}
+
+pub(crate) fn reattest(proof:&bridget_transport::protocol::NativePermissionProof)->Result<SessionProof,IdentityError> {
+    let runtime=read_runtime(&base_dir().map_err(|_|IdentityError::T3SessionUnavailable)?).map_err(|_|IdentityError::T3SessionUnavailable)?;
+    let authorization=proof.authorization.expose_for_attestation();
+    let url=validate_endpoint(&runtime,&proof.endpoint,authorization)?;
+    attest_http(&url,authorization)
 }
 
 /// La présence d'une seule variable sélectionne aussi ce chemin : une preuve
@@ -209,7 +225,12 @@ fn attest(
             .ok_or_else(denied)?,
     )
     .map_err(|_| denied())?;
-    if proof.version != 1
+    if !matches!(proof.version,1|2)
+        || (proof.version==1 && proof.permissions.is_some())
+        || (proof.version==2 && proof.permissions.as_ref().is_none_or(|fact|
+            bridget_transport::protocol::validate_permissions(fact,true).is_err()
+            || fact.provider_session_id!=proof.provider_session_id
+            || fact.provider_instance_id!=proof.provider_instance_id))
         // Les fils ordinaires ont souvent un UUID ; les enfants T3 ont aussi
         // des identifiants opaques `thread:delegated-task:...` attestés.
         || proof.thread_id.is_empty() || proof.thread_id.len() > 2048 || proof.thread_id.chars().any(char::is_control)

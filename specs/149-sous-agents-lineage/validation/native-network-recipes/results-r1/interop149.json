@@ -1,0 +1,748 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T13:21:41.150Z",
+ "finishedAt": "2026-10-10T13:22:25.715Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-823e8a5fab8a",
+  "sha256": "823e8a5fab8abe38fcb439d8fda98d929622dae3751ff8f629d306744379328b"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "umask": "077",
+ "summary": {
+  "title": "T036 interop 149",
+  "pass": 43,
+  "fail": 0,
+  "total": 43
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.uosKb8",
+  "projectRoot": "/private/tmp/b149n.znWcv0/work",
+  "daemonPid": 41577,
+  "catalogueV1": {
+   "inherit": false,
+   "inherit_refusal": "permission_attestation_unavailable",
+   "development": false,
+   "development_refusal": "permission_attestation_unavailable"
+  },
+  "catalogueV2FullAccessCodexParent": {
+   "claude": {
+    "protocol": "claude_stream_json",
+    "inherit": false,
+    "inherit_refusal": "permission_source_unavailable",
+    "development": false,
+    "development_refusal": "permission_source_unavailable",
+    "discovery": true
+   },
+   "codex": {
+    "protocol": "codex_app_server",
+    "inherit": true,
+    "inherit_refusal": null,
+    "development": true,
+    "development_refusal": null,
+    "discovery": true
+   },
+   "fixture-claude-149": {
+    "protocol": "claude_stream_json",
+    "inherit": false,
+    "inherit_refusal": "permission_source_unavailable",
+    "development": false,
+    "development_refusal": "permission_source_unavailable",
+    "discovery": true
+   },
+   "fixture-codex-149": {
+    "protocol": "codex_app_server",
+    "inherit": true,
+    "inherit_refusal": null,
+    "development": true,
+    "development_refusal": null,
+    "discovery": true
+   }
+  },
+  "catalogueScope": {
+   "cwd_scope": "project",
+   "max_depth": 8,
+   "max_children": 16
+  },
+  "snapshots": {
+   "A": "357c2b12d7cb3f16",
+   "B": "1a361f4f4fe36b32"
+  },
+  "observationTombstoneRustFront": {
+   "delegateCode": "t3_session_unavailable",
+   "delegateText": "t3_session_unavailable: la session T3 ou son rattachement Br",
+   "statusOfAdmittedTaskThroughT3MountedMcp": "refused:t3_session_unavailable"
+  },
+  "settledBeforeQuiet": true,
+  "watchLinesA": [
+   {
+    "status": "ready",
+    "seq": 0,
+    "keys": [
+     "generation",
+     "seq",
+     "status",
+     "version"
+    ]
+   },
+   {
+    "status": "changed",
+    "seq": 44,
+    "keys": [
+     "generation",
+     "seq",
+     "status",
+     "version"
+    ]
+   },
+   {
+    "status": "changed",
+    "seq": 46,
+    "keys": [
+     "generation",
+     "seq",
+     "status",
+     "version"
+    ]
+   }
+  ],
+  "finalCounts": {
+   "rows": 9,
+   "started": 9,
+   "prompts": 9,
+   "answered": 8,
+   "deliveries": {
+    "A": 6,
+    "B": 2
+   }
+  },
+  "httpSeen": {
+   "posts": 224,
+   "deletes": 73,
+   "statuses": {
+    "200": 146,
+    "202": 73,
+    "204": 73,
+    "401": 5
+   }
+  },
+  "evidencePids": [
+   41657,
+   42273,
+   42962,
+   44532,
+   45167,
+   45715,
+   46418,
+   46958,
+   47214
+  ],
+  "stopDaemon": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "S1.1",
+   "layer": "REEL",
+   "description": "deux credentials distincts, même endpoint et même instance fournisseur, sessions fournisseur distinctes",
+   "pass": true,
+   "observed": {
+    "sameEndpoint": true,
+    "sameInstance": true
+   }
+  },
+  {
+   "id": "S1.2",
+   "layer": "REEL",
+   "description": "les deux agents Bridget dérivent de leur fil et diffèrent",
+   "pass": true,
+   "observed": {
+    "a": "74786b56",
+    "b": "9744595c"
+   }
+  },
+  {
+   "id": "S1.3",
+   "layer": "REEL",
+   "description": "bridget_session sans fait : enveloppe v1 identité seule (5 champs camelCase, pas de permissions)",
+   "pass": true,
+   "observed": {
+    "keys": [
+     "environmentId",
+     "providerInstanceId",
+     "providerSessionId",
+     "threadId",
+     "version"
+    ],
+    "version": 1
+   }
+  },
+  {
+   "id": "S1.4",
+   "layer": "REEL",
+   "description": "bridget_who via T3 réel résout A et B sur leurs propres agents (identité148)",
+   "pass": true,
+   "observed": {
+    "aErr": false,
+    "bErr": false
+   }
+  },
+  {
+   "id": "S1.5",
+   "layer": "REEL",
+   "description": "chaque attestation ouvre puis ferme sa session de transport HTTP (DELETE par session, statuts 2xx)",
+   "pass": true,
+   "observed": {
+    "posts": 9,
+    "deletes": 3,
+    "statuses": [
+     200,
+     202,
+     204
+    ]
+   }
+  },
+  {
+   "id": "S2.1",
+   "layer": "REEL",
+   "description": "G-P-07(c) : admission inherit avec la seule enveloppe v1 -> permission_attestation_unavailable",
+   "pass": true,
+   "observed": {
+    "text": "permission_attestation_unavailable",
+    "code": "native_delegation_refused"
+   }
+  },
+  {
+   "id": "S2.2",
+   "layer": "REEL",
+   "description": "v1 + posture development : même refus nommé, aucune ligne, aucun lancement, aucune remise, aucun grant",
+   "pass": true,
+   "observed": {
+    "text": "permission_attestation_unavailable",
+    "before": {
+     "rows": 0,
+     "started": 0,
+     "prompts": 0,
+     "answered": 0,
+     "deliveries": {
+      "A": 0,
+      "B": 0
+     }
+    },
+    "after": {
+     "rows": 0,
+     "started": 0,
+     "prompts": 0,
+     "answered": 0,
+     "deliveries": {
+      "A": 0,
+      "B": 0
+     }
+    }
+   }
+  },
+  {
+   "id": "S2.3",
+   "layer": "REEL",
+   "description": "status/identité148 restent fonctionnels en v1 (tâche inconnue -> task_unavailable, pas de crash)",
+   "pass": true,
+   "observed": {
+    "payload": {
+     "text": "task_unavailable"
+    }
+   }
+  },
+  {
+   "id": "S3.1",
+   "layer": "REEL",
+   "description": "bridget_session avec fait publié : enveloppe v2 stricte (identité camelCase + permissions snake_case, revision 1)",
+   "pass": true,
+   "observed": {
+    "v2keys": [
+     "environmentId",
+     "permissions",
+     "providerInstanceId",
+     "providerSessionId",
+     "threadId",
+     "version"
+    ],
+    "permKeys": [
+     "cwd",
+     "driver",
+     "interaction_mode",
+     "provider_instance_id",
+     "provider_policy",
+     "provider_session_id",
+     "revision",
+     "run_id",
+     "runtime_mode",
+     "source",
+     "version"
+    ],
+    "revision": 1
+   }
+  },
+  {
+   "id": "S3.2",
+   "layer": "REEL",
+   "description": "l'enveloppe v2 ne contient ni token, ni endpoint, ni en-tête d'autorisation (<= 64 KiB)",
+   "pass": true,
+   "observed": {
+    "bytes": 1455
+   }
+  },
+  {
+   "id": "S3.3",
+   "layer": "REEL",
+   "description": "le fait de A n'est jamais prêté à B : B (même processus fournisseur) reste en v1",
+   "pass": true,
+   "observed": {
+    "version": 1
+   }
+  },
+  {
+   "id": "S3.4",
+   "layer": "REEL",
+   "description": "A (v2 full-access) : bridget_delegate sans posture admis, posture effective development, 1 ligne durable",
+   "pass": true,
+   "observed": {
+    "status": "queued",
+    "posture": "development"
+   }
+  },
+  {
+   "id": "S3.5",
+   "layer": "REEL",
+   "description": "le moteur a lancé UN processus enfant réel et UN tour ; résultat corrélé disponible",
+   "pass": true,
+   "observed": {
+    "state": "result_available",
+    "pid": 41657,
+    "result": "fixture149-answer:a1"
+   }
+  },
+  {
+   "id": "S3.6",
+   "layer": "REEL",
+   "description": "la politique de l'enfant est celle du fait parent (dangerFullAccess + approval never), figée dans le snapshot",
+   "pass": true,
+   "observed": {
+    "sandbox": {
+     "type": "dangerFullAccess"
+    },
+    "approval": "never",
+    "snapshotKeys": [
+     "version",
+     "source",
+     "owner_agent_id",
+     "owner_instance_id",
+     "parent",
+     "child_policy",
+     "project_cwd"
+    ]
+   }
+  },
+  {
+   "id": "S3.7",
+   "layer": "REEL",
+   "description": "exactement une remise corrélée (in_reply_to = mission, from = enfant, to = A), ACK réel, rien chez B",
+   "pass": true,
+   "observed": {
+    "aDeliveries": 1,
+    "matching": 1,
+    "bDeliveries": 0,
+    "acks": 1
+   }
+  },
+  {
+   "id": "S3.8",
+   "layer": "REEL",
+   "description": "B sans fait : refus nommé, A inchangé (aucun emprunt du fait de A)",
+   "pass": true,
+   "observed": {
+    "text": "permission_attestation_unavailable",
+    "rows": 1
+   }
+  },
+  {
+   "id": "S3.9",
+   "layer": "REEL",
+   "description": "S149-02/25 : B lecteur (sandbox readOnly) demande development -> permission_not_inherited, aucune ligne, aucun lancement, aucune invitation au grant",
+   "pass": true,
+   "observed": {
+    "text": "permission_not_inherited",
+    "rows": 1,
+    "started": 1,
+    "revB": 1
+   }
+  },
+  {
+   "id": "S3.10",
+   "layer": "REEL",
+   "description": "B (readOnly) sans posture : admis en lecture ; l'enfant de B reçoit un sandbox readOnly, celui de A est resté dangerFullAccess (S149-25)",
+   "pass": true,
+   "observed": {
+    "posture": "discovery",
+    "sandboxB": {
+     "type": "readOnly"
+    }
+   }
+  },
+  {
+   "id": "S3.11",
+   "layer": "REEL",
+   "description": "B ne lit ni n'annule la tâche de A (task_unavailable, aucune fuite de champ)",
+   "pass": true,
+   "observed": {
+    "status": {
+     "text": "task_unavailable"
+    },
+    "cancel": {
+     "text": "task_unavailable"
+    }
+   }
+  },
+  {
+   "id": "S3.12",
+   "layer": "REEL",
+   "description": "B rejoue le request_id de A : jamais la tâche de A (soit refus, soit tâche distincte propre à B)",
+   "pass": true,
+   "observed": {
+    "isError": false,
+    "sameTask": false,
+    "rowsBefore": 2,
+    "rowsAfter": 3
+   }
+  },
+  {
+   "id": "S4.1",
+   "layer": "REEL",
+   "description": "rotation : l'ancien credential est refusé par T3 (HTTP 401) et par Rust (t3_session_unavailable), sans repli",
+   "pass": true,
+   "observed": {
+    "http": 401,
+    "code": "t3_session_unavailable"
+   }
+  },
+  {
+   "id": "S4.2",
+   "layer": "REEL",
+   "description": "le nouveau credential retrouve la même identité Bridget (stable) mais aucun fait hérité : v1",
+   "pass": true,
+   "observed": {
+    "version": 1,
+    "sameAgent": true
+   }
+  },
+  {
+   "id": "S4.3",
+   "layer": "REEL",
+   "description": "après rotation sans fait : nouvelle admission refusée (v1) mais lecture de la tâche admise intacte",
+   "pass": true,
+   "observed": {
+    "refusal": "permission_attestation_unavailable",
+    "status": "result_available"
+   }
+  },
+  {
+   "id": "S4.4",
+   "layer": "REEL",
+   "description": "révocation de B : HTTP 401 + t3_session_unavailable ; le voisin A (nouveau credential) reste servi",
+   "pass": true,
+   "observed": {
+    "http": 401,
+    "code": "t3_session_unavailable",
+    "neighborOk": true
+   }
+  },
+  {
+   "id": "S4.5",
+   "layer": "REEL",
+   "description": "identités fausses : token forgé, endpoint hors runtime, credential valide sans binding Bridget -> t3_session_unavailable, jamais de repli PID",
+   "pass": true,
+   "observed": {
+    "forged": "t3_session_unavailable",
+    "wrongPort": "t3_session_unavailable",
+    "unboundC": "t3_session_unavailable",
+    "delegateC": "t3_session_unavailable"
+   }
+  },
+  {
+   "id": "S5.1",
+   "layer": "REEL",
+   "description": "G-P-07(b) côté T3 : fait retiré (fin de run) -> refus nommé permission_attestation_unavailable, jamais l'enveloppe v1",
+   "pass": true,
+   "observed": {
+    "rawIsError": true,
+    "namedCode": "permission_attestation_unavailable",
+    "hasStructured": false
+   }
+  },
+  {
+   "id": "S5.1b",
+   "layer": "REEL",
+   "description": "côté Rust (montage MCP T3) : même credential -> admission refusée fermée, zéro ligne, zéro lancement",
+   "pass": true,
+   "observed": {
+    "delegate": "t3_session_unavailable",
+    "status": "t3_session_unavailable"
+   }
+  },
+  {
+   "id": "S5.2",
+   "layer": "REEL",
+   "description": "fait lié à un autre run que le run actif : refus nommé ; la revision a augmenté à chaque publication du même credential",
+   "pass": true,
+   "observed": {
+    "rev3": 2,
+    "stale": 3,
+    "code": "permission_attestation_unavailable"
+   }
+  },
+  {
+   "id": "S5.3",
+   "layer": "REEL",
+   "description": "changement de mode (plan) : nouvelle revision pour les futures admissions ; le snapshot de la tâche déjà admise est inchangé (invariant 5)",
+   "pass": true,
+   "observed": {
+    "revision": 4,
+    "snapshotUnchanged": true
+   }
+  },
+  {
+   "id": "S6.1",
+   "layer": "REEL",
+   "description": "S149-19 : A voit seulement sa tâche, B (même projet, même processus) seulement la sienne ; aucune ne voit l'autre",
+   "pass": true,
+   "observed": {
+    "a": 1,
+    "b": 2
+   }
+  },
+  {
+   "id": "S6.2",
+   "layer": "REEL",
+   "description": "B ne peut ni show, ni journal, ni cancel la tâche de A via la CLI lecteur (task_unavailable, exit 2)",
+   "pass": true,
+   "observed": {
+    "show": "task_unavailable",
+    "journal": "task_unavailable",
+    "cancel": "task_unavailable"
+   }
+  },
+  {
+   "id": "S6.3",
+   "layer": "REEL",
+   "description": "mauvaise racine -> project_mismatch ; fil inconnu et fil sans binding -> binding_unavailable ; aucune donnée rendue",
+   "pass": true,
+   "observed": {
+    "wrongRoot": "project_mismatch",
+    "unknown": "binding_unavailable",
+    "unbound": "binding_unavailable"
+   }
+  },
+  {
+   "id": "S6.4",
+   "layer": "REEL",
+   "description": "show de la tâche terminale par son propre fil : résultat exact servi",
+   "pass": true,
+   "observed": {
+    "code": 0,
+    "result": "fixture149-answer:a1"
+   }
+  },
+  {
+   "id": "S6.5",
+   "layer": "REEL",
+   "description": "150 lectures Lineage : aucun lancement, aucune remise, aucun tour, base byte-stable (lecture quiète, aucun provider turn)",
+   "pass": true,
+   "observed": {
+    "quietBefore": {
+     "rows": 3,
+     "started": 3,
+     "prompts": 3,
+     "answered": 3,
+     "deliveries": {
+      "A": 1,
+      "B": 2
+     },
+     "db": "9ee81e018ead3604"
+    },
+    "quietAfter": {
+     "rows": 3,
+     "started": 3,
+     "prompts": 3,
+     "answered": 3,
+     "deliveries": {
+      "A": 1,
+      "B": 2
+     },
+     "db": "9ee81e018ead3604"
+    }
+   }
+  },
+  {
+   "id": "S6.9",
+   "layer": "REEL",
+   "description": "pagination en snapshot : pages de 1 tâche, même génération et même seq, union = liste complète, aucun doublon",
+   "pass": true,
+   "observed": {
+    "pages": 4,
+    "tasks": 4,
+    "seq": 36
+   }
+  },
+  {
+   "id": "S6.10",
+   "layer": "REEL",
+   "description": "mutation entre deux pages : page 2 rend snapshot_changed (le staging est à abandonner), jamais un snapshot mélangé",
+   "pass": true,
+   "observed": {
+    "mutated": true,
+    "page2": "snapshot_changed"
+   }
+  },
+  {
+   "id": "S6.11",
+   "layer": "REEL",
+   "description": "grammaire CLI fermée : formes ouvertes ou hors bornes -> exit 2, invalid_request, retryable false",
+   "pass": true,
+   "observed": {
+    "codes": [
+     [
+      2,
+      "invalid_request"
+     ],
+     [
+      2,
+      "invalid_request"
+     ],
+     [
+      2,
+      "invalid_request"
+     ],
+     [
+      2,
+      "invalid_request"
+     ],
+     [
+      2,
+      "invalid_request"
+     ],
+     [
+      2,
+      "invalid_request"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "S6.6",
+   "layer": "REEL",
+   "description": "watch : ready seq 0 premier pour chaque racine",
+   "pass": true,
+   "observed": {
+    "a": {
+     "generation": "fc0a1764-5321-4cfb-b497-c4cbbeaa89d7",
+     "seq": 0,
+     "status": "ready",
+     "version": 1
+    },
+    "b": {
+     "generation": "fc0a1764-5321-4cfb-b497-c4cbbeaa89d7",
+     "seq": 0,
+     "status": "ready",
+     "version": 1
+    }
+   }
+  },
+  {
+   "id": "S6.7",
+   "layer": "REEL",
+   "description": "mutation de la racine de A (nouvelle tâche) : A est signalé (corps absent), B ne reçoit rien (aucun UUID de fil ni contenu)",
+   "pass": true,
+   "observed": {
+    "aLines": [
+     "ready",
+     "changed",
+     "changed"
+    ],
+    "bLines": 1
+   }
+  },
+  {
+   "id": "S6.8",
+   "layer": "REEL",
+   "description": "cancel CLI : reçu natif, rejeu identique = même reçu, même request_id sur une autre tâche = envelope_mismatch, tâche réellement cancelled",
+   "pass": true,
+   "observed": {
+    "first": {
+     "status": "cancelling",
+     "task_id": "26682637-1073-4b1a-8d8f-fea46f5a1447",
+     "version": 1
+    },
+    "replay": {
+     "status": "cancelling",
+     "task_id": "26682637-1073-4b1a-8d8f-fea46f5a1447",
+     "version": 1
+    },
+    "mismatch": "envelope_mismatch",
+    "state": "cancelled"
+   }
+  },
+  {
+   "id": "S7.1",
+   "layer": "REEL",
+   "description": "aucune autorité en trop : parent, permissions, sandbox, endpoint, credential, proof, agent_id forgés dans les arguments -> 7 refus (arguments fermés), zéro ligne, zéro lancement",
+   "pass": true,
+   "observed": {
+    "refused": 7,
+    "of": 7,
+    "rows": [
+     8,
+     8
+    ],
+    "messages": {
+     "parent": "champ inconnu",
+     "permissions": "champ inconnu",
+     "sandbox": "champ inconnu",
+     "endpoint": "champ inconnu",
+     "credential": "champ inconnu",
+     "proof": "champ inconnu",
+     "agent_id": "champ inconnu"
+    }
+   }
+  },
+  {
+   "id": "S7.2",
+   "layer": "REEL",
+   "description": "projet attesté : cwd hors projet (/tmp), autre dépôt git, lien symbolique sortant, .. -> refus d'admission avant tout lancement",
+   "pass": true,
+   "observed": {
+    "tmp": "cwd_outside_parent_project",
+    "otherRepo": "cwd_outside_parent_project",
+    "symlink": "cwd_outside_parent_project",
+    "dotdot": "cwd_outside_parent_project"
+   }
+  },
+  {
+   "id": "S7.3",
+   "layer": "REEL",
+   "description": "conversation D d'un AUTRE projet : ne peut pas lancer dans le projet de A (refus), lance dans le sien ; sa liste Lineage ne contient que sa tâche ; racines croisées -> project_mismatch ; tâche de A introuvable",
+   "pass": true,
+   "observed": {
+    "intoOtherProject": "cwd_outside_parent_project",
+    "ownProject": "queued",
+    "listD": 1,
+    "dWrongRoot": "project_mismatch",
+    "aWrongRoot": "project_mismatch",
+    "dShowA": "task_unavailable"
+   }
+  }
+ ],
+ "residualProcesses": []
+}

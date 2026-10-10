@@ -1,0 +1,1604 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:33:01.851Z",
+ "finishedAt": "2026-10-10T17:35:23.300Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "T039 scénarios dégradés 149",
+  "pass": 41,
+  "fail": 2,
+  "total": 43
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.P1AWcl",
+  "daemonPid": 35250,
+  "replayAfterRightsLoss": {
+   "tombstone": "t3_session_unavailable",
+   "oldCredentialAfterRotation": "t3_session_unavailable",
+   "newCredentialWithoutFact_replay": "ok:result_available",
+   "newCredentialWithoutFact_status": "ok:result_available"
+  },
+  "o1ThreeLanes": {
+   "mcpMountWithRetiredFact": {
+    "delegateReplay": "t3_session_unavailable",
+    "taskStatus": "t3_session_unavailable",
+    "who": "t3_session_unavailable"
+   },
+   "freshCredentialNeverHadFact": {
+    "replay": "ok:result_available",
+    "status": "ok:result_available"
+   },
+   "humanNativeLineageCli": {
+    "showResult": "fixture149-answer:g1",
+    "showStatus": "result_available",
+    "listHasTask": true
+   }
+  },
+  "stopDaemon": "stopped_by_sigterm",
+  "daemonSecondPid": 38305,
+  "deliveriesAfterReconnect": [],
+  "deliveriesBeforeRestart": {
+   "idempotentAcked": 7,
+   "plain": 2
+  },
+  "processTreeBeforeStop": [
+   "38472 38305 38472      0 /Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb managed-wrapper fixture-codex-149 af",
+   "38476 38472 38476      0 /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/Ma"
+  ],
+  "stopDaemonInflight": "stopped_by_sigterm",
+  "survivorsAfterDaemonStop": [
+   {
+    "pid": 38472,
+    "firstMs": 62,
+    "lastMs": 515,
+    "ppid": 1,
+    "command": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb m",
+    "isInflightProvider": false
+   },
+   {
+    "pid": 38476,
+    "firstMs": 62,
+    "lastMs": 5836,
+    "ppid": 1,
+    "command": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3",
+    "isInflightProvider": true
+   }
+  ],
+  "inflightTimeline": [],
+  "inflightTask": {
+   "before": "working",
+   "early": "failed",
+   "earlyError": "unreachable",
+   "state": "failed",
+   "error": "unreachable",
+   "updated_at": 1791653643,
+   "completed_at": 1791653643,
+   "started_at": 1791653639,
+   "created_at": 1791653639,
+   "restartAtEpoch": 1791653642,
+   "failure_sent": true
+  },
+  "inflightProvidersAlive": {
+   "afterStop": 2,
+   "at7s": 0,
+   "at15s": 0
+  },
+  "inflightRestart": {
+   "pidsDaemon": {
+    "stopped": "SIGTERM",
+    "restartedPid": 38569
+   },
+   "before": {
+    "starts": 12,
+    "promptsI1": 1,
+    "pids": [
+     38472,
+     38476
+    ],
+    "rows": 12
+   },
+   "i1PidBefore": 38476,
+   "providersAfterDaemonStop": 2,
+   "taskState": "failed",
+   "taskError": "unreachable",
+   "missionPrompts": 1,
+   "distinctProviderPids": 1,
+   "startsTotalAfter": 12,
+   "notices": [
+    "Délégation native 824c6cc3-cf29-41fd-91a6-09653e2cd76e échouée : unreachable"
+   ]
+  },
+  "r92Executions": {
+   "before": [
+    "running",
+    "provider_accepted",
+    1
+   ],
+   "after": [
+    "unreachable",
+    "daemon_restart",
+    2
+   ],
+   "rowsBefore": 12,
+   "rowsAfter": 12,
+   "othersChanged": 0,
+   "providerSigtermDelayS": null
+  },
+  "admissionCutAttempts": [
+   {
+    "attempt": 1,
+    "admitted": "queued",
+    "exitState": {
+     "state": "starting",
+     "error": null,
+     "promptsBeforeRestart": 0,
+     "startsDuringStop": 1
+    },
+    "afterRestart": {
+     "state": "failed",
+     "error": "unreachable",
+     "prompts": 0,
+     "startsTotalDelta": 1,
+     "notices": 1
+    }
+   },
+   {
+    "attempt": 2,
+    "admitted": "queued",
+    "exitState": {
+     "state": "starting",
+     "error": null,
+     "promptsBeforeRestart": 0,
+     "startsDuringStop": 1
+    },
+    "afterRestart": {
+     "state": "failed",
+     "error": "unreachable",
+     "prompts": 0,
+     "startsTotalDelta": 1,
+     "notices": 1
+    }
+   },
+   {
+    "attempt": 3,
+    "admitted": "queued",
+    "exitState": {
+     "state": "starting",
+     "error": null,
+     "promptsBeforeRestart": 0,
+     "startsDuringStop": 1
+    },
+    "afterRestart": {
+     "state": "failed",
+     "error": "unreachable",
+     "prompts": 0,
+     "startsTotalDelta": 1,
+     "notices": 1
+    }
+   }
+  ],
+  "queuedObservedAtExit": false,
+  "r94Before": {
+   "tasks": [
+    {
+     "id": "30c747cd",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "16ff7843",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "7d1c33e7",
+     "parent": "16ff7843",
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "fe045c90",
+     "parent": null,
+     "state": "cancelled",
+     "error": null,
+     "sent": false,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "f323f2c0",
+     "parent": "fe045c90",
+     "state": "cancelled",
+     "error": null,
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "cbe3375f",
+     "parent": null,
+     "state": "failed",
+     "error": "livraison échouée: erreur Codex (code -32000; référence sha256:66bb1dfcdec778b0b928b8b230dfa24ce84519b01e7d8b321935f82f5b276b2c)",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "f111d520",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "0083afec",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "8eea382b",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "16a33e24",
+     "parent": null,
+     "state": "cancelled",
+     "error": null,
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "9c7741e4",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "824c6cc3",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "6c0b6187",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "97c21390",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "aa60237e",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "7e211201",
+     "parent": null,
+     "state": "waiting_for_children",
+     "error": null,
+     "sent": false,
+     "cleanup": false,
+     "hasResult": true
+    },
+    {
+     "id": "a6b38ede",
+     "parent": null,
+     "state": "waiting_for_children",
+     "error": null,
+     "sent": false,
+     "cleanup": false,
+     "hasResult": true
+    },
+    {
+     "id": "c4787902",
+     "parent": "7e211201",
+     "state": "working",
+     "error": null,
+     "sent": false,
+     "cleanup": false,
+     "hasResult": false
+    },
+    {
+     "id": "8464b945",
+     "parent": "a6b38ede",
+     "state": "working",
+     "error": null,
+     "sent": false,
+     "cleanup": false,
+     "hasResult": false
+    }
+   ],
+   "execs": [
+    {
+     "execution_id": "execution-4f93fc59-6bfd-4fba-9a26-a13878866f5e",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-0955607e-5be6-400b-bba4-f5932e8fc868",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-c718f28c-09b1-4ab4-bc6a-b9efcfcff523",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-d7b9eee2-1585-4823-b851-fc21d8a2eecd",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-3f725129-bc78-4e45-a358-ca85ab285775",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-660644ed-c58f-464d-be8a-fec8c909fd5a",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-c9bb75d4-7841-4667-9335-fa3b8c511f3f",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-d9fb0af3-eea0-421c-8bf7-98304c0f49a0",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-9e5b935a-45ee-40e1-9d67-d8ad418161a6",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-a839839d-886a-499d-a0b2-ef3f716292b5",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-52b274f6-5faa-41f5-8e73-7b96319adc5b",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-f2fa455d-b83e-44f9-b678-aa86cdf75250",
+     "state": "unreachable",
+     "reason": "daemon_restart",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-6f75eca4-5e77-4dc8-9d98-4069d83f7fb0",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-7de83bc2-f29e-4131-806d-8e9020c56dd6",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-8eb34142-63b9-43fe-a04e-54da8a03ae3c",
+     "state": "starting",
+     "reason": null,
+     "revision": 0,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-f7d33e6c-0ae8-42b1-8e70-a24b0440d679",
+     "state": "starting",
+     "reason": null,
+     "revision": 0,
+     "generation": 1
+    }
+   ],
+   "starts": 19,
+   "deliveriesSoFar": 1
+  },
+  "r94Offline": {
+   "resolveMsAfterCut": 4711,
+   "tasks": [
+    {
+     "id": "30c747cd",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "16ff7843",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "7d1c33e7",
+     "parent": "16ff7843",
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "fe045c90",
+     "parent": null,
+     "state": "cancelled",
+     "error": null,
+     "sent": false,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "f323f2c0",
+     "parent": "fe045c90",
+     "state": "cancelled",
+     "error": null,
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "cbe3375f",
+     "parent": null,
+     "state": "failed",
+     "error": "livraison échouée: erreur Codex (code -32000; référence sha256:66bb1dfcdec778b0b928b8b230dfa24ce84519b01e7d8b321935f82f5b276b2c)",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "f111d520",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "0083afec",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "8eea382b",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "16a33e24",
+     "parent": null,
+     "state": "cancelled",
+     "error": null,
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "9c7741e4",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "cleanup": true,
+     "hasResult": true
+    },
+    {
+     "id": "824c6cc3",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "6c0b6187",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "97c21390",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "aa60237e",
+     "parent": null,
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "7e211201",
+     "parent": null,
+     "state": "result_available",
+     "error": "native_result_owner_offline",
+     "sent": false,
+     "cleanup": false,
+     "hasResult": true
+    },
+    {
+     "id": "a6b38ede",
+     "parent": null,
+     "state": "result_available",
+     "error": "native_result_owner_offline",
+     "sent": false,
+     "cleanup": false,
+     "hasResult": true
+    },
+    {
+     "id": "c4787902",
+     "parent": "7e211201",
+     "state": "failed",
+     "error": "stdout Codex fermé pendant le tour",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    },
+    {
+     "id": "8464b945",
+     "parent": "a6b38ede",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "cleanup": true,
+     "hasResult": false
+    }
+   ],
+   "execs": [
+    {
+     "execution_id": "execution-4f93fc59-6bfd-4fba-9a26-a13878866f5e",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-0955607e-5be6-400b-bba4-f5932e8fc868",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-c718f28c-09b1-4ab4-bc6a-b9efcfcff523",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-d7b9eee2-1585-4823-b851-fc21d8a2eecd",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-3f725129-bc78-4e45-a358-ca85ab285775",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-660644ed-c58f-464d-be8a-fec8c909fd5a",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-c9bb75d4-7841-4667-9335-fa3b8c511f3f",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-d9fb0af3-eea0-421c-8bf7-98304c0f49a0",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-9e5b935a-45ee-40e1-9d67-d8ad418161a6",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-a839839d-886a-499d-a0b2-ef3f716292b5",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-52b274f6-5faa-41f5-8e73-7b96319adc5b",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-f2fa455d-b83e-44f9-b678-aa86cdf75250",
+     "state": "unreachable",
+     "reason": "daemon_restart",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-6f75eca4-5e77-4dc8-9d98-4069d83f7fb0",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-7de83bc2-f29e-4131-806d-8e9020c56dd6",
+     "state": "completed",
+     "reason": "completed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-8eb34142-63b9-43fe-a04e-54da8a03ae3c",
+     "state": "failed",
+     "reason": "provider_failed",
+     "revision": 2,
+     "generation": 1
+    },
+    {
+     "execution_id": "execution-f7d33e6c-0ae8-42b1-8e70-a24b0440d679",
+     "state": "unreachable",
+     "reason": "daemon_restart",
+     "revision": 2,
+     "generation": 1
+    }
+   ],
+   "starts": 19,
+   "stableAfter6s": "result_available"
+  },
+  "r94CliWhileOffline": {
+   "code": "binding_unavailable",
+   "status": "error"
+  },
+  "r94Reconnect": {
+   "m1": [
+    {
+     "id": "native-result-7e211201-7a28-4be7-861b-44a26be3ba41",
+     "from": "889d9244",
+     "body": "fixture149-answer:m1",
+     "plain": false
+    }
+   ],
+   "m2": [
+    {
+     "id": "native-result-a6b38ede-23fc-4141-aedf-5a61545d4612",
+     "body": "fixture149-answer:m2"
+    }
+   ],
+   "acks": 1
+  },
+  "r94Cli": {
+   "show": {
+    "status": "result_available",
+    "result": "fixture149-answer:m1"
+   },
+   "rows": [
+    [
+     "7e211201",
+     "result_available",
+     null
+    ],
+    [
+     "c4787902",
+     "failed",
+     "stdout Codex fermé pendant le tour"
+    ]
+   ]
+  },
+  "r94Second": {
+   "m1AfterSecondRestart": 0,
+   "m2AfterSecondRestart": [
+    {
+     "id": "native-result-a6b38ede-23fc-4141-aedf-5a61545d4612",
+     "body": "fixture149-answer:m2",
+     "sameIdAsFirst": true
+    }
+   ],
+   "tasksEqual": true,
+   "execsEqual": true
+  },
+  "providerDeath": {
+   "pid": 41228,
+   "parentOfProviderIsWrapper": "non précisé",
+   "diedAfter3s": true,
+   "state": "failed",
+   "error": "stdout Codex fermé pendant le tour",
+   "startsBefore": 20,
+   "startsAfter": 20,
+   "prompts": 1,
+   "liveProvidersAfter": 0,
+   "notices": [
+    "Délégation native 68f27286-37a0-4e72-97cb-ca3799f78963 échouée : stdout Codex fermé pendant le tour"
+   ]
+  },
+  "promptsByNonce": {
+   "rt1": 1,
+   "n1": 1,
+   "n1g": 1,
+   "c1": 1,
+   "c1g": 1,
+   "f1": 1,
+   "g1": 1,
+   "g3": 1,
+   "t2": 1,
+   "t1": 1,
+   "u1": 1,
+   "i1": 1,
+   "m2": 1,
+   "m1": 1,
+   "m2g": 1,
+   "m1g": 1,
+   "pd1": 1
+  },
+  "finalCounts": {
+   "rows": 20,
+   "started": 20,
+   "prompts": 19,
+   "answered": 12,
+   "deliveries": {},
+   "startsTotal": 20
+  },
+  "httpSeen": {
+   "posts": 85,
+   "deletes": 28
+  },
+  "allStarts": [
+   35270,
+   35573,
+   35592,
+   36180,
+   36199,
+   36409,
+   36691,
+   37287,
+   37555,
+   37566,
+   38096,
+   38476,
+   39180,
+   39304,
+   39427,
+   39563,
+   39580,
+   39616,
+   39620,
+   41228
+  ],
+  "finalStates": [
+   "result_available",
+   "result_available",
+   "result_available",
+   "cancelled",
+   "cancelled",
+   "failed",
+   "result_available",
+   "result_available",
+   "result_available",
+   "cancelled",
+   "result_available",
+   "failed",
+   "failed",
+   "failed",
+   "failed",
+   "result_available",
+   "result_available",
+   "failed",
+   "failed",
+   "failed"
+  ],
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "R1.1",
+   "layer": "REEL",
+   "description": "retry : 20 rejeux (10 en vol, 10 après la fin) -> même task_id, même enfant, même message_id ; 1 lancement, 1 tour, 1 remise corrélée",
+   "pass": true,
+   "observed": {
+    "replays": 20,
+    "sameAll": true,
+    "starts": 1,
+    "prompts": 1,
+    "deliveries": 1,
+    "rows": 1
+   }
+  },
+  {
+   "id": "R1.2",
+   "layer": "REEL",
+   "description": "même request_id avec une autre enveloppe -> envelope_mismatch, aucune mutation, aucun lancement",
+   "pass": true,
+   "observed": {
+    "payload": {
+     "text": "envelope_mismatch"
+    }
+   }
+  },
+  {
+   "id": "R1.3",
+   "layer": "REEL",
+   "description": "Lineage montre un seul enfant pour ce request_id (pas de doublon)",
+   "pass": true,
+   "observed": {
+    "tasks": 1
+   }
+  },
+  {
+   "id": "R7.1",
+   "layer": "REEL",
+   "description": "nested actif : le tour de l'enfant est fini mais la racine n'expose ni statut result_available ni résultat tant que le petit-enfant travaille ; aucune remise au parent",
+   "pass": true,
+   "observed": {
+    "rootStatus": "waiting_for_children",
+    "rootResult": null,
+    "nestedState": "working",
+    "deliveriesDuring": 0,
+    "starts": 3
+   }
+  },
+  {
+   "id": "R7.2",
+   "layer": "REEL",
+   "description": "la lignée est durable : parent_task_id et propriétaire racine stables (la racine appartient à A, le petit-enfant à l'enfant)",
+   "pass": true,
+   "observed": {
+    "rootOwnerOfNested": "74786b56",
+    "ownerOfNested": "f8be83df"
+   }
+  },
+  {
+   "id": "R7.3",
+   "layer": "REEL",
+   "description": "quand le petit-enfant a fini : la racine devient result_available, UNE seule remise corrélée à A ; le résultat du petit-enfant n'est pas remis à A",
+   "pass": true,
+   "observed": {
+    "root": "result_available",
+    "nested": "result_available",
+    "deliveries": 1,
+    "leaked": false
+   }
+  },
+  {
+   "id": "R2.1",
+   "layer": "REEL",
+   "description": "un autre fil (B) ne peut ni annuler ni lire la tâche de A : task_unavailable, tâche et processus inchangés",
+   "pass": true,
+   "observed": {
+    "cancel": {
+     "text": "task_unavailable"
+    },
+    "status": {
+     "text": "task_unavailable"
+    },
+    "providers": 4
+   }
+  },
+  {
+   "id": "R2.2",
+   "layer": "REEL",
+   "description": "cancel de la racine : racine + descendant actif cancelled, PID des deux enfants réellement terminés, zéro fournisseur résiduel, aucune remise de résultat",
+   "pass": true,
+   "observed": {
+    "states": [
+     "cancelled",
+     "cancelled"
+    ],
+    "pids": [
+     [
+      36180,
+      false
+     ],
+     [
+      36199,
+      false
+     ]
+    ],
+    "liveProviders": 0
+   }
+  },
+  {
+   "id": "R2.3",
+   "layer": "REEL",
+   "description": "cancel rejoué : idempotent (même état cancelled, aucune erreur, aucun nouveau lancement)",
+   "pass": true,
+   "observed": {
+    "status": "cancelled",
+    "starts": 5
+   }
+  },
+  {
+   "id": "R4.1",
+   "layer": "REEL",
+   "description": "identité inconnue : token forgé, absence totale d'identité, fil sans binding -> refus explicites ; aucune identité voisine empruntée, aucune ligne, aucun lancement",
+   "pass": true,
+   "observed": {
+    "bogus": [
+     "t3_session_unavailable",
+     "t3_session_unavailable"
+    ],
+    "noIdentity": [
+     "identity_not_found",
+     "identity_not_found"
+    ],
+    "lineage": "binding_unavailable"
+   }
+  },
+  {
+   "id": "R3.1",
+   "layer": "REEL",
+   "description": "parent extérieur : le fil B voit zéro tâche de A (liste, show), compteurs et base inchangés",
+   "pass": true,
+   "observed": {
+    "listBTasks": 0,
+    "show": "task_unavailable"
+   }
+  },
+  {
+   "id": "R5.1",
+   "layer": "REEL",
+   "description": "refus fournisseur : tâche failed avec erreur explicite, 1 seul lancement, 1 seul tour (pas de reprise ni de substitution de modèle/fournisseur), 1 notification d'échec, Lineage failed",
+   "pass": true,
+   "observed": {
+    "state": "failed",
+    "error": "livraison échouée: erreur Codex (code -32000; référence sha256:66bb1dfcdec778b0b928b8b230dfa24ce84519b01e7d8b321935f82f5",
+    "prompts": 1,
+    "notices": 1,
+    "lineageStatus": "failed",
+    "lineageModel": "fixture-model-149"
+   }
+  },
+  {
+   "id": "R5.2",
+   "layer": "REEL",
+   "description": "le rejeu de la requête refusée rend l'échec mémorisé sans nouveau lancement",
+   "pass": true,
+   "observed": {
+    "replayStatus": "failed",
+    "prompts": 1
+   }
+  },
+  {
+   "id": "R5.3",
+   "layer": "REEL",
+   "description": "modèle ou fournisseur absent du registre : refus nommé à l'admission, aucun lancement, aucune substitution",
+   "pass": true,
+   "observed": {
+    "model": "model_unavailable",
+    "agent": "type d'agent inconnu 'agent-inconnu' dans /Users/moi/.cache/bridget149-native-interop.P1AWcl/state/agents.json. Types disponibles : claude, codex, cursor, fixture-claude-149, fixture-codex-149, gemini, project-discovery-claude, project-discovery-codex, project-discovery-fixture-claude-149, project-discovery-fixture-codex-149"
+   }
+  },
+  {
+   "id": "R8.1",
+   "layer": "REEL",
+   "description": "droits réduits (parent devient readOnly) : le rejeu de l'ancienne requête rend la même tâche et le même résultat, sans nouveau lancement ; son snapshot reste dangerFullAccess",
+   "pass": true,
+   "observed": {
+    "sameTask": true,
+    "prompts": 1,
+    "sandbox": "dangerFullAccess",
+    "snapshotUnchanged": true,
+    "revision": 2
+   }
+  },
+  {
+   "id": "R8.2",
+   "layer": "REEL",
+   "description": "droits réduits : une NOUVELLE requête development est refusée (permission_not_inherited) avant tout lancement ; une requête héritée reçoit le sandbox readOnly (jamais l'ancien full-access)",
+   "pass": true,
+   "observed": {
+    "development": "permission_not_inherited",
+    "g2Prompts": 0,
+    "g3Sandbox": "readOnly"
+   }
+  },
+  {
+   "id": "R8.3",
+   "layer": "REEL",
+   "description": "fait retiré, puis session tournée : aucun rejeu n'entraîne de lancement ni de nouvelle remise ; l'ancien credential est refusé ; sans fait (v1) la lecture/le rejeu de l'identité 148 ne relance rien",
+   "pass": true,
+   "observed": {
+    "tombstone": {
+     "tombstone": "t3_session_unavailable",
+     "oldCredentialAfterRotation": "t3_session_unavailable",
+     "newCredentialWithoutFact_replay": "ok:result_available",
+     "newCredentialWithoutFact_status": "ok:result_available"
+    },
+    "startedBefore": 7,
+    "startedAfter": 8,
+    "g1Prompts": 1
+   }
+  },
+  {
+   "id": "R8.4",
+   "layer": "REEL",
+   "description": "O1 (comportement exact, G-P-07(b)) : fait retiré puis session tournée - (1) le montage MCP privé de l'ancien credential est fermé EN BLOC (rejeu, status ET identité : t3_session_unavailable, jamais v1) ; (2) un credential neuf qui n'a jamais eu de fait reçoit v1 et lit/rejoue la tâche admise (148) ; (3) la lecture humaine Lineage native (gardes147) lit la tâche admise, résultat intact",
+   "pass": true,
+   "observed": {
+    "mcpMountWithRetiredFact": {
+     "delegateReplay": "t3_session_unavailable",
+     "taskStatus": "t3_session_unavailable",
+     "who": "t3_session_unavailable"
+    },
+    "freshCredentialNeverHadFact": {
+     "replay": "ok:result_available",
+     "status": "ok:result_available"
+    },
+    "humanNativeLineageCli": {
+     "showResult": "fixture149-answer:g1",
+     "showStatus": "result_available",
+     "listHasTask": true
+    }
+   }
+  },
+  {
+   "id": "R6.1",
+   "layer": "REEL",
+   "description": "T3 en panne après admission : la mission admise (enfant déjà lancé) va à son terme sans T3, résultat remis UNE fois à A, PID enfant sans relance",
+   "pass": true,
+   "observed": {
+    "state": "result_available",
+    "deliveries": 1,
+    "prompts": 1,
+    "t1pid": 37555,
+    "startsAfter": 10
+   }
+  },
+  {
+   "id": "R6.2",
+   "layer": "REEL",
+   "description": "T3 en panne : l'annulation reste native (CLI Lineage) -> tâche cancelled et PID de l'enfant réellement terminé ; la lecture native reste servie",
+   "pass": true,
+   "observed": {
+    "cancel": {
+     "status": "cancelling",
+     "task_id": "16a33e24-674a-47af-85d4-d0a858d886c5",
+     "version": 1
+    },
+    "state": "cancelled",
+    "t2pid": 37566,
+    "alive": false,
+    "readResult": "fixture149-answer:t1"
+   }
+  },
+  {
+   "id": "R6.3",
+   "layer": "REEL",
+   "description": "T3 en panne : le montage MCP T3 est fermé (status et nouvelle admission refusés t3_session_unavailable), zéro ligne et zéro lancement ajoutés, aucun repli PID",
+   "pass": true,
+   "observed": {
+    "status": "t3_session_unavailable",
+    "delegate": "t3_session_unavailable",
+    "t3Prompts": 0
+   }
+  },
+  {
+   "id": "R6.4",
+   "layer": "REEL",
+   "description": "T3 revenu : l'ancien credential reste refusé (registre perdu) ; avec un credential neuf + fait, le rejeu de la requête admise avant la panne rend la MÊME tâche, sans relance",
+   "pass": true,
+   "observed": {
+    "stale": "t3_session_unavailable",
+    "sameTask": true,
+    "sameMessage": true,
+    "prompts": 1
+   }
+  },
+  {
+   "id": "R9.1",
+   "layer": "REEL",
+   "description": "reprise du daemon, missions terminées : mêmes task_id/child/message, mêmes états (result_available, cancelled, failed), aucun nouveau lancement, aucun fournisseur survivant à l'arrêt",
+   "pass": true,
+   "observed": {
+    "statesEqual": true,
+    "startsBefore": 11,
+    "startsAfter": 11,
+    "providersAfterDaemonStop": 0
+   }
+  },
+  {
+   "id": "R9.1b",
+   "layer": "REEL",
+   "description": "reprise du daemon : aucune remise déjà accusée (ACK) n'est rejouée au parent reconnecté",
+   "pass": true,
+   "observed": {
+    "deliveriesAfterReconnect": 0,
+    "replayedAfterAck": 0,
+    "plain": 0
+   }
+  },
+  {
+   "id": "R9.2.a",
+   "layer": "REEL",
+   "description": "mission EN VOL, vrai SIGTERM du daemon puis relance : la tâche est failed/unreachable DÈS le démarrage (avant la reconnexion du parent), sans attente de 2 s ni reprise",
+   "pass": true,
+   "observed": {
+    "before": "working",
+    "early": "failed",
+    "earlyError": "unreachable",
+    "earlyStarts": 12,
+    "startsBefore": 12
+   }
+  },
+  {
+   "id": "R9.2.b",
+   "layer": "REEL",
+   "description": "la mission n'est portée que par UN tour et UN PID : 1 prompt NONCE_i1, 1 PID distinct (celui d'avant la coupure, mort), aucun fournisseur vivant à 7 s ni à 15 s (un survivant immédiat est tracé dans survivorsAfterDaemonStop)",
+   "pass": true,
+   "observed": {
+    "missionPrompts": 1,
+    "distinctPids": 1,
+    "samePidAsBeforeStop": true,
+    "pidAliveNow": false,
+    "providers": [
+     2,
+     0,
+     0
+    ],
+    "survivors": [
+     {
+      "pid": 38472,
+      "firstMs": 62,
+      "lastMs": 515,
+      "ppid": 1,
+      "command": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb m",
+      "isInflightProvider": false
+     },
+     {
+      "pid": 38476,
+      "firstMs": 62,
+      "lastMs": 5836,
+      "ppid": 1,
+      "command": "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3",
+      "isInflightProvider": true
+     }
+    ]
+   }
+  },
+  {
+   "id": "R9.2.c",
+   "layer": "REEL",
+   "description": "starts avant = après : aucun nouvel enfant (compteur de lancements fournisseur inchangé à t0, 7 s et 15 s) ; aucun événement started/prompt après la relance",
+   "pass": true,
+   "observed": {
+    "startsBefore": 12,
+    "startsT7": 12,
+    "startsFinal": 12,
+    "eventsAfterRestart": 0,
+    "rows": 12,
+    "rowsBefore": 12
+   }
+  },
+  {
+   "id": "R9.2.d",
+   "layer": "REEL",
+   "description": "UNE notice d'échec failed/unreachable remise au parent reconnecté (pas de résultat, pas de rejeu), état final failed + erreur explicite",
+   "pass": true,
+   "observed": {
+    "state": "failed",
+    "error": "unreachable",
+    "notices": 1,
+    "noticeHead": "Délégation native 824c6cc3-cf29-41fd-91a6-09653e2cd76e échouée : unreachable"
+   }
+  },
+  {
+   "id": "R9.2.f",
+   "layer": "REEL",
+   "description": "exécution durable de la mission en vol : active avant la coupure, `unreachable/daemon_restart` après la relance (état terminal, aucune ligne ajoutée, aucune autre exécution modifiée) ",
+   "pass": true,
+   "observed": {
+    "before": [
+     "running",
+     "provider_accepted",
+     1
+    ],
+    "after": [
+     "unreachable",
+     "daemon_restart",
+     2
+    ],
+    "rowsBefore": 12,
+    "rowsAfter": 12,
+    "othersChanged": 0,
+    "providerSigtermDelayS": null
+   }
+  },
+  {
+   "id": "R9.2.g",
+   "layer": "OBS",
+   "description": "OBSERVATION (ne compte ni PASS ni FAIL ; l'exigence est O4.6) : le fournisseur bloquant en vol après SIGTERM + relance IMMÉDIATE du daemon - durée de survie mesurée, SIGTERM reçu du wrapper ou non",
+   "pass": true,
+   "observed": {
+    "survivedAfterDaemonExitMs": 5836,
+    "ppid": 1,
+    "sigtermEventsFromProvider": 0,
+    "providerNaturalEnd": "SLOW_149:9000"
+   }
+  },
+  {
+   "id": "R9.2.e",
+   "layer": "REEL",
+   "description": "le rejeu de la requête interrompue rend la MÊME tâche failed, sans nouveau lancement (pas de substitution silencieuse)",
+   "pass": true,
+   "observed": {
+    "replayTask": true,
+    "replayStatus": "failed",
+    "status": "failed",
+    "startsFinal": 12,
+    "prompts": 1
+   }
+  },
+  {
+   "id": "R9.3",
+   "layer": "REEL",
+   "description": "admission coupée par SIGTERM avant toute mission (état durable `starting`, 0 prompt) : après relance la tâche est failed/unreachable, 0 mission envoyée (0 prompt), 0 enfant relancé, 1 notice d'échec ; `queued` seul n'a pas pu être exposé en réel",
+   "pass": true,
+   "observed": {
+    "attempts": [
+     {
+      "exit": "starting",
+      "post": "failed",
+      "err": "unreachable",
+      "prompts": 0,
+      "startsDelta": 1,
+      "notices": 1
+     },
+     {
+      "exit": "starting",
+      "post": "failed",
+      "err": "unreachable",
+      "prompts": 0,
+      "startsDelta": 1,
+      "notices": 1
+     },
+     {
+      "exit": "starting",
+      "post": "failed",
+      "err": "unreachable",
+      "prompts": 0,
+      "startsDelta": 1,
+      "notices": 1
+     }
+    ],
+    "queuedObservedAtExit": false
+   }
+  },
+  {
+   "id": "R9.4.a",
+   "layer": "REEL",
+   "description": "avant la coupure : deux racines `waiting_for_children` avec leur résultat DÉJÀ capturé (fixture149-answer:m1/m2), chacune avec un petit-enfant `working` dont l'exécution durable est active, parent connecté",
+   "pass": true,
+   "observed": {
+    "rootBefore": "waiting_for_children",
+    "root2Before": "waiting_for_children",
+    "retained": [
+     "fixture149-answer:m1",
+     "fixture149-answer:m2"
+    ],
+    "nested": [
+     "working",
+     "working"
+    ],
+    "nestedExec": [
+     [
+      "starting",
+      null
+     ],
+     [
+      "starting",
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "R9.4.b",
+   "layer": "REEL",
+   "description": "parent HORS LIGNE après relance : le petit-enfant est `failed/unreachable`, la racine sort de `waiting_for_children` (result_available) avec son résultat capturé INTACT, `result_sent` faux, erreur transitoire `native_result_owner_offline`, état stable 6 s plus tard",
+   "pass": false,
+   "observed": {
+    "resolveMsAfterCut": 4711,
+    "root": [
+     "result_available",
+     "fixture149-answer:m1",
+     false,
+     "native_result_owner_offline"
+    ],
+    "root2": [
+     "result_available",
+     false
+    ],
+    "nested": [
+     "failed",
+     "stdout Codex fermé pendant le tour"
+    ],
+    "stable": [
+     "result_available",
+     false
+    ]
+   }
+  },
+  {
+   "id": "R9.4.c",
+   "layer": "REEL",
+   "description": "exécutions durables avant/après cohérentes : aucune exécution réouverte, aucune exécution encore active, aucune nouvelle ligne ; les exécutions des petits-enfants sont fermées (unreachable/daemon_restart), plus de `running` résiduel (cause de F2 de la ronde r2)",
+   "pass": false,
+   "observed": {
+    "before": 16,
+    "after": 16,
+    "reopened": 0,
+    "stillActive": [],
+    "nestedExecs": [
+     [
+      "failed",
+      "provider_failed"
+     ],
+     [
+      "unreachable",
+      "daemon_restart"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "R9.4.d",
+   "layer": "REEL",
+   "description": "aucun nouveau fournisseur ni nouveau tour pendant tout cela : lancements inchangés, m1/m1g/m2/m2g = 1 tour chacun, aucun fournisseur vivant",
+   "pass": true,
+   "observed": {
+    "startsBefore": 19,
+    "startsAfter": 19,
+    "prompts": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "live": 0
+   }
+  },
+  {
+   "id": "R9.4.e",
+   "layer": "REEL",
+   "description": "reconnexion du parent : la racine débloquée remet son résultat EXACT UNE seule fois (corrélé à la mission, expéditeur = l'enfant), `result_sent` vrai, erreur transitoire effacée, rien du petit-enfant n'est remis, aucun doublon pendant 6 s ; la 2e racine aussi",
+   "pass": true,
+   "observed": {
+    "m1": 1,
+    "m2": 1,
+    "m1Body": "fixture149-answer:m1",
+    "fromIsChild": true,
+    "sent": [
+     true,
+     true
+    ],
+    "errorCleared": true,
+    "leakedNested": 0
+   }
+  },
+  {
+   "id": "R9.4.f",
+   "layer": "REEL",
+   "description": "CLI Lineage (lecture humaine native, état durable) : la racine est `result_available` avec le résultat exact, le petit-enfant est `failed`",
+   "pass": true,
+   "observed": {
+    "show": {
+     "status": "result_available",
+     "result": "fixture149-answer:m1"
+    },
+    "rows": [
+     [
+      "7e211201",
+      "result_available",
+      null
+     ],
+     [
+      "c4787902",
+      "failed",
+      "stdout Codex fermé pendant le tour"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "R9.4.g",
+   "layer": "REEL",
+   "description": "2e redémarrage : le résultat de la racine ACCUSÉE (m1) n'est PAS remis de nouveau ; états de tâches et exécutions durables identiques ; aucun lancement",
+   "pass": true,
+   "observed": {
+    "m1Redelivered": 0,
+    "tasksEqual": true,
+    "execsEqual": true,
+    "starts": [
+     19,
+     19
+    ]
+   }
+  },
+  {
+   "id": "R9.4.h",
+   "layer": "OBS",
+   "description": "OBSERVATION (ne compte ni PASS ni FAIL) : remise NON accusée (m2) après le 2e redémarrage - nombre de remises vues par le parent reconnecté et identité du message",
+   "pass": true,
+   "observed": {
+    "m1AfterSecondRestart": 0,
+    "m2AfterSecondRestart": [
+     {
+      "id": "native-result-a6b38ede-23fc-4141-aedf-5a61545d4612",
+      "body": "fixture149-answer:m2",
+      "sameIdAsFirst": true
+     }
+    ],
+    "tasksEqual": true,
+    "execsEqual": true
+   }
+  },
+  {
+   "id": "R9.4.i",
+   "layer": "REEL",
+   "description": "contrôle : annuler une racine déjà `result_available` et remise ne la rouvre pas (état inchangé, aucune remise, aucun lancement)",
+   "pass": true,
+   "observed": {
+    "isError": false,
+    "status": "result_available",
+    "state": "result_available",
+    "starts": 19
+   }
+  },
+  {
+   "id": "R9.6",
+   "layer": "REEL",
+   "description": "mort du fournisseur natif en vol (SIGTERM d'UN PID vérifié, daemon vivant) : aucune relance par la flotte ni le wrapper (starts inchangé, 1 seul tour, 0 fournisseur vivant), la tâche devient terminale (failed) avec erreur explicite et UNE notice d'échec",
+   "pass": true,
+   "observed": {
+    "pid": 41228,
+    "parentOfProviderIsWrapper": "non précisé",
+    "diedAfter3s": true,
+    "state": "failed",
+    "error": "stdout Codex fermé pendant le tour",
+    "startsBefore": 20,
+    "startsAfter": 20,
+    "prompts": 1,
+    "liveProvidersAfter": 0,
+    "notices": [
+     "Délégation native 68f27286-37a0-4e72-97cb-ca3799f78963 échouée : stdout Codex fermé pendant le tour"
+    ]
+   }
+  },
+  {
+   "id": "R9.5",
+   "layer": "REEL",
+   "description": "sur tout le rejeu (plusieurs SIGTERM + relances du daemon) chaque mission (nonce) a été portée par au plus UN tour fournisseur : aucune mission exécutée deux fois",
+   "pass": true,
+   "observed": {
+    "nonces": 17,
+    "duplicated": [],
+    "daemonStarts": 8
+   }
+  }
+ ],
+ "residualProcesses": []
+}

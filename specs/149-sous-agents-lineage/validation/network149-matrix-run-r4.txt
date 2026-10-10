@@ -1,0 +1,39 @@
+PASS S1   read: lineage.read list => ok(ok)
+PASS S2   read: lineage.read show T3 => ok(ok)
+PASS S3   read: lineage.read journal T3 => ok(ok)
+PASS S4   read: lineage.watch ready seq0 => items=1
+PASS S5   read: lineage.journal flux => items=1
+PASS S6   read: lineage.cancel REFUSÉ (operate requis) => EnvironmentAuthorizationError/The authenticated token is missing required scope:
+PASS S7   operate: lineage.cancel tâche terminale T3 -> état courant sans effet => ok(result_available)
+PASS S8   settings:write seul: lineage.read REFUSÉ => EnvironmentAuthorizationError/The authenticated token is missing required scope:
+PASS S9   settings:write seul: lineage.cancel REFUSÉ => EnvironmentAuthorizationError/The authenticated token is missing required scope:
+PASS S10  sans jeton: ticket WS refusé => ?/
+PASS I1   propriété extra projectRoot (autorité forgée) => Failure [{"_tag":"Die","defect":"Expected no excess propertyn  at ["projectRoot"]"}]
+PASS I2   propriété extra workspaceRoot => Failure [{"_tag":"Die","defect":"Expected no excess propertyn  at ["workspaceRoot"]"}]
+PASS I3   propriété extra agentId/rootOwner => Failure [{"_tag":"Die","defect":"Expected no excess propertyn  at ["rootOwnerAgentId"]"}]
+PASS I4   action inconnue => Failure [{"_tag":"Die","defect":"Expected { readonly "action": "list", ... } | { readonly "action": "show", ... } | { 
+PASS I5   taskId non UUID canonique => Failure [{"_tag":"Die","defect":"Expected a UUIDn  at ["taskId"]"}]
+PASS I6   taskId UUID majuscules non canonique => Failure [{"_tag":"Die","defect":"Expected a string matching the RegExp ^[0-9a-f-]{36}$n  at ["taskId"]"}]
+PASS I7   limit hors borne show (16385) => Failure [{"_tag":"Die","defect":"Expected a value less than or equal to 16384n  at ["limit"]"}]
+PASS I8   limit journal hors borne (101) => Failure [{"_tag":"Die","defect":"Expected a value less than or equal to 100n  at ["limit"]"}]
+PASS I9   afterSeq négatif => Failure [{"_tag":"Die","defect":"Expected a value greater than or equal to 0n  at ["afterSeq"]"}]
+PASS I10  cancel sans requestId => Failure [{"_tag":"Die","defect":"Missing keyn  at ["requestId"]"}]
+PASS I11  cancel requestId non UUID => Failure [{"_tag":"Die","defect":"Expected a UUIDn  at ["requestId"]"}]
+PASS I12  cancel propriété extra force => Failure [{"_tag":"Die","defect":"Expected no excess propertyn  at ["force"]"}]
+PASS I13  watch propriété extra => Failure [{"_tag":"Die","defect":"Expected no excess propertyn  at ["afterSeq"]"}]
+PASS R1   projectId inexistant => BridgetLineageError/project_mismatch
+PASS R2   thread inexistant => BridgetLineageError/binding_unavailable
+PASS R3   thread de proj1 avec projectId proj2 -> project_mismatch => BridgetLineageError/project_mismatch
+PASS R4   fil étranger (root proj2 != root store) -> project_mismatch natif => BridgetLineageError/project_mismatch
+PASS R5   show tâche inconnue -> task_unavailable => BridgetLineageError/task_unavailable
+PASS R6   journal tâche inconnue -> task_unavailable => BridgetLineageError/task_unavailable
+PASS R7   cancel tâche inconnue -> task_unavailable => BridgetLineageError/task_unavailable
+PASS R8   show depuis fil étranger -> project_mismatch (pas d'existence révélée) => BridgetLineageError/project_mismatch
+PASS R9   cancel depuis fil étranger -> project_mismatch => BridgetLineageError/project_mismatch
+PASS R10  watch depuis fil étranger refusé => items=0 err=project_mismatch
+PASS R11  journal tâche sans journal (T4) -> journal_unavailable => BridgetLineageError/journal_unavailable
+PASS R12  show offset hors résultat -> result_offset_invalid => BridgetLineageError/result_offset_invalid
+PASS C1   cancel T4 (échouée) -> état courant failed, pas cancelled inventé => ok(failed)
+PASS C2   rejeu identique même request_id -> même reçu => ok(failed)
+PASS C3   même request_id, autre tâche -> envelope_mismatch => BridgetLineageError/envelope_mismatch
+TOTAL pass=38 fail=0

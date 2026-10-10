@@ -1,0 +1,774 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:25:41.662Z",
+ "finishedAt": "2026-10-10T17:29:26.189Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "E2/E3 hypothèses de la revue de sources (r3)",
+  "pass": 8,
+  "fail": 2,
+  "total": 10
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.3znVhG",
+  "daemonPid": 6708,
+  "e3ControlCancelApi": {
+   "isError": true,
+   "payload": {
+    "text": "task_unavailable"
+   }
+  },
+  "e3ControlCancelCli": {
+   "code": 0,
+   "json": {
+    "status": "cancelling",
+    "task_id": "39579721-f183-4b0a-aec6-4e080b72f1d3",
+    "version": 1
+   }
+  },
+  "e3Control": {
+   "timeline": [
+    {
+     "atMs": 17,
+     "v": {
+      "root": {
+       "id": "65c1cde9",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "39579721",
+       "state": "cancelling",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting",
+      "delivered": 0
+     }
+    },
+    {
+     "atMs": 3275,
+     "v": {
+      "root": {
+       "id": "65c1cde9",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "39579721",
+       "state": "cancelled",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "failed",
+      "delivered": 0
+     }
+    },
+    {
+     "atMs": 4353,
+     "v": {
+      "root": {
+       "id": "65c1cde9",
+       "state": "result_available",
+       "error": null,
+       "sent": true
+      },
+      "nested": {
+       "id": "39579721",
+       "state": "cancelled",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "failed",
+      "delivered": 1
+     }
+    }
+   ]
+  },
+  "e3CancelCli": {
+   "code": 0,
+   "stdout": "{\"status\":\"cancelling\",\"task_id\":\"041f582e-e44a-4909-a394-3925bc6721ac\",\"version\":1}\n",
+   "stderr": "",
+   "json": {
+    "status": "cancelling",
+    "task_id": "041f582e-e44a-4909-a394-3925bc6721ac",
+    "version": 1
+   }
+  },
+  "e3BeforeCut": {
+   "cancelApiError": true,
+   "timeline": [
+    {
+     "atMs": 22,
+     "v": {
+      "nested": {
+       "id": "041f582e",
+       "state": "cancelling",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting",
+      "root": "waiting_for_children"
+     }
+    }
+   ],
+   "windowOk": true,
+   "nestedProviderAlive": true
+  },
+  "e3AfterCut": {
+   "timeline": [
+    {
+     "atMs": 25,
+     "v": {
+      "root": {
+       "id": "f6310c79",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "041f582e",
+       "state": "cancelling",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting",
+      "delivered": 0,
+      "live": 0
+     }
+    },
+    {
+     "atMs": 1068,
+     "v": {
+      "root": {
+       "id": "f6310c79",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "041f582e",
+       "state": "cancelled",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting",
+      "delivered": 0,
+      "live": 0
+     }
+    },
+    {
+     "atMs": 2139,
+     "v": {
+      "root": {
+       "id": "f6310c79",
+       "state": "result_available",
+       "error": null,
+       "sent": true
+      },
+      "nested": {
+       "id": "041f582e",
+       "state": "cancelled",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting",
+      "delivered": 1,
+      "live": 0
+     }
+    }
+   ],
+   "startsBefore": 4,
+   "startsAfter": 4,
+   "prompts": [
+    1,
+    1
+   ]
+  },
+  "e3bBeforeCut": {
+   "timeline": [
+    {
+     "atMs": 22,
+     "v": {
+      "root": "starting",
+      "nested": null
+     }
+    },
+    {
+     "atMs": 900,
+     "v": {
+      "root": "working",
+      "nested": {
+       "id": "daadf2dd",
+       "state": "starting",
+       "error": null,
+       "sent": false
+      }
+     }
+    },
+    {
+     "atMs": 1961,
+     "v": {
+      "root": "waiting_for_children",
+      "nested": {
+       "id": "daadf2dd",
+       "state": "working",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting"
+     }
+    },
+    {
+     "atMs": 2847,
+     "v": {
+      "root": "waiting_for_children",
+      "nested": {
+       "id": "daadf2dd",
+       "state": "working",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "running"
+     }
+    }
+   ],
+   "windowL": false
+  },
+  "e3bAfterCut": {
+   "timeline": [
+    {
+     "atMs": 24,
+     "v": {
+      "root": {
+       "id": "54713cd4",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "daadf2dd",
+       "state": "failed",
+       "error": "unreachable",
+       "sent": false
+      },
+      "nestedExec": "unreachable",
+      "delivered": 0
+     }
+    },
+    {
+     "atMs": 1077,
+     "v": {
+      "root": {
+       "id": "54713cd4",
+       "state": "result_available",
+       "error": null,
+       "sent": true
+      },
+      "nested": {
+       "id": "daadf2dd",
+       "state": "failed",
+       "error": "unreachable",
+       "sent": false
+      },
+      "nestedExec": "unreachable",
+      "delivered": 1
+     }
+    }
+   ]
+  },
+  "e2Crafted": {
+   "nestedQueued": {
+    "task_id": "871e5695-da58-4488-a1c4-c16ac7ece570",
+    "child": "aa41103e-37bb-4341-9dae-11966347af84",
+    "mission": "b1367efb-0425-4f12-9313-bac117e1e76e",
+    "owner_instance": "13fcf209-f284-49a0-9a46-e8f45a0456f3",
+    "parent_task_id": "dab6a1d8-9522-4eda-a4fb-6fa8c71165d2",
+    "state": "queued"
+   },
+   "externalQueued": {
+    "task_id": "99d0c177-946f-4396-965b-fe7162177477",
+    "child": "0a1bac0b-c841-4fbe-b62f-44bca116a763",
+    "mission": "c06043e7-17c1-435c-87e0-4e0764612d71",
+    "owner_instance": "10c9a063-db3e-46e6-99af-12f400d9c18f",
+    "parent_task_id": null,
+    "state": "queued"
+   }
+  },
+  "e2After": {
+   "timeline": [
+    {
+     "atMs": 36,
+     "v": {
+      "root": {
+       "id": "dab6a1d8",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "0e5e047b",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "queuedNested": {
+       "id": "871e5695",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "queuedExternal": {
+       "id": "99d0c177",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "xDelivered": 0
+     }
+    },
+    {
+     "atMs": 1106,
+     "v": {
+      "root": {
+       "id": "dab6a1d8",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "0e5e047b",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "queuedNested": {
+       "id": "871e5695",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "queuedExternal": {
+       "id": "99d0c177",
+       "state": "starting",
+       "error": null,
+       "sent": false
+      },
+      "xDelivered": 0
+     }
+    },
+    {
+     "atMs": 2182,
+     "v": {
+      "root": {
+       "id": "dab6a1d8",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "0e5e047b",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "queuedNested": {
+       "id": "871e5695",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "queuedExternal": {
+       "id": "99d0c177",
+       "state": "working",
+       "error": null,
+       "sent": false
+      },
+      "xDelivered": 0
+     }
+    },
+    {
+     "atMs": 3253,
+     "v": {
+      "root": {
+       "id": "dab6a1d8",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "0e5e047b",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "queuedNested": {
+       "id": "871e5695",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "queuedExternal": {
+       "id": "99d0c177",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "xDelivered": 0
+     }
+    },
+    {
+     "atMs": 4330,
+     "v": {
+      "root": {
+       "id": "dab6a1d8",
+       "state": "waiting_for_children",
+       "error": null,
+       "sent": false
+      },
+      "nested": {
+       "id": "0e5e047b",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "queuedNested": {
+       "id": "871e5695",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "queuedExternal": {
+       "id": "99d0c177",
+       "state": "result_available",
+       "error": null,
+       "sent": true
+      },
+      "xDelivered": 1
+     }
+    }
+   ],
+   "startsDelta": 10
+  },
+  "e2cAfter": {
+   "crafted": {
+    "task_id": "13f95e9c-5592-431b-a669-b1586b36db8f",
+    "child": "4061d4d3-3730-4d14-aad6-dc174d169fa6",
+    "mission": "74f47f37-4e8b-4e65-83a7-acf465de5d99",
+    "owner_instance": "d2451048-11a7-419e-bf35-418073c289df",
+    "parent_task_id": "1112a369-6f40-4d84-a88c-00f377a734a0",
+    "state": "queued"
+   },
+   "timeline": [
+    {
+     "atMs": 34,
+     "v": {
+      "root": {
+       "id": "1112a369",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "nested": {
+       "id": "a7e7964a",
+       "state": "failed",
+       "error": "unreachable",
+       "sent": false
+      },
+      "queued": {
+       "id": "13f95e9c",
+       "state": "queued",
+       "error": null,
+       "sent": false
+      },
+      "notices": 0
+     }
+    },
+    {
+     "atMs": 1093,
+     "v": {
+      "root": {
+       "id": "1112a369",
+       "state": "failed",
+       "error": "stdout Codex fermé pendant le tour",
+       "sent": false
+      },
+      "nested": {
+       "id": "a7e7964a",
+       "state": "failed",
+       "error": "unreachable",
+       "sent": false
+      },
+      "queued": {
+       "id": "13f95e9c",
+       "state": "cancelled",
+       "error": null,
+       "sent": false
+      },
+      "notices": 1
+     }
+    }
+   ]
+  },
+  "release": [
+   {
+    "tag": "E2",
+    "cancelIsError": false,
+    "state": "cancelled"
+   }
+  ],
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "E3c",
+   "layer": "REEL",
+   "description": "CONTRÔLE : annulation individuelle d'un descendant avec le daemon SAIN - le descendant devient `cancelled`, son exécution est close (non active), la racine sort de `waiting_for_children` (result_available) et son résultat est remis UNE fois",
+   "pass": true,
+   "observed": {
+    "cancelApi": "refus native_delegation_refused -> CLI 0",
+    "final": {
+     "root": {
+      "id": "65c1cde9",
+      "state": "result_available",
+      "error": null,
+      "sent": true
+     },
+     "nested": {
+      "id": "39579721",
+      "state": "cancelled",
+      "error": null,
+      "sent": false
+     },
+     "nestedExec": "failed",
+     "delivered": 1
+    },
+    "steps": 3
+   }
+  },
+  {
+   "id": "E3.a",
+   "layer": "REEL",
+   "description": "fenêtre atteinte par l'API : le descendant est `cancelling` (annulation lente, fournisseur sourd à SIGTERM) avec son exécution durable ACTIVE, la racine attend toujours",
+   "pass": true,
+   "observed": [
+    {
+     "atMs": 22,
+     "v": {
+      "nested": {
+       "id": "041f582e",
+       "state": "cancelling",
+       "error": null,
+       "sent": false
+      },
+      "nestedExec": "starting",
+      "root": "waiting_for_children"
+     }
+    }
+   ]
+  },
+  {
+   "id": "E3.b",
+   "layer": "REEL",
+   "description": "APRÈS coupure en pleine annulation : la racine ne reste PAS indéfiniment en `waiting_for_children` (45 s) - le descendant `cancelling` devient `cancelled`, la racine est `result_available` et remise au plus UNE fois, aucun nouveau lancement ni tour",
+   "pass": true,
+   "observed": {
+    "final": {
+     "root": {
+      "id": "f6310c79",
+      "state": "result_available",
+      "error": null,
+      "sent": true
+     },
+     "nested": {
+      "id": "041f582e",
+      "state": "cancelled",
+      "error": null,
+      "sent": false
+     },
+     "nestedExec": "starting",
+     "delivered": 1,
+     "live": 0
+    },
+    "stuck": false,
+    "timelineSteps": 3,
+    "startsDelta": 0,
+    "prompts": [
+     1,
+     1
+    ]
+   }
+  },
+  {
+   "id": "E3.c",
+   "layer": "REEL",
+   "description": "hygiène des exécutions durables : l'exécution du descendant `cancelled` n'est plus ACTIVE après la relance (sinon : écart F3 - ligne d'exécution restée active pour une tâche terminale ; sans effet observé sur la racine)",
+   "pass": false,
+   "observed": {
+    "nestedState": "cancelled",
+    "nestedExec": "starting",
+    "rootResolvedAnyway": "result_available"
+   }
+  },
+  {
+   "id": "E3b.a",
+   "layer": "OBS",
+   "description": "OBSERVATION (ne compte ni PASS ni FAIL) : la fenêtre « résultat du descendant capturé / exécution encore active » n'est PAS atteignable avec turn/completed tardif - le résultat n'est capturé qu'à la fin du tour ; le descendant est `working` avec exécution `running` à la coupure",
+   "pass": true,
+   "observed": {
+    "windowReached": false,
+    "lastBeforeCut": {
+     "root": "waiting_for_children",
+     "nested": {
+      "id": "daadf2dd",
+      "state": "working",
+      "error": null,
+      "sent": false
+     },
+     "nestedExec": "running"
+    }
+   }
+  },
+  {
+   "id": "E3b.b",
+   "layer": "REEL",
+   "description": "APRÈS coupure pendant un tour tardif du descendant (exécution `running`) : la racine ne reste PAS indéfiniment `waiting_for_children` (45 s), l'exécution du descendant est close (unreachable), résultat remis au plus une fois",
+   "pass": true,
+   "observed": {
+    "final": {
+     "root": {
+      "id": "54713cd4",
+      "state": "result_available",
+      "error": null,
+      "sent": true
+     },
+     "nested": {
+      "id": "daadf2dd",
+      "state": "failed",
+      "error": "unreachable",
+      "sent": false
+     },
+     "nestedExec": "unreachable",
+     "delivered": 1
+    },
+    "stuck": false,
+    "nestedExecActive": false
+   }
+  },
+  {
+   "id": "E2.a",
+   "layer": "SIMULE",
+   "description": "CONTRÔLE : la tâche `queued` EXTERNE (propriétaire = le fil T3 A reconnecté) REPREND après la relance : elle est lancée, termine (`result_available`) et son résultat est remis UNE fois ; la tâche terminée d'origine n'est PAS rouverte",
+   "pass": true,
+   "observed": {
+    "external": {
+     "id": "99d0c177",
+     "state": "result_available",
+     "error": null,
+     "sent": true
+    },
+    "delivered": 1,
+    "originalState": "result_available",
+    "promptsX1": 2
+   }
+  },
+  {
+   "id": "E2.b",
+   "layer": "SIMULE",
+   "description": "E2 : la tâche `queued` dont le propriétaire est un enfant natif (jamais reconnecté) NE bloque PAS indéfiniment la racine : au bout de 45 s la racine n'est plus `waiting_for_children` et la tâche `queued` n'est plus `queued` (sinon : BLOCK)",
+   "pass": false,
+   "observed": {
+    "final": {
+     "root": {
+      "id": "dab6a1d8",
+      "state": "waiting_for_children",
+      "error": null,
+      "sent": false
+     },
+     "nested": {
+      "id": "0e5e047b",
+      "state": "failed",
+      "error": "stdout Codex fermé pendant le tour",
+      "sent": false
+     },
+     "queuedNested": {
+      "id": "871e5695",
+      "state": "queued",
+      "error": null,
+      "sent": false
+     },
+     "queuedExternal": {
+      "id": "99d0c177",
+      "state": "result_available",
+      "error": null,
+      "sent": true
+     },
+     "xDelivered": 1
+    },
+    "stuck": true,
+    "execsUnchangedByCraft": true
+   }
+  },
+  {
+   "id": "E2c",
+   "layer": "SIMULE",
+   "description": "variante réaliste : propriétaire de la tâche `queued` en plein tour au moment de la coupure (racine `working`) -> la racine devient `failed` (unreachable, ou interrompue par l'arrêt coopératif du wrapper), le nettoyage ANNULE la tâche `queued` (plus de `queued`), UNE notice d'échec au parent, aucun lancement",
+   "pass": true,
+   "observed": {
+    "final": {
+     "root": {
+      "id": "1112a369",
+      "state": "failed",
+      "error": "stdout Codex fermé pendant le tour",
+      "sent": false
+     },
+     "nested": {
+      "id": "a7e7964a",
+      "state": "failed",
+      "error": "unreachable",
+      "sent": false
+     },
+     "queued": {
+      "id": "13f95e9c",
+      "state": "cancelled",
+      "error": null,
+      "sent": false
+     },
+     "notices": 1
+    },
+    "promptsK5": 1
+   }
+  },
+  {
+   "id": "E.rel",
+   "layer": "REEL",
+   "description": "issue de secours : toute racine restée bloquée ne se termine que par `cancel` du parent (cancelled) - ou aucune racine n'est restée bloquée",
+   "pass": true,
+   "observed": {
+    "stuckBeforeRelease": [
+     "E2"
+    ],
+    "released": [
+     {
+      "tag": "E2",
+      "cancelIsError": false,
+      "state": "cancelled"
+     }
+    ]
+   }
+  }
+ ],
+ "residualProcesses": []
+}

@@ -1,0 +1,8 @@
+T0-temoin-transport rc= 0 tests= 5 echecs= 0
+T1-codex-stop_native-sans-interrupt rc= 101 tests= 5 echecs= 2
+    ECHEC test native149_stop_native_interrompt_le_tour_exact_puis_arrete_le_fournisseur ... FAILED
+    ECHEC test native149_stop_native_est_idempotent ... FAILED
+T2-codex-stop_native-sans-fermeture-admission rc= 101 tests= 5 echecs= 1
+    ECHEC test native149_stop_native_ferme_l_admission_et_ne_demarre_aucun_message_en_file ... FAILED
+T3-codex-stop_native-interrompt-un-autre-tour rc= 101 tests= 5 echecs= 1
+    ECHEC test native149_stop_native_d_une_autre_mission_n_interrompt_pas_le_tour_actif ... FAILED

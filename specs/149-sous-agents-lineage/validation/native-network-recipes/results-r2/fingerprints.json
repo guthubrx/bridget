@@ -1,0 +1,72 @@
+{
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-ec6b18b5d468",
+  "sha256": "ec6b18b5d468dd0031eb6282da10bdc27cb38b7193f07b4a8b9107cbe92d8b0f",
+  "matchesReceipt": true
+ },
+ "rustSources": {
+  "fingerprintNow": "ebed6dc3f35c65b89114257efeab3ce8f5802c0bc92a247f1166db602893edcf",
+  "fingerprintReceipt": "e9b0eb9ffed3635b112dcb3b7d871bfdaf59e0d23c85f7f4817190b149950d22",
+  "equal": false,
+  "files": 198,
+  "productionNow": "6cc9a2be1dd3e60d59e4035574ebbb767095fc235f0a691b8481125ceb1f367f",
+  "productionReceipt": "65403980d033e2859591f8b455be191a2e27ade809517c4f40c20a2c6930b049",
+  "productionEqual": false,
+  "productionSourcesNewerThanBinary": [
+   "Cargo.lock",
+   "Cargo.toml"
+  ],
+  "allSourcesNewerThanBinary": [
+   "Cargo.lock",
+   "Cargo.toml",
+   "crates/bridget-transport/tests/permission_source_revision_vectors149_test.rs"
+  ],
+  "sourcesChangedSinceReceiptDigests": {},
+  "cargoManifestNow": {
+   "Cargo.toml": "52293175462770fc",
+   "Cargo.lock": "df6a077c8d74cbb9"
+  },
+  "interpretation": "binaire immuable = r\u00e9f\u00e9rence ; sourcesChangedSinceReceiptDigests liste uniquement une d\u00e9rive FUTURE des sources, jamais un d\u00e9faut du binaire"
+ },
+ "t3": {
+  "head": "33f6d04e116430bf7f0011902d6af3868163f2d1",
+  "files": {
+   "packages/provider-core/src/server/mcpSession.ts": "2e95140365bef3f82cfbb60045963a7d23119fb7ff14f1bd661da0321d3bf201",
+   "apps/server/src/mcp/OrchestratorMcpService.ts": "e4d6a2db680f9720a285e003503ac9d77242f66578b92d53465c4c6bad86d8fd",
+   "apps/server/src/mcp/McpSessionRegistry.ts": "6e1282d6fcde684615b5bd90b034d2e362bf1e72969d03d528a9bea6466c23fe",
+   "apps/server/src/mcp/McpHttpServer.ts": "0bf639fbb86bb23f91a8388dc6970839972aeb96ae33b0459b6a2cf10367c9e3",
+   "apps/server/src/bridget/BridgetReader.ts": "99acc8a7c38c2477f6fd83922e754a31916ff0d9a6a148a1d2bf9c1b82ee64d4",
+   "apps/server/src/bridget/BridgetLineage.ts": "ddb6be37c21e158284c91994b18777ae3d7f800d479ce60ab613575eefc5589f",
+   "apps/server/src/ws.ts": "c9cce8ceef8fcb5a36467241558b797164111950735e468e22b2dbf8e0d1a9be",
+   "apps/server/src/server.ts": "04bcd1aeae7c70f3bb70b873e3b0952bfc89d59c1b54b2fcac656e8f6ff80c59",
+   "packages/contracts/src/bridgetLineage.ts": "cd216feb52261c28b93c76d3a3ea3629cf5029fad6612977ac5028cab0616b63",
+   "packages/contracts/src/bridgetPermissions.ts": "df03fd3fb71dc3e2cfbdf95d8ea0c0c04a43ddea7b169220cc435c34d50ce0c3"
+  }
+ },
+ "recipeTools": {
+  "codex149.py": "7de49a1b3edc6a737b4181827841672b0f4c94c02584c45d9402e21bc7d7a883",
+  "codexspy.mjs": "0c50f2a56f8e48bd82142e159f1c42a6766e3dfd2bc6046058f4245d2e4dffdf",
+  "common149.ts": "e273956be66a6e1d404818cf8005426568928e145b4e4c118fc9e8b8470f33a3",
+  "fingerprints.py": "dc984faf39a2af9389253adf36f3faa8e323b789f0aba156749f5909ba5c1929",
+  "fx.mjs": "9b70b61c223aee3d52b4c39a9ed3e35665810569e2ce870d8054d8636983f1ab",
+  "interop149.ts": "f1f7cfaa5996361750a5617181a7a67ed2b265c22268d69e044ca8959ad95b3b",
+  "provider149.py": "cdcefa2b742738fdadada5edbd5ec36c5693d0b496b85a2c8bc382a3edbaf939",
+  "recovery149.ts": "f8ff6ffb83e3b0d3393c6b1926d3f45ac5f2538c49bed384288b3218c2b4d4ed",
+  "server149.ts": "c120df6f1d29133658076a41dfe504e26b5b7199cad92a5312b16a4e16209a73",
+  "t3host.ts": "10b96a42ed8a9750bd4669bb8cd31ff04cefb2a3c301270902bf2504c5de10d5",
+  "t3server.ts": "7d3970ff4d13d13b01e7e14a59706b88b944a90faefe1d8c9f28f9ce483357ba",
+  "unified149.ts": "c9c00197c347a53aa49a0fd558127dd0654317c8fa6547a1c52f799e364bd20a"
+ },
+ "receiptBinarySha256": "ec6b18b5d468dd0031eb6282da10bdc27cb38b7193f07b4a8b9107cbe92d8b0f",
+ "currentCanonicalReceipt": {
+  "binarySha256": "620e729fca53c621a4a7be784fa948ba813768764e3cf518e030ef60c0cf4fd2",
+  "productionFingerprint": "6cc9a2be1dd3e60d59e4035574ebbb767095fc235f0a691b8481125ceb1f367f",
+  "productionFingerprintEqualsNow": true,
+  "sourceDigestsDifferingFromR5": [
+   "Cargo.lock",
+   "Cargo.toml"
+  ],
+  "note": "re\u00e7u canonique plus r\u00e9cent (binaire diff\u00e9rent, NON rejou\u00e9 ici) : sert uniquement \u00e0 situer la d\u00e9rive future des manifestes"
+ },
+ "checkedAt": "2026-10-10T16:42:25+0200"
+}

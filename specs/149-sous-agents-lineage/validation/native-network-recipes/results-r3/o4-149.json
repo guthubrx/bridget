@@ -1,0 +1,545 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T17:14:12.324Z",
+ "finishedAt": "2026-10-10T17:15:12.177Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-0a29ad9b2cdb",
+  "sha256": "0a29ad9b2cdb88b1c19f95d9a9bfd1cd89292e269a92fa440864a25bdfa5dde6"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "O4 fournisseur natif et arrêt du daemon (r3)",
+  "pass": 8,
+  "fail": 1,
+  "total": 9
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.GyH22l",
+  "daemonPid": 74075,
+  "scenarioB": {
+   "tag": "B",
+   "restartAfterMs": null,
+   "restartedAtMs": null,
+   "task": "14ddb9b2-1e27-488e-9361-c721bc347c72",
+   "before": {
+    "taskState": "working",
+    "providerPid": 74108,
+    "wrapperPid": 74103,
+    "wrapperRow": {
+     "ppid": 74075,
+     "pgid": 74103
+    },
+    "providerRow": {
+     "ppid": 74103,
+     "pgid": 74108
+    },
+    "wrapperSigmask": "0",
+    "wrapperEnv": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+    "daemonPid": 74075,
+    "hbBefore": null
+   },
+   "after": {
+    "stopped": "stopped_by_sigterm",
+    "daemonGoneMs": 1080,
+    "wrapperDeadMs": 4047,
+    "providerDeadMs": 4047,
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.04,
+      "ignored": false
+     }
+    ],
+    "lastHeartbeatAfterT0S": null,
+    "liveAfter": []
+   },
+   "samplesCount": 190
+  },
+  "scenarioA": {
+   "tag": "A",
+   "restartAfterMs": null,
+   "restartedAtMs": null,
+   "task": "d17cc9b1-ae71-4569-a327-76e5a76f4c21",
+   "before": {
+    "taskState": "working",
+    "providerPid": 74512,
+    "wrapperPid": 74508,
+    "wrapperRow": {
+     "ppid": 74456,
+     "pgid": 74508
+    },
+    "providerRow": {
+     "ppid": 74508,
+     "pgid": 74512
+    },
+    "wrapperSigmask": "0",
+    "wrapperEnv": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+    "daemonPid": 74456,
+    "hbBefore": "{\"pid\": 74512, \"t\": 1791652463.369904, \"n\": 9}"
+   },
+   "after": {
+    "stopped": "stopped_by_sigterm",
+    "daemonGoneMs": 1024,
+    "wrapperDeadMs": 1029,
+    "providerDeadMs": 1029,
+    "events": [
+     {
+      "event": "interrupt",
+      "atS": 1.01,
+      "exact": true
+     },
+     {
+      "event": "hb_stop",
+      "atS": 1.01
+     },
+     {
+      "event": "sigterm",
+      "atS": 1.01,
+      "ignored": false
+     }
+    ],
+    "lastHeartbeatAfterT0S": 0.93,
+    "liveAfter": []
+   },
+   "samplesCount": 51
+  },
+  "scenarioC": {
+   "tag": "C",
+   "restartAfterMs": null,
+   "restartedAtMs": null,
+   "task": "07bc2e6a-8758-41f7-9ddc-468ee5709331",
+   "before": {
+    "taskState": "working",
+    "providerPid": 74790,
+    "wrapperPid": 74780,
+    "wrapperRow": {
+     "ppid": 74715,
+     "pgid": 74780
+    },
+    "providerRow": {
+     "ppid": 74780,
+     "pgid": 74790
+    },
+    "wrapperSigmask": "0",
+    "wrapperEnv": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+    "daemonPid": 74715,
+    "hbBefore": "{\"pid\": 74512, \"t\": 1791652464.403868, \"n\": 14}"
+   },
+   "after": {
+    "stopped": "stopped_by_sigterm",
+    "daemonGoneMs": 1032,
+    "wrapperDeadMs": 6378,
+    "providerDeadMs": 6355,
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.02,
+      "ignored": true
+     },
+     {
+      "event": "answered",
+      "atS": 6.33
+     },
+     {
+      "event": "interrupt",
+      "atS": 6.33,
+      "exact": true
+     },
+     {
+      "event": "stdin_eof",
+      "atS": 6.33
+     }
+    ],
+    "lastHeartbeatAfterT0S": null,
+    "liveAfter": []
+   },
+   "samplesCount": 298
+  },
+  "scenarioB1": {
+   "tag": "B1",
+   "restartAfterMs": 0,
+   "restartedAtMs": 1633,
+   "task": "63e27aa0-7e80-4c1d-bf3e-8fc59cfc26f7",
+   "before": {
+    "taskState": "working",
+    "providerPid": 75545,
+    "wrapperPid": 75541,
+    "wrapperRow": {
+     "ppid": 75508,
+     "pgid": 75541
+    },
+    "providerRow": {
+     "ppid": 75541,
+     "pgid": 75545
+    },
+    "wrapperSigmask": "0",
+    "wrapperEnv": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+    "daemonPid": 75508,
+    "hbBefore": "{\"pid\": 74512, \"t\": 1791652464.403868, \"n\": 14}"
+   },
+   "after": {
+    "stopped": "stopped_by_sigterm",
+    "daemonGoneMs": 1074,
+    "wrapperDeadMs": 1611,
+    "providerDeadMs": 18311,
+    "events": [],
+    "lastHeartbeatAfterT0S": null,
+    "liveAfter": []
+   },
+   "samplesCount": 888
+  },
+  "scenarioA1": {
+   "tag": "A1",
+   "restartAfterMs": 0,
+   "restartedAtMs": 1079,
+   "task": "b68c51ae-b994-403d-8c19-90cb600542ee",
+   "before": {
+    "taskState": "working",
+    "providerPid": 76565,
+    "wrapperPid": 76561,
+    "wrapperRow": {
+     "ppid": 75767,
+     "pgid": 76561
+    },
+    "providerRow": {
+     "ppid": 76561,
+     "pgid": 76565
+    },
+    "wrapperSigmask": "0",
+    "wrapperEnv": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+    "daemonPid": 75767,
+    "hbBefore": "{\"pid\": 76565, \"t\": 1791652499.693679, \"n\": 7}"
+   },
+   "after": {
+    "stopped": "stopped_by_sigterm",
+    "daemonGoneMs": 1049,
+    "wrapperDeadMs": 1023,
+    "providerDeadMs": 1023,
+    "events": [
+     {
+      "event": "interrupt",
+      "atS": 1.01,
+      "exact": true
+     },
+     {
+      "event": "sigterm",
+      "atS": 1.01,
+      "ignored": false
+     }
+    ],
+    "lastHeartbeatAfterT0S": 0.9,
+    "liveAfter": []
+   },
+   "samplesCount": 51
+  },
+  "scenarioB2": {
+   "tag": "B2",
+   "restartAfterMs": 6000,
+   "restartedAtMs": 7082,
+   "task": "4404c0ee-6290-4f60-a92d-f45545f119f4",
+   "before": {
+    "taskState": "working",
+    "providerPid": 76792,
+    "wrapperPid": 76786,
+    "wrapperRow": {
+     "ppid": 76760,
+     "pgid": 76786
+    },
+    "providerRow": {
+     "ppid": 76786,
+     "pgid": 76792
+    },
+    "wrapperSigmask": "0",
+    "wrapperEnv": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+    "daemonPid": 76760,
+    "hbBefore": "{\"pid\": 76565, \"t\": 1791652500.7225049, \"n\": 12}"
+   },
+   "after": {
+    "stopped": "stopped_by_sigterm",
+    "daemonGoneMs": 1051,
+    "wrapperDeadMs": 4073,
+    "providerDeadMs": 4053,
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.05,
+      "ignored": false
+     }
+    ],
+    "lastHeartbeatAfterT0S": null,
+    "liveAfter": []
+   },
+   "samplesCount": 191
+  },
+  "summaryTable": [
+   {
+    "tag": "B",
+    "providerDeadMs": 4047,
+    "wrapperDeadMs": 4047,
+    "lastHeartbeatAfterT0S": null,
+    "events": [
+     "sigterm@4.04"
+    ]
+   },
+   {
+    "tag": "A",
+    "providerDeadMs": 1029,
+    "wrapperDeadMs": 1029,
+    "lastHeartbeatAfterT0S": 0.93,
+    "events": [
+     "interrupt@1.01",
+     "hb_stop@1.01",
+     "sigterm@1.01"
+    ]
+   },
+   {
+    "tag": "C",
+    "providerDeadMs": 6355,
+    "wrapperDeadMs": 6378,
+    "lastHeartbeatAfterT0S": null,
+    "events": [
+     "sigterm@4.02",
+     "answered@6.33",
+     "interrupt@6.33",
+     "stdin_eof@6.33"
+    ]
+   },
+   {
+    "tag": "B1",
+    "providerDeadMs": 18311,
+    "wrapperDeadMs": 1611,
+    "lastHeartbeatAfterT0S": null,
+    "events": []
+   },
+   {
+    "tag": "A1",
+    "providerDeadMs": 1023,
+    "wrapperDeadMs": 1023,
+    "lastHeartbeatAfterT0S": 0.9,
+    "events": [
+     "interrupt@1.01",
+     "sigterm@1.01"
+    ]
+   },
+   {
+    "tag": "B2",
+    "providerDeadMs": 4053,
+    "wrapperDeadMs": 4073,
+    "lastHeartbeatAfterT0S": null,
+    "events": [
+     "sigterm@4.05"
+    ]
+   }
+  ],
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "O4.0",
+   "layer": "REEL",
+   "description": "arbre de processus cohérent pour les 3 cas : le fournisseur est un enfant DIRECT du wrapper (ppid = PID wrapper) et dirige son PROPRE groupe de processus (pgid = son PID, différent de celui du wrapper) ; le wrapper est un enfant du daemon",
+   "pass": true,
+   "observed": [
+    {
+     "tag": "A",
+     "provider": 74512,
+     "wrapper": 74508,
+     "wrapperPpid": 74456,
+     "daemon": 74456,
+     "providerPgid": 74512,
+     "wrapperPgid": 74508
+    },
+    {
+     "tag": "B",
+     "provider": 74108,
+     "wrapper": 74103,
+     "wrapperPpid": 74075,
+     "daemon": 74075,
+     "providerPgid": 74108,
+     "wrapperPgid": 74103
+    },
+    {
+     "tag": "C",
+     "provider": 74790,
+     "wrapper": 74780,
+     "wrapperPpid": 74715,
+     "daemon": 74715,
+     "providerPgid": 74790,
+     "wrapperPgid": 74780
+    }
+   ]
+  },
+  {
+   "id": "O4.1",
+   "layer": "REEL",
+   "description": "la variable d'amorce native (condition d'installation du gestionnaire SIGTERM du wrapper) est dans l'environnement du wrapper en vol (lue par `ps eww`, nom seulement)",
+   "pass": true,
+   "observed": [
+    {
+     "tag": "A",
+     "env": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+     "sigmask": "0"
+    },
+    {
+     "tag": "B",
+     "env": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+     "sigmask": "0"
+    },
+    {
+     "tag": "C",
+     "env": "BRIDGET_NATIVE_MISSION_BOOTSTRAP présent",
+     "sigmask": "0"
+    }
+   ]
+  },
+  {
+   "id": "O4.2",
+   "layer": "REEL",
+   "description": "A (coopératif) : après SIGTERM du daemon, le wrapper interrompt le tour EXACT (turn/interrupt avec l'identifiant du tour) puis le fournisseur s'arrête ; le battement cesse (dernier battement <= 4 s après T0) ; aucun processus restant",
+   "pass": true,
+   "observed": {
+    "events": [
+     {
+      "event": "interrupt",
+      "atS": 1.01,
+      "exact": true
+     },
+     {
+      "event": "hb_stop",
+      "atS": 1.01
+     },
+     {
+      "event": "sigterm",
+      "atS": 1.01,
+      "ignored": false
+     }
+    ],
+    "providerDeadMs": 1029,
+    "wrapperDeadMs": 1029,
+    "lastHeartbeatAfterT0S": 0.93,
+    "live": []
+   }
+  },
+  {
+   "id": "O4.3",
+   "layer": "REEL",
+   "description": "B (fournisseur bloquant qui ne lit pas stdin) : le fournisseur est arrêté PAR le wrapper (événement `sigterm` du fournisseur) dans une borne <= 6 s, sans survivre jusqu'à la fin naturelle de son tour (20 s)",
+   "pass": true,
+   "observed": {
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.04,
+      "ignored": false
+     }
+    ],
+    "providerDeadMs": 4047,
+    "wrapperDeadMs": 4047,
+    "live": []
+   }
+  },
+  {
+   "id": "O4.4",
+   "layer": "REEL",
+   "description": "C (fournisseur qui ignore SIGTERM 8 s) : borne effective mesurée ; le fournisseur reçoit SIGTERM du wrapper et s'arrête au plus tard à la fin de sa fenêtre (8 s) + 3 s, sans orphelin durable",
+   "pass": true,
+   "observed": {
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.02,
+      "ignored": true
+     },
+     {
+      "event": "answered",
+      "atS": 6.33
+     },
+     {
+      "event": "interrupt",
+      "atS": 6.33,
+      "exact": true
+     },
+     {
+      "event": "stdin_eof",
+      "atS": 6.33
+     }
+    ],
+    "providerDeadMs": 6355,
+    "wrapperDeadMs": 6378,
+    "live": []
+   }
+  },
+  {
+   "id": "O4.6",
+   "layer": "REEL",
+   "description": "B1 (fournisseur bloquant) + relance IMMÉDIATE du daemon : aucun orphelin au-delà de 6 s (exigence) - le wrapper ne doit pas être tué avant d'avoir arrêté son fournisseur",
+   "pass": false,
+   "observed": {
+    "restartedAtMs": 1633,
+    "wrapperDeadMs": 1611,
+    "providerDeadMs": 18311,
+    "events": [],
+    "live": []
+   }
+  },
+  {
+   "id": "O4.7",
+   "layer": "REEL",
+   "description": "A1 (fournisseur coopératif) + relance IMMÉDIATE du daemon : aucun orphelin au-delà de 6 s ; le tour exact est interrompu",
+   "pass": true,
+   "observed": {
+    "restartedAtMs": 1079,
+    "wrapperDeadMs": 1023,
+    "providerDeadMs": 1023,
+    "events": [
+     {
+      "event": "interrupt",
+      "atS": 1.01,
+      "exact": true
+     },
+     {
+      "event": "sigterm",
+      "atS": 1.01,
+      "ignored": false
+     }
+    ],
+    "live": []
+   }
+  },
+  {
+   "id": "O4.8",
+   "layer": "REEL",
+   "description": "B2 (fournisseur bloquant) + relance du daemon APRÈS 6 s (le wrapper a fini seul) : aucun orphelin au-delà de 6 s",
+   "pass": true,
+   "observed": {
+    "restartedAtMs": 7082,
+    "wrapperDeadMs": 4073,
+    "providerDeadMs": 4053,
+    "events": [
+     {
+      "event": "sigterm",
+      "atS": 4.05,
+      "ignored": false
+     }
+    ],
+    "live": []
+   }
+  },
+  {
+   "id": "O4.5",
+   "layer": "REEL",
+   "description": "après la mort de chaque fournisseur, plus aucun processus de la fixture et plus aucune ligne d'évidence ne s'ajoute (zéro processus possédé, zéro écriture)",
+   "pass": true,
+   "observed": {
+    "live": 0
+   }
+  }
+ ],
+ "residualProcesses": []
+}

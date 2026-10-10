@@ -1,0 +1,49 @@
+PASS S1.1 [REEL] deux credentials distincts, même endpoint et même instance fournisseur, sessions fournisseur distinctes
+PASS S1.2 [REEL] les deux agents Bridget dérivent de leur fil et diffèrent
+PASS S1.3 [REEL] bridget_session sans fait : enveloppe v1 identité seule (5 champs camelCase, pas de permissions)
+PASS S1.4 [REEL] bridget_who via T3 réel résout A et B sur leurs propres agents (identité148)
+PASS S1.5 [REEL] chaque attestation ouvre puis ferme sa session de transport HTTP (DELETE par session, statuts 2xx)
+PASS S2.1 [REEL] G-P-07(c) : admission inherit avec la seule enveloppe v1 -> permission_attestation_unavailable
+PASS S2.2 [REEL] v1 + posture development : même refus nommé, aucune ligne, aucun lancement, aucune remise, aucun grant
+PASS S2.3 [REEL] status/identité148 restent fonctionnels en v1 (tâche inconnue -> task_unavailable, pas de crash)
+PASS S3.1 [REEL] bridget_session avec fait publié : enveloppe v2 stricte (identité camelCase + permissions snake_case, revision 1)
+PASS S3.2 [REEL] l'enveloppe v2 ne contient ni token, ni endpoint, ni en-tête d'autorisation (<= 64 KiB)
+PASS S3.3 [REEL] le fait de A n'est jamais prêté à B : B (même processus fournisseur) reste en v1
+PASS S3.4 [REEL] A (v2 full-access) : bridget_delegate sans posture admis, posture effective development, 1 ligne durable
+PASS S3.5 [REEL] le moteur a lancé UN processus enfant réel et UN tour ; résultat corrélé disponible
+PASS S3.6 [REEL] la politique de l'enfant est celle du fait parent (dangerFullAccess + approval never), figée dans le snapshot
+PASS S3.7 [REEL] exactement une remise corrélée (in_reply_to = mission, from = enfant, to = A), ACK réel, rien chez B
+PASS S3.8 [REEL] B sans fait : refus nommé, A inchangé (aucun emprunt du fait de A)
+PASS S3.9 [REEL] S149-02/25 : B lecteur (sandbox readOnly) demande development -> permission_not_inherited, aucune ligne, aucun lancement, aucune invitation au grant
+PASS S3.10 [REEL] B (readOnly) sans posture : admis en lecture ; l'enfant de B reçoit un sandbox readOnly, celui de A est resté dangerFullAccess (S149-25)
+PASS S3.11 [REEL] B ne lit ni n'annule la tâche de A (task_unavailable, aucune fuite de champ)
+PASS S3.12 [REEL] B rejoue le request_id de A : jamais la tâche de A (soit refus, soit tâche distincte propre à B)
+[16:30:13.146] WARN (#479): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+[16:30:13.148] WARN (#480): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+PASS S4.1 [REEL] rotation : l'ancien credential est refusé par T3 (HTTP 401) et par Rust (t3_session_unavailable), sans repli
+PASS S4.2 [REEL] le nouveau credential retrouve la même identité Bridget (stable) mais aucun fait hérité : v1
+PASS S4.3 [REEL] après rotation sans fait : nouvelle admission refusée (v1) mais lecture de la tâche admise intacte
+[16:30:13.494] WARN (#566): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+[16:30:13.496] WARN (#567): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+PASS S4.4 [REEL] révocation de B : HTTP 401 + t3_session_unavailable ; le voisin A (nouveau credential) reste servi
+[16:30:13.612] WARN (#582): rejected MCP request with an unusable credential { reason: 'unknown_or_expired_token' }
+PASS S4.5 [REEL] identités fausses : token forgé, endpoint hors runtime, credential valide sans binding Bridget -> t3_session_unavailable, jamais de repli PID
+PASS S5.1 [REEL] G-P-07(b) côté T3 : fait retiré (fin de run) -> refus nommé permission_attestation_unavailable, jamais l'enveloppe v1
+PASS S5.1b [REEL] côté Rust (montage MCP T3) : même credential -> admission refusée fermée, zéro ligne, zéro lancement
+PASS S5.2 [REEL] fait lié à un autre run que le run actif : refus nommé ; la revision a augmenté à chaque publication du même credential
+PASS S5.3 [REEL] changement de mode (plan) : nouvelle revision pour les futures admissions ; le snapshot de la tâche déjà admise est inchangé (invariant 5)
+PASS S6.1 [REEL] S149-19 : A voit seulement sa tâche, B (même projet, même processus) seulement la sienne ; aucune ne voit l'autre
+PASS S6.2 [REEL] B ne peut ni show, ni journal, ni cancel la tâche de A via la CLI lecteur (task_unavailable, exit 2)
+PASS S6.3 [REEL] mauvaise racine -> project_mismatch ; fil inconnu et fil sans binding -> binding_unavailable ; aucune donnée rendue
+PASS S6.4 [REEL] show de la tâche terminale par son propre fil : résultat exact servi
+PASS S6.5 [REEL] 150 lectures Lineage : aucun lancement, aucune remise, aucun tour, base byte-stable (lecture quiète, aucun provider turn)
+PASS S6.9 [REEL] pagination en snapshot : pages de 1 tâche, même génération et même seq, union = liste complète, aucun doublon
+PASS S6.10 [REEL] mutation entre deux pages : page 2 rend snapshot_changed (le staging est à abandonner), jamais un snapshot mélangé
+PASS S6.11 [REEL] grammaire CLI fermée : formes ouvertes ou hors bornes -> exit 2, invalid_request, retryable false
+PASS S6.6 [REEL] watch : ready seq 0 premier pour chaque racine
+PASS S6.7 [REEL] mutation de la racine de A (nouvelle tâche) : A est signalé (corps absent), B ne reçoit rien (aucun UUID de fil ni contenu)
+PASS S6.8 [REEL] cancel CLI : reçu natif, rejeu identique = même reçu, même request_id sur une autre tâche = envelope_mismatch, tâche réellement cancelled
+PASS S7.1 [REEL] aucune autorité en trop : parent, permissions, sandbox, endpoint, credential, proof, agent_id forgés dans les arguments -> 7 refus (arguments fermés), zéro ligne, zéro lancement
+PASS S7.2 [REEL] projet attesté : cwd hors projet (/tmp), autre dépôt git, lien symbolique sortant, .. -> refus d'admission avant tout lancement
+PASS S7.3 [REEL] conversation D d'un AUTRE projet : ne peut pas lancer dans le projet de A (refus), lance dans le sien ; sa liste Lineage ne contient que sa tâche ; racines croisées -> project_mismatch ; tâche de A introuvable
+{"summary":{"title":"T036 interop 149","pass":43,"fail":0,"total":43},"residualProcesses":0}

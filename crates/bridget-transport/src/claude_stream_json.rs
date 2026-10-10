@@ -71,6 +71,7 @@ struct ActiveTurn {
     text_updates: usize,
     /// Issue fournisseur (`end_turn`, …) — absente ⇒ le fil affiche « inconnu ».
     stop_reason: Option<String>,
+    permission_denied: bool,
 }
 
 struct QueueState {
@@ -84,6 +85,7 @@ struct QueueState {
 }
 
 pub struct ClaudeStreamJsonTransport {
+    permission_observation:Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,
     connection_id: String,
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
@@ -168,6 +170,7 @@ impl ClaudeStreamJsonTransport {
             writer: writer.clone(),
             child: child.clone(),
         });
+        let permission_observation=Arc::new(Mutex::new(None));
         let reader_handle = spawn_reader(
             spawned.stdout,
             Vec::new(),
@@ -179,6 +182,9 @@ impl ClaudeStreamJsonTransport {
             provider_kind.clone(),
             pinned_model,
             resume_bootstrap,
+            writer.clone(),
+            permission_observation.clone(),
+            options.args.clone(),
         );
         let worker_handle = spawn_worker(
             queue.clone(),
@@ -208,6 +214,7 @@ impl ClaudeStreamJsonTransport {
             },
         );
         Ok(Self {
+            permission_observation,
             connection_id: format!("claude-stream-json-{pid}"),
             alive,
             shutdown_started: AtomicBool::new(false),
@@ -349,6 +356,7 @@ impl Transport for ClaudeStreamJsonTransport {
 }
 
 impl ManagedSession for ClaudeStreamJsonTransport {
+    fn provider_permissions(&self)->Option<(String,Value,u64,Option<String>)>{self.permission_observation.lock().unwrap_or_else(|e|e.into_inner()).clone()}
     fn set_private_profile_instructions(
         &mut self,
         instructions: &str,
@@ -547,10 +555,13 @@ fn spawn_claude_child(
     environment: &[(String, String)],
     inherit_stderr: bool,
 ) -> Result<Option<SpawnedClaude>, TransportError> {
+    crate::protocol::recheck_frozen_inputs(&options.command,environment).map_err(TransportError::DeliveryFailed)?;
     let mut command = Command::new(&options.command);
     command
         .args(&options.args)
         .envs(environment.iter().cloned())
+        .env_remove("BRIDGET_NATIVE_CHILD_POLICY")
+        .env_remove("BRIDGET_NATIVE_PERMISSION_SOURCES")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(if inherit_stderr {
@@ -761,6 +772,7 @@ fn spawn_worker(
                 response: String::new(),
                 text_updates: 0,
                 stop_reason: None,
+                permission_denied: false,
             });
             busy.store(true, Ordering::SeqCst);
             push_internal(
@@ -939,6 +951,9 @@ fn spawn_reader(
     provider_kind: String,
     pinned_model: Option<String>,
     resume_bootstrap: Option<ResumeBootstrap>,
+    writer: Writer,
+    permission_observation:Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,
+    launch_args:Vec<String>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let (stdout, prefetch) = if let Some(bootstrap) = resume_bootstrap {
@@ -952,6 +967,7 @@ fn spawn_reader(
             .chain(BufReader::new(stdout).lines());
         let mut pending_writes = std::collections::HashMap::new();
         let observation_cwd = std::env::current_dir().ok();
+        let mut permission_requests=std::collections::HashSet::new();
         for line in lines {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
@@ -968,6 +984,25 @@ fn spawn_reader(
                     continue;
                 }
             };
+            if value.get("type").and_then(Value::as_str)==Some("system") {
+                let mode=value.get("permissionMode").or_else(||value.get("permission_mode")).and_then(Value::as_str);
+                let session=value.get("session_id").and_then(Value::as_str);
+                let mut observed=permission_observation.lock().unwrap_or_else(|e|e.into_inner());
+                if let Some(mode)=mode {
+                    if matches!(mode,"default"|"acceptEdits"|"bypassPermissions"|"plan"|"dontAsk"|"auto") {
+                        let session=session.map(str::to_owned).or_else(||observed.as_ref().map(|o|o.0.clone()));
+                        let tools=value.get("tools").filter(|v|v.as_array().is_some_and(|a|a.iter().all(Value::is_string))).cloned()
+                            .or_else(||observed.as_ref().map(|o|o.1["tools"].clone()));
+                        if let (Some(session),Some(tools))=(session,tools){
+                            let mut policy=json!({"kind":"claude","permission_mode":mode,"tools":tools,"permission_callback":{"kind":"native_wrapper","tool_approval":if matches!(mode,"bypassPermissions"|"auto"){"allow"}else{"prompt"},"plan_exit":"deny"},"settings_sources":"provider_default"});
+                            if crate::protocol::claude_launch_policy_options(&launch_args,&mut policy).is_err(){*observed=None;continue}
+                            let cwd=value.get("cwd").and_then(Value::as_str).map(str::to_owned).or_else(||observed.as_ref().and_then(|o|o.3.clone()));
+                            let revision=observed.as_ref().map(|o|o.2.saturating_add(u64::from(o.0!=session||o.1!=policy||o.3!=cwd))).unwrap_or(1);
+                            *observed=Some((session,policy,revision,cwd));
+                        }
+                    }else{*observed=None;}
+                }
+            }
             if let Some(session_id) = session_id_from_system_init(&value) {
                 if let Some(store) = session_store
                     .lock()
@@ -1046,6 +1081,24 @@ fn spawn_reader(
             // (deltas→assistant→result, ou assistant→result sans partial).
             // Une fixture assistant-puis-deltas testerait un fantôme de
             // protocole, pas un trou du pilote.
+            if kind=="control_request"&&value.pointer("/request/subtype").and_then(Value::as_str)==Some("can_use_tool"){
+                if let Some(request_id)=value.get("request_id").and_then(Value::as_str).filter(|id|!id.is_empty()&&id.len()<=256&&!id.chars().any(char::is_control)) {
+                    if permission_requests.len()>=4096 {break}
+                    if permission_requests.insert(request_id.to_owned()){
+                        if let Some(active)=queue.0.lock().unwrap_or_else(|e|e.into_inner()).active.as_mut(){active.permission_denied=true;}
+                        let frame=json!({"type":"control_response","response":{"subtype":"success","request_id":request_id,"response":{"behavior":"deny","message":"provider_permission_denied","interrupt":true}}});
+                        let written=writer.lock().map_err(|_|()).and_then(|mut lock|{
+                            let stdin=lock.as_mut().ok_or(())?;
+                            writeln!(stdin,"{frame}").map_err(|_|())?;stdin.flush().map_err(|_|())
+                        });
+                        record_or_terminal(&journal,&events,"permission_denied",None,json!({"request_id":request_id,"code":"provider_permission_denied"}));
+                        if written.is_err(){break}
+                    }
+                }else if let Some(active)=queue.0.lock().unwrap_or_else(|e|e.into_inner()).active.as_mut(){
+                    active.permission_denied=true;
+                }
+                continue;
+            }
             if kind == "control_response" {
                 // Forme mesurée le 28/08 : {"type":"control_response",
                 // "response":{"subtype":"success","request_id":…,
@@ -1136,7 +1189,11 @@ fn spawn_reader(
                 }
             }
             if kind == "result" {
-                let terminal = if value.get("is_error").and_then(Value::as_bool) == Some(false)
+                let denied=value.get("permission_denials").and_then(Value::as_array).is_some_and(|denials|!denials.is_empty())
+                    ||queue.0.lock().unwrap_or_else(|e|e.into_inner()).active.as_ref().is_some_and(|active|active.permission_denied);
+                let terminal = if denied {
+                    ManagedTerminal::Failed{detail:"provider_permission_denied".into()}
+                } else if value.get("is_error").and_then(Value::as_bool) == Some(false)
                     && value.get("terminal_reason").and_then(Value::as_str) == Some("completed")
                 {
                     ManagedTerminal::Completed

@@ -1,0 +1,49 @@
+{
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-823e8a5fab8a",
+  "sha256": "823e8a5fab8abe38fcb439d8fda98d929622dae3751ff8f629d306744379328b",
+  "matchesReceipt": true
+ },
+ "rustSources": {
+  "fingerprintNow": "f54a66ee8bcdc305fc855bc0fb365ebd4b3b4bae3e030f11bf5d3acb3bf3b804",
+  "fingerprintReceipt": "e6f45086b23974604667c93d3b34755d7d73dc5dadbe4dde94c1e09f34285408",
+  "equal": false,
+  "files": 197,
+  "productionNow": "65403980d033e2859591f8b455be191a2e27ade809517c4f40c20a2c6930b049",
+  "productionReceipt": "e0d86f016f1fbb06d485c13ff863a639a2ed3daef29b8be4247797e1d7a3f215",
+  "productionEqual": false,
+  "productionSourcesNewerThanBinary": [
+   "crates/bridget-daemon/src/daemon.rs",
+   "crates/bridget-daemon/src/daemon/native_delegation.rs",
+   "crates/bridget-daemon/src/wrapper.rs"
+  ]
+ },
+ "t3": {
+  "head": "33f6d04e116430bf7f0011902d6af3868163f2d1",
+  "files": {
+   "packages/provider-core/src/server/mcpSession.ts": "2e95140365bef3f82cfbb60045963a7d23119fb7ff14f1bd661da0321d3bf201",
+   "apps/server/src/mcp/OrchestratorMcpService.ts": "e4d6a2db680f9720a285e003503ac9d77242f66578b92d53465c4c6bad86d8fd",
+   "apps/server/src/mcp/McpSessionRegistry.ts": "6e1282d6fcde684615b5bd90b034d2e362bf1e72969d03d528a9bea6466c23fe",
+   "apps/server/src/mcp/McpHttpServer.ts": "0bf639fbb86bb23f91a8388dc6970839972aeb96ae33b0459b6a2cf10367c9e3",
+   "apps/server/src/bridget/BridgetReader.ts": "99acc8a7c38c2477f6fd83922e754a31916ff0d9a6a148a1d2bf9c1b82ee64d4",
+   "apps/server/src/bridget/BridgetLineage.ts": "ddb6be37c21e158284c91994b18777ae3d7f800d479ce60ab613575eefc5589f",
+   "apps/server/src/ws.ts": "c9cce8ceef8fcb5a36467241558b797164111950735e468e22b2dbf8e0d1a9be",
+   "apps/server/src/server.ts": "04bcd1aeae7c70f3bb70b873e3b0952bfc89d59c1b54b2fcac656e8f6ff80c59",
+   "packages/contracts/src/bridgetLineage.ts": "cd216feb52261c28b93c76d3a3ea3629cf5029fad6612977ac5028cab0616b63",
+   "packages/contracts/src/bridgetPermissions.ts": "df03fd3fb71dc3e2cfbdf95d8ea0c0c04a43ddea7b169220cc435c34d50ce0c3"
+  }
+ },
+ "recipeTools": {
+  "codex149.py": "7de49a1b3edc6a737b4181827841672b0f4c94c02584c45d9402e21bc7d7a883",
+  "common149.ts": "e273956be66a6e1d404818cf8005426568928e145b4e4c118fc9e8b8470f33a3",
+  "fingerprints.py": "c5dec1c463b8f65188678160d8e4f668f4a4aaa458beed70e0f431238f93c4ea",
+  "fx.mjs": "6f2e9f3c2467ce6adfc53b67cd59194e4c955014077d68c1495120a3d9472e02",
+  "interop149.ts": "f1f7cfaa5996361750a5617181a7a67ed2b265c22268d69e044ca8959ad95b3b",
+  "provider149.py": "cdcefa2b742738fdadada5edbd5ec36c5693d0b496b85a2c8bc382a3edbaf939",
+  "recovery149.ts": "12c3a16109eb5b49824e6e0999f55c6e6d82c48ad9fb77f7d311d3e2578f7729",
+  "server149.ts": "c120df6f1d29133658076a41dfe504e26b5b7199cad92a5312b16a4e16209a73",
+  "t3host.ts": "10b96a42ed8a9750bd4669bb8cd31ff04cefb2a3c301270902bf2504c5de10d5",
+  "t3server.ts": "6c8ffc8b5ddc7d24f974685e6034c35bcfc7091e2c9b8f8faf6aa362daf6989b"
+ },
+ "checkedAt": "2026-10-10T15:23:38+0200"
+}

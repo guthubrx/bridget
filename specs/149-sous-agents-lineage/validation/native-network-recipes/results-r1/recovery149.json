@@ -1,0 +1,460 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T13:16:02.874Z",
+ "finishedAt": "2026-10-10T13:17:19.369Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-debug/bridget-823e8a5fab8a",
+  "sha256": "823e8a5fab8abe38fcb439d8fda98d929622dae3751ff8f629d306744379328b"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "T039 scénarios dégradés 149",
+  "pass": 23,
+  "fail": 1,
+  "total": 24
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.KLsVHW",
+  "daemonPid": 7642,
+  "replayAfterRightsLoss": {
+   "tombstone": "t3_session_unavailable",
+   "oldCredentialAfterRotation": "t3_session_unavailable",
+   "newCredentialWithoutFact_replay": "ok:result_available",
+   "newCredentialWithoutFact_status": "ok:result_available"
+  },
+  "stopDaemon": "stopped_by_sigterm",
+  "daemonSecondPid": 14563,
+  "deliveriesAfterReconnect": [],
+  "deliveriesBeforeRestart": {
+   "idempotentAcked": 7,
+   "plain": 2
+  },
+  "inflightTimeline": [
+   {
+    "dt": 0.44,
+    "event": "started",
+    "pid": 14845
+   },
+   {
+    "dt": 0.44,
+    "event": "thread_start",
+    "pid": 14845
+   },
+   {
+    "dt": 0.58,
+    "event": "prompt",
+    "pid": 14845,
+    "nonce": "none",
+    "turn": 1,
+    "chars": 1342
+   },
+   {
+    "dt": 0.58,
+    "event": "answered",
+    "pid": 14845,
+    "nonce": "none"
+   },
+   {
+    "dt": 0.6,
+    "event": "prompt",
+    "pid": 14845,
+    "nonce": "i1",
+    "turn": 2,
+    "chars": 772
+   }
+  ],
+  "inflightTask": {
+   "state": "failed",
+   "error": "unreachable",
+   "updated_at": 1791638224,
+   "completed_at": 1791638224,
+   "started_at": 1791638220,
+   "created_at": 1791638220,
+   "restartAtEpoch": 1791638222
+  },
+  "inflightProvidersAlive": {
+   "at7s": 0,
+   "at15s": 0
+  },
+  "inflightRestart": {
+   "before": {
+    "starts": 12,
+    "promptsI1": 1,
+    "pids": [
+     14718,
+     14722
+    ]
+   },
+   "providersAfterDaemonStop": 1,
+   "taskState": "failed",
+   "taskError": "unreachable",
+   "missionPrompts": 2,
+   "distinctProviderPids": 2,
+   "startsTotalAfter": 13,
+   "notices": [
+    "Délégation native bfa59c81-f949-4f30-9a74-64c8e052b846 échouée : unreachable"
+   ]
+  },
+  "finalCounts": {
+   "rows": 12,
+   "started": 13,
+   "prompts": 16,
+   "answered": 11,
+   "deliveries": {},
+   "startsTotal": 13
+  },
+  "httpSeen": {
+   "posts": 31,
+   "deletes": 10
+  },
+  "allStarts": [
+   7671,
+   8242,
+   8263,
+   9750,
+   9801,
+   10234,
+   11044,
+   11787,
+   12439,
+   12454,
+   13904,
+   14722,
+   14845
+  ],
+  "finalStates": [
+   "result_available",
+   "result_available",
+   "result_available",
+   "cancelled",
+   "cancelled",
+   "failed",
+   "result_available",
+   "result_available",
+   "result_available",
+   "cancelled",
+   "result_available",
+   "failed"
+  ],
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "R1.1",
+   "layer": "REEL",
+   "description": "retry : 20 rejeux (10 en vol, 10 après la fin) -> même task_id, même enfant, même message_id ; 1 lancement, 1 tour, 1 remise corrélée",
+   "pass": true,
+   "observed": {
+    "replays": 20,
+    "sameAll": true,
+    "starts": 1,
+    "prompts": 1,
+    "deliveries": 1,
+    "rows": 1
+   }
+  },
+  {
+   "id": "R1.2",
+   "layer": "REEL",
+   "description": "même request_id avec une autre enveloppe -> envelope_mismatch, aucune mutation, aucun lancement",
+   "pass": true,
+   "observed": {
+    "payload": {
+     "text": "envelope_mismatch"
+    }
+   }
+  },
+  {
+   "id": "R1.3",
+   "layer": "REEL",
+   "description": "Lineage montre un seul enfant pour ce request_id (pas de doublon)",
+   "pass": true,
+   "observed": {
+    "tasks": 1
+   }
+  },
+  {
+   "id": "R7.1",
+   "layer": "REEL",
+   "description": "nested actif : le tour de l'enfant est fini mais la racine n'expose ni statut result_available ni résultat tant que le petit-enfant travaille ; aucune remise au parent",
+   "pass": true,
+   "observed": {
+    "rootStatus": "waiting_for_children",
+    "rootResult": null,
+    "nestedState": "working",
+    "deliveriesDuring": 0,
+    "starts": 3
+   }
+  },
+  {
+   "id": "R7.2",
+   "layer": "REEL",
+   "description": "la lignée est durable : parent_task_id et propriétaire racine stables (la racine appartient à A, le petit-enfant à l'enfant)",
+   "pass": true,
+   "observed": {
+    "rootOwnerOfNested": "74786b56",
+    "ownerOfNested": "516e9168"
+   }
+  },
+  {
+   "id": "R7.3",
+   "layer": "REEL",
+   "description": "quand le petit-enfant a fini : la racine devient result_available, UNE seule remise corrélée à A ; le résultat du petit-enfant n'est pas remis à A",
+   "pass": true,
+   "observed": {
+    "root": "result_available",
+    "nested": "result_available",
+    "deliveries": 1,
+    "leaked": false
+   }
+  },
+  {
+   "id": "R2.1",
+   "layer": "REEL",
+   "description": "un autre fil (B) ne peut ni annuler ni lire la tâche de A : task_unavailable, tâche et processus inchangés",
+   "pass": true,
+   "observed": {
+    "cancel": {
+     "text": "task_unavailable"
+    },
+    "status": {
+     "text": "task_unavailable"
+    },
+    "providers": 4
+   }
+  },
+  {
+   "id": "R2.2",
+   "layer": "REEL",
+   "description": "cancel de la racine : racine + descendant actif cancelled, PID des deux enfants réellement terminés, zéro fournisseur résiduel, aucune remise de résultat",
+   "pass": true,
+   "observed": {
+    "states": [
+     "cancelled",
+     "cancelled"
+    ],
+    "pids": [
+     [
+      9750,
+      false
+     ],
+     [
+      9801,
+      false
+     ]
+    ],
+    "liveProviders": 0
+   }
+  },
+  {
+   "id": "R2.3",
+   "layer": "REEL",
+   "description": "cancel rejoué : idempotent (même état cancelled, aucune erreur, aucun nouveau lancement)",
+   "pass": true,
+   "observed": {
+    "status": "cancelled",
+    "starts": 5
+   }
+  },
+  {
+   "id": "R4.1",
+   "layer": "REEL",
+   "description": "identité inconnue : token forgé, absence totale d'identité, fil sans binding -> refus explicites ; aucune identité voisine empruntée, aucune ligne, aucun lancement",
+   "pass": true,
+   "observed": {
+    "bogus": [
+     "t3_session_unavailable",
+     "t3_session_unavailable"
+    ],
+    "noIdentity": [
+     "identity_not_found",
+     "identity_not_found"
+    ],
+    "lineage": "binding_unavailable"
+   }
+  },
+  {
+   "id": "R3.1",
+   "layer": "REEL",
+   "description": "parent extérieur : le fil B voit zéro tâche de A (liste, show), compteurs et base inchangés",
+   "pass": true,
+   "observed": {
+    "listBTasks": 0,
+    "show": "task_unavailable"
+   }
+  },
+  {
+   "id": "R5.1",
+   "layer": "REEL",
+   "description": "refus fournisseur : tâche failed avec erreur explicite, 1 seul lancement, 1 seul tour (pas de reprise ni de substitution de modèle/fournisseur), 1 notification d'échec, Lineage failed",
+   "pass": true,
+   "observed": {
+    "state": "failed",
+    "error": "livraison échouée: erreur Codex (code -32000; référence sha256:66bb1dfcdec778b0b928b8b230dfa24ce84519b01e7d8b321935f82f5",
+    "prompts": 1,
+    "notices": 1,
+    "lineageStatus": "failed",
+    "lineageModel": "fixture-model-149"
+   }
+  },
+  {
+   "id": "R5.2",
+   "layer": "REEL",
+   "description": "le rejeu de la requête refusée rend l'échec mémorisé sans nouveau lancement",
+   "pass": true,
+   "observed": {
+    "replayStatus": "failed",
+    "prompts": 1
+   }
+  },
+  {
+   "id": "R5.3",
+   "layer": "REEL",
+   "description": "modèle ou fournisseur absent du registre : refus nommé à l'admission, aucun lancement, aucune substitution",
+   "pass": true,
+   "observed": {
+    "model": "model_unavailable",
+    "agent": "type d'agent inconnu 'agent-inconnu' dans /Users/moi/.cache/bridget149-native-interop.KLsVHW/state/agents.json. Types disponibles : claude, codex, cursor, fixture-claude-149, fixture-codex-149, gemini, project-discovery-claude, project-discovery-codex, project-discovery-fixture-claude-149, project-discovery-fixture-codex-149"
+   }
+  },
+  {
+   "id": "R8.1",
+   "layer": "REEL",
+   "description": "droits réduits (parent devient readOnly) : le rejeu de l'ancienne requête rend la même tâche et le même résultat, sans nouveau lancement ; son snapshot reste dangerFullAccess",
+   "pass": true,
+   "observed": {
+    "sameTask": true,
+    "prompts": 1,
+    "sandbox": "dangerFullAccess",
+    "snapshotUnchanged": true,
+    "revision": 2
+   }
+  },
+  {
+   "id": "R8.2",
+   "layer": "REEL",
+   "description": "droits réduits : une NOUVELLE requête development est refusée (permission_not_inherited) avant tout lancement ; une requête héritée reçoit le sandbox readOnly (jamais l'ancien full-access)",
+   "pass": true,
+   "observed": {
+    "development": "permission_not_inherited",
+    "g2Prompts": 0,
+    "g3Sandbox": "readOnly"
+   }
+  },
+  {
+   "id": "R8.3",
+   "layer": "REEL",
+   "description": "fait retiré, puis session tournée : aucun rejeu n'entraîne de lancement ni de nouvelle remise ; l'ancien credential est refusé ; sans fait (v1) la lecture/le rejeu de l'identité 148 ne relance rien",
+   "pass": true,
+   "observed": {
+    "tombstone": {
+     "tombstone": "t3_session_unavailable",
+     "oldCredentialAfterRotation": "t3_session_unavailable",
+     "newCredentialWithoutFact_replay": "ok:result_available",
+     "newCredentialWithoutFact_status": "ok:result_available"
+    },
+    "startedBefore": 7,
+    "startedAfter": 8,
+    "g1Prompts": 1
+   }
+  },
+  {
+   "id": "R6.1",
+   "layer": "REEL",
+   "description": "T3 en panne après admission : la mission admise (enfant déjà lancé) va à son terme sans T3, résultat remis UNE fois à A, PID enfant sans relance",
+   "pass": true,
+   "observed": {
+    "state": "result_available",
+    "deliveries": 1,
+    "prompts": 1,
+    "t1pid": 12439,
+    "startsAfter": 10
+   }
+  },
+  {
+   "id": "R6.2",
+   "layer": "REEL",
+   "description": "T3 en panne : l'annulation reste native (CLI Lineage) -> tâche cancelled et PID de l'enfant réellement terminé ; la lecture native reste servie",
+   "pass": true,
+   "observed": {
+    "cancel": {
+     "status": "cancelling",
+     "task_id": "e0f5308c-741e-4e71-91a2-60805310b511",
+     "version": 1
+    },
+    "state": "cancelled",
+    "t2pid": 12454,
+    "alive": false,
+    "readResult": "fixture149-answer:t1"
+   }
+  },
+  {
+   "id": "R6.3",
+   "layer": "REEL",
+   "description": "T3 en panne : le montage MCP T3 est fermé (status et nouvelle admission refusés t3_session_unavailable), zéro ligne et zéro lancement ajoutés, aucun repli PID",
+   "pass": true,
+   "observed": {
+    "status": "t3_session_unavailable",
+    "delegate": "t3_session_unavailable",
+    "t3Prompts": 0
+   }
+  },
+  {
+   "id": "R6.4",
+   "layer": "REEL",
+   "description": "T3 revenu : l'ancien credential reste refusé (registre perdu) ; avec un credential neuf + fait, le rejeu de la requête admise avant la panne rend la MÊME tâche, sans relance",
+   "pass": true,
+   "observed": {
+    "stale": "t3_session_unavailable",
+    "sameTask": true,
+    "sameMessage": true,
+    "prompts": 1
+   }
+  },
+  {
+   "id": "R9.1",
+   "layer": "REEL",
+   "description": "reprise du daemon, missions terminées : mêmes task_id/child/message, mêmes états (result_available, cancelled, failed), aucun nouveau lancement, aucun fournisseur survivant à l'arrêt",
+   "pass": true,
+   "observed": {
+    "statesEqual": true,
+    "startsBefore": 11,
+    "startsAfter": 11,
+    "providersAfterDaemonStop": 0
+   }
+  },
+  {
+   "id": "R9.1b",
+   "layer": "REEL",
+   "description": "reprise du daemon : aucune remise déjà accusée (ACK) n'est rejouée au parent reconnecté",
+   "pass": true,
+   "observed": {
+    "deliveriesAfterReconnect": 0,
+    "replayedAfterAck": 0,
+    "plain": 0
+   }
+  },
+  {
+   "id": "R9.2",
+   "layer": "REEL",
+   "description": "mission EN VOL coupée par l'arrêt du daemon : l'état est explicite (failed + erreur) ET la mission n'est pas exécutée une seconde fois par un enfant relancé (1 seul tour portant la mission)",
+   "pass": false,
+   "observed": {
+    "taskState": "failed",
+    "error": "unreachable",
+    "missionPrompts": 2,
+    "distinctProviderPids": 2,
+    "startsBefore": 12,
+    "startsAfter": 13,
+    "parentNotices": 1
+   }
+  }
+ ],
+ "residualProcesses": []
+}

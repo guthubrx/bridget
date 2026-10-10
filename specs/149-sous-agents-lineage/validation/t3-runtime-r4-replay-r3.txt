@@ -1,0 +1,35 @@
+# groupe tick
+PASS T1     journal 1/4 (fait de tâche modifié) : T1 + racine seulement => {"subagent.updated":1,"thread.metadata-updated":2} fils_metadata=0101,0001
+PASS T2     tâches inchangées T2/T3/T4 : 0 événement => aucun événement sur …0002/…0003/…0004
+PASS T3     tick journal seul (seq+1, aucun fait) : racine seule => {"thread.metadata-updated":1}
+PASS T4     filigrane racine = seq du magasin ; marqueur d'un enfant inchangé ≤ racine => racine 900|5|1 enfant4 00000000-0000-4000-8000-000000000900|1
+# groupe seed
+PASS S1     seed 130 (134 tâches, 2 pages) : 130 créations + 130 subagent + racine => {"subagent.updated":130,"thread.created":130,"thread.metadata-updated":1} fils_virtuels=134
+PASS S2     journal 1/134 : 0 réécriture des 133 autres, ≤2 événements pour la tâche modifiée + racine 1 => {"subagent.updated":1,"thread.metadata-updated":2}
+PASS S3     tick journal seul 1/134 : racine seule (1 événement, pas ~270) => {"thread.metadata-updated":1}
+# groupe cursor
+PASS C1     mutation entre pages x3 : snapshot_changed, AUCUNE réconciliation partielle (nombre de fils inchangé) => code=snapshot_changed fils=134/134 delta={"thread.metadata-updated":135} racine=00000000-0000-4000-8000-000000000900|8|0
+PASS C2     échec de snapshot : 0 événement de projection hors dégradation (aucun thread.created / subagent.updated) => {"thread.metadata-updated":135}
+PASS C3     une mutation seule : 2e tentative réussit, snapshot complet, 0 création/subagent => {"thread.metadata-updated":135} racine=00000000-0000-4000-8000-000000000900|12|1
+# groupe reads
+PASS R1     100 list + 100 show sur snapshot inchangé : 0 événement => list_ok=100 show_ok=100 delta={}
+# groupe generation
+PASS G1     nouvelle génération, faits inchangés : marqueurs de tous les fils réécrits, 0 subagent.updated, 0 création => {"thread.metadata-updated":135} fils=134 marqueurs_gen999=134 racine=00000000-0000-4000-8000-000000000999|13|1
+# groupe global
+PASS F1     panne GLOBALE (magasin illisible) : refus fermé, racine et fils indisponibles => code=invalid_output racine_available=0 fils_indisponibles=134/134 delta={"thread.metadata-updated":135}
+PASS F2     reprise COMPLÈTE au même seq : tout redevient available:true, 0 création, 0 subagent, aucun doublon => {"thread.metadata-updated":135} seq=13/13 fils_disponibles=134/134 fils=134
+# groupe unseed
+PASS U1     unseed 130 : historique voulu conservé (pas de prune), 130 fils available:false, 4 available:true => {"thread.metadata-updated":131} historiques=130 disponibles=4 fils=134 observé_seq=14..14 marqueur_seq=13..13
+# groupe local
+PASS L1     journal_unavailable (T4, read + flux) : message local, racine et T1/T2/T3 inchangés => read=journal_unavailable flux=journal_unavailable delta={} racine=1 T1..T3=111
+PASS L2     result_offset_invalid : racine inchangée, 0 événement => code=result_offset_invalid delta={}
+PASS L3     refus d'arguments (envelope_mismatch sur cancel) : racine inchangée => racine=1
+# groupe known
+PASS K1     task_unavailable sur enfant CONNU de ce root : ce fil seul est invalidé => code=task_unavailable T3=0 T1,T2,T4=111 racine=1 delta={"thread.metadata-updated":1}
+PASS K2     reprise : le fil redevient disponible au prochain snapshot complet => T3=1
+# groupe foreign
+PASS X0     préparation : fil virtuel X lié à la racine ÉTRANGÈRE (root2) => bind=ok X_available=1
+PASS X1     UUID d'une tâche d'un AUTRE root (show/cancel/inconnu) : task_unavailable, root1 et root2 intacts, 0 événement => show=task_unavailable cancel=task_unavailable inconnu=task_unavailable delta={} X_available=1 root1_inchange=true
+# groupe forged
+PASS Z1     contexte forgé (mauvais projectId + fil réel) : refusé ET sans effet sur la disponibilité du fil réel => code=project_mismatch racine_available=1 (avant 1) fils_indisponibles=130 delta={}
+TOTAL pass=23 fail=0 finding=0

@@ -1,0 +1,304 @@
+{
+ "schema": "native-network-recipes/1",
+ "startedAt": "2026-10-10T20:04:32.828Z",
+ "finishedAt": "2026-10-10T20:05:11.800Z",
+ "binary": {
+  "path": "/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-release/bridget-abc850858975",
+  "sha256": "abc850858975fb5c7d733eb052be4fff6e3cb24537ce8b7d4475019b79abf6d8"
+ },
+ "node": "v24.13.1",
+ "host": "monordinateur",
+ "summary": {
+  "title": "E2 queued à propriétaire natif perdu, transaction durable cohérente (r4)",
+  "pass": 6,
+  "fail": 0,
+  "total": 6
+ },
+ "notes": {
+  "fixtureRoot": "/Users/moi/.cache/bridget149-native-interop.MyCzuH",
+  "daemonPid": 60337,
+  "crafted": {
+   "nestedQueued": {
+    "task_id": "c4571cdc-821c-43d0-b088-7e536f259231",
+    "child": "09010c7f-b2b8-416c-ac69-272bb6d93afa",
+    "mission": "267cbdcc-171a-41ff-bcc5-60282c12ac93",
+    "owner_instance": "6b8fe94a-fd37-46cb-a79a-017fd2535974",
+    "parent_task_id": "7fec15fb-c735-4f15-baf5-e1e68b76e42e",
+    "state": "queued"
+   },
+   "externalQueued": {
+    "task_id": "adbaf33b-7e14-42cd-bb84-3fec6004f7fe",
+    "child": "d3cc3997-20de-4b43-8d3a-09d99b02754b",
+    "mission": "915b42a1-5b17-4858-981c-57963fc342b3",
+    "owner_instance": "10c9a063-db3e-46e6-99af-12f400d9c18f",
+    "parent_task_id": null,
+    "state": "queued"
+   }
+  },
+  "offline": {
+   "resolveMs": 1075,
+   "tasks": [
+    {
+     "id": "fe87342d",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "hasResult": true
+    },
+    {
+     "id": "7fec15fb",
+     "parent": null,
+     "state": "result_available",
+     "error": "native_result_owner_offline",
+     "sent": false,
+     "hasResult": true
+    },
+    {
+     "id": "bc9cbd12",
+     "parent": "7fec15fb",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "hasResult": false
+    },
+    {
+     "id": "c4571cdc",
+     "parent": "7fec15fb",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "hasResult": false
+    },
+    {
+     "id": "adbaf33b",
+     "parent": null,
+     "state": "queued",
+     "error": null,
+     "sent": false,
+     "hasResult": false
+    }
+   ],
+   "execs": [
+    [
+     "execution-5513",
+     "completed",
+     "completed"
+    ],
+    [
+     "execution-3589",
+     "completed",
+     "completed"
+    ],
+    [
+     "execution-5519",
+     "unreachable",
+     "daemon_restart"
+    ]
+   ],
+   "startsDelta": 0
+  },
+  "reconnect": {
+   "root": [
+    {
+     "body": "fixture149-answer:e1"
+    }
+   ],
+   "external": [
+    {
+     "body": "fixture149-answer:x1"
+    }
+   ],
+   "acks": 2,
+   "tasks": [
+    {
+     "id": "fe87342d",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "hasResult": true
+    },
+    {
+     "id": "7fec15fb",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "hasResult": true
+    },
+    {
+     "id": "bc9cbd12",
+     "parent": "7fec15fb",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "hasResult": false
+    },
+    {
+     "id": "c4571cdc",
+     "parent": "7fec15fb",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "hasResult": false
+    },
+    {
+     "id": "adbaf33b",
+     "parent": null,
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "hasResult": true
+    }
+   ]
+  },
+  "stopDaemonFinal": "stopped_by_sigterm",
+  "cleanup": {
+   "remainingBefore": [],
+   "sigtermed": [],
+   "remainingAfter": []
+  }
+ },
+ "checks": [
+  {
+   "id": "E2r4.a",
+   "layer": "REEL",
+   "description": "avant coupure : racine `waiting_for_children` avec résultat RÉEL capturé (fixture149-answer:e1), exécution de la racine `completed`, descendant `working` avec exécution active",
+   "pass": true,
+   "observed": {
+    "root": {
+     "id": "7fec15fb",
+     "state": "waiting_for_children",
+     "error": null,
+     "sent": false,
+     "result": "fixture149-answer:e1"
+    },
+    "nested": {
+     "id": "bc9cbd12",
+     "state": "working",
+     "error": null,
+     "sent": false,
+     "result": null
+    },
+    "execs": [
+     [
+      "execution-5513",
+      "completed",
+      "completed"
+     ],
+     [
+      "execution-3589",
+      "completed",
+      "completed"
+     ],
+     [
+      "execution-5519",
+      "starting",
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "id": "E2r4.b",
+   "layer": "SIMULE",
+   "description": "état durable simulé COHÉRENT (transaction d'admission rejouée, daemon arrêté) : `queued` imbriqué (parent = la racine, propriétaire = l'enfant natif) et `queued` externe, sans enfant, sans exécution ; la racine et le descendant réels ne sont pas modifiés",
+   "pass": true,
+   "observed": {
+    "queuedNested": {
+     "id": "c4571cdc",
+     "parent": "7fec15fb"
+    },
+    "queuedExternal": "adbaf33b",
+    "execsUnchanged": true
+   }
+  },
+  {
+   "id": "E2r4.c",
+   "layer": "REEL",
+   "description": "parent HORS LIGNE après relance (effets du daemon réel, sans écriture DB de la recette) : le `queued` imbriqué à propriétaire perdu n'est plus `queued` (fermé `failed`), le descendant réel est `failed`, la racine sort de `waiting_for_children` -> `result_available`, résultat capturé INTACT, `result_sent` faux, stable 6 s ; aucun lancement",
+   "pass": true,
+   "observed": {
+    "resolveMs": 1075,
+    "root": {
+     "id": "7fec15fb",
+     "state": "result_available",
+     "error": "native_result_owner_offline",
+     "sent": false,
+     "result": "fixture149-answer:e1"
+    },
+    "nested": {
+     "id": "bc9cbd12",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "result": null
+    },
+    "queuedNested": {
+     "id": "c4571cdc",
+     "state": "failed",
+     "error": "unreachable",
+     "sent": false,
+     "result": null
+    },
+    "queuedExternal": {
+     "id": "adbaf33b",
+     "state": "queued",
+     "error": null,
+     "sent": false,
+     "result": null
+    },
+    "startsDelta": 0
+   }
+  },
+  {
+   "id": "E2r4.d",
+   "layer": "REEL",
+   "description": "exécutions durables : aucune exécution rouverte, aucune encore active, aucune ligne en plus ; celle du descendant est fermée (unreachable/daemon_restart ou failed)",
+   "pass": true,
+   "observed": {
+    "before": 3,
+    "after": 3,
+    "reopened": 0,
+    "active": 0
+   }
+  },
+  {
+   "id": "E2r4.e",
+   "layer": "REEL",
+   "description": "reconnexion : le résultat EXACT de la racine est remis UNE seule fois (expéditeur = l'enfant), `result_sent` vrai, rien du descendant remis, aucun doublon 6 s ; le `queued` EXTERNE (contrôle) REPREND (`result_available`, UNE remise) sans faux échec ; la tâche externe d'origine n'est pas rouverte (2 tours x1)",
+   "pass": true,
+   "observed": {
+    "rootDeliveries": 1,
+    "rootBody": "fixture149-answer:e1",
+    "fromChild": true,
+    "rootSent": true,
+    "external": {
+     "id": "adbaf33b",
+     "state": "result_available",
+     "error": null,
+     "sent": true,
+     "result": "fixture149-answer:x1"
+    },
+    "externalDeliveries": 1,
+    "promptsX1": 2,
+    "leaked": 0
+   }
+  },
+  {
+   "id": "E2r4.f",
+   "layer": "REEL",
+   "description": "2e redémarrage (résultats accusés) : aucune remise rejouée (racine, queued externe), tâches et exécutions durables identiques, aucun lancement, aucun fournisseur vivant",
+   "pass": true,
+   "observed": {
+    "redelivered": 0,
+    "tasksEqual": true,
+    "execsEqual": true,
+    "startsDelta": 0,
+    "deliveriesBefore": 2
+   }
+  }
+ ],
+ "residualProcesses": []
+}
