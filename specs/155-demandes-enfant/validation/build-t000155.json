@@ -1,0 +1,1 @@
+{"stage": "/Users/moi/.cache/bridget-build-155-t000.esro4cg4", "source": "c8f6f8a0e09a31dc123a994883bf6853ca1fd161", "rc": 0, "seconds": 55.72, "command": ["python3", "scripts/build.py", "cargo", "build", "--locked", "--offline", "--release", "-p", "bridget-daemon"]}

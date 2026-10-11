@@ -1,4 +1,8 @@
 <!-- SPECKIT START -->
+Correctif T000155 livré seul le 2026-10-12 : sources c8f6f8a0e09a fusionnées et poussées github/main.
+Binaire signé installé et actif ; daemon81535/pont81746 à01:48CEST. T3 inchangé, aucune base supprimée.
+Trois tests ciblés PASS, ConvergeP2, audit A99.95 sans blocage. Les 40 autres tâches155 restent ouvertes.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/155-demandes-enfant/validation/livraison-t000155.md.
 Session 154 livrée et activée le 2026-10-12 : 28/28, CONVERGED passage 2 ; Claude R2 APPROVE.
 Code 806d0984fe45eea9fcc885770285bc00a85d005e intégré/poussé github/main ; build 58,36 s RC0.
 Binaire signé installé/actif SHA 39834b7d36bd184842ea8cf99994a08e92af583178a97b0dba537643e52ffaa8.
