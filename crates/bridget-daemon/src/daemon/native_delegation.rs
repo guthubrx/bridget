@@ -1,7 +1,7 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
 use super::*;
-use crate::delegation::Task;
-use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, SpawnPosture};
+use crate::delegation::{Task, WorkspaceRecord, WorkspaceState};
+use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, SpawnPosture, WorkspaceRequest};
 use serde_json::{Value, json};
 use sha2::Digest;
 use std::path::Path;
@@ -11,6 +11,38 @@ const WAIT_MAX_SECS: u64 = 3600;
 /// Bornes du délai de réponse choisi par le parent (session 150).
 const MISSION_REPLY_MIN_SECS: u64 = 60;
 const MISSION_REPLY_MAX_SECS: u64 = 86_400;
+
+#[derive(Default)]
+pub(super) struct WorkspaceWork {
+    creations: HashMap<(String, String), WorkspaceReservation>,
+    reports: HashSet<(String, String, u32)>,
+}
+
+struct WorkspaceReservation {
+    task_id: String,
+    owner_instance: String,
+    path: PathBuf,
+}
+
+enum WorkspaceClaimKey {
+    Creation((String, String)),
+    Report((String, String, u32)),
+}
+
+struct WorkspaceClaim {
+    work: Arc<Mutex<WorkspaceWork>>,
+    key: WorkspaceClaimKey,
+}
+
+impl Drop for WorkspaceClaim {
+    fn drop(&mut self) {
+        let mut work = self.work.lock().unwrap_or_else(|e| e.into_inner());
+        match &self.key {
+            WorkspaceClaimKey::Creation(key) => { work.creations.remove(key); }
+            WorkspaceClaimKey::Report(key) => { work.reports.remove(key); }
+        }
+    }
+}
 
 enum ParentPermission {
     Root(PathBuf, SpawnPosture),
@@ -40,6 +72,9 @@ impl ParentPermission {
 fn failure(code: &str) -> Value {
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
+    }
+    if code.starts_with("workspace_") && let Some((code, message)) = code.split_once(':') {
+        return json!({"status":"refused","code":code,"message":message.trim()});
     }
     json!({"status":"refused","code":code})
 }
@@ -155,13 +190,13 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         } => (agent_type, model, effort, posture),
         _ => unreachable!("seules les missions sont persistées"),
     };
-    let body = (task.state == "result_available")
+    let body = (task.state == "result_available" && workspace_report_ready(task))
         .then_some(task.result.as_deref())
         .flatten();
     let summary = body.map(|body| {
         &body[..crate::store::ledger_search::floor_char_boundary(body, body.len().min(2048))]
     });
-    let mailbox = matches!(task.state.as_str(), "result_available" | "failed").then(|| {
+    let mailbox = (workspace_report_ready(task) && matches!(task.state.as_str(), "result_available" | "failed")).then(|| {
         let state = if task.acknowledged_at.is_some() {
             "acknowledged"
         } else if task.delivery_acked || phase == Some("acked") {
@@ -173,13 +208,13 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         json!({"state":state})
     });
-    let work_state = match task.state.as_str() {
+    let work_state = if !workspace_report_ready(task) && task.terminal() { "waiting_for_children" } else { match task.state.as_str() {
         "waiting_for_children" => "waiting_for_children",
         "result_available" => "result_available",
         "failed" => "failed",
         "cancelled" => "cancelled",
         _ => "working",
-    };
+    }};
     let mut view = json!({"version":1,"task_id":task.task_id,"status":task.state,
         "child_agent_id":task.child,"message_id":task.mission,
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
@@ -189,8 +224,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "work_state":work_state,"summary":summary,
         "summary_truncated":body.zip(summary).is_some_and(|(body, summary)| body.len() > summary.len()),
         "result_bytes":body.map(str::len),
-        "detail":matches!(task.state.as_str(),"result_available"|"failed").then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
+        "detail":(workspace_report_ready(task) && matches!(task.state.as_str(),"result_available"|"failed")).then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
         "mailbox":mailbox});
+    if let Some(workspace) = &task.workspace {
+        view["workspace"] = json!({"strategy":workspace.strategy,"state":workspace.state,
+            "path":workspace.path,"branch":workspace.branch,"base_commit":workspace.base_commit,
+            "head_commit":workspace.head_commit,"branch_commit":workspace.branch_commit,
+            "head_on_branch":workspace.head_on_branch,"commit_count":workspace.commit_count,
+            "commits":workspace.commits,"truncated":workspace.truncated,"dirty":workspace.dirty});
+    }
     if !full {
         view.as_object_mut().unwrap().remove("result");
     }
@@ -519,6 +561,12 @@ fn handle_with_fact(
     } else {
         None
     };
+    if matches!(&request, NativeDelegationRequest::Delegate { workspace: Some(WorkspaceRequest::Worktree { .. }), .. }) {
+        let result = delegate_worktree(conn, &request, candidate_project.as_ref(), fact.as_ref(), thread, state)
+            .unwrap_or_else(|code| failure(&code));
+        if result["status"] != "refused" { tick(state); }
+        return DaemonToWrapper::NativeDelegationResult { result };
+    }
     let drives = matches!(
         &request,
         NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::Cancel { .. }
@@ -564,6 +612,67 @@ fn handle_with_fact(
         tick(state);
     }
     DaemonToWrapper::NativeDelegationResult { result }
+}
+
+fn recheck_attested_thread(st: &DaemonState, conn: &str, thread: Option<&str>) -> Result<(), String> {
+    if let Some(thread) = thread {
+        let owner = crate::t3code::stable_uuid(thread);
+        let expected = (owner.clone(), crate::t3code::stable_uuid(&format!("instance:{thread}")));
+        if live_connection_identity(st, conn) != Some(expected)
+            || human_authority_guard(st, thread, &agent_communication_project(st, &owner)).is_err()
+        { return Err("permission_attestation_unavailable".into()); }
+    }
+    Ok(())
+}
+
+/// Git hors verrou ; la réservation protège la clé et la place jusqu'au commit.
+/// O(n+r+B) hors coût Git, n <= 4096, r <= 128.
+fn delegate_worktree(
+    conn: &str, request: &NativeDelegationRequest,
+    project: Option<&bridget_transport::protocol::CommunicationProject>,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>, thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Value, String> {
+    let cwd = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Probe)? {
+            WorkspaceAdmission::View(view) => return Ok(view),
+            WorkspaceAdmission::Probe(cwd) => cwd,
+            _ => unreachable!("sonde avant Git"),
+        }
+    };
+    let NativeDelegationRequest::Delegate { workspace: Some(WorkspaceRequest::Worktree { base_ref, branch }), .. } = request
+        else { return Err("invalid_request".into()); };
+    let plan = crate::workspace_git::preflight(&cwd, base_ref.as_deref(), branch.as_deref())?;
+    let task_id = Uuid::new_v4().to_string();
+    let (reserved, _claim) = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Reserve { plan: &plan, task_id: &task_id })? {
+            WorkspaceAdmission::View(view) => return Ok(view),
+            WorkspaceAdmission::Reserved { task, claim } => (task, claim),
+            _ => unreachable!("première passe métier"),
+        }
+    };
+    let expected_path = plan.worktree_dir.join(&reserved.task_id[..8]);
+    let branch = plan.branch.clone().unwrap_or_else(|| format!("bridget/{}", &reserved.task_id[..8]));
+    info!("création worktree natif : chemin={}, branche={}", expected_path.display(), branch);
+    let record = crate::workspace_git::create(&plan, &reserved.task_id)?;
+    let result = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread).and_then(|()|
+            admit_delegate(conn, request, project, fact, &mut st,
+                WorkspacePass::Commit { plan: &plan, task_id: &reserved.task_id, record: &record }))
+    };
+    match result {
+        Ok(WorkspaceAdmission::View(view)) => Ok(view),
+        Ok(_) => unreachable!("seconde passe métier"),
+        Err(reason) => {
+            let code = if reason.starts_with("workspace_path_unsafe") { "workspace_path_unsafe" } else { "workspace_create_failed" };
+            Err(format!("{code}: {reason}; chemin {}; branche {}", record.path, record.branch))
+        }
+    }
 }
 
 fn validate_task_ids(ids: &[String]) -> Result<(), String> {
@@ -635,7 +744,7 @@ fn wait_tasks(
             let mut ready = Vec::new();
             let mut pending = Vec::new();
             for task in tasks {
-                if task.terminal() {
+                if task.terminal() && workspace_report_ready(&task) {
                     ready.push(current_task_view(&st, &task, false)?);
                 } else {
                     pending.push(task.task_id);
@@ -653,6 +762,378 @@ fn wait_tasks(
             slice.min(deadline.saturating_duration_since(Instant::now())),
         );
     }
+}
+
+#[derive(Clone, Copy)]
+enum WorkspacePass<'a> {
+    Shared,
+    Probe,
+    Reserve { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str },
+    Commit { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str, record: &'a WorkspaceRecord },
+}
+
+enum WorkspaceAdmission {
+    View(Value),
+    Probe(PathBuf),
+    Reserved { task: Task, claim: WorkspaceClaim },
+}
+
+fn task_id_for_pass<'a>(pass: WorkspacePass<'a>) -> &'a str {
+    match pass {
+        WorkspacePass::Reserve { task_id, .. } | WorkspacePass::Commit { task_id, .. } => task_id,
+        _ => "",
+    }
+}
+
+/// O(n+r), n <= 4096 tâches, r <= 128 réservations ; aucune commande Git.
+fn workspace_limit(st: &DaemonState, plan: &crate::workspace_git::WorkspacePreflight, created: bool) -> Result<(), String> {
+    let mut paths: HashSet<PathBuf> = plan.listed_paths.iter().cloned().collect();
+    for task in st.delegation_store.tasks()? {
+        if let Some(workspace) = task.workspace {
+            let path = PathBuf::from(workspace.path);
+            if path.starts_with(&plan.worktree_dir) {
+                // Un retrait humain libère la place, même si la tâche reste retenue.
+                match std::fs::symlink_metadata(&path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => { paths.insert(path); }
+                }
+            }
+        }
+    }
+    let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
+    for reservation in work.creations.values() {
+        if reservation.path.starts_with(&plan.worktree_dir) { paths.insert(reservation.path.clone()); }
+    }
+    if paths.len() > 32 || (!created && paths.len() == 32) { Err("workspace_limit".into()) } else { Ok(()) }
+}
+
+/// Admission unique : mêmes gardes sur les deux passes métier. Git reste dehors.
+/// O(n+r+B), n <= 4096 tâches, r <= 128 réservations, B octets des politiques.
+fn admit_delegate(
+    conn: &str, request: &NativeDelegationRequest,
+    candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    st: &mut DaemonState, pass: WorkspacePass<'_>,
+) -> Result<WorkspaceAdmission, String> {
+    let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
+    let NativeDelegationRequest::Delegate { request_id, agent_type, model, effort, task, cwd,
+        posture, reply_timeout, workspace, keep_alive_secs, brief } = request else { return Err("invalid_request".into()); };
+    if request_id.is_empty()
+        || request_id.len() > 128
+        || request_id.chars().any(bridget_core::is_disallowed_control)
+        || task.trim().is_empty()
+        || task.len() > 65536
+    {
+        return Err("invalid_request".into());
+    }
+    if reply_timeout.is_some_and(|secs| {
+        !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs)
+    }) {
+        return Err("reply_timeout_out_of_range".into());
+    }
+    if keep_alive_secs.is_some_and(|secs| !(60..=7200).contains(&secs)) {
+        return Err("keep_alive_out_of_range".into());
+    }
+    let round_body = brief.as_ref().map(|draft| {
+        crate::handoff::validate_and_render(draft)
+            .map(|rendered| format!("{}\n\n--- Consigne ---\n{task}", rendered.body))
+            .map_err(|error| format!("brief_invalid:{error}"))
+    }).transpose()?;
+    let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+    if let Some(mut saved) = st
+        .delegation_store
+        .by_agent_request(&owner, request_id, &canonical)?
+    {
+        recover_owner(st, &mut saved, &owner, &instance)?;
+        return current_task_view(st, &saved, true).map(WorkspaceAdmission::View);
+    }
+    // Le magasin garde seul la liste fermée. Capturer uniquement les
+    // refus d'une nouvelle admission, jamais un rejeu ou un parse invalide.
+    let receipt_owner = owner.clone();
+    let result: Result<WorkspaceAdmission, String> = (|| {
+        // ADR 027 : garde unique des puits autonomes. Après le rejeu (une clé admise ou
+        // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
+        let control = crate::referent_control::read(st.store.connection())
+            .map_err(|_| "control_state_unavailable")?;
+        if matches!(
+            crate::referent_control::admit_autonomous_effect(
+                crate::referent_control::AutonomousEffect::NativeDelegation,
+                &control
+            ),
+            crate::referent_control::Admission::Deferred { .. }
+        ) {
+            return Err("referent_paused".into());
+        }
+        if !matches!(pass, WorkspacePass::Commit { .. })
+            && st.workspace_work.lock().unwrap_or_else(|e| e.into_inner())
+                .creations.contains_key(&(owner.clone(), request_id.clone()))
+        { return Err("workspace_creation_in_progress".into()); }
+        let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
+        let frozen_cwd = if let Some(fact) = &fact {
+            let path = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable")?;
+            let root = std::fs::canonicalize(&fact.cwd).map_err(|_| "cwd_unavailable")?;
+            if !path.is_dir() || !path.starts_with(&root) {
+                return Err("cwd_outside_parent_project".into());
+            }
+            path
+        } else if *posture == Some(SpawnPosture::Discovery) {
+            authorize_cwd(
+                st,
+                &owner,
+                &instance,
+                cwd,
+                SpawnPosture::Discovery,
+                candidate_project,
+            )?
+        } else {
+            return Err("permission_attestation_unavailable".into());
+        };
+        crate::communication::project_scope(
+            agent_communication_project(st, &owner).as_ref(),
+            candidate_project,
+            "native-child",
+            None,
+        )?;
+        let target = st
+            .registry
+            .get(agent_type)
+            .map_err(|_| "agent_type_unknown")?;
+        let (scoped, permission_snapshot, effective_posture) = if let Some(fact) = fact.clone() {
+            let (policy, effective) = crate::native_permissions::child_policy(
+                &fact,
+                target,
+                &frozen_cwd,
+                &st.source_env,
+                *posture,
+            )?;
+            let scoped = st.registry.for_inherited_delegation(
+                agent_type,
+                model,
+                effort.as_deref(),
+                &policy,
+            )?;
+            (
+                scoped,
+                Some(crate::native_permissions::snapshot(
+                    &owner,
+                    &instance,
+                    fact,
+                    policy,
+                    &frozen_cwd,
+                )),
+                Some(effective),
+            )
+        } else {
+            (
+                st.registry.for_delegation(
+                    agent_type,
+                    model,
+                    effort.as_deref(),
+                    SpawnPosture::Discovery,
+                )?,
+                None,
+                Some(SpawnPosture::Discovery),
+            )
+        };
+        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+            if effective_posture != Some(SpawnPosture::Development) {
+                return Err("workspace_requires_development".into());
+            }
+            if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json")
+                && target.protocol == "claude_stream_json"
+            { return Err("workspace_inheritance_unavailable".into()); }
+        }
+        if matches!(pass, WorkspacePass::Probe) {
+            return Ok(WorkspaceAdmission::Probe(frozen_cwd));
+        }
+        let (scoped, permission_snapshot, frozen_cwd) = match pass {
+            WorkspacePass::Reserve { plan, .. } => {
+                if frozen_cwd != plan.cwd {
+                    return Err("workspace_path_unsafe: dossier parent changé".into());
+                }
+                workspace_limit(st, plan, false)?;
+                (scoped, permission_snapshot, frozen_cwd)
+            }
+            WorkspacePass::Commit { plan, record, .. } => {
+                if frozen_cwd != plan.cwd {
+                    return Err("workspace_path_unsafe: dossier parent changé".into());
+                }
+                let expected = plan.worktree_dir.join(&task_id_for_pass(pass)[..8]);
+                let path = std::fs::canonicalize(&record.path).map_err(|_| "workspace_path_unsafe: worktree absent")?;
+                let child = std::fs::canonicalize(path.join(&plan.offset)).map_err(|_| "workspace_path_unsafe: dossier enfant absent")?;
+                if path != expected || !path.starts_with(&frozen_cwd)
+                    || child != expected.join(&plan.offset) || !child.starts_with(&path)
+                { return Err("workspace_path_unsafe: chemin canonique inattendu".into()); }
+                workspace_limit(st, plan, true)?;
+                let fact = fact.ok_or("permission_attestation_unavailable")?;
+                let (policy, effective) = crate::native_permissions::child_policy(
+                    &fact, target, &child, &st.source_env, *posture,
+                )?;
+                if Some(effective) != effective_posture { return Err("permission_not_inherited".into()); }
+                let scoped = st.registry.for_inherited_delegation(agent_type, model, effort.as_deref(), &policy)?;
+                let snapshot = Some(crate::native_permissions::snapshot(&owner, &instance, fact, policy, &child));
+                (scoped, snapshot, child)
+            }
+            WorkspacePass::Shared => (scoped, permission_snapshot, frozen_cwd),
+            WorkspacePass::Probe => unreachable!(),
+        };
+        // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
+        let (active, instance_active, mut retained) =
+            st.delegation_store.admission_counts(&instance)?;
+        let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
+        let own = matches!(pass, WorkspacePass::Commit { .. });
+        let reservations = work.creations.values().filter(|r| !own || r.task_id != task_id_for_pass(pass)).count();
+        let instance_reservations = work.creations.values().filter(|r| r.owner_instance == instance && (!own || r.task_id != task_id_for_pass(pass))).count();
+        drop(work);
+        if active + reservations >= 128 || instance_active + instance_reservations >= 16 {
+            return Err("task_limit".into());
+        }
+        if retained >= crate::delegation::MAX_RETAINED_TASKS {
+            // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
+            // arbres soldés du plus ancien au plus récent), puis seulement refus.
+            if let Err(error) = copy_delivery_acks(st) {
+                warn!(
+                    "rétention native: accusés non recopiés avant la purge de borne : {error}"
+                );
+            }
+            purge_retained(
+                st,
+                unix_timestamp(),
+                Some(crate::delegation::MAX_RETAINED_TASKS),
+                usize::MAX,
+            );
+            retained = st.delegation_store.admission_counts(&instance)?.2;
+            if retained >= crate::delegation::MAX_RETAINED_TASKS {
+                return Err("retention_saturated".into());
+            }
+        }
+        let task_id = if matches!(pass, WorkspacePass::Shared) {
+            Uuid::new_v4().to_string()
+        } else { task_id_for_pass(pass).to_owned() };
+        let executions = st
+            .execution_store
+            .recoverable_execution_ids_for_agent(&owner)
+            .map_err(|error| error.to_string())?;
+        if executions.len() > 1 {
+            return Err("parent_execution_ambiguous".into());
+        }
+        let (root_owner_agent_id, parent_task_id) =
+            match st.delegation_store.for_child(&owner)? {
+                Some(mut parent) => {
+                    let command = current_command(st, &parent)?;
+                    if st.managed_by_instance.get(&instance) != Some(&command)
+                        || st
+                            .fleet
+                            .resolved_definition_for_command(&command)
+                            .is_none_or(|d| d.digest != parent.definition.digest)
+                        || !recover_child(st, &mut parent, &instance)?
+                    {
+                        return Err("parent_task_unavailable".into());
+                    }
+                    let link = st
+                        .fleet
+                        .agent_link_for_child(&instance)
+                        .map_err(|e| e.to_string())?
+                        .ok_or("parent_task_unavailable")?;
+                    if link.delegation_id.as_deref() != Some(parent.task_id.as_str()) {
+                        return Err("parent_task_unavailable".into());
+                    }
+                    // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
+                    // Sans délai explicite, comportement 149 : aucun contrôle.
+                    if let (Some(secs), Some(deadline)) = (
+                        reply_timeout,
+                        effective_deadline(st, &parent, unix_timestamp())?,
+                    ) && i64::try_from(*secs).map_or(true, |secs| {
+                        secs > deadline.saturating_sub(unix_timestamp())
+                    }) {
+                        return Err("reply_timeout_exceeds_parent".into());
+                    }
+                    st.delegation_store.parent_lineage(&parent)?
+                }
+                None => (owner.clone(), None),
+            };
+        let record = Task {
+            task_id: task_id.clone(),
+            root_owner_agent_id,
+            parent_task_id,
+            updated_at: unix_timestamp(),
+            started_at: None,
+            completed_at: None,
+            owner,
+            owner_instance: instance.clone(),
+            origin_owner_instance: instance,
+            parent_execution_id: executions.into_iter().next(),
+            request: request.clone(),
+            permission_snapshot,
+            effective_posture,
+            definition: scoped.resolved_definition(agent_type)?,
+            cwd: frozen_cwd.to_string_lossy().into_owned(),
+            child: Uuid::new_v4().to_string(),
+            child_instance: None,
+            mission: Uuid::new_v4().to_string(),
+            mission_deadline_at: None,
+            launch_issued_at: None,
+            mission_issued_at: None,
+            restart_resumes: 0,
+            cancel_stopped: Vec::new(),
+            created_at: unix_timestamp(),
+            state: "queued".into(),
+            result: None,
+            error: None,
+            result_sent: false,
+            cleanup_done: false,
+            failure_sent: false,
+            reply_timeout: reply_timeout.and_then(|secs| i64::try_from(secs).ok()),
+            delivery_acked: false,
+            acknowledged_at: None,
+            round: 1,
+            idle_deadline_at: None,
+            round_body,
+            rounds: Vec::new(),
+            guarded: keep_alive_secs.is_some(),
+            guard_released: false,
+            unacked_rounds: Vec::new(),
+            workspace: if let WorkspacePass::Commit { record, .. } = pass { Some(record.clone()) } else { None },
+            workspace_report_mission: None,
+        };
+        if let WorkspacePass::Reserve { plan, .. } = pass {
+            let key = (record.owner.clone(), request_id.clone());
+            let reservation = WorkspaceReservation {
+                task_id: record.task_id.clone(), owner_instance: record.owner_instance.clone(),
+                path: plan.worktree_dir.join(&record.task_id[..8]),
+            };
+            st.workspace_work.lock().unwrap_or_else(|e| e.into_inner()).creations.insert(key.clone(), reservation);
+            let claim = WorkspaceClaim { work: Arc::clone(&st.workspace_work), key: WorkspaceClaimKey::Creation(key) };
+            return Ok(WorkspaceAdmission::Reserved { task: record, claim });
+        }
+        // O(128) : seules les autres tâches actives en développement.
+        let shared_writers = if record.workspace.is_none() && effective_posture == Some(SpawnPosture::Development) {
+            st.delegation_store.shared_writers(&record.cwd)?
+        } else { 0 };
+        st.delegation_store.insert(&record, request_id, &canonical)?;
+        if matches!(pass, WorkspacePass::Commit { .. }) {
+            // La place réservée devient la tâche durable sous le même verrou.
+            st.workspace_work.lock().unwrap_or_else(|e| e.into_inner())
+                .creations.remove(&(record.owner.clone(), request_id.clone()));
+        }
+        let mut view = current_task_view(st, &record, true)?;
+        if let Some(workspace) = &record.workspace {
+            view["workspace"] = json!({"state":workspace.state,"path":workspace.path,
+                "branch":workspace.branch,"base_commit":workspace.base_commit});
+        }
+        if shared_writers > 0 { view["shared_writers"] = json!(shared_writers); }
+        Ok(WorkspaceAdmission::View(view))
+    })();
+    if let Err(code) = &result {
+        st.delegation_store.record_refusal(
+            &receipt_owner,
+            request_id,
+            &canonical,
+            code,
+            unix_timestamp(),
+        )?;
+    }
+    result
 }
 
 #[cfg(test)]
@@ -719,264 +1200,28 @@ fn handle_locked_with_project(
                         crate::native_permissions::child_policy(fact,st.registry.get(&name)?,Path::new(&fact.cwd),&st.source_env,None));
                     let development=fact.as_ref().ok_or_else(||"permission_attestation_unavailable".to_string()).and_then(|fact|
                         crate::native_permissions::child_policy(fact,st.registry.get(&name)?,Path::new(&fact.cwd),&st.source_env,Some(SpawnPosture::Development)));
+                    let worktree_refusal = match inherited.as_ref() {
+                        Err(code) => Some(code.clone()),
+                        Ok((_, SpawnPosture::Discovery)) => Some("workspace_requires_development".to_string()),
+                        Ok((_, SpawnPosture::Development)) if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json")
+                            && definition.protocol == "claude_stream_json" => Some("workspace_inheritance_unavailable".to_string()),
+                        Ok(_) => None,
+                    };
                     json!({"agent_type":name,"protocol":definition.protocol,"models":definition.capabilities.models,
+                        "worktree":worktree_refusal.is_none(),"worktree_refusal":worktree_refusal,
                         "inherit":inherited.is_ok(),"inherit_refusal":inherited.err(),
                         "discovery":discovery && (permission.is_some()||fact.is_some()),"development":development.as_ref().is_ok_and(|(_,p)|*p==SpawnPosture::Development),
                         "development_refusal":development.err()})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
+                json!({"version":1,"providers":entries,"workspace_strategies":["shared","worktree"],"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
-        NativeDelegationRequest::Delegate {
-            request_id,
-            agent_type,
-            model,
-            effort,
-            task,
-            cwd,
-            posture,
-            reply_timeout,
-            keep_alive_secs,
-            brief,
-        } => {
-            if request_id.is_empty()
-                || request_id.len() > 128
-                || request_id.chars().any(bridget_core::is_disallowed_control)
-                || task.trim().is_empty()
-                || task.len() > 65536
-            {
-                return Err("invalid_request".into());
+        NativeDelegationRequest::Delegate { .. } => {
+            match admit_delegate(conn, &request, candidate_project, attested, st, WorkspacePass::Shared)? {
+                WorkspaceAdmission::View(view) => Ok(view),
+                _ => unreachable!("admission partagée"),
             }
-            if reply_timeout.is_some_and(|secs| {
-                !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs)
-            }) {
-                return Err("reply_timeout_out_of_range".into());
-            }
-            if keep_alive_secs.is_some_and(|secs| !(60..=7200).contains(&secs)) {
-                return Err("keep_alive_out_of_range".into());
-            }
-            let round_body = brief.as_ref().map(|draft| {
-                crate::handoff::validate_and_render(draft)
-                    .map(|rendered| format!("{}\n\n--- Consigne ---\n{task}", rendered.body))
-                    .map_err(|error| format!("brief_invalid:{error}"))
-            }).transpose()?;
-            let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
-            if let Some(mut saved) = st
-                .delegation_store
-                .by_agent_request(&owner, request_id, &canonical)?
-            {
-                recover_owner(st, &mut saved, &owner, &instance)?;
-                return current_task_view(st, &saved, true);
-            }
-            // Le magasin garde seul la liste fermée. Capturer uniquement les
-            // refus d'une nouvelle admission, jamais un rejeu ou un parse invalide.
-            let receipt_owner = owner.clone();
-            let result = (|| {
-                // ADR 027 : garde unique des puits autonomes. Après le rejeu (une clé admise ou
-                // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
-                let control = crate::referent_control::read(st.store.connection())
-                    .map_err(|_| "control_state_unavailable")?;
-                if matches!(
-                    crate::referent_control::admit_autonomous_effect(
-                        crate::referent_control::AutonomousEffect::NativeDelegation,
-                        &control
-                    ),
-                    crate::referent_control::Admission::Deferred { .. }
-                ) {
-                    return Err("referent_paused".into());
-                }
-                let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
-                let frozen_cwd = if let Some(fact) = &fact {
-                    let path = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable")?;
-                    let root = std::fs::canonicalize(&fact.cwd).map_err(|_| "cwd_unavailable")?;
-                    if !path.is_dir() || !path.starts_with(&root) {
-                        return Err("cwd_outside_parent_project".into());
-                    }
-                    path
-                } else if *posture == Some(SpawnPosture::Discovery) {
-                    authorize_cwd(
-                        st,
-                        &owner,
-                        &instance,
-                        cwd,
-                        SpawnPosture::Discovery,
-                        candidate_project,
-                    )?
-                } else {
-                    return Err("permission_attestation_unavailable".into());
-                };
-                crate::communication::project_scope(
-                    agent_communication_project(st, &owner).as_ref(),
-                    candidate_project,
-                    "native-child",
-                    None,
-                )?;
-                let target = st
-                    .registry
-                    .get(agent_type)
-                    .map_err(|_| "agent_type_unknown")?;
-                let (scoped, permission_snapshot, effective_posture) = if let Some(fact) = fact {
-                    let (policy, effective) = crate::native_permissions::child_policy(
-                        &fact,
-                        target,
-                        &frozen_cwd,
-                        &st.source_env,
-                        *posture,
-                    )?;
-                    let scoped = st.registry.for_inherited_delegation(
-                        agent_type,
-                        model,
-                        effort.as_deref(),
-                        &policy,
-                    )?;
-                    (
-                        scoped,
-                        Some(crate::native_permissions::snapshot(
-                            &owner,
-                            &instance,
-                            fact,
-                            policy,
-                            &frozen_cwd,
-                        )),
-                        Some(effective),
-                    )
-                } else {
-                    (
-                        st.registry.for_delegation(
-                            agent_type,
-                            model,
-                            effort.as_deref(),
-                            SpawnPosture::Discovery,
-                        )?,
-                        None,
-                        Some(SpawnPosture::Discovery),
-                    )
-                };
-                // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
-                let (active, instance_active, mut retained) =
-                    st.delegation_store.admission_counts(&instance)?;
-                if active >= 128 || instance_active >= 16 {
-                    return Err("task_limit".into());
-                }
-                if retained >= crate::delegation::MAX_RETAINED_TASKS {
-                    // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
-                    // arbres soldés du plus ancien au plus récent), puis seulement refus.
-                    if let Err(error) = copy_delivery_acks(st) {
-                        warn!(
-                            "rétention native: accusés non recopiés avant la purge de borne : {error}"
-                        );
-                    }
-                    purge_retained(
-                        st,
-                        unix_timestamp(),
-                        Some(crate::delegation::MAX_RETAINED_TASKS),
-                        usize::MAX,
-                    );
-                    retained = st.delegation_store.admission_counts(&instance)?.2;
-                    if retained >= crate::delegation::MAX_RETAINED_TASKS {
-                        return Err("retention_saturated".into());
-                    }
-                }
-                let task_id = Uuid::new_v4().to_string();
-                let executions = st
-                    .execution_store
-                    .recoverable_execution_ids_for_agent(&owner)
-                    .map_err(|error| error.to_string())?;
-                if executions.len() > 1 {
-                    return Err("parent_execution_ambiguous".into());
-                }
-                let (root_owner_agent_id, parent_task_id) =
-                    match st.delegation_store.for_child(&owner)? {
-                        Some(mut parent) => {
-                            let command = current_command(st, &parent)?;
-                            if st.managed_by_instance.get(&instance) != Some(&command)
-                                || st
-                                    .fleet
-                                    .resolved_definition_for_command(&command)
-                                    .is_none_or(|d| d.digest != parent.definition.digest)
-                                || !recover_child(st, &mut parent, &instance)?
-                            {
-                                return Err("parent_task_unavailable".into());
-                            }
-                            let link = st
-                                .fleet
-                                .agent_link_for_child(&instance)
-                                .map_err(|e| e.to_string())?
-                                .ok_or("parent_task_unavailable")?;
-                            if link.delegation_id.as_deref() != Some(parent.task_id.as_str()) {
-                                return Err("parent_task_unavailable".into());
-                            }
-                            // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
-                            // Sans délai explicite, comportement 149 : aucun contrôle.
-                            if let (Some(secs), Some(deadline)) = (
-                                reply_timeout,
-                                effective_deadline(st, &parent, unix_timestamp())?,
-                            ) && i64::try_from(*secs).map_or(true, |secs| {
-                                secs > deadline.saturating_sub(unix_timestamp())
-                            }) {
-                                return Err("reply_timeout_exceeds_parent".into());
-                            }
-                            st.delegation_store.parent_lineage(&parent)?
-                        }
-                        None => (owner.clone(), None),
-                    };
-                let record = Task {
-                    task_id: task_id.clone(),
-                    root_owner_agent_id,
-                    parent_task_id,
-                    updated_at: unix_timestamp(),
-                    started_at: None,
-                    completed_at: None,
-                    owner,
-                    owner_instance: instance.clone(),
-                    origin_owner_instance: instance,
-                    parent_execution_id: executions.into_iter().next(),
-                    request: request.clone(),
-                    permission_snapshot,
-                    effective_posture,
-                    definition: scoped.resolved_definition(agent_type)?,
-                    cwd: frozen_cwd.to_string_lossy().into_owned(),
-                    child: Uuid::new_v4().to_string(),
-                    child_instance: None,
-                    mission: Uuid::new_v4().to_string(),
-                    mission_deadline_at: None,
-                    launch_issued_at: None,
-                    mission_issued_at: None,
-                    restart_resumes: 0,
-                    cancel_stopped: Vec::new(),
-                    created_at: unix_timestamp(),
-                    state: "queued".into(),
-                    result: None,
-                    error: None,
-                    result_sent: false,
-                    cleanup_done: false,
-                    failure_sent: false,
-                    reply_timeout: reply_timeout.and_then(|secs| i64::try_from(secs).ok()),
-                    delivery_acked: false,
-                    acknowledged_at: None,
-                    round: 1,
-                    idle_deadline_at: None,
-                    round_body,
-                    rounds: Vec::new(),
-                    guarded: keep_alive_secs.is_some(),
-                    guard_released: false,
-                    unacked_rounds: Vec::new(),
-                };
-                st.delegation_store
-                    .insert(&record, request_id, &canonical)?;
-                current_task_view(st, &record, true)
-            })();
-            if let Err(code) = &result {
-                st.delegation_store.record_refusal(
-                    &receipt_owner,
-                    request_id,
-                    &canonical,
-                    code,
-                    unix_timestamp(),
-                )?;
-            }
-            result
         }
         NativeDelegationRequest::Status { task_id } => {
             let task = st
@@ -1019,7 +1264,7 @@ fn handle_locked_with_project(
             // Toute la propriété est établie avant de révéler un état de préparation.
             if tasks
                 .iter()
-                .any(|task| !matches!(task.state.as_str(), "result_available" | "failed"))
+                .any(|task| !workspace_report_ready(task) || !matches!(task.state.as_str(), "result_available" | "failed"))
             {
                 return Err("task_not_ready".into());
             }
@@ -1784,10 +2029,112 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
     Ok(children)
 }
 
+fn workspace_report_ready(task: &Task) -> bool {
+    task.workspace.is_none() || task.workspace_report_mission.as_deref() == Some(task.mission.as_str())
+}
+
+struct WorkspaceReportJob {
+    task_id: String,
+    mission: String,
+    round: u32,
+    workspace: WorkspaceRecord,
+    stopped: bool,
+    _claim: WorkspaceClaim,
+}
+
+/// O(1), réservation distincte du verrou global ; les ticks concurrents passent.
+fn claim_workspace_report(st: &DaemonState, task: &Task, stopped: bool) -> Option<WorkspaceReportJob> {
+    if workspace_report_ready(task) { return None; }
+    let workspace = task.workspace.as_ref()?;
+    let key = (task.task_id.clone(), task.mission.clone(), task.round_no());
+    let mut work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
+    if !work.reports.insert(key.clone()) { return None; }
+    Some(WorkspaceReportJob { task_id: task.task_id.clone(), mission: task.mission.clone(),
+        round: task.round_no(), workspace: workspace.clone(), stopped,
+        _claim: WorkspaceClaim { work: Arc::clone(&st.workspace_work), key: WorkspaceClaimKey::Report(key) } })
+}
+
+fn report_text(value: &str) -> String {
+    value.chars().flat_map(|c| if c.is_control() || bridget_core::is_disallowed_control(c) {
+        c.escape_unicode().collect::<Vec<_>>()
+    } else { vec![c] }).collect()
+}
+
+/// O(B+L), résultat borné à 256 Kio, L ligne de faits Git. Aucun fait du texte enfant.
+fn append_workspace_result(task: &mut Task) {
+    let Some(workspace) = &task.workspace else { return; };
+    let yes_no = |value: Option<bool>| match value { Some(true) => "oui", Some(false) => "non", None => "indisponible" };
+    let commits = workspace.commit_count.map(|n| format!("{n} commit(s)"))
+        .unwrap_or_else(|| "nombre de commits indisponible".into());
+    let line = format!("[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}",
+        report_text(&workspace.branch), &workspace.base_commit[..workspace.base_commit.len().min(7)], commits,
+        yes_no(workspace.dirty), yes_no(workspace.head_on_branch), report_text(&workspace.path));
+    let Some(body) = &task.result else { return; };
+    let body = body.replace("[Bridget] espace de travail", "[Enfant] espace de travail");
+    const LIMIT: usize = 262144;
+    // Les chemins OS et noms validés bornent cette ligne bien sous LIMIT.
+    let budget = LIMIT.saturating_sub(line.len().saturating_add(2));
+    let boundary = crate::store::ledger_search::floor_char_boundary(&body, body.len().min(budget));
+    task.result = Some(format!("{}\n\n{line}", &body[..boundary]));
+}
+
+/// Git sans verrou. CAS court par tâche/mission/ronde et premier rapport gagnant.
+/// O(B+log n), B sortie Git bornée ; la garde se libère aussi sur panique.
+fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceReportJob) {
+    let report = crate::workspace_git::report(&job.workspace);
+    if let Err(error) = &report {
+        warn!("rapport worktree indisponible : tâche={}, mission={}, ronde={}, erreur={}", job.task_id, job.mission, job.round, error);
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(Some(mut task)) = st.delegation_store.get(&job.task_id) else { return; };
+    if task.mission != job.mission || task.round_no() != job.round || workspace_report_ready(&task) { return; }
+    let eligible = if job.stopped {
+        matches!(task.state.as_str(), "failed" | "cancelled" | "result_available")
+    } else {
+        task.state == "waiting_for_children" || (task.state == "result_available" && !task.result_sent)
+    };
+    if !eligible { return; }
+    if task.state == "waiting_for_children" {
+        match descendants_busy(&st, &task) {
+            Ok(false) => {}
+            Ok(true) => return,
+            Err(error) => {
+                warn!("rapport worktree différé : descendants indisponibles : {error}");
+                return;
+            }
+        }
+    }
+    let mut workspace = match report {
+        Ok(workspace) => workspace,
+        Err(_) => {
+            let mut workspace = job.workspace.clone();
+            workspace.head_commit = None;
+            workspace.branch_commit = None;
+            workspace.head_on_branch = None;
+            workspace.commit_count = None;
+            workspace.commits.clear();
+            workspace.truncated = false;
+            workspace.dirty = None;
+            workspace
+        }
+    };
+    workspace.state = WorkspaceState::Kept;
+    task.workspace = Some(workspace);
+    task.workspace_report_mission = Some(task.mission.clone());
+    if matches!(task.state.as_str(), "waiting_for_children" | "result_available") && !task.result_sent {
+        append_workspace_result(&mut task);
+        task.state = "result_available".into();
+    }
+    if let Err(error) = st.delegation_store.save(&task) {
+        error!("rapport worktree non persisté : {error}");
+    }
+}
+
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     let mut controls = Vec::new();
     let mut cancellations = Vec::new();
     let mut cleanups = Vec::new();
+    let mut reports = Vec::new();
     {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         let control = match crate::referent_control::read(st.store.connection()) {
@@ -1902,6 +2249,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         .and_then(|route| st.conn_instances.get(&route.connection_id))
                         == Some(&task.owner_instance);
                 if !task.failure_sent
+                    && workspace_report_ready(&task)
                     && parent_live
                     && st
                         .presences
@@ -1946,6 +2294,11 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             }
             if task.state == "cancelled" {
+                if !task.cleanup_done { cleanups.push(task); }
+                continue;
+            }
+            if task.state == "result_available" && !workspace_report_ready(&task) {
+                if let Some(job) = claim_workspace_report(&st, &task, false) { reports.push(job); }
                 continue;
             }
             if task.state == "result_available" && task.result_sent && !task.cleanup_done
@@ -1981,6 +2334,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         || task.child_instance.is_none() {
                         task.state = "failed".into();
                         task.error = Some("native_result_invalid".into());
+                    } else if !workspace_report_ready(&task) {
+                        if let Some(job) = claim_workspace_report(&st, &task, false) { reports.push(job); }
+                        continue;
                     } else {
                         task.state = "result_available".into();
                     }
@@ -2233,6 +2589,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
         }
     }
+    for job in reports { complete_workspace_report(state, job); }
     let _ = execute_controls(controls);
     for task in cancellations {
         cancel_tree(state, &task);
@@ -2524,35 +2881,50 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         }
     }
     if success {
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
-        for id in task_ids {
-            if let Ok(Some(mut entry)) = st.delegation_store.get(&id) {
-                if matches!(entry.state.as_str(), "cancelling" | "cancelled") {
-                    // Tous les arrêts ci-dessus sont confirmés. Ne publier la
-                    // fin de l'annulation qu'après la clôture CAS de sa mission.
-                    if let Err(error) = close_lost_execution(&st, &entry, "native_cancelled") {
-                        error!("annulation native: clôture d'exécution refusée: {error}");
-                        continue;
-                    }
-                    if entry.state == "cancelling" {
-                        entry.state = "cancelled".into();
-                        if entry
-                            .error
-                            .as_deref()
-                            .is_some_and(|error| error.starts_with("native_cancel_unverifiable:"))
-                        {
-                            entry.error = None;
-                        }
-                        if let Err(error) = st.delegation_store.save(&entry) {
-                            error!("annulation native non persistée: {error}");
+        let mut reports = Vec::new();
+        let mut closed = Vec::new();
+        {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            for id in &task_ids {
+                if let Ok(Some(mut entry)) = st.delegation_store.get(id) {
+                    if matches!(entry.state.as_str(), "cancelling" | "cancelled") {
+                        // Tous les arrêts ci-dessus sont confirmés. Ne publier la
+                        // fin de l'annulation qu'après la clôture CAS de sa mission.
+                        if let Err(error) = close_lost_execution(&st, &entry, "native_cancelled") {
+                            error!("annulation native: clôture d'exécution refusée: {error}");
                             continue;
                         }
+                        if entry.state == "cancelling" {
+                            entry.state = "cancelled".into();
+                            if entry
+                                .error
+                                .as_deref()
+                                .is_some_and(|error| error.starts_with("native_cancel_unverifiable:"))
+                            {
+                                entry.error = None;
+                            }
+                            if let Err(error) = st.delegation_store.save(&entry) {
+                                error!("annulation native non persistée: {error}");
+                                continue;
+                            }
+                        }
                     }
+                    if entry.terminal() { closed.push(id.clone()); }
+                    if entry.terminal() && !workspace_report_ready(&entry)
+                        && let Some(job) = claim_workspace_report(&st, &entry, true)
+                    { reports.push(job); }
                 }
-                if entry.terminal() {
-                    entry.cleanup_done = true;
-                    let _ = st.delegation_store.save(&entry);
-                }
+            }
+        }
+        for job in reports { complete_workspace_report(state, job); }
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        for id in closed {
+            if let Ok(Some(mut entry)) = st.delegation_store.get(&id)
+                && entry.terminal() && workspace_report_ready(&entry)
+                && (!entry.guarded || entry.guard_released)
+            {
+                entry.cleanup_done = true;
+                let _ = st.delegation_store.save(&entry);
             }
         }
     }
@@ -7630,6 +8002,7 @@ mod tests {
             reply_timeout: None,
             keep_alive_secs: None,
             brief: None,
+            workspace: None,
         }
     }
     fn cleanup(config: &DaemonConfig) {
@@ -8537,6 +8910,7 @@ mod tests {
             reply_timeout: None,
             keep_alive_secs: None,
             brief: None,
+            workspace: None,
         };
         handle_locked("conn-1", job, &mut st).unwrap();
         let shared = Arc::new(Mutex::new(st));
@@ -9697,3 +10071,7 @@ mod tests {
 #[cfg(test)]
 #[path = "native_delegation_permissions149_tests.rs"]
 mod native_delegation_permissions149_tests;
+
+#[cfg(test)]
+#[path = "native_workspace154_tests.rs"]
+mod native_workspace154_tests;

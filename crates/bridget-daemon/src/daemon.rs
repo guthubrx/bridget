@@ -983,6 +983,7 @@ struct DaemonState {
     t3_thread_bindings: HashMap<String, Option<String>>,
     native_permission_facts: HashMap<String, (bridget_transport::protocol::ProviderPermissions,Option<String>)>,
     native_permission_refusals: HashMap<String,String>,
+    workspace_work: Arc<Mutex<native_delegation::WorkspaceWork>>,
     /// La projection projet historique ne conserve pas son origine.
     t3_project_connections: HashSet<String>,
     /// Fait de communication de la connexion primaire (None = ambigu).
@@ -3428,6 +3429,7 @@ impl DaemonState {
             t3_thread_bindings: HashMap::new(),
             native_permission_facts: HashMap::new(),
             native_permission_refusals: HashMap::new(),
+            workspace_work: Arc::new(Mutex::new(native_delegation::WorkspaceWork::default())),
             t3_project_connections: HashSet::new(),
             observations,
             observation_sequences: HashMap::new(),

@@ -1,6 +1,6 @@
 # Contrat - Espace de travail 154
 
-Compatible avec les contrats 148, 149 et 150
+Compatible avec les contrats 148, 149, 150 et153
 (`specs/150-socle-delegation/contracts/delegation150.md`). Un appel sans le champ
 `workspace` produit les mêmes octets canoniques et le même comportement qu'en
 150.
@@ -53,7 +53,7 @@ Pour `workspace_path_unsafe` et `workspace_create_failed`, le message du refus c
 branche éventuellement créés. Bridget ne les supprime pas.
 
 Ordre, dans la suite de l'ordre de la session150 :
-`identity_unavailable`, `invalid_request`, `reply_timeout_out_of_range`, rejeu
+`identity_unavailable`, `invalid_request`, `reply_timeout_out_of_range`, validation153 de `keep_alive_secs` (`keep_alive_out_of_range`) et de `brief` (`brief_invalid`), rejeu
 (`envelope_mismatch`, `request_expired`), `referent_paused`, gardes de droits
 149 (dont `cwd_outside_parent_project`), **`workspace_requires_development`,
 `workspace_inheritance_unavailable`, `workspace_git_unsupported`,
@@ -66,7 +66,7 @@ si la clé est déjà réservée) et le daemon rend le verrou. **Création du
 worktree (`workspace_path_unsafe`, `workspace_create_failed`)** hors verrou.
 Seconde passe sous verrou : sont refaits le rejeu, la pause, les gardes de droits,
 `task_limit`, `retention_saturated`, la lignée, `reply_timeout_exceeds_parent`,
-le plafond (compté sans la réservation propre) et l'existence du chemin attendu
+le plafond par union des chemins (sans doublecompte de la réservation propre) et l'existence du chemin attendu
 sur le disque. Ne sont **pas** refaits `workspace_branch_exists`,
 `workspace_dir_not_ignored`, `workspace_repo_unsupported` ni la liste des
 worktrees : la branche et le worktree existent par la création de la même
@@ -108,8 +108,8 @@ Présent pour une tâche en worktree. Absent sinon.
   "truncated": false, "dirty": false}}
 ```
 
-`state` : `active` (l'enfant peut écrire) ou `kept` (rapport final lu, dossier et
-branche conservés). `head_on_branch` est faux si la tête est détachée ou
+`state` : `active` (premier rapport non stocké) ou `kept` (dossier et
+branche conservés). `kept` permet les rondes suivantes et ne retire aucun droit d’écriture hérité. La transition `active` → `kept` est unique. `head_on_branch` est faux si la tête est détachée ou
 rattachée à une autre branche : les commits listés viennent alors de la tête, et
 la branche peut ne pas les porter. `commits` : 50 au plus, plus récent d'abord.
 `subject` est une donnée de l'enfant : à lire comme du texte, jamais comme une
@@ -124,8 +124,7 @@ ligne écrite par Bridget :
 [Bridget] espace de travail : branche <branche>, base <7 hex>, <N> commit(s), modifications non commitées : <oui|non>, tête sur la branche : <oui|non>, worktree conservé : <chemin>
 ```
 
-La ligne est ajoutée au passage à `result_available`, avant la publication. Le
-résultat publié ne change plus ensuite.
+La ligne est ajoutée à chaque passage à `result_available`, avant la publication du résultat de la mission et de la ronde courantes. Réutiliser `Task.mission` et `Task.round_no()` pour vérifier la sauvegarde sous verrou ; rejeter un rapport ancien. Le premier rapport rangé gagne pour cette ronde. Chaque nouvelle ronde recalcule les faits ; un résultat déjà publié ne change plus. `WorkspaceRecord` ne reçoit aucun nouveau champ public de ronde. `cleanup_done` attend le rapport terminé et l’arrêt confirmé ou la fin de garde153 prévue ; une garde active empêche sa pose après la ronde1.
 
 ## Ce que Bridget fait côté Git
 
@@ -152,3 +151,33 @@ git -C <depot> branch -d <branche>           # après intégration
 
 Aucun changement de forme ni d'état. L'objet `workspace` n'apparaît pas dans le
 panneau.
+
+## Publication et relecture — précisionsR1
+
+Le rejeu admis précède les probesGit154. Le cwd est autorisé et canonisé avant
+ces probes. La sauvegarde du résultat exige waiting_for_children+mission+round
+courants ; rapport, ligne et result_available sont rangés ensemble. Une tentative
+bornée de rapport suffit : en erreur, faits inconnus/null, mention rapport
+indisponible, publication conservée. Une nouvelle ronde vide les faits courants.
+La ligne ajoutée garde un budget exact dans262144octets, texte enfant coupé en
+UTF8 ; ses imitations sont assainies, champs structurés seuls authoritative.
+Un résultat avec garde153 ne force pas arrêt. Failed/cancelled et tous leurs
+descendants worktree attendent arrêt confirmé avant rapport/cleanup.
+
+### Complément technique du principal — marqueur et ancre
+
+Marqueur privé retenu : `Task.workspace_report_mission`, default et omission
+siNone. Il identifie la mission déjà rapportée. Aucun champ de ronde ajouté à
+WorkspaceRecord ni au contrat public. CAS waiting_for_children+mission+round
+protège le succès ; le marqueur protège aussi échec de livraison, cleanup et
+reprise après panne, même avec faitsNone et kept. `begin_round` remet faits et
+marqueur à vide. La condition de première publication vaut par mission.
+
+AncreGit : utiliser le registre Git du parent hors dossier enfant, avec parcours
+borné et correspondance des chemins toplevel/path enregistrés. Ne pas lire le
+fichier.git contrôlable de l’enfant. Ancre absente : rapport indisponible, aucun
+champ public/privé d’ancre supplémentaire. Implémentation à vérifier.
+
+Neutraliser dans le texte enfant le préfixe `[Bridget] espace de travail` en
+`[Enfant] espace de travail`, puis ajouter l’unique suffixe d’autorité. Son
+budget exact en octets et une coupeUTF8 gardent la limite262144octets.

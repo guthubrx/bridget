@@ -937,6 +937,17 @@ mod tests {
         assert!(!path_matches("/other/*", "/project/src/lib.rs"));
     }
     #[test]
+    fn native154_worktree_paths_do_not_collide() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source("a", "a", vec![Kind::FileWritten], now);
+        state.request("owner", sub(Kind::FileCollision, false), now, 100);
+        assert!(state.observe(file("a", "h", "/depot/a.rs"), now).is_empty());
+        assert!(state.observe(file("b", "h", "/depot/.worktrees/12345678/a.rs"), now + Duration::from_secs(1)).is_empty());
+        assert_eq!(state.observe(file("b", "h", "/depot/a.rs"), now + Duration::from_secs(2)).len(), 1);
+    }
+
+    #[test]
     fn spec100_collision_is_scoped_and_deduplicated() {
         let now = Instant::now();
         let mut state = Observations::default();

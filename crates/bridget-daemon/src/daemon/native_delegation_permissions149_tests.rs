@@ -16,7 +16,7 @@ fn fixture(label: &str) -> (DaemonState, DaemonConfig, Receiver<ManagedSuperviso
 
 /// Même harnais, mais le lecteur de la connexion de contrôle reste ouvert :
 /// un `tick` qui écrit au parent n'échoue pas sur une socket fermée.
-fn fixture_with_reader(
+pub(super) fn fixture_with_reader(
     label: &str,
 ) -> (DaemonState, DaemonConfig, Receiver<ManagedSupervisorCommand>, BufReader<UnixStream>) {
     let label = format!(
@@ -82,7 +82,7 @@ fn fixture_with_reader(
     (st, config, rx, reader)
 }
 
-fn codex_fact(cwd: &str, sandbox: Value, approval: &str) -> bridget_transport::protocol::ProviderPermissions {
+pub(super) fn codex_fact(cwd: &str, sandbox: Value, approval: &str) -> bridget_transport::protocol::ProviderPermissions {
     bridget_transport::protocol::ProviderPermissions {
         version: 1,
         source: "native_wrapper".into(),
@@ -121,7 +121,7 @@ fn claude_definition(config_dir: &Path) -> crate::registry::AgentDefinition {
     }
 }
 
-fn claude_fact(config_dir: &Path, cwd: &Path, env: &SourceEnvironment, mode: &str) -> bridget_transport::protocol::ProviderPermissions {
+pub(super) fn claude_fact(config_dir: &Path, cwd: &Path, env: &SourceEnvironment, mode: &str) -> bridget_transport::protocol::ProviderPermissions {
     let definition = claude_definition(config_dir);
     let mut policy = json!({
         "kind":"claude",
@@ -161,7 +161,7 @@ fn fixture_entries(catalogue: &Value) -> Vec<&Value> {
     entries
 }
 
-fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Option<SpawnPosture>) -> NativeDelegationRequest {
+pub(super) fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Option<SpawnPosture>) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
         request_id: request_id.into(),
         agent_type: agent_type.into(),
@@ -173,10 +173,11 @@ fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Opti
         reply_timeout: None,
         keep_alive_secs: None,
         brief: None,
+        workspace: None,
     }
 }
 
-fn insert_fact(st: &mut DaemonState, fact: bridget_transport::protocol::ProviderPermissions, scope: Option<&str>) {
+pub(super) fn insert_fact(st: &mut DaemonState, fact: bridget_transport::protocol::ProviderPermissions, scope: Option<&str>) {
     st.native_permission_facts
         .insert("conn-1".into(), (fact, scope.map(str::to_owned)));
 }
@@ -217,7 +218,8 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
             "providers",
             "version",
             "wait_timeout_default_secs",
-            "wait_timeout_max_secs"
+            "wait_timeout_max_secs",
+            "workspace_strategies"
         ]
     );
     assert_eq!(catalogue["mission_reply_limit_secs"], 3600);
@@ -377,6 +379,8 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
         mission_issued_at: None,
         restart_resumes: 0,
         cancel_stopped: Vec::new(),
+        workspace: None,
+        workspace_report_mission: None,
     }
 }
 

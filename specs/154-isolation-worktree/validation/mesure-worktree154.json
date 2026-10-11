@@ -1,0 +1,94 @@
+{
+  "at": "2026-10-11T21:51:54.915966+00:00",
+  "git_version": "git version 2.55.0",
+  "clone": "/private/tmp/b.wpssuc4z/depot",
+  "source_repo": "/Users/moi/Nextcloud/10.Scripts/64.bridget",
+  "source_commit": "89f7a4163c2fb27229587f50a46414295ba3674d",
+  "iterations": [
+    {
+      "iteration": 1,
+      "seconds": 0.5887876249616966,
+      "rc": 0,
+      "command": [
+        "git",
+        "-C",
+        "/private/tmp/b.wpssuc4z/depot",
+        "worktree",
+        "add",
+        "-b",
+        "mesure1",
+        "/private/tmp/b.wpssuc4z/depot/.worktrees/m1",
+        "HEAD"
+      ]
+    },
+    {
+      "iteration": 2,
+      "seconds": 0.4271919579477981,
+      "rc": 0,
+      "command": [
+        "git",
+        "-C",
+        "/private/tmp/b.wpssuc4z/depot",
+        "worktree",
+        "add",
+        "-b",
+        "mesure2",
+        "/private/tmp/b.wpssuc4z/depot/.worktrees/m2",
+        "HEAD"
+      ]
+    },
+    {
+      "iteration": 3,
+      "seconds": 0.6628195000812411,
+      "rc": 0,
+      "command": [
+        "git",
+        "-C",
+        "/private/tmp/b.wpssuc4z/depot",
+        "worktree",
+        "add",
+        "-b",
+        "mesure3",
+        "/private/tmp/b.wpssuc4z/depot/.worktrees/m3",
+        "HEAD"
+      ]
+    },
+    {
+      "iteration": 4,
+      "seconds": 0.5862505420809612,
+      "rc": 0,
+      "command": [
+        "git",
+        "-C",
+        "/private/tmp/b.wpssuc4z/depot",
+        "worktree",
+        "add",
+        "-b",
+        "mesure4",
+        "/private/tmp/b.wpssuc4z/depot/.worktrees/m4",
+        "HEAD"
+      ]
+    },
+    {
+      "iteration": 5,
+      "seconds": 0.6327103750081733,
+      "rc": 0,
+      "command": [
+        "git",
+        "-C",
+        "/private/tmp/b.wpssuc4z/depot",
+        "worktree",
+        "add",
+        "-b",
+        "mesure5",
+        "/private/tmp/b.wpssuc4z/depot/.worktrees/m5",
+        "HEAD"
+      ]
+    }
+  ],
+  "median_seconds": 0.5887876249616966,
+  "max_seconds": 0.6628195000812411,
+  "creation_timeout_seconds": 20,
+  "clone_preserved": "private test clone; no production Git worktree created",
+  "global_config_changed": false
+}

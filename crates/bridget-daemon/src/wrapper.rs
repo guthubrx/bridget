@@ -352,7 +352,9 @@ fn managed_resume_context(
                 resume_card_external_text(&attested.branch),
                 resume_card_external_text(&attested.head)
             ));
-            if attested.modified.is_empty() {
+            if attested.status_unavailable {
+                lines.push("Fichiers non commités : indisponible (configuration exécutable).".into());
+            } else if attested.modified.is_empty() {
                 lines.push("Fichiers non commités : aucun attesté.".to_string());
             } else {
                 // Borné : la carte est un message remis à l'agent, pas un inventaire.
@@ -571,16 +573,11 @@ fn deliver_injected_message<S: Transport + ?Sized>(
 /// même URL) et ne dépend PAS d'un chemin absolu gravé en dur.
 fn is_protected_principal_checkout(path: &Path) -> bool {
     let git = |args: &[&str]| -> Option<String> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .output()
-            .ok()?;
-        if !output.status.success() {
+        let output = crate::workspace_git::run_git(path, args, crate::workspace_git::READ_TIMEOUT).ok()?;
+        if !output.success() || output.truncated {
             return None;
         }
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Some(output.stdout.trim().to_string())
     };
     let Some(toplevel) = git(&["rev-parse", "--show-toplevel"]) else {
         return false;
@@ -618,35 +615,34 @@ struct ResumeWorktree {
     branch: String,
     head: String,
     modified: Vec<String>,
+    status_unavailable: bool,
 }
 
 fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
     let git = |args: &[&str]| -> Result<String, String> {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(worktree)
-            .args(args)
-            .output()
-            .map_err(|error| error.to_string())?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        let output = crate::workspace_git::run_git(worktree, args, crate::workspace_git::READ_TIMEOUT)?;
+        if output.truncated { return Err("sortie Git tronquée à 1 Mio".into()); }
+        if !output.success() {
+            return Err(output.stderr.trim().to_string());
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(output.stdout.trim().to_string())
     };
     let branch =
         git(&["symbolic-ref", "--short", "HEAD"]).unwrap_or_else(|_| "detached".to_string());
     let head = git(&["rev-parse", "--short", "HEAD"])?;
     // Répertoires non suivis repliés (`normal`, pas `all`) : un target de build
     // oublié listait 40 000 fichiers et faisait une carte de 1 Mo (2026-09-04).
-    let modified = git(&["status", "--porcelain=v1", "--untracked-files=normal"])?
-        .lines()
-        .map(str::to_string)
-        .collect();
+    let status_unavailable = crate::workspace_git::executable_configuration(worktree)?;
+    let modified = if status_unavailable { Vec::new() } else {
+        git(&["status", "--porcelain=v1", "--untracked-files=normal"])?
+            .lines().map(str::to_string).collect()
+    };
     Ok(ResumeWorktree {
         path: worktree.display().to_string(),
         branch,
         head,
         modified,
+        status_unavailable,
     })
 }
 
@@ -6717,6 +6713,177 @@ mod prompt_tests {
         assert!(
             linked.join(".git").is_file(),
             "worktree lié attendu pour que le principal soit protégé"
+        );
+    }
+
+    #[test]
+    fn native154_wrapper_fsmonitor_ne_lance_pas_le_programme_du_depot() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = resume_root("154-fsmonitor");
+        let worktree = root.join("linked");
+        init_worktree(&worktree);
+        let marker = root.join("fsmonitor-executed");
+        let script = root.join("fsmonitor.sh");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf executed > '{}'\nprintf 'token\\0'\n", marker.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&worktree)
+                .args(["config", "--local", "core.fsmonitor"])
+                .arg(&script)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let result = super::managed_resume_worktree(&worktree);
+        let executed = marker.exists();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(result.is_ok(), "lecture de la fixture : {:?}", result.err());
+        assert!(!executed, "core.fsmonitor a exécuté le programme du dépôt");
+    }
+
+    #[test]
+    fn native154_wrapper_filtre_clean_est_omis_et_signale() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = resume_root("154-clean");
+        let worktree = root.join("linked");
+        init_worktree(&worktree);
+        let marker = root.join("clean-executed");
+        let script = root.join("clean.sh");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf executed > '{}'\n/bin/cat\n", marker.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&worktree)
+                .args(["config", "--local", "filter.fixture154.clean"])
+                .arg(&script)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(worktree.join(".gitattributes"), "tracked.txt filter=fixture154\n").unwrap();
+        let card = managed_resume_context(&worktree, "sans-mission", "fixture", "acp", "digest");
+        let executed = marker.exists();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(!executed, "status a exécuté le filtre clean du dépôt");
+        assert!(
+            card.contains("indisponible (configuration exécutable)"),
+            "la carte doit nommer le motif de l'état indisponible : {card}"
+        );
+    }
+
+    // Le PATH du faux Git appartient seulement au fils de test. Le parent
+    // réutilise la recette current_exe/env_clear/watchdog déjà présente ici.
+    fn wrapper154_isolated_git(case: &str, test_name: &str, check: impl FnOnce(&std::path::Path)) {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+        const CHILD_ROOT: &str = "BRIDGET_WRAPPER154_CHILD_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            check(std::path::Path::new(&root));
+            return;
+        }
+        let root = resume_root(case);
+        for directory in ["bin", "home", "tmp", "repo"] {
+            fs::create_dir(root.join(directory)).unwrap();
+        }
+        let script = root.join("bin/git");
+        let status = match case {
+            "154-large" => "/usr/bin/awk 'BEGIN { for (i = 0; i < 393216; i++) print \" M file\" }'",
+            "154-slow" => "/bin/sleep 12; printf ' M file\\n'",
+            _ => panic!("fixture inconnue"),
+        };
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nfor argument in \"$@\"; do\n case \"$argument\" in\n --version) printf 'git version 2.55.0\\n'; exit 0;;\n symbolic-ref) printf 'refs/heads/fixture\\n'; exit 0;;\n rev-parse) printf '0123456789012345678901234567890123456789\\n'; exit 0;;\n config) exit 1;;\n status) {status}; exit 0;;\n esac\ndone\nexit 1\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let log_path = root.join("child.log");
+        let log = fs::File::create(&log_path).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut child = Command::new(&executable)
+            .args(["--exact", test_name, "--nocapture"])
+            .env_clear()
+            .env("HOME", root.join("home"))
+            .env("TMPDIR", root.join("tmp"))
+            .env("PATH", root.join("bin"))
+            .env(CHILD_ROOT, root.join("repo"))
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let result = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let observed = Command::new("/bin/ps")
+                    .args(["-p", &child.id().to_string(), "-o", "command="])
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&observed.stdout)
+                        .trim()
+                        .starts_with(&executable.display().to_string()),
+                    "le watchdog doit identifier son seul fils de test"
+                );
+                assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+                let stop_deadline = Instant::now() + Duration::from_secs(3);
+                while matches!(child.try_wait(), Ok(None)) && Instant::now() < stop_deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let diagnostic = fs::read_to_string(&log_path).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            result.is_some_and(|status| status.success()),
+            "wrapper Git {case}, résultat {result:?} : {diagnostic}"
+        );
+    }
+
+    #[test]
+    fn native154_wrapper_sortie_git_bornee_a_un_mio() {
+        wrapper154_isolated_git(
+            "154-large",
+            "wrapper::prompt_tests::native154_wrapper_sortie_git_bornee_a_un_mio",
+            |root| {
+                if let Ok(worktree) = super::managed_resume_worktree(root) {
+                    let retained: usize = worktree.modified.iter().map(|line| line.len() + 1).sum();
+                    assert!(retained <= 1024 * 1024, "sortie Git conservée sans borne : {retained} octets");
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn native154_wrapper_delai_git_est_borne() {
+        wrapper154_isolated_git(
+            "154-slow",
+            "wrapper::prompt_tests::native154_wrapper_delai_git_est_borne",
+            |root| {
+                let started = std::time::Instant::now();
+                let result = super::managed_resume_worktree(root);
+                assert!(result.is_err(), "le faux Git lent doit dépasser le délai");
+                assert!(started.elapsed() < std::time::Duration::from_secs(11), "lecture Git au-delà du délai de dix secondes");
+            },
         );
     }
 

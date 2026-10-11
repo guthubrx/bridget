@@ -1085,3 +1085,37 @@ chargées. Utiliser uniquement le mécanisme natif de rechargement du client
 lorsqu'il est connu ; sinon signaler que la session doit être réouverte par
 l'humain. Ne pas inventer de commande de reload, ne pas tuer une conversation et
 ne pas relancer silencieusement un fournisseur.
+
+## Espace de travail natif 154
+
+`bridget_delegate.workspace` : objet fermé strategy shared ou worktree. Pour
+worktree, base_ref et branch facultatifs ; défaut HEAD et bridget/task8. Aucun
+start_from_origin, push, merge, pr ou cleanup. L’absence et shared explicite
+restent distincts dans l’enveloppe de rejeu. Lire capabilities avant d’appeler.
+
+Le reçu workspace donne state/path/branch/base_commit ; cwd est le dossier
+enfant. Le statut ajoute head_commit/branch_commit/head_on_branch/commit_count/
+commits/truncated/dirty. Au plus 50 commits, sujets de 200 caractères assainis. Chaque
+ronde recalcule ses faits ; résultat publié immuable. Rapport indisponible reste
+nommé et faits inconnus. kept conserve le dossier et les droits des rondes
+suivantes. La garde 153 et les conditions de purge 150/153 restent applicables.
+
+Refus fermés : workspace_requires_development, workspace_inheritance_unavailable,
+workspace_git_unsupported, workspace_not_git, workspace_repo_unsupported,
+workspace_base_unavailable, workspace_branch_invalid, workspace_branch_exists,
+workspace_dir_not_ignored, workspace_limit, workspace_creation_in_progress,
+workspace_path_unsafe, workspace_create_failed. Rejouer même clé/arguments pour
+creation_in_progress. Les deux derniers nomment les restes éventuels ; aucune
+suppression. Sans workspace : défaut shared, shared_writers informatif si ≥1.
+
+Git 2.44+, `.worktrees/` ignoré dans le dépôt,32 chemins distincts au plus.
+LFS/filtres/inclusions/clones partiels/worktreeConfig refusés. Les droits 149
+restent fermés ; pas de refus global ajouté pour tout enfant Claude.
+
+Recette humaine : `git worktree list`, `git branch --list 'bridget/*'`, puis
+`git worktree remove <chemin absolu du reçu>` et `git branch -d <branche>`
+après conservation/intégration du travail. Aucune commande de nettoyage
+automatique Bridget, aucun force. Voir la recette complète dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md
+
+Les sources et ce guide ne prouvent pas le chargement du contrat 154.

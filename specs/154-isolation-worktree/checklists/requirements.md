@@ -49,3 +49,7 @@
   ignorance de `.worktrees/`.
 - Décisions laissées au plan : délai de Git réglé par la mesure T002, forme de la
   ligne de fin du résultat (alignement possible avec la session151).
+
+- Relecture post153 : 28tâches non cochées, dépendance153 déclarée, rapport par
+  mission/ronde, kept sans retrait de droits, cleanup après fin de garde/arrêt
+  confirmé. Choix conservateurs approuvés, aucun arbitrage nouveau.

@@ -63,12 +63,103 @@ La vue courante donne `resume_attempts`, le nombre de décisions de reprise apr�
 Ce compteur est sauvegardé avant la reprise. Un crash peut donc consommer une
 tentative avant son effet ; il ne permet jamais de dépasser la borne.
 
+## Espace de travail — contrat 154
+
+Ce contrat exige un catalogue et des processus chargés qui annoncent
+`workspace_strategies`. Les sources et cette documentation ne prouvent pas
+l’activation de la session 154. Consulter `bridget_capabilities` avant de choisir.
+
+Sans `workspace`, l’enfant garde le dossier partagé. Le comportement de la session 153 reste
+le défaut. `{"strategy":"shared"}` demande ce partage explicitement. Ajouter
+`{"strategy":"worktree","base_ref":"main"}` à `bridget_delegate` pour demander
+un dossier Git distinct, si la paire de fournisseurs le permet. La posture
+effective doit être `development`. Les droits hérités ne sont pas élargis.
+
+`base_ref` est facultatif : son défaut est HEAD. Bridget résout la base en un
+commit et la fige. `branch` est facultatif : son défaut est
+`bridget/<8 premiers caractères du task_id>`. Une branche demandée doit être
+nouvelle. Le reçu conserve `task_id`, `cwd` et `workspace` avec état, chemin,
+branche et base. Garder les mêmes arguments et la même request_id sur rejeu.
+Absence de workspace et shared explicite sont des enveloppes différentes.
+
+Le dossier créé se trouve sous le dossier du parent dans `.worktrees/<task8>`.
+Le dossier enfant est ce worktree, avec le décalage conservé si le parent
+travaille dans un sous-dossier du dépôt. Le HEAD, l’index et les fichiers du
+parent restent dans son checkout. Les modifications non commitées du parent,
+les fichiers ignorés et les sous-modules non initialisés ne sont pas copiés.
+
+Git 2.44 ou plus est requis. `.worktrees/` doit déjà être ignoré par le dépôt
+(.gitignore ou info/exclude). Une règle globale ne suffit pas. Bridget ne
+modifie aucun fichier de configuration. Git LFS, filtres exécutables, inclusions
+de configuration, clones partiels et worktreeConfig sont refusés. Un lien
+symbolique à la place de `.worktrees` est refusé. Le plafond est de 32 chemins
+worktree distincts, réservations en cours comprises.
+
+| Refus | Suite utile |
+|---|---|
+| workspace_requires_development | Choisir une posture de développement déjà autorisée. |
+| workspace_inheritance_unavailable | Cette paire ne prouve pas les droits dans un dossier différent ; garder shared. |
+| workspace_git_unsupported | Installer une version Git compatible par la voie habituelle. |
+| workspace_not_git | Choisir un dossier autorisé dans un dépôt Git non nu. |
+| workspace_repo_unsupported | Garder shared pour ce dépôt à configuration non prise en charge. |
+| workspace_base_unavailable | Donner une référence locale qui résout un commit. |
+| workspace_branch_invalid | Donner un nom de branche Git valide. |
+| workspace_branch_exists | Donner une branche nouvelle, sans réécrire l’existante. |
+| workspace_dir_not_ignored | Faire ignorer `.worktrees/` par le dépôt. |
+| workspace_limit | Examiner et nettoyer les worktrees conservés avant une nouvelle demande. |
+| workspace_creation_in_progress | Attendre puis rejouer les mêmes arguments avec la même clé. |
+| workspace_path_unsafe | Examiner le chemin ; les restes éventuels sont nommés dans le refus. |
+| workspace_create_failed | Examiner le refus ; les restes éventuels sont nommés et conservés. |
+
+Les limites 149 restent applicables. Claude/GLM vers Claude/GLM avec worktree est
+refusé quand l’héritage exige le même dossier. Codex vers Claude en développement
+exige accès complet et approbation never selon la règle existante. Un enfant
+Codex workspaceWrite ne reçoit pas de droit sur le dossier Git commun. Il peut
+conserver ses modifications dans le worktree sans pouvoir les commiter.
+
+À chaque ronde, Bridget lit les faits Git avant de publier le résultat : base,
+tête, branche, nombre de commits, les 50 derniers, modifications non commitées et
+tête sur la branche attendue. `bridget_task_status.workspace` porte ces faits.
+Une tête détachée ou une autre branche donne head_on_branch égal à false. Les sujets
+restent du texte enfant. Une imitation du préfixe d’autorité dans ce texte est
+neutralisée ; Bridget ajoute son unique ligne de fin. Les faits structurés
+font foi. Si la lecture Git échoue, la ligne indique « nombre de commits
+indisponible » et les indicateurs concernés valent « indisponible ». Les faits
+restent inconnus. La tâche ne reste pas bloquée sur cette lecture.
+
+L’état kept signifie dossier et branche conservés. Il permet les écritures
+et les rondes suivantes selon les droits hérités. Une nouvelle ronde vide les
+faits courants puis les recalcule ; les résultats déjà publiés restent stables.
+Un résultat avec garde 153 ne force pas l’arrêt de l’enfant. Échec et annulation
+attendent l’arrêt confirmé pour rapporter tout l’arbre. Le nettoyage logique
+et la purge attendent les conditions 150/153 ; aucun fichier Git n’est supprimé.
+
+En mode shared en développement, shared_writers apparaît dans le reçu si un
+autre enfant actif écrit dans le même dossier. Cet avertissement ne bloque
+rien. La détection file_collision garde son comportement.
+
+Bridget crée le worktree et lit son état Git. Il ne fait ni commit, fusion,
+rebase, push, fetch, pull request, suppression de branche ou de worktree.
+Le nettoyage appartient à l’humain. Exemple pour un dépôt et un chemin issus
+du reçu, à adapter après examen du travail :
+
+```sh
+git -C /Users/moi/Nextcloud/10.Scripts/64.bridget worktree list
+git -C /Users/moi/Nextcloud/10.Scripts/64.bridget branch --list 'bridget/*'
+# Choisir le chemin exact du reçu après avoir conservé/intégré le travail.
+git -C /Users/moi/Nextcloud/10.Scripts/64.bridget worktree remove /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/1a2b3c4d
+git -C /Users/moi/Nextcloud/10.Scripts/64.bridget branch -d bridget/1a2b3c4d
+```
+
+Ces commandes humaines refusent le retrait sale ou une branche non intégrée.
+Ne pas ajouter force pour contourner ce refus.
+
 ## Rondes et brief - contrat153
 
 Pour faire corriger un travail par le même enfant, ajouter `keep_alive_secs`
 à `bridget_delegate`. Ce nombre entier va de 60 à 7 200 secondes. Sans ce
 champ, le nettoyage habituel suit le résultat. Vérifier le catalogue réellement
-chargé : les sources ou fichiers installés ne prouvent pas l'activation153.
+chargé : les sources ou fichiers installés ne prouvent pas l'activation 153.
 
 Avec cette garde, l'enfant reste disponible après l'envoi de son résultat.
 La tâche reste `result_available`. `idle_deadline_at` indique la fin de la

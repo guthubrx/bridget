@@ -41,6 +41,7 @@ fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequ
         cwd: "/tmp".into(),
         posture: None,
         reply_timeout: None,
+        workspace: None,
         keep_alive_secs: None,
         brief: None,
     }
@@ -73,7 +74,9 @@ fn task(
         effective_posture: None,
         definition: definition(),
         cwd: "/tmp".into(),
+        workspace: None,
         child: child.into(),
+        workspace_report_mission: None,
         child_instance: child_instance.map(Into::into),
         mission: format!("mission-{task_id}"),
         mission_deadline_at: None,

@@ -14,8 +14,9 @@ const SOURCE: &[u8] = include_bytes!(
 );
 
 fn yesterday() -> String {
-    // Date de l'hôte comme le journal, pas une horloge/fuseau de consommateur.
+    // Date UTC comme current_host_date() du journal, pas le fuseau local.
     let mut command = std::process::Command::new("/bin/date");
+    command.arg("-u");
     #[cfg(target_os = "macos")]
     command.args(["-v-1d", "+%F"]);
     #[cfg(not(target_os = "macos"))]

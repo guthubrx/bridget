@@ -2,8 +2,8 @@
 
 **Spec** : `specs/154-isolation-worktree/spec.md`
 **Branche** : `session-154-isolation-worktree`
-**Worktree** : le worktree courant du pipeline 150-158 (exécution séquentielle,
-sans commit automatique, diff enregistré par session)
+**Worktree** : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/154-isolation-worktree
+**Base** : `89f7a4163c2fb27229587f50a46414295ba3674d`, incluant153 `7c848850ba6067cf1d0d94b8edf0dd11896a1b24` livrée et active
 **Date** : 2026-10-11 (révisé après deux rondes de contre-revue Codex)
 **Statut** : prêt pour l'implémentation. Arbitrage utilisateur reçu le 2026-10-11 : le daemon exécute Git pour tout parent autorisé, comme T3, avec les durcissements ci-dessous (`spec.md`, « Arbitrage utilisateur - exécution de Git »). 28 tâches.
 
@@ -36,13 +36,13 @@ fonction Git.
 | D4 | Refus précoces `workspace_requires_development` et `workspace_inheritance_unavailable` | laisser échouer à `settings_revision_changed` | refus lisibles, aucun effet disque |
 | D5 | Exécuteur Git unique, durci, liste blanche sans suppression, configurations système et globale ignorées | `std::process::Command` partout, ou `git2` | sécurité en un point, pas de dépendance |
 | D6 | Bridget ne supprime jamais un worktree ni une branche | retrait automatique sans force ; retrait après contrôle de propreté | quatre risques de perte écartés par construction (contre-revue 2, 3, 4, 7) |
-| D7 | `cleanup_done` après le rapport final, état `kept` | nouveau drapeau de purge | la purge 150 reste inchangée |
+| D7 | `cleanup_done` après le rapport terminé et arrêt confirmé/fin de garde153, état `kept` indépendant des droits d’écriture | nouveau drapeau de purge | la purge 150 reste inchangée |
 | D8 | Rapport lu dans Git (dont `head_on_branch`), ligne de fin écrite par Bridget, objet dans `task_status` | texte de l'enfant comme source | un enfant ne forge pas les faits |
 | D9 | `shared_writers` informatif | refus de la 2e délégation partagée | compatibilité 149, usages en lecture |
 | D10 | Refus des dépôts à configuration exécutable (filtres, inclusions, clone partiel) | neutraliser chaque filtre par `-c` | liste incomplète si une inclusion en ajoute (contre-revue 1) |
 | D11 | `.worktrees/` doit être déjà ignoré, plafond de 32 worktrees, aucune écriture dans la configuration du dépôt | écrire `info/exclude` ; pas de plafond | supprime une surface de lien symbolique ; borne l'accumulation (contre-revue 5, 9) |
-| D12 | Rapport hors verrou : le tick note un travail, Git lit sans verrou, un verrou court range le rapport | Git dans le tick | verrou global jamais tenu pendant Git (ronde 2, point 4) |
-| D13 | Table de réservations en mémoire (clé et plafond) ; la seconde passe ne refait pas les contrôles d'état Git créés par la requête | pas de réservation ; revalidation totale | deux appels de même clé ne créent pas deux worktrees ; la branche réservée et la 32e place ne se refusent pas elles-mêmes (ronde 2, points 5 et 7) |
+| D12 | Rapport hors verrou : le tick note un travail, Git lit sans verrou, un verrou court range rapport+ligne+result_available ensemble si waiting_for_children+mission+round correspondent, chaque ronde recalcule ses faits | Git dans le tick | verrou global jamais tenu pendant Git (ronde 2, point 4) |
+| D13 | Réservations via Arc<Mutex> séparé, plafond par union de chemins ; la seconde passe ne refait pas les contrôles d'état Git créés par la requête | pas de réservation ; revalidation totale | deux appels de même clé ne créent pas deux worktrees ; la branche réservée et la 32e place ne se refusent pas elles-mêmes (ronde 2, points 5 et 7) |
 | D14 | Exécution de Git par le daemon pour tout parent autorisé, comme T3, durcie ; risque résiduel de changement de configuration accepté | Git confiné ; Git par fichiers ; réservation aux parents non confinés | décision utilisateur du 2026-10-11 ; T3 fait de même avec moins de durcissements |
 
 ## Fichiers touchés
@@ -54,7 +54,7 @@ fonction Git.
 | `crates/bridget-daemon/src/workspace_git.rs` (nouveau) | exécuteur Git, validations, avant-vol, création, rapport |
 | `crates/bridget-daemon/src/workspace_git_tests.rs` (nouveau) | tests de l'exécuteur et des validations |
 | `crates/bridget-daemon/src/delegation.rs` | `Task.workspace`, `WorkspaceRecord`, `visible_changed` l'ignore |
-| `crates/bridget-daemon/src/daemon/native_delegation.rs` | avant-vol hors verrou, admission en deux passes, contrôles précoces, rapport au résultat et à la fin, catalogue, `shared_writers`, `task_view` |
+| `crates/bridget-daemon/src/daemon/native_delegation.rs` | rejeu/autorisation du cwd canonique avant avant-vol Git hors verrou, admission en deux passes, contrôles précoces, rapport au résultat et à la fin, catalogue, `shared_writers`, `task_view` |
 | `crates/bridget-daemon/src/daemon/native_workspace154_tests.rs` (nouveau) | tests `native154_*` |
 | `crates/bridget-daemon/src/delegation_mcp.rs` | schéma, liste blanche et lecture de `workspace` |
 | `crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs` | clés de catalogue figées |
@@ -99,7 +99,7 @@ Le code existant de droits (`native_permissions.rs`) ne change pas.
   list` est O(w), w ≤ 32 enregistrés sous `.worktrees/` (borné par le plafond).
 - Création : 1 `worktree add`, coût proportionnel à la taille de l'arbre
   extrait, mesuré en T002, hors verrou.
-- Rapport : 5 commandes, bornées à 50 commits et 1 Mio de sortie.
+- Rapport : nombre constant de commandes, bornées à 50 commits et 1 Mio de sortie.
 - `shared_writers` : parcours des tâches actives, O(128) par la borne 150.
 
 ### Minimalisme (Article XIX)
@@ -112,8 +112,7 @@ Le code existant de droits (`native_permissions.rs`) ne change pas.
   suppression de branche, retrait de worktree, commit automatique, écriture dans
   `info/exclude`, commande de liste, création par le wrapper.
 
-Potentiel minimalisme : aucune ligne existante supprimée ; environ 300 lignes
-ajoutées, dont 60 % de tests. La révision retire environ 120 lignes prévues
+Potentiel minimalisme : aucune ligne existante supprimée ; volume final à mesurer après implémentation ; aucune estimation de lignes ne vaut preuve. La révision retire environ 120 lignes prévues
 (retrait, retour arrière, états de rétention, exclusion).
 
 ### Responsabilité future (Article XX)
@@ -152,10 +151,84 @@ ajoutées, dont 60 % de tests. La révision retire environ 120 lignes prévues
 | Paires Claude vers Claude refusées | refus explicite, question 1, session 154b |
 | Sujets de commit hostiles | assainis et traités comme données ; champs structurés lus dans Git |
 | Dépôts Git LFS refusés | documenté ; le partage `shared` reste disponible |
-| Chevauchement avec la session151 (résultat structuré) | l'objet `workspace` est autonome ; 151 le déplace sans changer sa forme |
+| Chevauchement avec la session151 (résultat structuré) | l'objet `workspace` est autonome ; le contrat151 livré reste intact |
 
 ## Livraison
 
 Code sur disque dans le worktree du pipeline, sans commit automatique ni
 relance de service. Diff cumulé enregistré dans
 `specs/154-isolation-worktree/validation/diff-154.patch`.
+
+## Réutilisation et séparation des responsabilités
+
+- Exécuteur Git : `workspace_git.rs`, `workspace_git_tests.rs`, déclaration
+  `lib.rs`, lectures T022 dans `wrapper.rs`. API proposée :
+  `run_git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<GitOutput, String>`,
+  `preflight(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>) -> Result<WorkspacePreflight, String>`,
+  `create(preflight: &WorkspacePreflight, task_id: &str) -> Result<WorkspaceRecord, String>`,
+  `report(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord, String>`.
+  `GitOutput` et `WorkspacePreflight` sont des valeurs locales/transitoires ; aucun
+  stockage ni dépendance. Les types restent ceux nécessaires au module prévu.
+- Protocole et stockage : `protocol.rs`, `delegation.rs`, `delegation_mcp.rs`,
+  payload optionnel et enveloppe ; conserver `keep_alive_secs`, `brief` et leurs
+  octets153. Aucun champ public de ronde dans `WorkspaceRecord`.
+- Natif : `native_delegation.rs`, tests154, catalogue149 et test observation T021.
+  Seul propriétaire de l’admission, des réservations, du tick et du CAS.
+  Capturer `task_id`, `mission`, `round_no()` sous verrou ; recharger avant
+  sauvegarde. `kept` ne ferme pas les droits. `cleanup_done` exige rapport terminé
+  et arrêt confirmé/fin de garde153 ; ronde1 avec garde active ne suffit pas.
+
+Le propriétaire Git ne modifie ni `communication.rs`, ni la résolution du
+projet commun. Les signatures sont recommandations d’intégration ; aucun
+helper supplémentaire ni champ public nouveau n’est autorisé sans preuve.
+
+## Décisions de contre-revueR1 — en cours d’implémentation
+
+Référence : adversarial-review-claude.md,15hypothèses. Échec de rapport : une
+tentative bornée, faitsNone, mention indisponible ; publication/cleanup avancent
+selon leurs conditions153. Chaque annulation rapporte tous les membres worktree
+de l’arbre hors verrou. `begin_round` vide les faits courants et conserve kept.
+Le budget du texte enfant retire la taille exacte de la ligne finale puis coupe
+en UTF8. Une imitation de cette ligne est assainie ; l’objet workspace fait foi.
+
+La whitelist valide les formes/options. Git2.55 refuse `status --no-textconv`
+et `status --no-ext-diff` (RC129 constaté par le principal). Ces options ne
+sont appliquées qu’aux formes compatibles de log ; environnement/configuration
+restent communs. Aucun refus global des enfantsClaude : les contrôles149
+full+never et les schémas fermés existants restent les autorités.
+
+H11 : ancre du registreGitparent retenue ci-dessous, implémentation à vérifier.
+H12 : borne du lot de rapports encore en conception.
+Ne pas inventer de quota ni déclarer leur correction acquise. Le marqueur privé Task.workspace_report_mission est autorisé par le complément
+du principal ci-dessous ; aucun champ public de ronde ni table nouvelle.
+
+### Complément technique du principal — marqueur et ancre
+
+Marqueur privé retenu : `Task.workspace_report_mission`, default et omission
+siNone. Il identifie la mission déjà rapportée. Aucun champ de ronde ajouté à
+WorkspaceRecord ni au contrat public. CAS waiting_for_children+mission+round
+protège le succès ; le marqueur protège aussi échec de livraison, cleanup et
+reprise après panne, même avec faitsNone et kept. `begin_round` remet faits et
+marqueur à vide. La condition de première publication vaut par mission.
+
+AncreGit : utiliser le registre Git du parent hors dossier enfant, avec parcours
+borné et correspondance des chemins toplevel/path enregistrés. Ne pas lire le
+fichier.git contrôlable de l’enfant. Ancre absente : rapport indisponible, aucun
+champ public/privé d’ancre supplémentaire. Implémentation à vérifier.
+
+Neutraliser dans le texte enfant le préfixe `[Bridget] espace de travail` en
+`[Enfant] espace de travail`, puis ajouter l’unique suffixe d’autorité. Son
+budget exact en octets et une coupeUTF8 gardent la limite262144octets.
+
+## ComplémentH12 et limiteSIGTERM
+
+WorkspaceWorkArcMutexséparé unique : creationsMap etreportsSet des
+(task,mission,round) en cours. Claim empêche tickconcurrent de relancerGit lent ;
+DropRAII retireseulementl’entrée du verrou séparé. Aucunthread/backgroundengine
+ni quota arbitraire. Choixautoriséroot ; testnatifconcurrence àprouver.
+
+SIGTERM sur seulchild.id Git puis reapborné, pasSIGKILL. Programmehostile
+ignorantSIGTERM peutpersister ; retourborné, pas arrêtabsolu. Parent/ancêtre
+principal etregistreGitcommun restent la sourcefiable du modèleADR011.
+FondationsR1 :15PASS/7FAIL ; T004/T021/T022acquises ; cinqcasesdone,23open.
+T011attendcontratferméglobal ; T003/T005nonacquises. Aucun GREENglobal.

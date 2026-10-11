@@ -364,6 +364,16 @@ impl DelegationStore {
         next.mission = mission.into();
         next.round_body = Some(round_body.into());
         next.rounds.push(record);
+        next.workspace_report_mission = None;
+        if let Some(workspace) = &mut next.workspace {
+            workspace.head_commit = None;
+            workspace.branch_commit = None;
+            workspace.head_on_branch = None;
+            workspace.commit_count = None;
+            workspace.commits.clear();
+            workspace.truncated = false;
+            workspace.dirty = None;
+        }
         if !old.delivery_acked && !next.unacked_rounds.contains(&expected_round) {
             next.unacked_rounds.push(expected_round);
         }

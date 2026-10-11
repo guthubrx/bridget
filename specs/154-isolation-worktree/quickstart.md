@@ -1,7 +1,7 @@
 # Vérification rapide - Session154
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/154-isolation-worktree`.
 Aucune commande ne lance de service ni de modèle.
 
 ## Environnement de test (obligatoire)
@@ -29,11 +29,13 @@ Suite complète avant clôture : même environnement,
 ```sh
 umask 077; R=$(mktemp -d /tmp/b.XXXX)
 git clone --local --no-hardlinks /Users/moi/Nextcloud/10.Scripts/64.bridget $R/depot
-time git -C $R/depot worktree add -b mesure $R/depot/.worktrees/m1 HEAD
-rm -rf $R   # la mesure se fait dans un clone jetable, jamais dans le dépôt Bridget
+for repetition in 1 2 3 4 5; do
+  time git -C "$R/depot" worktree add -b "mesure-$repetition" "$R/depot/.worktrees/m$repetition" HEAD
+done
+# Conserver ce clone privé jusqu’au nettoyage contrôlé du principal.
 ```
 
-Consigner les temps dans `validation/mesure-worktree.md`.
+Consigner les cinq temps, leur médiane et maximum dans `validation/mesure-worktree.md`. T002 est exécutée par le principal. T025 exécute une seule suite workspace finale.
 
 ## Scénarios à observer
 
@@ -45,8 +47,8 @@ Consigner les temps dans `validation/mesure-worktree.md`.
 6. Conservation sans suppression, annulation, purge 150 : filtre `native154_conservation`.
 7. Avertissement de partage, collision et wrapper : filtres
    `native154_partage`, `native154_wrapper`, `spec100`.
-8. Non-régression : filtres `native148`, `native149`, `native150`,
-   `delegation149`.
+8. Non-régression T001 : filtres `native148`, `native149`, `native150`,
+   `delegation149`, `spec100`, `spec_087`. Les contrats153 restent préservés.
 
 ## Vérification manuelle de fin (sans modèle)
 

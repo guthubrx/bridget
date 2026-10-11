@@ -2005,6 +2005,19 @@ pub struct SpawnOwnership {
     pub max_depth: Option<usize>,
 }
 
+/// Stratégie optionnelle ; l'absence conserve le partage et les octets153.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkspaceRequest {
+    Shared {},
+    Worktree {
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        base_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        branch: Option<String>,
+    },
+}
+
 /// Aucun champ d'identité parent n'est accepté dans une demande de mission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -2023,6 +2036,8 @@ pub enum NativeDelegationRequest {
         /// Délai de réponse de la mission en secondes ; absent = 3600 (session 150).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply_timeout: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        workspace: Option<WorkspaceRequest>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         keep_alive_secs: Option<u64>,
         // Un null explicite reste présent pour le refus métier ; l'absence
@@ -7915,6 +7930,7 @@ mod spec104_search_contract_tests {
             cwd: "/c".to_string(),
             posture: None,
             reply_timeout: None,
+            workspace: None,
             keep_alive_secs: None,
             brief: None,
         };
@@ -7946,6 +7962,63 @@ mod spec104_search_contract_tests {
         assert_eq!(*keep_alive_secs, None);
         assert_eq!(*brief, None);
         assert_eq!(serde_json::to_vec(&request).unwrap(), wire.to_vec());
+    }
+
+    #[test]
+    fn native154_contrat_sans_workspace_octets153() {
+        let wire = r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120,"keep_alive_secs":600,"brief":{"objective":"objectif","summary":"résultat"}}"#.as_bytes();
+        let request: NativeDelegationRequest = serde_json::from_slice(wire).unwrap();
+        assert_eq!(serde_json::to_vec(&request).unwrap(), wire.to_vec());
+        assert!(serde_json::to_value(request).unwrap().get("workspace").is_none());
+    }
+
+    #[test]
+    fn native154_contrat_workspace_objet_ferme() {
+        let base = serde_json::json!({
+            "operation":"delegate", "request_id":"k", "agent_type":"a",
+            "model":"m", "task":"t", "cwd":"/c"
+        });
+        for workspace in [
+            serde_json::json!({"strategy":"shared"}),
+            serde_json::json!({"strategy":"worktree"}),
+            serde_json::json!({"strategy":"worktree","base_ref":"main","branch":"bridget/refonte"}),
+        ] {
+            let mut wire = base.clone();
+            wire["workspace"] = workspace;
+            let request: NativeDelegationRequest = serde_json::from_value(wire.clone())
+                .expect("stratégie workspace valide");
+            assert_eq!(serde_json::to_value(request).unwrap()["workspace"], wire["workspace"]);
+        }
+        for workspace in [
+            serde_json::json!({"strategy":"worktree","unknown":true}),
+            serde_json::json!({"strategy":"shared","base_ref":"main"}),
+            serde_json::json!({"strategy":"existing_worktree"}),
+            serde_json::json!(null),
+            serde_json::json!({"strategy":"worktree","base_ref":null}),
+            serde_json::json!({"strategy":"worktree","branch":null}),
+        ] {
+            let mut wire = base.clone();
+            wire["workspace"] = workspace;
+            assert!(
+                serde_json::from_value::<NativeDelegationRequest>(wire.clone()).is_err(),
+                "workspace doit être fermé : {}", wire["workspace"]
+            );
+        }
+    }
+
+    #[test]
+    fn native154_contrat_partage_explicite_enveloppe_distincte() {
+        let absent: NativeDelegationRequest = serde_json::from_str(
+            r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/c"}"#,
+        ).unwrap();
+        let mut shared_wire = serde_json::to_value(&absent).unwrap();
+        shared_wire["workspace"] = serde_json::json!({"strategy":"shared"});
+        let shared: NativeDelegationRequest = serde_json::from_value(shared_wire)
+            .expect("partage explicite valide");
+        let canonical = serde_json::to_vec(&shared).unwrap();
+        assert_ne!(canonical, serde_json::to_vec(&absent).unwrap());
+        assert_eq!(serde_json::from_slice::<NativeDelegationRequest>(&canonical).unwrap(), shared);
+        assert_eq!(serde_json::to_value(shared).unwrap()["workspace"], serde_json::json!({"strategy":"shared"}));
     }
 
     #[test]

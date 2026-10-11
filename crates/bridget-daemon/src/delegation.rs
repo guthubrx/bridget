@@ -53,6 +53,44 @@ pub(crate) struct RoundRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkspaceStrategy {
+    Worktree,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkspaceState {
+    Active,
+    Kept,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkspaceCommit {
+    pub sha: String,
+    pub subject: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkspaceRecord {
+    pub strategy: WorkspaceStrategy,
+    pub state: WorkspaceState,
+    pub toplevel: String,
+    pub path: String,
+    pub branch: String,
+    pub base_commit: String,
+    pub head_commit: Option<String>,
+    pub branch_commit: Option<String>,
+    pub head_on_branch: Option<bool>,
+    pub commit_count: Option<u32>,
+    pub commits: Vec<WorkspaceCommit>,
+    pub truncated: bool,
+    pub dirty: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
     #[serde(default)]
@@ -77,6 +115,11 @@ pub(crate) struct Task {
     pub effective_posture: Option<SpawnPosture>,
     pub definition: ResolvedAgentDefinition,
     pub cwd: String,
+    #[serde(default)]
+    pub workspace: Option<WorkspaceRecord>,
+    /// Mission dont le rapport est rangé, y compris si Git était indisponible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_report_mission: Option<String>,
     pub child: String,
     pub child_instance: Option<String>,
     pub mission: String,
@@ -426,8 +469,18 @@ impl DelegationStore {
         ))
     }
 
+    /// O(log n + a), a ≤ 128 tâches actives ; seul le compteur quitte SQLite.
+    /// Appelé avant l'insertion de la candidate, donc compte les autres tâches.
+    pub fn shared_writers(&self, cwd: &str) -> Result<usize, String> {
+        self.conn.query_row(
+            "SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling') AND json_extract(payload,'$.effective_posture')='development' AND json_extract(payload,'$.cwd')=?1",
+            [cwd],
+            |row| row.get(0),
+        ).map_err(|error| error.to_string())
+    }
+
     pub fn pending(&self) -> Result<Vec<Task>, String> {
-        let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.state') NOT IN ('failed','cancelled','result_available') OR (json_extract(payload,'$.state')='result_available' AND (json_extract(payload,'$.result_sent')=0 OR coalesce(json_extract(payload,'$.cleanup_done'),0)=0)) OR (json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) ORDER BY task_id").map_err(|error|error.to_string())?;
+        let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.state') NOT IN ('failed','cancelled','result_available') OR (json_extract(payload,'$.state')='result_available' AND (json_extract(payload,'$.result_sent')=0 OR coalesce(json_extract(payload,'$.cleanup_done'),0)=0)) OR (json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) OR (json_extract(payload,'$.state')='cancelled' AND json_extract(payload,'$.workspace') IS NOT NULL AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) ORDER BY task_id").map_err(|error|error.to_string())?;
         statement
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|error| error.to_string())?
@@ -565,6 +618,71 @@ mod tests {
             "delivery_acked": false, "acknowledged_at": null
         });
         serde_json::from_value(payload).unwrap()
+    }
+
+    #[test]
+    fn native154_stockage_payloads150_152_153_sans_workspace() {
+        let base = serde_json::to_value(legacy_task151()).unwrap();
+        for version in [150, 152, 153] {
+            let mut payload = base.clone();
+            payload.as_object_mut().unwrap().remove("workspace");
+            payload.as_object_mut().unwrap().remove("workspace_report_mission");
+            if version >= 152 {
+                payload["launch_issued_at"] = serde_json::json!(110);
+                payload["restart_resumes"] = serde_json::json!(1);
+            }
+            if version >= 153 {
+                payload["round"] = serde_json::json!(2);
+                payload["guarded"] = serde_json::json!(true);
+                payload["request"]["keep_alive_secs"] = serde_json::json!(600);
+                payload["request"]["brief"] = serde_json::json!({"objective":"objectif","summary":"résultat"});
+            }
+            let task: Task = serde_json::from_value(payload).unwrap();
+            assert!(task.workspace.is_none(), "payload {version}");
+            assert!(task.workspace_report_mission.is_none(), "payload {version}");
+        }
+    }
+
+    #[test]
+    fn native154_stockage_workspace_sans_signal_lineage() {
+        let mut task = legacy_task151();
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        store.insert(&task, "request-152", b"canonical").unwrap();
+        let before = store.lineage_page("parent", 100, None, |_| false).unwrap();
+        store.take_changes();
+        let receiver = store.change_receiver().unwrap();
+        receiver.try_recv().unwrap();
+        task.workspace = Some(WorkspaceRecord {
+            strategy: WorkspaceStrategy::Worktree,
+            state: WorkspaceState::Active,
+            toplevel: "/tmp/repository".into(),
+            path: "/tmp/repository/.worktrees/task".into(),
+            branch: "bridget/task".into(),
+            base_commit: "a".repeat(40),
+            head_commit: None,
+            branch_commit: None,
+            head_on_branch: None,
+            commit_count: None,
+            commits: Vec::new(),
+            truncated: false,
+            dirty: None,
+        });
+        for state in [WorkspaceState::Active, WorkspaceState::Kept] {
+            task.workspace.as_mut().unwrap().state = state;
+            if task.workspace.as_ref().unwrap().state == WorkspaceState::Kept {
+                task.workspace_report_mission = Some(task.mission.clone());
+            }
+            store.save(&task).unwrap();
+            let saved = store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(serde_json::to_value(saved.workspace).unwrap(), serde_json::to_value(&task.workspace).unwrap());
+            assert_eq!(saved.workspace_report_mission, task.workspace_report_mission);
+            assert_eq!(store.lineage_page("parent", 100, None, |_| false).unwrap(), before);
+            assert!(store.take_changes().is_empty());
+            assert!(receiver.try_recv().is_err());
+        }
+        let mut record = serde_json::to_value(task.workspace.unwrap()).unwrap();
+        record["state"] = serde_json::json!("removed");
+        assert!(serde_json::from_value::<WorkspaceRecord>(record).is_err());
     }
 
     #[test]

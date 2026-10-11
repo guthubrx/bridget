@@ -5,15 +5,15 @@
 
 Spec: 154-isolation-worktree
 Titre: Isolation optionnelle de l'enfant dans un worktree Git
-Statut: Spécifiée (révisée après deux rondes de contre-revue Codex ; arbitrage utilisateur sur l'exécution de Git reçu le 2026-10-11)
+Statut: Implemented (28/28 tâches acquises ; convergence formelle et livraison à faire)
 Priorité: P1
-Tâches: à exécuter (26 tâches générées)
-Tests: à écrire en rouge d'abord (voir tasks.md)
+Tâches: 28/28 acquises sur preuves distinctes
+Tests: preuves acquises sur des passages distincts ; suite globale RC101 historique (voir validation/tests-154.md)
 
 Résumé:
 - Contexte: Un enfant natif travaille dans le dossier du parent. Si le parent ou un autre enfant écrit dans le même dossier, les fichiers se mélangent. Bridget ne fait que prévenir après coup (`file_collision`).
 - Objectif: Permettre au parent de demander un espace de travail dédié (worktree Git) pour un enfant, et de recevoir la branche et les commits produits. Bridget crée le worktree. Il ne le supprime jamais.
-- Dépendances: SPEC-148, SPEC-149, SPEC-150 (livrée). Les sessions 151 et 152 ne sont pas requises.
+- Dépendances: SPEC-148, SPEC-149, SPEC-150 et SPEC-153 (livrées). La base inclut aussi les sessions151 et152 livrées ; leurs contrats existants sont conservés.
 
 Fichiers:
 - spec.md: ✓
@@ -23,9 +23,9 @@ Fichiers:
 
 **Feature Branch**: `session-154-isolation-worktree`
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implemented
 **Priority**: P1
-**Dependencies**: SPEC-148, SPEC-149, SPEC-150
+**Dependencies**: SPEC-148, SPEC-149, SPEC-150, SPEC-153
 
 Date : 2026-10-11. Accord utilisateur : feuille de route « Bridget cinq étoiles
 en communication et délégation » (ADR 150b, ligne 154). Critère visé :
@@ -78,9 +78,9 @@ réseau.
 - élargissement des droits d'écriture du bac à sable de l'enfant (question 2) ;
 - dépôts qui utilisent des filtres Git exécutables, des inclusions de
   configuration ou un clone partiel (refusés, voir FR-013) ;
-- résultat structuré général (session151) : cette session ajoute seulement
+- extension du résultat structuré général déjà livré en session151 : cette session ajoute seulement
   l'objet `workspace` et une ligne de fin ;
-- reprise après panne d'une mission (session152) ;
+- extension de la reprise après panne déjà livrée en session152 ;
 - sous-modules Git et fichiers ignorés par Git (non copiés, voir hypothèses).
 
 ## Scénarios utilisateur
@@ -182,7 +182,9 @@ worktree. Rien ne bloque l'appel.
   objet par le réseau. **Ce contrôle est un garde-fou, pas une garantie** : la
   configuration peut changer entre le contrôle et l'extraction ou le rapport.
   Le risque résiduel est accepté (voir « Arbitrage utilisateur - exécution de Git »).
-- **FR-014** : Toute commande Git de Bridget passe par un exécuteur unique :
+- **FR-014** : Toute commande Git des parcours154 (avant-vol, création et
+  rapport) et des deux lectures du wrapper couvertes par T022 passe par un
+  exécuteur unique :
   variables `GIT_*` retirées, configuration système et globale de l'utilisateur
   ignorées, hooks désactivés (`core.hooksPath=/dev/null`),
   `core.fsmonitor=false`, `GIT_ALLOW_PROTOCOL=` vide, `protocol.allow=never`,
@@ -191,6 +193,8 @@ worktree. Rien ne bloque l'appel.
   (`--no-textconv`, `--no-ext-diff`), délai maximal, sortie bornée en mémoire et
   en temps, arguments sans interpréteur de commandes, références après
   `--end-of-options`. Les alias ne remplacent pas les commandes internes de Git.
+  Les lectures historiques de `communication.rs` et `derive_domain_at` restent
+  hors de ce périmètre, comme prévu au plan et dans l’ADR154.
 - **FR-015** : L'exécuteur n'accepte que les sous-commandes de la liste
   blanche : `--version`, `rev-parse`, `symbolic-ref`, `check-ref-format`,
   `check-ignore`, `show-ref`, `config --get-regexp`, `worktree add -b`,
@@ -229,16 +233,11 @@ worktree. Rien ne bloque l'appel.
 - **FR-021** : Le résultat remis au parent se termine par une ligne écrite par
   Bridget : branche, base, nombre de commits, modifications non commitées, tête
   sur la branche, état du worktree.
-- **FR-022** : Le rapport est calculé au passage à `result_available`. Pour un
-  échec ou une annulation, il est calculé après l'arrêt confirmé de l'enfant.
-  L'état passe de `active` à `kept`, une seule fois. Le tick ne lance pas Git :
-  il note un travail de rapport sous verrou, le verrou est rendu, Git lit le
-  worktree, puis un verrou court range le rapport (premier rapport rangé gagne).
-  La transition vers `result_available` attend ce rapport.
+- **FR-022** : Le rapport est calculé à chaque passage à `result_available`, donc pour chaque mission et ronde153. Pour un échec ou une annulation, il est calculé après l'arrêt confirmé de l'enfant. Le tick note sous verrou le travail avec `task_id`, `Task.mission` et `Task.round_no()` existants. Git lit hors verrou. Un verrou court range le rapport seulement si la mission et la ronde courantes correspondent encore et si aucun rapport de cette ronde n'a été rangé. Le premier rapport gagne pour cette ronde ; un rapport devenu ancien est rejeté. La publication du résultat attend ce rapport. Une nouvelle ronde recalcule les faits Git. Les résultats déjà publiés restent immuables. L'état passe `active` → `kept` une seule fois, sans retour ; `kept` signifie dossier et branche conservés, et permet de continuer à écrire selon les droits hérités.
 
 **Conservation et purge**
 
-- **FR-023** : `cleanup_done` devient vrai après le rapport final. La purge de la
+- **FR-023** : `cleanup_done` devient vrai seulement après le rapport terminé et l’arrêt confirmé ou la fin de garde153 prévue par le contrat existant. Un rapport de ronde1 avec garde active ne suffit pas. La purge de la
   session150 ne change pas. Elle efface des lignes de base, jamais des fichiers
   du disque. Un worktree d'une tâche purgée reste sur le disque.
 - **FR-024** : Un worktree absent au lancement de l'enfant fait échouer la
@@ -259,9 +258,11 @@ worktree. Rien ne bloque l'appel.
 - **FR-027** : Deux appels de même clé ou de même dossier ne créent pas deux
   worktrees ni ne dépassent le plafond de 32. Une table de réservations en
   mémoire, sous verrou, refuse une seconde création pour la même clé
-  (`workspace_creation_in_progress`, à rejouer) et compte les réservations
-  en cours dans le plafond. Le plafond se compte aussi sur les enregistrements
-  de tâches du dossier.
+  (`workspace_creation_in_progress`, à rejouer). Le plafond compte l’union
+  des chemins enregistrés dans Git, des réservations en cours et des chemins
+  de tâches encore présents ou dont la présence est indéterminée. Un chemin
+  de tâche absent (`NotFound`) ne compte pas. Les enregistrements Git et les
+  réservations restent comptés ; les ensembles ne sont jamais additionnés.
 - **FR-028** : Les lectures Git du wrapper (carte de reprise) passent par le même
   exécuteur durci (lecture seule, sortie et temps bornés, filtres exécutables
   non lancés : `status` est omis et la carte le dit si la configuration locale
@@ -404,3 +405,34 @@ réduisent la surface et ne forment pas une frontière de sécurité.
    avec le message « ajoutez `.worktrees/` à `.gitignore` ». Autre choix :
    Bridget ajoute le motif à `info/exclude` lui-même (écriture dans le dépôt,
    rejetée par la contre-revue comme surface de lien symbolique).
+
+## Précisions approuvées après contre-revueR1
+
+Le rapport protège la publication par comparaison d’état waiting_for_children,
+mission et ronde courantes. Une erreur Git après tentative bornée laisse les
+faits inconnus et rend « rapport indisponible », sans attente infinie. Le
+résultat courant inclut une seule ligne de fin ; les imitations sont assainies.
+Les champs structurés portent les faits. Une nouvelle ronde vide les faits
+courants sans changer kept. Aucun arrêt forcé à result_available avec garde153.
+Failed/cancelled attendent l’arrêt confirmé avant rapport de tout l’arbre.
+Le rejeu admis et l’autorisation du cwd canonique précèdent toute probeGit154.
+Les réservations et tâches ne se comptent qu’une fois par chemin au plafond.
+H11 ancreGit fiable du registreparent retenue ci-dessous, à vérifier ; H12 borne du lot reste en conception.
+
+### Complément technique du principal — marqueur et ancre
+
+Marqueur privé retenu : `Task.workspace_report_mission`, default et omission
+siNone. Il identifie la mission déjà rapportée. Aucun champ de ronde ajouté à
+WorkspaceRecord ni au contrat public. CAS waiting_for_children+mission+round
+protège le succès ; le marqueur protège aussi échec de livraison, cleanup et
+reprise après panne, même avec faitsNone et kept. `begin_round` remet faits et
+marqueur à vide. La condition de première publication vaut par mission.
+
+AncreGit : utiliser le registre Git du parent hors dossier enfant, avec parcours
+borné et correspondance des chemins toplevel/path enregistrés. Ne pas lire le
+fichier.git contrôlable de l’enfant. Ancre absente : rapport indisponible, aucun
+champ public/privé d’ancre supplémentaire. Implémentation à vérifier.
+
+Neutraliser dans le texte enfant le préfixe `[Bridget] espace de travail` en
+`[Enfant] espace de travail`, puis ajouter l’unique suffixe d’autorité. Son
+budget exact en octets et une coupeUTF8 gardent la limite262144octets.

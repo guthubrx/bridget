@@ -60,5 +60,6 @@ mod t3code_mcp;
 pub mod test_sync;
 pub mod threads;
 pub mod wrapper;
+pub(crate) mod workspace_git;
 pub(crate) mod native_permissions;
 mod native_permission_observer;

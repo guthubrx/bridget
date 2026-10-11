@@ -121,12 +121,15 @@ sans code en plus.
   suivi par Git : il manquerait dans le worktree et ferait perdre des règles
   `deny`. Refus explicite et précoce `workspace_inheritance_unavailable`. Question
   1 de la spec.
-- **Autres paires.** Codex vers Codex, Codex vers Claude et Claude vers Codex ne
-  dépendent pas du dossier du parent pour hériter. Le sandbox Codex
+- **Autres paires.** Codex vers Codex conserve le schéma fermé des droitsCodex.
+  Codex vers Claude en développement exige accèscomplet+never (:218-225)
+  et recalcule le contexte du dossierréel ; les fichiersClaude ignorés du parent
+  ne sont pas des droitsCodex. Claude avec règles versCodex est refusé
+  (:253-268). Aucun refus global de toute cibleClaude n’est ajouté. Le sandbox Codex
   `workspace-write` garde ses racines inscriptibles vides
   (`native_delegation.rs:118-122`) : aucun droit n'est ajouté.
 - **Catalogue.** Le catalogue calcule déjà `inherit` et `development` par
-  fournisseur (`native_delegation.rs:380-391`). Il ajoute `worktree` et
+  fournisseur (`native_delegation.rs:714-725`). Il ajoute `worktree` et
   `worktree_refusal` avec la même logique de paire. Le test qui fige les clés
   (`native_delegation_permissions149_tests.rs:195`) est mis à jour.
 
@@ -163,8 +166,9 @@ sans code en plus.
     par un exécuteur enregistreur.
 - **Avant-vol hors verrou.** Les commandes de lecture (`--version`, `rev-parse`,
   `config --get-regexp`, `check-ref-format`, `show-ref`, `check-ignore`,
-  `worktree list`) tournent avant le verrou, sur le dossier brut de la requête,
-  comme `resolve_communication_project`. Elles n'exécutent ni hook ni fsmonitor.
+  `worktree list`) tournent horsverrou seulement après lookup de rejeu et
+  autorisation du cwdcanonique dans le premier verrou. La résolution héritée
+  `resolve_communication_project` reste horspérimètre154. Elles n'exécutent ni hook ni fsmonitor.
   `status` et `worktree add` ne tournent jamais avant l'autorisation.
 - **Rejeté** : la bibliothèque `git2` (nouvelle dépendance lourde, Article XIX) ;
   neutraliser les filtres un par un par `-c` (liste incomplète si une inclusion
@@ -226,7 +230,7 @@ environnement de développement. **Décision : supprimer la suppression.**
   arrière, les états `removed` et `retained`, le motif de rétention, les
   tests de retrait. Quatre objections tombent par construction.
 - **Ce que Bridget fait à la fin** : une lecture seule, durcie, qui produit le
-  rapport (R7) et passe l'état à `kept`. Puis `cleanup_done`.
+  rapport (R7) et passe l'état à `kept`. Puis `cleanup_done` seulement après arrêt confirmé/fin de garde153 et rapport terminé.
 - **Ce que cela coûte** : les worktrees s'accumulent sur le disque. Parades :
   plafond de 32 worktrees enregistrés sous `<cwd>/.worktrees/` (refus
   `workspace_limit`), chemin et branche dans le résultat remis au parent,
@@ -238,7 +242,7 @@ environnement de développement. **Décision : supprimer la suppression.**
   nommés dans le refus. Le journal du daemon les nomme avant l'appel à Git. Ils
   sont inoffensifs : un extrait propre d'un commit et une branche posée sur ce
   commit.
-- **Purge 150** : `cleanup_done` suit le rapport final. La purge efface des
+- **Purge 150** : `cleanup_done` suit le rapport terminé et l’arrêt confirmé/fin de garde153. La purge efface des
   lignes de base et ne touche pas le disque. Aucun changement du code de purge.
 - **Rejeté** : retrait automatique (risques ci-dessus) ; retrait différé à la
   purge ; commande de liste dans Bridget (la commande Git suffit) ;
@@ -259,20 +263,18 @@ environnement de développement. **Décision : supprimer la suppression.**
 - **Où.** Au passage à `result_available` (`native_delegation.rs:1111`) pour un
   résultat. Après l'arrêt confirmé de l'enfant pour un échec ou une annulation.
 - **Comment le parent le reçoit.** Une ligne de fin, écrite par Bridget. L'objet
-  complet est dans `bridget_task_status`. La session151 pourra le déplacer.
+  complet est dans `bridget_task_status`. Le contrat151 déjà livré reste conservé.
 - **Taille.** 50 commits au plus, 200 caractères par sujet : environ 12 Kio au
   maximum, bien sous la limite de résultat de 262 144 octets
   (`native_delegation.rs:1105`).
 
-## R8 - Décision : durcir les lectures Git du wrapper
+## R8 - Décision : lectures du wrapper par l'exécuteur unique
 
-Le wrapper lit `git status` et `git worktree list` sur le dossier de l'enfant
-sans couper `core.fsmonitor` ni les verrous optionnels (`wrapper.rs:572-590`,
-`:623-641`). Ces lectures existent déjà. La session 154 les oriente vers des
-worktrees d'enfants dont le dossier Git est dans le dépôt du parent. Décision :
-ajouter `-c core.fsmonitor=false` et `GIT_OPTIONAL_LOCKS=0` à ces deux
-fonctions, rien d'autre. Borner la taille de sortie n'est pas traité : la carte
-tronque déjà l'affichage à 40 entrées, et ce point est hors périmètre.
+Les lectures de `managed_resume_worktree` et `is_protected_principal_checkout`
+passent par `workspace_git` (T022). Le temps et les sorties sont bornés avant
+la troncature de la carte. `status` est omis si un filtre exécutable est présent ;
+la carte indique son indisponibilité. Le durcissement limité à deux lignes est
+supersédé. Aucun changement de `communication.rs` ni de la racine/projet commun.
 
 ## R9 - Décision : collision, prévenir sans bloquer
 
@@ -303,3 +305,60 @@ tronque déjà l'affichage à 40 entrées, et ce point est hors périmètre.
 - Mesure d'un dépôt volumineux : T002 mesure le dépôt Bridget seulement.
 - Fenêtre de course sur un lien `.worktrees` remplacé entre le contrôle et Git :
   recontrôle après création, résiduel accepté (R3).
+
+## R12 - Base153 livrée et rapports par ronde
+
+Base documentaire : `89f7a4163c2fb27229587f50a46414295ba3674d`, avec153
+`7c848850ba6067cf1d0d94b8edf0dd11896a1b24` livrée et active.
+Preuves relues : `delegation.rs:82` (mission), `:139` (`round_no`),
+`:161` (`continuable`) ; `native_delegation.rs:756-769` (keep_alive/brief avant
+rejeu), `:728` (catalogue153), `:2229-2232` (garde avant nettoyage),
+`:2500-2554` (arrêt confirmé puis cleanup).
+
+Chaque ronde recalcule ses faits Git avant publication. Comparer mission et
+ronde existantes avant sauvegarde ; le premier rapport gagne pour la ronde
+courante, jamais pour toutes les rondes. Aucun helper, table ou état de ronde
+public nouveau. `kept` conserve le dossier/branche ; les écritures restent
+autorisées par les droits hérités. Les historiques publiés ne changent pas.
+
+Validation externe primaire le2026-10-11 : [git-worktree](https://git-scm.com/docs/git-worktree)
+confirme que les worktrees liés ont leurs métadonnées et partagent le dépôt ;
+[git](https://git-scm.com/docs/git) documente les variables d’environnement et
+les options de configuration. Ces lectures ne prouvent aucun test154.
+
+## R13 — Contre-revueR1 et complément technique du principal
+
+Quinzehypothèses arbitrées dans adversarial-review-claude.md. PublicationCAS
+waiting_for_children+mission+round, rapporttentativebornée et indisponible en
+erreur ; réserver budget exactdu suffixe262144octets et couperUTF8.
+
+Task.workspace_report_mission privé default/skipNone est autorisé :
+ND2193-2228 peut passer result_availableàfailed après refus de livraison.
+CASsuccès seul ne couvre pas échec/cleanup/reprise. begin_round remet marqueur
+et faits àvide. Aucun champ public de ronde ni migration/table.
+
+L’ancrevient du registreGitparent horsenfant par scanborné et correspondance
+toplevel/path. Aucun enfant.git lu, aucun champanchor nouveau. Ancre absente
+→ faitsNone et mentionindisponible. H12bornelot reste enétude.
+Whitelistformes/options, environnement/configurationcommuns ; no-textconv et
+no-ext-diff seulement sur logcompatible, pas statusGit2.55(RC129constatéroot).
+Annulation : chaque membreworktree de l’arbre, rapporthorsverrou puis cleanupCAS
+après arrêtconfirmé. Résultatavecgarde153 neforcepasarrêt.
+
+RéservationsArcMutexséparé ; plafondunionpaths sansdoubleréservationpropre.
+Neutraliser lepréfixeenfantBridget→Enfant ; unique suffixeautoritaire et faits
+structurés. Ces décisions restent à éprouver par les tests prévus ; aucun test
+supplémentaire, aucun GREEN inventé.
+
+## ComplémentH12 et limiteSIGTERM
+
+WorkspaceWorkArcMutexséparé unique : creationsMap etreportsSet des
+(task,mission,round) en cours. Claim empêche tickconcurrent de relancerGit lent ;
+DropRAII retireseulementl’entrée du verrou séparé. Aucunthread/backgroundengine
+ni quota arbitraire. Choixautoriséroot ; testnatifconcurrence àprouver.
+
+SIGTERM sur seulchild.id Git puis reapborné, pasSIGKILL. Programmehostile
+ignorantSIGTERM peutpersister ; retourborné, pas arrêtabsolu. Parent/ancêtre
+principal etregistreGitcommun restent la sourcefiable du modèleADR011.
+FondationsR1 :15PASS/7FAIL ; T004/T021/T022acquises ; cinqcasesdone,23open.
+T011attendcontratferméglobal ; T003/T005nonacquises. Aucun GREENglobal.
