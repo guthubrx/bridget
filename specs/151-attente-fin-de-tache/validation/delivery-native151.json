@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--features",
+    "test-support",
+    "native151",
+    "--lib",
+    "--",
+    "--test-threads=4",
+    "--nocapture"
+  ],
+  "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget",
+  "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/151-attente-fin-de-tache/validation/delivery-native151.log",
+  "tmp": "/tmp/b.rfh75ov_",
+  "exit_code": 0,
+  "seconds": 48.13
+}

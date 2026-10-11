@@ -1,0 +1,144 @@
+{
+  "format": "bridget-delivery-candidate-v1",
+  "source_root": "/Users/moi/Nextcloud/10.Scripts/64.bridget",
+  "source_commit": "e1af5c58a0e81f4e26fa16354d5cdd5fb604894d",
+  "build_id": "e1af5c58a0e8",
+  "stage": "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a",
+  "cargo_target_dir": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/target",
+  "build_command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/build.py",
+    "cargo",
+    "build",
+    "--locked",
+    "--offline",
+    "--release",
+    "-p",
+    "bridget-daemon"
+  ],
+  "build_environment": {
+    "CARGO_TARGET_DIR": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/target",
+    "BRIDGET_BUILD_ID": "e1af5c58a0e8",
+    "BRIDGET_BUILD_CACHE_GIB": "10",
+    "BRIDGET_BUILD_CACHE_DAYS": "7"
+  },
+  "started_at_utc": "2026-10-11T12:15:22.048904+00:00",
+  "installed_binary_before_sha256": "68c3117ad806a1988eaa49bb39936cc09121156cd39e31e1de24dbaa6157de87",
+  "installation_performed": false,
+  "services_changed": false,
+  "build_rc": 0,
+  "build_seconds": 138.529,
+  "build_finished_at_utc": "2026-10-11T12:17:40.587479+00:00",
+  "candidate": "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget",
+  "candidate_sha256": "5687904276f63b8eec1f6362f16fb815decb5038d20d32b859e60482ce9daf3d",
+  "candidate_size_bytes": 17637616,
+  "source_release_binary": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/target/release/bridget",
+  "source_release_binary_sha256": "13eabc1223dbed2f072a6451bfe20d02e0ab6f648599e1643de808e21a80e600",
+  "signature": "adhoc",
+  "verification_commands": [
+    {
+      "command": [
+        "codesign",
+        "--force",
+        "--sign",
+        "-",
+        "--timestamp=none",
+        "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget: replacing existing signature\n"
+    },
+    {
+      "command": [
+        "codesign",
+        "--verify",
+        "--strict",
+        "--verbose=2",
+        "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget: valid on disk\n/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget: satisfies its Designated Requirement\n"
+    },
+    {
+      "command": [
+        "codesign",
+        "-d",
+        "--verbose=4",
+        "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "Executable=/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget\nIdentifier=bridget-555549444bf56734b1ac323c84ec07333749d7d7\nFormat=Mach-O thin (arm64)\nCodeDirectory v=20400 size=34569 flags=0x2(adhoc) hashes=1074+2 location=embedded\nVersionPlatform=1\nVersionMin=720896\nVersionSDK=1704448\nHash type=sha256 size=32\nCandidateCDHash sha256=e7767f8116fd200a8d5d080fcefbfaf93c1a4039\nCandidateCDHashFull sha256=e7767f8116fd200a8d5d080fcefbfaf93c1a403962730abc094043d3d06ea530\nHash choices=sha256\nCMSDigest=e7767f8116fd200a8d5d080fcefbfaf93c1a403962730abc094043d3d06ea530\nCMSDigestType=2\nExecutable Segment base=0\nExecutable Segment limit=14270464\nExecutable Segment flags=0x1\nPage size=16384\nCDHash=e7767f8116fd200a8d5d080fcefbfaf93c1a4039\nSignature=adhoc\nInfo.plist=not bound\nTeamIdentifier=not set\nSealed Resources=none\nInternal requirements count=0 size=12\n"
+    },
+    {
+      "command": [
+        "/Users/moi/.cache/bridget-delivery150-151.v6wl8m5a/bridget",
+        "--version"
+      ],
+      "rc": 0,
+      "stdout": "bridget 0.1.3\n",
+      "stderr": ""
+    }
+  ],
+  "build_identity_evidence": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/target/release/build/bridget-daemon-3fceaed01b5862e3/output",
+      "build_identity_lines": [
+        "cargo:rustc-env=BRIDGET_BUILD_ID=e1af5c58a0e8"
+      ]
+    }
+  ],
+  "release_compile_seconds": 57.62,
+  "installed_binary_after_sha256": "68c3117ad806a1988eaa49bb39936cc09121156cd39e31e1de24dbaa6157de87",
+  "verified_at_utc": "2026-10-11T12:19:24.536723+00:00",
+  "cache_cleanup": {
+    "performed_by": "scripts/build.py cargo, automatic after successful build",
+    "budget_gib": 10,
+    "max_age_days": 7,
+    "removed_profiles": [
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug",
+        "removed_gib_logical_rounded": 6.8,
+        "cache_children_remaining": {
+          "deps": false,
+          "build": false,
+          "incremental": false,
+          ".fingerprint": false
+        },
+        "top_level_bridget_exists": false
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/target/debug",
+        "removed_gib_logical_rounded": 62.62,
+        "cache_children_remaining": {
+          "deps": true,
+          "build": true,
+          "incremental": true,
+          ".fingerprint": true
+        },
+        "top_level_bridget_exists": true
+      }
+    ],
+    "removed_total_gib_logical_rounded": 69.42,
+    "remaining_gib_logical_rounded": 0.28,
+    "guards_inferred_from_successful_cleanup_branch": [
+      "Python>=3.11 and fd-safe shutil.rmtree",
+      "Plain same-volume non-symlink profile/cache directories",
+      "Nonblocking exclusive .cargo-lock flock",
+      "Size and latest modification unchanged during recheck",
+      "lsof complete without error; no other process path inside each removed profile",
+      "Only deps/build/incremental/.fingerprint removed; top-level binaries and lock retained"
+    ],
+    "physical_space": {
+      "before_free_gib_rounded": 23.52,
+      "after_free_bytes": 39549644800,
+      "after_free_gib": 36.83,
+      "deletion_attributable_physical_bytes": null,
+      "limitation": "Aucune mesure physique isolée du retrait. Le changement net de volume inclut compilation, clones APFS et activité concurrente ;69.42 Gio est une mesure logique arrondie."
+    },
+    "further_cleanup_invoked": false,
+    "target150_retained_for_parent_tests": true
+  }
+}

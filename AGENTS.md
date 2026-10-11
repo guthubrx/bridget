@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Sessions150-158 en cours (pipeline my.specify-all) dans .worktrees/150-socle-delegation. Plan courant : specs/150-socle-delegation/plan.md.
+Sessions 150/151 livrées sur Git et sur disque le 2026-10-11 : 150 39/39, 151 27/27. Feuille de route 152–160 préparée seulement. Sources b39367a633cd puis e1af5c58a0e8 intégrées et poussées github/main. Binaire e1af5c58a0e8 signé installé atomiquement ; runtime inchangé, aucune relance. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/151-attente-fin-de-tache/validation/livraison150-151.md.
 Complément149 identité durable en cours le 2026-10-11, dans la session déjà autorisée.
 Sources Bridget9f2ccbf23195 et T3d833387203 intégrées et poussées vers leurs forks.
 MCP officiel existant réattesté par fil ; opt-out/configurations étrangères protégés. Routes de fils opaques encodées.
