@@ -3628,6 +3628,21 @@ mod tests {
         message
     }
 
+    #[test]
+    fn native151_groupe_remises_natives_message() {
+        let (mut worker, _peer) = worker099();
+        for index in 0..3 {
+            let message = plain114(&format!("native-result-task-{index}"));
+            assert!(!message.reply);
+            assert!(message.thread_notice.is_none());
+            assert_eq!(batch_family(&message), Some(BatchFamily::Message));
+            worker.handle_frame(DaemonToWrapper::Deliver(message));
+        }
+        assert_eq!(worker.batchable_prefix(), 3);
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
     /// Session 114 : plusieurs comptes rendus sans réponse attendue tiennent
     /// dans un seul tour, au lieu d'en ouvrir un chacun.
     #[test]

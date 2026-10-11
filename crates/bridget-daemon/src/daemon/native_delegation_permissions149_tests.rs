@@ -191,9 +191,29 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
     assert_eq!(catalogue["max_children"], 16);
     assert_eq!(catalogue["max_depth"], 8);
     // Aucune invitation à un grant humain : la forme de la réponse est fermée.
-    let mut clés: Vec<&str> = catalogue.as_object().unwrap().keys().map(String::as_str).collect();
+    let mut clés: Vec<&str> = catalogue
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     clés.sort();
-    assert_eq!(clés, ["cwd_root", "cwd_scope", "max_children", "max_depth", "mission_reply_limit_secs", "mission_reply_max_secs", "mission_reply_min_secs", "providers", "version"]);
+    assert_eq!(
+        clés,
+        [
+            "cwd_root",
+            "cwd_scope",
+            "max_children",
+            "max_depth",
+            "mission_reply_limit_secs",
+            "mission_reply_max_secs",
+            "mission_reply_min_secs",
+            "providers",
+            "version",
+            "wait_timeout_default_secs",
+            "wait_timeout_max_secs"
+        ]
+    );
     assert_eq!(catalogue["mission_reply_limit_secs"], 3600);
     assert_eq!(catalogue["mission_reply_min_secs"], 60);
     assert_eq!(catalogue["mission_reply_max_secs"], 86_400);
@@ -335,6 +355,7 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
         failure_sent: false,
         reply_timeout: None,
         delivery_acked: false,
+        acknowledged_at: None,
     }
 }
 

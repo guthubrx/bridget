@@ -46,6 +46,167 @@ fn guichet_deposit(request_id: &str, bytes: &[u8]) -> GuichetDeposit {
 }
 
 #[test]
+fn native151_envoi_resume_fige_migration_store_preserve_ancienne_demande() {
+    let path = std::env::temp_dir().join(format!("bridget-151-store-{}.db", Uuid::new_v4()));
+    {
+        let legacy = rusqlite::Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE tracked_requests (
+                    id TEXT PRIMARY KEY, sender TEXT NOT NULL, target TEXT NOT NULL,
+                    state TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    deadline_at INTEGER NOT NULL, escalation_level INTEGER NOT NULL DEFAULT 0,
+                    cancel_reason TEXT, completed_at INTEGER
+                 );
+                 INSERT INTO tracked_requests VALUES
+                    ('ancienne', 'parent', 'enfant', 'answered', 1, 2, 0, NULL, 3);",
+            )
+            .unwrap();
+    }
+    for _ in 0..2 {
+        let store = Store::open(&path).unwrap();
+        let snapshot: (String, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT state, reply_summary FROM tracked_requests WHERE id='ancienne'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(snapshot, ("answered".into(), None));
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn native151_envoi_resume_fige_guichet_conserve_null_apres_reponse_tardive() {
+    let path = std::env::temp_dir().join(format!("bridget-151-guichet-{}.db", Uuid::new_v4()));
+    let mut store = Store::open(&path).unwrap();
+    let now = 1_787_500_000;
+    store
+        .create_request("demande-guichet", "parent", "codex-1", 60)
+        .unwrap();
+    let mut deposit = guichet_deposit("rapport-guichet", br#"{"type":"service_request"}"#);
+    deposit.operation = ServiceRequestOperation::DeliveryReport;
+    deposit.payload = ServiceRequestPayload::DeliveryReport {
+        objective_id: "objectif".into(),
+        delegation_id: "delegation".into(),
+        delivery_hash: "0".repeat(64),
+        in_reply_to: "demande-guichet".into(),
+        review_verdict: None,
+    };
+    store.deposit_guichet(&deposit, 600, 60, now).unwrap();
+    let claim = match store.claim_next_guichet("service", now).unwrap() {
+        GuichetNext::Claimed(claim) => claim,
+        GuichetNext::Empty => panic!("rapport du guichet absent"),
+    };
+    assert!(matches!(
+        store.reply_guichet(
+            "service",
+            GuichetReplyInput {
+                issuer_scope: &claim.issuer_scope,
+                request_id: &claim.request_id,
+                generation: claim.claim_generation,
+                token: &claim.claim_token,
+                response_message_id: "reponse-guichet",
+                reply_bytes: br#"{"type":"guichet_reply"}"#,
+                in_reply_to: "demande-guichet",
+                outcome: GuichetOutcome::Accepted,
+            },
+            now,
+        ),
+        Ok(GuichetResult::Terminal { ref issue, .. }) if issue == "accepted"
+    ));
+    assert!(
+        !store
+            .mark_answered(
+                "demande-guichet",
+                "codex-1",
+                "parent",
+                Some(r#"{"id":"tardive","from":"codex-1","summary":"retard","summary_truncated":false}"#),
+            )
+            .unwrap()
+    );
+    let snapshot: (String, Option<String>) = store
+        .conn
+        .query_row(
+            "SELECT state, reply_summary FROM tracked_requests WHERE id='demande-guichet'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(snapshot, ("answered".into(), None));
+    drop(store);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn native151_envoi_resume_fige_snapshot_filtre_et_premiere_reponse_stable() {
+    let path = std::env::temp_dir().join(format!("bridget-151-snapshot-{}.db", Uuid::new_v4()));
+    let store = Store::open(&path).unwrap();
+    store
+        .create_request("demande", "parent", "enfant", 60)
+        .unwrap();
+    store.set_request_deadline("demande", 7).unwrap();
+    assert_eq!(
+        store.request_wait_snapshot("demande", "parent").unwrap(),
+        Some(("open".into(), 7, None))
+    );
+    let first = bridget_core::BridgetMessage::new("enfant", "parent", "première réponse");
+    let first_summary = request_reply_summary(&first);
+    assert!(
+        !store
+            .mark_answered("demande", "tiers", "parent", Some(&first_summary))
+            .unwrap()
+    );
+    assert!(
+        !store
+            .mark_answered("demande", "enfant", "tiers", Some(&first_summary))
+            .unwrap()
+    );
+    assert!(
+        store
+            .mark_answered("demande", "enfant", "parent", Some(&first_summary))
+            .unwrap()
+    );
+    let second = bridget_core::BridgetMessage::new("enfant", "parent", "réponse tardive");
+    assert!(
+        !store
+            .mark_answered(
+                "demande",
+                "enfant",
+                "parent",
+                Some(&request_reply_summary(&second))
+            )
+            .unwrap()
+    );
+    // La lecture garde la réponse même si le ledger n'existe plus.
+    store.conn.execute_batch("DROP TABLE ledger").unwrap();
+    let changes = store.conn.total_changes();
+    for _ in 0..2 {
+        assert_eq!(
+            store.request_wait_snapshot("demande", "parent").unwrap(),
+            Some(("answered".into(), 7, Some(first_summary.clone())))
+        );
+        assert_eq!(
+            store.request_wait_snapshot("demande", "tiers").unwrap(),
+            None
+        );
+        assert_eq!(
+            store.request_wait_snapshot("inconnue", "parent").unwrap(),
+            None
+        );
+    }
+    assert_eq!(
+        store.conn.total_changes(),
+        changes,
+        "l'attente reste une lecture pure"
+    );
+    drop(store);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn guichet_rejoue_les_octets_et_releve_fifo_apres_reouverture() {
     let path = std::env::temp_dir().join(format!("bridget-guichet-{}.db", Uuid::new_v4()));
     let mut store = Store::open(&path).unwrap();
@@ -612,11 +773,19 @@ fn cancellation_is_idempotent_and_terminal() {
         .unwrap();
     assert_eq!(first.state, "cancelled");
     assert_eq!(second.state, "cancelled");
-    assert!(!store.mark_answered("request-1", "bob", "alice").unwrap());
+    assert!(
+        !store
+            .mark_answered("request-1", "bob", "alice", None)
+            .unwrap()
+    );
     store
         .create_request("request-2", "alice", "bob", 60)
         .unwrap();
-    assert!(store.mark_answered("request-2", "bob", "alice").unwrap());
+    assert!(
+        store
+            .mark_answered("request-2", "bob", "alice", None)
+            .unwrap()
+    );
     assert_eq!(
         store.get_request("request-2").unwrap().unwrap().state,
         "answered"

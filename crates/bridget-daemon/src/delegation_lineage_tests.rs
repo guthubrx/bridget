@@ -84,6 +84,7 @@ fn task(
         failure_sent: false,
         reply_timeout: None,
         delivery_acked: false,
+        acknowledged_at: None,
     }
 }
 
@@ -944,6 +945,36 @@ fn native150_purge_arbre_termine_et_accuse_purge() {
     let page = store.lineage_page("humain", 100, None, |_| false).unwrap();
     assert!(page["tasks"].as_array().unwrap().is_empty());
 
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native151_attente_compteur_insert_save_human_cancel_et_purge() {
+    let dir = temp_dir("epoch");
+    let store = open_store(&dir.join("store.sqlite"));
+    let epoch = store.wait_epoch();
+    let before = epoch.get();
+    poser(
+        &store, "racine", "humain", None, "working", false, false, false,
+    );
+    assert_eq!(epoch.get(), before + 1);
+    let mut saved = store.get("racine").unwrap().unwrap();
+    let projection = store.projection_meta().unwrap();
+    saved.result_sent = true;
+    store.save(&saved).unwrap();
+    assert_eq!(epoch.get(), before + 2);
+    assert_eq!(store.projection_meta().unwrap().seq, projection.seq);
+    store
+        .human_cancel("humain", "racine", "cancel-151")
+        .unwrap();
+    assert_eq!(epoch.get(), before + 3);
+    saved.state = "cancelled".into();
+    saved.cleanup_done = true;
+    store.save(&saved).unwrap();
+    let before_purge = epoch.get();
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+    assert_eq!(epoch.get(), before_purge + 1);
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }

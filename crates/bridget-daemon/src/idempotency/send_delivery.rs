@@ -324,7 +324,9 @@ impl IdempotencyStore {
         &self,
         key: &IdempotencyKey,
     ) -> Result<Option<String>, IdempotencyError> {
-        Ok(self.stored_send_delivery(key)?.map(|delivery| delivery.phase))
+        Ok(self
+            .stored_send_delivery(key)?
+            .map(|delivery| delivery.phase))
     }
 
     fn stored_send_delivery(
@@ -758,11 +760,13 @@ impl IdempotencyStore {
         }
         let answered_request = if let Some(message) = message {
             if let Some(request_id) = message.in_reply_to.as_deref() {
+                let reply_summary = crate::store::request_reply_summary(&message);
                 let changed = crate::store::mark_answered_in_transaction(
                     &tx,
                     request_id,
                     &message.from,
                     &message.to,
+                    Some(&reply_summary),
                 )?;
                 changed.then(|| request_id.to_string())
             } else {

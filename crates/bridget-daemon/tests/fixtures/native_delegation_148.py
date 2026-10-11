@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 
 args = sys.argv[2:]
 model = args[args.index("--model") + 1]
@@ -39,6 +40,16 @@ for line in sys.stdin:
         initialized = True
     if blocked:
         continue
+    if "FAIL_151" in content:
+        emit({"type": "result", "is_error": True, "terminal_reason": "api_error"})
+        continue
+    if "WAIT_FILE_151" in content:
+        record("waiting_file_151")
+        deadline = time.monotonic() + 20
+        while not os.path.exists(os.path.join(os.path.dirname(evidence), "release-151")):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("fixture151 non libérée")
+            time.sleep(0.01)
     text = "fixture-glm5.3-answer-148"
     emit({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}})
     emit({"type": "result", "is_error": False, "terminal_reason": "completed", "result": text})

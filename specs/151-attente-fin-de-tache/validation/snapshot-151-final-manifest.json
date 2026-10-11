@@ -1,0 +1,1569 @@
+{
+  "format_version": 1,
+  "captured_at_utc": "2026-10-11T09:45:28.852152+00:00",
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache",
+  "stage": "final_after_ack_W004",
+  "tasks": {
+    "checked_by_principal": 26,
+    "total": 26,
+    "still_open": [],
+    "worker_changed_tasks": false
+  },
+  "baseline": {
+    "committed_base": "1f2c661d39a9ce106723a93ac883f76ab9fe52c6",
+    "live_source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation",
+    "receipt_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/dependency150.json",
+    "receipt_sha256": "c5fc124bd5dfbfd62e09e2b9c7be030a5029a5b74e8a8c6fb911715a2ca1bd06",
+    "imported_patch_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/dependency150.patch",
+    "imported_patch_sha256": "2a538537622e9fe12e8fdc0fff2bd9c453ddf2708152734cfcfade4513088f92",
+    "verified_file_count": 19,
+    "files": [
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/daemon.rs",
+        "relative_path": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "9980e62eba124f2147a4ccd9b209469326db98d94de73f61edb34b6913ac26f2",
+        "expected_sha256": "9980e62eba124f2147a4ccd9b209469326db98d94de73f61edb34b6913ac26f2",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "relative_path": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "sha256": "2d98e7434f64017da0d3c40c74e6075b8445f7614bd7604c0a2989612df10af8",
+        "expected_sha256": "2d98e7434f64017da0d3c40c74e6075b8445f7614bd7604c0a2989612df10af8",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+        "relative_path": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+        "sha256": "7643ab73d5dfdd2e8c802e3edda5a34167931ae3c42711b1ec8b261ea59a8cc3",
+        "expected_sha256": "7643ab73d5dfdd2e8c802e3edda5a34167931ae3c42711b1ec8b261ea59a8cc3",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+        "relative_path": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+        "sha256": "487f7ab72147b91ffa8efda641ec89225aba4a3677c24e7044ff2942d3437e6c",
+        "expected_sha256": "487f7ab72147b91ffa8efda641ec89225aba4a3677c24e7044ff2942d3437e6c",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/delegation.rs",
+        "relative_path": "crates/bridget-daemon/src/delegation.rs",
+        "sha256": "2e951fc860a48e9089f70a8cc5074eda992ce87710095ab44249769e517df6f1",
+        "expected_sha256": "2e951fc860a48e9089f70a8cc5074eda992ce87710095ab44249769e517df6f1",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/delegation_lineage.rs",
+        "relative_path": "crates/bridget-daemon/src/delegation_lineage.rs",
+        "sha256": "dc0b9f1c445b48f655020b334f081f42e47d049ed6f77e1515a8392252993e4b",
+        "expected_sha256": "dc0b9f1c445b48f655020b334f081f42e47d049ed6f77e1515a8392252993e4b",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+        "relative_path": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+        "sha256": "fff0ca569903e9bf9ee78c679e232318aef48e13129afafd2cfef9ab53b01656",
+        "expected_sha256": "fff0ca569903e9bf9ee78c679e232318aef48e13129afafd2cfef9ab53b01656",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/delegation_mcp.rs",
+        "relative_path": "crates/bridget-daemon/src/delegation_mcp.rs",
+        "sha256": "ba28f65e520364a007b51d18b960050c22947a818db28c8f2f18d65cb869bb8c",
+        "expected_sha256": "ba28f65e520364a007b51d18b960050c22947a818db28c8f2f18d65cb869bb8c",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/desired_state.rs",
+        "relative_path": "crates/bridget-daemon/src/desired_state.rs",
+        "sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+        "expected_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/fleet.rs",
+        "relative_path": "crates/bridget-daemon/src/fleet.rs",
+        "sha256": "fc8f5d387abcdafff6893b093f8285194a08533d08f3f3e39d86a0e4311ffea2",
+        "expected_sha256": "fc8f5d387abcdafff6893b093f8285194a08533d08f3f3e39d86a0e4311ffea2",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "relative_path": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2fe5e502c6e357adac0bb0a21e04cdaf00696521d743e82c4a2c17b3f29903ad",
+        "expected_sha256": "2fe5e502c6e357adac0bb0a21e04cdaf00696521d743e82c4a2c17b3f29903ad",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/idempotency/tests.rs",
+        "relative_path": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "70c9430fffaf3f6103423b0f7c64a46318bfb7f26c8ff48633374e437da060dc",
+        "expected_sha256": "70c9430fffaf3f6103423b0f7c64a46318bfb7f26c8ff48633374e437da060dc",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/referent_control.rs",
+        "relative_path": "crates/bridget-daemon/src/referent_control.rs",
+        "sha256": "98d1573a2a401fbbab7d6d6d44d99a96b1a66f386775a7fabca370bd01a5656b",
+        "expected_sha256": "98d1573a2a401fbbab7d6d6d44d99a96b1a66f386775a7fabca370bd01a5656b",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/src/store/ledger_requests.rs",
+        "relative_path": "crates/bridget-daemon/src/store/ledger_requests.rs",
+        "sha256": "448dd1e6b298ff3da52c0448d0fd83a46f8b09d6257b3b4f23196f33a1cf76c6",
+        "expected_sha256": "448dd1e6b298ff3da52c0448d0fd83a46f8b09d6257b3b4f23196f33a1cf76c6",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "relative_path": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "862fc1681b45de7bd59b8369057486e38fb508bc72d94e7b4b0830f08675d363",
+        "expected_sha256": "862fc1681b45de7bd59b8369057486e38fb508bc72d94e7b4b0830f08675d363",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/crates/bridget-transport/src/protocol.rs",
+        "relative_path": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "9b119d3292804e8c0e85156489b98e92e83d331bbda598acef7e96883e77be42",
+        "expected_sha256": "9b119d3292804e8c0e85156489b98e92e83d331bbda598acef7e96883e77be42",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/docs/delegation-native.md",
+        "relative_path": "docs/delegation-native.md",
+        "sha256": "17a1eb1f7c2c3e1eb4dfda3b2f6eec9c14c6eec5e28e8a42f82940b8a2dd1d35",
+        "expected_sha256": "17a1eb1f7c2c3e1eb4dfda3b2f6eec9c14c6eec5e28e8a42f82940b8a2dd1d35",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/skills/bridget/SKILL.md",
+        "relative_path": "skills/bridget/SKILL.md",
+        "sha256": "68f6ab7ff81df5398d5d608b31697f00710211d534915ec72fd0b890dc94b224",
+        "expected_sha256": "68f6ab7ff81df5398d5d608b31697f00710211d534915ec72fd0b890dc94b224",
+        "matches": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/skills/bridget/references/commandes.md",
+        "relative_path": "skills/bridget/references/commandes.md",
+        "sha256": "2c6f07758419dcec7b288ce5376a581ee1684a931aafaed64e13806ffb1d6288",
+        "expected_sha256": "2c6f07758419dcec7b288ce5376a581ee1684a931aafaed64e13806ffb1d6288",
+        "matches": true
+      }
+    ],
+    "live_scoped_patch_byte_identical": true,
+    "unreceipted_live_planning_documents_used_as_baseline": false
+  },
+  "scope": {
+    "cumulative_tracked_files": 33,
+    "delta151_tracked_files": 30,
+    "delta151_categories": {
+      "session_selector151": 1,
+      "production151_with_inline_tests_possible": 15,
+      "tests_or_format151": 11,
+      "documentation151": 3
+    },
+    "imported150_byte_identical_paths": [
+      "crates/bridget-daemon/src/desired_state.rs",
+      "crates/bridget-daemon/src/fleet.rs",
+      "crates/bridget-daemon/src/referent_control.rs"
+    ],
+    "untracked_inventory": "all_git_untracked_excluding_standard_ignores_and_snapshot_outputs",
+    "ignored_inventory": "ignored_untracked_files_in_validation150_and_validation151_only",
+    "excluded_recursive_outputs": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/delta151-vs150-final.patch",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/delta151-vs150.patch",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/diff-151-final.patch",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/diff-151.patch",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/snapshot-151-final-manifest.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/snapshot-151-manifest.json"
+    ],
+    "delta151_patch_excludes_untracked_documents": true,
+    "no_new_production_modules_or_dependencies_created_by_snapshot_worker": true
+  },
+  "patches": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/diff-151-final.patch",
+      "bytes": 510753,
+      "sha256": "9cce536c4fa797b0720a2d4c1e9022d2b1e7d50e10308daa3f938bd756d1b1e1"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/delta151-vs150-final.patch",
+      "bytes": 307444,
+      "sha256": "eb9f16ac60faa0d9f39e5ec1dbec13a3e62bfac18842ea277c52ca60d4a2f6a1"
+    }
+  ],
+  "workspace_test_runs": {
+    "counting_method": "last_test_result_of_each_Cargo_Running_unittests_Running_tests_or_Doc_tests_target",
+    "W001": {
+      "cargo_targets": 94,
+      "passed": 2029,
+      "failed": 10,
+      "ignored": 72,
+      "return_code": 101,
+      "preliminary_raw_lines": 97,
+      "preliminary_raw_passed": 2032,
+      "preliminary_raw_failed": 10
+    },
+    "W002": {
+      "cargo_targets": 94,
+      "passed": 2030,
+      "failed": 12,
+      "ignored": 72,
+      "return_code": 101,
+      "failed_targets": 9,
+      "preliminary_raw_lines": 98,
+      "preliminary_raw_passed": 2033,
+      "preliminary_raw_failed": 13,
+      "inherited_failures": 8,
+      "new_failures_corrected_in_isolated_green_runs": 4
+    },
+    "full_final_after_ack_still_required": false,
+    "global_green_claimed": false,
+    "W003": {
+      "cargo_targets": 94,
+      "passed": 2045,
+      "failed": 9,
+      "ignored": 72,
+      "return_code": 101,
+      "inherited_failures": 8,
+      "new_oracle_failure": 1,
+      "oracle_corrected_by_single_literal_26_to_27": true
+    },
+    "W004": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T022-workspace151-final.log",
+      "sha256": "8af70bd02343f7820e8bbad7b39c70d0bb4fb63b05da591394957fbf1e24ff3b",
+      "cargo_targets": 94,
+      "passed": 2046,
+      "failed": 8,
+      "ignored": 72,
+      "return_code": 101,
+      "failed_targets": 5,
+      "inherited_failures": 8,
+      "new_failures151": 0,
+      "failure_names": [
+        "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+        "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+        "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+        "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+        "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+        "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+        "spec094_mcp_modifie_uniquement_sa_propre_presence",
+        "spec098_pont_expose_remet_repond_renouvelle_et_retire"
+      ],
+      "baseline_failure_names_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/specs/150-socle-delegation/validation/tests-150.md",
+      "baseline_failure_names_sha256": "39557c470895e92310de3f1d05e58f3edc30498b784e22508c0e9d80099915c2",
+      "failure_names_exactly_equal_baseline": true,
+      "daemon_lib": {
+        "passed": 1347,
+        "failed": 0,
+        "ignored": 14
+      }
+    }
+  },
+  "production_files_mutated_by_snapshot_worker": false,
+  "cargo_run_by_snapshot_worker": false,
+  "counts": {
+    "untracked_nonignored": 40,
+    "ignored_validation_files": 93
+  },
+  "untracked_nonignored": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/docs/decisions/150-feuille-de-route-delegation-cinq-etoiles.md",
+      "relative_path": "docs/decisions/150-feuille-de-route-delegation-cinq-etoiles.md",
+      "kind": "file",
+      "bytes": 4280,
+      "sha256": "ec39b4feeaae73587c0742c88576815036d6c79f6310a490c001c927062c5a9f"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/docs/decisions/150-retention-et-delai-delegation-native.md",
+      "relative_path": "docs/decisions/150-retention-et-delai-delegation-native.md",
+      "kind": "file",
+      "bytes": 2670,
+      "sha256": "aaec84ca6af17fb17a21f409201b70906b9b029fa3338cac27ced29ece4142a3"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/docs/decisions/151-attente-et-boite-de-fin-de-tache.md",
+      "relative_path": "docs/decisions/151-attente-et-boite-de-fin-de-tache.md",
+      "kind": "file",
+      "bytes": 6109,
+      "sha256": "d922d62898577c9c649ad1ad4ad1acd2046d9b5e85c445fef41a163180517867"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/adversarial-review-codex.md",
+      "relative_path": "specs/150-socle-delegation/adversarial-review-codex.md",
+      "kind": "file",
+      "bytes": 5316,
+      "sha256": "df5a178eea32f88c66e1e7d980afb279d4e2ed1dfedc6067a1458699afb248e4"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/checklists/requirements.md",
+      "relative_path": "specs/150-socle-delegation/checklists/requirements.md",
+      "kind": "file",
+      "bytes": 1824,
+      "sha256": "9a244307faebb41215920bb02b90ec5515e6bd319aa9f1687babf731372ee6da"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/contracts/delegation150.md",
+      "relative_path": "specs/150-socle-delegation/contracts/delegation150.md",
+      "kind": "file",
+      "bytes": 2312,
+      "sha256": "f1e9083cec6ee4e2e01bfd5c8b30a00f2805351e68b327b939ae314366271020"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/data-model.md",
+      "relative_path": "specs/150-socle-delegation/data-model.md",
+      "kind": "file",
+      "bytes": 2200,
+      "sha256": "c92e2ec644cbb1457a8ed5ce7b2f713782c93c7d63b71275a88e1cfa5d22dddd"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/implementation.md",
+      "relative_path": "specs/150-socle-delegation/implementation.md",
+      "kind": "file",
+      "bytes": 5218,
+      "sha256": "d2107af3e73590aeb7e984dfaa49b3657561fb868a4024ed54cabd9899d64124"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/plan.md",
+      "relative_path": "specs/150-socle-delegation/plan.md",
+      "kind": "file",
+      "bytes": 5619,
+      "sha256": "1adc02faf545c28c16ebd0a7d1d765ff0d8a8f0294237f106f1f191278f8b061"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/quickstart.md",
+      "relative_path": "specs/150-socle-delegation/quickstart.md",
+      "kind": "file",
+      "bytes": 1036,
+      "sha256": "d0df3b13dad7e9810348e31aae7dd1240f5b298e638ce6ccc3b1abee3287795f"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/research-t3-bridget.md",
+      "relative_path": "specs/150-socle-delegation/research-t3-bridget.md",
+      "kind": "file",
+      "bytes": 7698,
+      "sha256": "2e5a011758e6a675d47e11e3735e61b3671a45d4b039f9071cef945f4ef19c22"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/research.md",
+      "relative_path": "specs/150-socle-delegation/research.md",
+      "kind": "file",
+      "bytes": 9524,
+      "sha256": "67a39c559a51d2ad52f33f66ab3d3ef1800d95f34c385a3bc45c7e8b97398a0d"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/reuse-audit.md",
+      "relative_path": "specs/150-socle-delegation/reuse-audit.md",
+      "kind": "file",
+      "bytes": 6410,
+      "sha256": "43936b884181a5483eeb6ead1ac19cf23e4df00e63c3cc519d8f5f0c96e01157"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/spec.md",
+      "relative_path": "specs/150-socle-delegation/spec.md",
+      "kind": "file",
+      "bytes": 12935,
+      "sha256": "abef624cf95adf7dca4eeece03fb0d0d0c42cc75c5df2dcb7df8453e8871cbba"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/tasks.md",
+      "relative_path": "specs/150-socle-delegation/tasks.md",
+      "kind": "file",
+      "bytes": 16167,
+      "sha256": "e82ef0c8780ffdadc88780b8eba445b7194d6ebb2438eb5d05c40e8a4a220fbb"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/validation/baseline.md",
+      "relative_path": "specs/150-socle-delegation/validation/baseline.md",
+      "kind": "file",
+      "bytes": 610,
+      "sha256": "bc3f477580bda3ee14c400bcb47d5897b455919f2cd904af3b3cfd4b968a2524"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/validation/diff-150.patch",
+      "relative_path": "specs/150-socle-delegation/validation/diff-150.patch",
+      "kind": "file",
+      "bytes": 128889,
+      "sha256": "4fcfefe1bef62f463ccf0154a14bc9d43755c2fe8cd2c173f1859a7e74569afb"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/150-socle-delegation/validation/tests-150.md",
+      "relative_path": "specs/150-socle-delegation/validation/tests-150.md",
+      "kind": "file",
+      "bytes": 5749,
+      "sha256": "39557c470895e92310de3f1d05e58f3edc30498b784e22508c0e9d80099915c2"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/adversarial-review-claude.md",
+      "relative_path": "specs/151-attente-fin-de-tache/adversarial-review-claude.md",
+      "kind": "file",
+      "bytes": 1516,
+      "sha256": "7d7b75f9a6be0bc62514bd38872a7df6f127cd50e27fc06a45e6efabc8a6ee05"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/adversarial-review-codex.md",
+      "relative_path": "specs/151-attente-fin-de-tache/adversarial-review-codex.md",
+      "kind": "file",
+      "bytes": 11004,
+      "sha256": "748c619d1984f39c63bf3a5b66448589557cba730cc0685f5aa29bdc53ee28f8"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/analyze-report.md",
+      "relative_path": "specs/151-attente-fin-de-tache/analyze-report.md",
+      "kind": "file",
+      "bytes": 8679,
+      "sha256": "204ba20b8e5351a0c6a1ba640899b4a196a6add6a8593683b032b87a56a36d08"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/checklists/requirements.md",
+      "relative_path": "specs/151-attente-fin-de-tache/checklists/requirements.md",
+      "kind": "file",
+      "bytes": 3238,
+      "sha256": "d3c3c28c14709dac457727d96883480aa329e6e63f76401252f03fd864c19ff7"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/contracts/attente151.md",
+      "relative_path": "specs/151-attente-fin-de-tache/contracts/attente151.md",
+      "kind": "file",
+      "bytes": 8249,
+      "sha256": "fc3d51cf0e428b74e7523dc8adc6940f86edd4af5fad1ca3c344b959dcb2234b"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/data-model.md",
+      "relative_path": "specs/151-attente-fin-de-tache/data-model.md",
+      "kind": "file",
+      "bytes": 5091,
+      "sha256": "8e9f024a62ba402c957df5f4f49e1a011eda1d51cb3f6d8055039b3583338609"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/implementation.md",
+      "relative_path": "specs/151-attente-fin-de-tache/implementation.md",
+      "kind": "file",
+      "bytes": 46195,
+      "sha256": "ba3b1997238f1aa0fc662624c80bce7f59cef3bf050af6c84ec51b41bab2a090"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/plan.md",
+      "relative_path": "specs/151-attente-fin-de-tache/plan.md",
+      "kind": "file",
+      "bytes": 12734,
+      "sha256": "2fa09f6ae4eb3c5685c5c1fb3b6729b020c90190ec2188c92ea9d68d2ec9856d"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/quickstart.md",
+      "relative_path": "specs/151-attente-fin-de-tache/quickstart.md",
+      "kind": "file",
+      "bytes": 2477,
+      "sha256": "2168fae141f344cfabc3010c238a4c10ebf2e41f29be3088e4162803a3fdda3e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/research.md",
+      "relative_path": "specs/151-attente-fin-de-tache/research.md",
+      "kind": "file",
+      "bytes": 18212,
+      "sha256": "92deb938c4c57e1ddc228c8dc4c043efe9d2510c89e02d6989680880473431c0"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/reuse-audit.md",
+      "relative_path": "specs/151-attente-fin-de-tache/reuse-audit.md",
+      "kind": "file",
+      "bytes": 29668,
+      "sha256": "c923d82b68d7076f6fc34d5a3b106a79bf789b4744135cc13fbcffe8c6ccefe7"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/spec.md",
+      "relative_path": "specs/151-attente-fin-de-tache/spec.md",
+      "kind": "file",
+      "bytes": 20884,
+      "sha256": "273e13c2d85a54cd497c4f579a2bc9f5256cbc3c9ffdc1236c186381b865679a"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/tasks.md",
+      "relative_path": "specs/151-attente-fin-de-tache/tasks.md",
+      "kind": "file",
+      "bytes": 21424,
+      "sha256": "a12fc911af41a58fa1dd161275bd24cb82d56051384d2eb2021d4fcdcf40f08d"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-results.json",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-results.json",
+      "kind": "file",
+      "bytes": 51166,
+      "sha256": "fb15bd0e55ee8c89a76863b5cd4f9f57497e3d35a96ccf3f767064115c1978e0"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline.md",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline.md",
+      "kind": "file",
+      "bytes": 3203,
+      "sha256": "3331e51ce02c83f0326ea563e209e9142d8a070098aff33b54e9ee51790cd0b4"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-ancien-daemon.md",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-ancien-daemon.md",
+      "kind": "file",
+      "bytes": 5378,
+      "sha256": "9e532b71a4718b035f20776f07e9895047a482dac5379523a77e8ce03ff1b168"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-r1.json",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-r1.json",
+      "kind": "file",
+      "bytes": 6665,
+      "sha256": "9b5bbdaa4e6ad89478351323c6030615a7903b66353085f62beae6cb2d255014"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151.json",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151.json",
+      "kind": "file",
+      "bytes": 7463,
+      "sha256": "9c20656358a9a36f7317f8bf5324dacb6f649b75369f2e8b9e4570526d3d2acd"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/dependency150.json",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/dependency150.json",
+      "kind": "file",
+      "bytes": 2458,
+      "sha256": "c5fc124bd5dfbfd62e09e2b9c7be030a5029a5b74e8a8c6fb911715a2ca1bd06"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/dependency150.patch",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/dependency150.patch",
+      "kind": "file",
+      "bytes": 127741,
+      "sha256": "2a538537622e9fe12e8fdc0fff2bd9c453ddf2708152734cfcfade4513088f92"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/idle-probe.json",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/idle-probe.json",
+      "kind": "file",
+      "bytes": 248,
+      "sha256": "a646543ff91c831da6bacf378ebc5aa05950bb06a1d9e851eeb513924a22076e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/tests-151.md",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/tests-151.md",
+      "kind": "file",
+      "bytes": 53968,
+      "sha256": "4b45ffeaf0acea4de5de632425c5a8d29b40300e1cbfc9a69e290ee5d0670f78"
+    }
+  ],
+  "ignored_validation_files": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/SC008-151-calme-final.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/SC008-151-calme-final.log",
+      "kind": "file",
+      "bytes": 1032,
+      "sha256": "1a025f467c869acaa1fd27dd03c6aaacbdca0df6878ee23da4f5cea33d88e1dc"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/SC008-151-calme.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/SC008-151-calme.log",
+      "kind": "file",
+      "bytes": 1033,
+      "sha256": "0ac5d12b18d726d96885337faf94e0fda23907037f6d57884d5ead4d08b1e318"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/SC008-151-charge.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/SC008-151-charge.log",
+      "kind": "file",
+      "bytes": 706,
+      "sha256": "f184b7d0f829988a1254e4b8bacc8aa56f2192fcbb0471087aec1bdf61f0017c"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T002-protocole-final.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T002-protocole-final.log",
+      "kind": "file",
+      "bytes": 3610,
+      "sha256": "7da50b46eae0935b817934aefaad8cbb63710350a6c68c03e28fdfa33057ca35"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-final-batch.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-final-batch.log",
+      "kind": "file",
+      "bytes": 23763,
+      "sha256": "00376cb0007b3d5faf14874c2d058b55eed0ad6ff47926e5291b62b71824c8a9"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-final-delegation149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-final-delegation149.log",
+      "kind": "file",
+      "bytes": 24894,
+      "sha256": "0f18542eb3aca42c7be042e5fb02a51ba4f733129a5494f1e5010ffe7799ea63"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-final-native148.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-final-native148.log",
+      "kind": "file",
+      "bytes": 26607,
+      "sha256": "6041ff365c11a1c890640d9b5c2692f7b7b749e1e24e3d3bb8eb682c4fcff258"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-final-native149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-final-native149.log",
+      "kind": "file",
+      "bytes": 34436,
+      "sha256": "a4768b0eed3c45d464dc047fff36c5806539936a95e19d08855d242b28892623"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-final-native150.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-final-native150.log",
+      "kind": "file",
+      "bytes": 28705,
+      "sha256": "91eba3b40a2e87c6010fcd63bce383f7286d75cb39116c56c8115869526a49be"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-final-spec_087.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-final-spec_087.log",
+      "kind": "file",
+      "bytes": 24799,
+      "sha256": "eb426b625d9f59db8f4fca44836a1f7ea8c0b7cef944f17be0d0adff8955fcfb"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-lib-batch.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-lib-batch.log",
+      "kind": "file",
+      "bytes": 488,
+      "sha256": "af4067b2714da55679f0e04709e575683000dca1b3ed5bb48b0bbe4405d73d0c"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-lib-delegation149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-lib-delegation149.log",
+      "kind": "file",
+      "bytes": 1619,
+      "sha256": "729e4b1cb105d754bd4071af1c2f6a77e467a771246f3465974acf877093e025"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-lib-native148.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-lib-native148.log",
+      "kind": "file",
+      "bytes": 3056,
+      "sha256": "57048985e54e59823a5a30f93b4a471fb9cf9cacc4436227c42bb513761e4b68"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-lib-native149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-lib-native149.log",
+      "kind": "file",
+      "bytes": 10703,
+      "sha256": "dadae8e04e18df7a313f7dfae9763a2ae59671d5c7d977a1d212ccbb442a504c"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-lib-native150.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-lib-native150.log",
+      "kind": "file",
+      "bytes": 5430,
+      "sha256": "d4dec66a33aebb6772b50e9829ffa923c4fee4866f3c11aef767b29b18f1e331"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T021-lib-spec_087.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T021-lib-spec_087.log",
+      "kind": "file",
+      "bytes": 1524,
+      "sha256": "91428a69230c8507a4a29ce45167af61e2d05c5cac362bfda7317e97de38c7e1"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T022-workspace151-final-ack.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T022-workspace151-final-ack.log",
+      "kind": "file",
+      "bytes": 237140,
+      "sha256": "26d76c0a44ed009615c5417cd09c840069134a5e9d0388eb88fea1a0475296ea"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T022-workspace151-final.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T022-workspace151-final.log",
+      "kind": "file",
+      "bytes": 237676,
+      "sha256": "8af70bd02343f7820e8bbad7b39c70d0bb4fb63b05da591394957fbf1e24ff3b"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T022-workspace151-post-eof.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T022-workspace151-post-eof.log",
+      "kind": "file",
+      "bytes": 238875,
+      "sha256": "874026a254bf7d7bdd68f574357248dbf2fa139116059f4e0451a51457501056"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T022-workspace151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T022-workspace151.log",
+      "kind": "file",
+      "bytes": 239889,
+      "sha256": "88c25f844c093f2c0f312c697503b6f7aa66ca617b30e750db15f4002fa82699"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-batch.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-batch.log",
+      "kind": "file",
+      "bytes": 488,
+      "sha256": "59e8578f6c9958b56e0a0ff174d8ef62685e45f6a12ff42a26ac1426435fc4cd"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-delegation149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-delegation149.log",
+      "kind": "file",
+      "bytes": 1619,
+      "sha256": "489f48b29472940fe5304497227fce63799e499c957d94496e65bd679ecc3089"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-native148.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-native148.log",
+      "kind": "file",
+      "bytes": 3098,
+      "sha256": "73335528920638e51f677142977fc9fb138c7a9e272b179c4da89f174ab97d66"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-native149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-native149.log",
+      "kind": "file",
+      "bytes": 10703,
+      "sha256": "c7539c0fc84e6c1dfec8dc8d8b660d8aeda7ea4a26602ab02467f10bd5c9df61"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-native150.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-native150.log",
+      "kind": "file",
+      "bytes": 5430,
+      "sha256": "3d7cdbc70505c192969399f02b119e26f9e71848645ba3ee6319f1308a79eecc"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-native151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-native151.log",
+      "kind": "file",
+      "bytes": 9422,
+      "sha256": "9c02132cd2d370b1feeeae446f1aacd0f80283408c41b447ef18dd9babd2fc6b"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/T025-final-spec_087.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/T025-final-spec_087.log",
+      "kind": "file",
+      "bytes": 1524,
+      "sha256": "834db447480e1579835b9f9f3c6193cae4fdb957c169ac3b83efc3356449e8d2"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-batch.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-batch.log",
+      "kind": "file",
+      "bytes": 23763,
+      "sha256": "42ed48a5aa7de8d7b31e164a36d10582b28ec70715ccce268b761ed346901f9c"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-delegation149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-delegation149.log",
+      "kind": "file",
+      "bytes": 25038,
+      "sha256": "e5868510299006624c16786977e0f57c582da6c367bc80d2ca86476323d887ff"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-native148.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-native148.log",
+      "kind": "file",
+      "bytes": 26885,
+      "sha256": "3fc611e363e1a845d88d126ef4e43b9fa8f63f0f872667f3b7f2369c61eb15ff"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-native149.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-native149.log",
+      "kind": "file",
+      "bytes": 34436,
+      "sha256": "50bd38d431908496fed36fd9a8bc6212ba2fd828db914328201f203e4aa02820"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-native150.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-native150.log",
+      "kind": "file",
+      "bytes": 28706,
+      "sha256": "9411262146cc81dbf148a619bbffed5b00dfe69ddbfa301443b600b9456071c8"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/baseline-spec_087.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/baseline-spec_087.log",
+      "kind": "file",
+      "bytes": 24799,
+      "sha256": "1d15481798a92968bc1781f67da9f57b6c148ce3c79087adf72084c61641bc25"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-daemon-r1.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-daemon-r1.log",
+      "kind": "file",
+      "bytes": 144,
+      "sha256": "1df87a2ae7cd9e61c65d96d5b59dc6fef853a5f8d17c4b58a96abf491e002189"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-daemon.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-daemon.log",
+      "kind": "file",
+      "bytes": 144,
+      "sha256": "2f363e4e701380c53b073132a2815ba278d09fb99e5a188880e94d38b9fd65d8"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-mcp-r1.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-mcp-r1.log",
+      "kind": "file",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-mcp.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-mcp.log",
+      "kind": "file",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-r1.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-r1.log",
+      "kind": "file",
+      "bytes": 1186,
+      "sha256": "7f9dda0467cac9adcd1d53c2825f0b8e29658988a26ea830d0f2986e1a305ae3"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151-source.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151-source.log",
+      "kind": "file",
+      "bytes": 11454,
+      "sha256": "f9124215395ea411bf542ecd8bab2bc7edc0e90361ed42e0188cee9884003d10"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compat-old151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compat-old151.log",
+      "kind": "file",
+      "bytes": 859,
+      "sha256": "81acaadd0214436571ecb58c1dd0550b336378f350f3b6d1e8eae5f4857fe686"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/compile-request151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/compile-request151.log",
+      "kind": "file",
+      "bytes": 728,
+      "sha256": "3ecfbe9b6d33760ac9a0c2e2b6b44af0fc0343bc79da019d166320ddd8c8116d"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/diagnostic-e2e-deadline151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/diagnostic-e2e-deadline151.log",
+      "kind": "file",
+      "bytes": 3203,
+      "sha256": "aad40a87431e6585421120a020ef55d315a2286bb749f7c56ea5196972e15edf"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/e2e-151-expiration-r1.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/e2e-151-expiration-r1.log",
+      "kind": "file",
+      "bytes": 1580,
+      "sha256": "15da05b58e37e73a08519880af3a537a422bb648cd8608cb09f1a252f8e50ee4"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/e2e-151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/e2e-151.log",
+      "kind": "file",
+      "bytes": 12371,
+      "sha256": "e5314605bc0062e714c55688c0ef09e234a5f042b1bd787813957aa3cece7e81"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/e2e-eof-151-green-facade.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/e2e-eof-151-green-facade.log",
+      "kind": "file",
+      "bytes": 1406,
+      "sha256": "a847ec3b9fd61115e5a6a692ea5a1683df53b240fda3a8683290dd51fd1657a4"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/e2e-green151-extraits.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/e2e-green151-extraits.log",
+      "kind": "file",
+      "bytes": 1922,
+      "sha256": "3666209f60cebbe11238b50e85388d4fe4a125ed0167198d70e09a03ad8308d8"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/execute-send-eof151-sha.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/execute-send-eof151-sha.log",
+      "kind": "file",
+      "bytes": 464,
+      "sha256": "136bcfc87855591a9c449ac9d7c0e4920f4b1a95205f571f519c7817bc8b1637"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/facade-regressions151-extraits.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/facade-regressions151-extraits.log",
+      "kind": "file",
+      "bytes": 4093,
+      "sha256": "b3be3ea26f64444b61d56ce92460930f6fd18419c59d04eb4747ab1c7797964e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/filtre-exact-incomplet151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/filtre-exact-incomplet151.log",
+      "kind": "file",
+      "bytes": 488,
+      "sha256": "31f748d562954402aae498bd5940bac76258633cf65b5cf9db32d69daf1819da"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-151-complet.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-151-complet.log",
+      "kind": "file",
+      "bytes": 4261,
+      "sha256": "bd343b6def9f2d3c68ae5ae8e078d131537c4d70bf774aeb66e4b83907aa9b67"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-151-first.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-151-first.log",
+      "kind": "file",
+      "bytes": 5281,
+      "sha256": "3f5799ec527517df5feaeb8ec0bfb09c47e393ee44fc281b9023565a6e23bf20"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-T002.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-T002.log",
+      "kind": "file",
+      "bytes": 3610,
+      "sha256": "d92ef93f4b09edf4774daf06496b807596492845b6a95c6660c77445b1a6bfc0"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-ack151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-ack151.log",
+      "kind": "file",
+      "bytes": 3907,
+      "sha256": "13d44e5f9293a034f1eca970b46b7753bf26a564ea792ae1dec48004cc506582"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-claude-catalogue151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-claude-catalogue151.log",
+      "kind": "file",
+      "bytes": 599,
+      "sha256": "866da1a0c5b5eb19a0cc01f913b9affb7dede9a0fc05b730da7a22f6a80b1878"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-client-eof151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-client-eof151.log",
+      "kind": "file",
+      "bytes": 2625,
+      "sha256": "4d53e23a143042d23a990531c6604d4082ea9ae2d970ead30aec5edaeca6b558"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-compat-result150-relecture151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-compat-result150-relecture151.log",
+      "kind": "file",
+      "bytes": 743,
+      "sha256": "c0a9240ced0a0e7dd511ada35efa62925cdec502f8b38166ec95fbb1c78a701d"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-core151-red-request.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-core151-red-request.log",
+      "kind": "file",
+      "bytes": 7244,
+      "sha256": "81ccc8a9a67a9ff4ca7a1cb8352efaf78e81d9c0c0e92b4e13070d3c0dc0ed19"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-e2e-ack151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-e2e-ack151.log",
+      "kind": "file",
+      "bytes": 4867,
+      "sha256": "4159794c51dbf046c05a6d056dc4f06f0eb2f3c2e7a1619f2ca72fc52624f2c2"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-e2e-sc001151-sqlite.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-e2e-sc001151-sqlite.log",
+      "kind": "file",
+      "bytes": 986,
+      "sha256": "7cf2018221db5b6f6300bba471b388e4c95f4777c9e7c47a7c1bbc7b4641cd9b"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-e2e-sc006151-r1.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-e2e-sc006151-r1.log",
+      "kind": "file",
+      "bytes": 1740,
+      "sha256": "f4916faa26c2badfb1fabf428489a8642d8eb1852a8a2d13cb499f5f5b074afb"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-e2e-sc006151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-e2e-sc006151.log",
+      "kind": "file",
+      "bytes": 1436,
+      "sha256": "80bf4c2563f21ac77e01046f0552909517be4203976a852eb33507ae695f166b"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-e2e151-final-sqlite.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-e2e151-final-sqlite.log",
+      "kind": "file",
+      "bytes": 2331,
+      "sha256": "ca37b39ed640f66c6f94d85ab0b390daa1edcb7bd7f2c6ba57e4694bafac6383"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-e2e151-sc001-sc006-eof.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-e2e151-sc001-sc006-eof.log",
+      "kind": "file",
+      "bytes": 2294,
+      "sha256": "626e8c0ccc5f628cb81d4eaa5c4a8773b16fbb96631bc562b77b58fe36a472b4"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-client.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-client.log",
+      "kind": "file",
+      "bytes": 2625,
+      "sha256": "977dd8468be199eead88c4a66481dbc51a61a3e3464a8c55062327fc202d1f4e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-core_089_content_test.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-core_089_content_test.log",
+      "kind": "file",
+      "bytes": 1394,
+      "sha256": "b1e20a6cc5cdb45675beae38d78caffd2cb4f3a3805222fbc90cc7e7501b847d"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-core_089_isolation_test.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-core_089_isolation_test.log",
+      "kind": "file",
+      "bytes": 1603,
+      "sha256": "6820ae96fa7845ecb4ed6dca35c8b75975825aa458991fc1692565a8e4947163"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-e2e.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-e2e.log",
+      "kind": "file",
+      "bytes": 2330,
+      "sha256": "6d0193431dae366d7a0d92d6d5afa30f73fd792fddd5f56e407e3dd8352028ab"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-e2e148.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-e2e148.log",
+      "kind": "file",
+      "bytes": 1127,
+      "sha256": "5ace709d958fdaacaac9a095b0aca0a9c32503f917281a602e5c4f5cfb0c1ced"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-mcp-final.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-mcp-final.log",
+      "kind": "file",
+      "bytes": 10838,
+      "sha256": "e8e4b51131b2724c5496a37a17837d86f2265d9b174a56e5fe2c2079194204fa"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-mcp.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-mcp.log",
+      "kind": "file",
+      "bytes": 677,
+      "sha256": "2e3d66ff93f7bb88f161f0bb764f4f3931a99b25243cfbd2be7a321a76834e43"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-eof-compatible151-t3_session_identity_env.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-eof-compatible151-t3_session_identity_env.log",
+      "kind": "file",
+      "bytes": 1032,
+      "sha256": "a73e99e4c5c2a4e1f24fb0508e8d0f2580eafda7e7e0c51bbf06ee934e7e0f11"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-mcp-ack-catalogue151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-mcp-ack-catalogue151.log",
+      "kind": "file",
+      "bytes": 13305,
+      "sha256": "7ef8b7f25915f0856cbd00228be82f53ed32c52034bd883e80aa8ded683cb1f7"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-mcp-eof151-final.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-mcp-eof151-final.log",
+      "kind": "file",
+      "bytes": 10238,
+      "sha256": "81fe0cc0e17f2125273bdf76ced2af8049110a1469a8dc1986a9e13fc378c18a"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-mcp-eof151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-mcp-eof151.log",
+      "kind": "file",
+      "bytes": 3182,
+      "sha256": "328d6d352eb39a6f21e81528f7e0c1cad1b87e23c04cbeea73b7c746939ac50e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-result-historique151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-result-historique151.log",
+      "kind": "file",
+      "bytes": 743,
+      "sha256": "6c847649506c6afb150cabc1d342a1627b00d18519380f763f485aa60c42ed16"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-skill-publications151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-skill-publications151.log",
+      "kind": "file",
+      "bytes": 697,
+      "sha256": "8c1ab940e9d82fdc31ac6fddd615496021be69f81fb57cfcab4203254f3c0577"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-storage151-verifie.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-storage151-verifie.log",
+      "kind": "file",
+      "bytes": 1045,
+      "sha256": "5070be45589302d7ab7a4ce8f2692f7e409a4cd25742164ee5e06ab3521614ad"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-storage151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-storage151.log",
+      "kind": "file",
+      "bytes": 1752,
+      "sha256": "c22d8b1e880fce428bd4ae89fc2f12b4fbb2abe826418310789f3473c40087fe"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/green-transport-eof151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/green-transport-eof151.log",
+      "kind": "file",
+      "bytes": 939,
+      "sha256": "703adc2a21643d0b4681356bfdba95d0dbd04625ec061d0e4c559622397bee72"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/old-build151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/old-build151.log",
+      "kind": "file",
+      "bytes": 339,
+      "sha256": "0bc3c84c5ec0d14a4df76471a0516574c8a0cd10c6e8907757995507723427fe"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-T002.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-T002.log",
+      "kind": "file",
+      "bytes": 4721,
+      "sha256": "ef04a3484dd83bc93b5407d2f91acc6393ac1c1b6d48c6364bd60f6e42cce99e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-ack151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-ack151.log",
+      "kind": "file",
+      "bytes": 6469,
+      "sha256": "40a93005d85116e24db8695ed31362eac04b8245fd84600c318eeeb3d03e3386"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-compat-result150-relecture151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-compat-result150-relecture151.log",
+      "kind": "file",
+      "bytes": 1154,
+      "sha256": "9da150d5771e55df9af615375fc14ab814f4b439ee67cd18ae26311a00a404d6"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-core151-green-workers.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-core151-green-workers.log",
+      "kind": "file",
+      "bytes": 8557,
+      "sha256": "0a8a6c5be38ce9f4e07a4eb1c5eee128bf33e8af163f399df1cbf8847a90a0d1"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-e2e-ack-champ-public151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-e2e-ack-champ-public151.log",
+      "kind": "file",
+      "bytes": 3398,
+      "sha256": "e763312ed6c9d1bc4794aa62ec335a5ce2fc3c1a87c41c5651c4406f17aab622"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-e2e-sc006151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-e2e-sc006151.log",
+      "kind": "file",
+      "bytes": 1979,
+      "sha256": "513772bfa16d2ea957e9fc9fbe63b5034a662e48767327c5dc4c94c93fd4b1bf"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-eof-nonwait151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-eof-nonwait151.log",
+      "kind": "file",
+      "bytes": 1503,
+      "sha256": "a920e09d01d4a32f76f9f1ecb60a0abc6a55944b2c93d88676381c6cce3c0f77"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-eof-statut151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-eof-statut151.log",
+      "kind": "file",
+      "bytes": 1171,
+      "sha256": "f96814b8b9a56a0a956e9ac4d88d82385565c0a44836999a0e85d9e26cc2f418"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-fd-connect151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-fd-connect151.log",
+      "kind": "file",
+      "bytes": 1288,
+      "sha256": "3781ed3ba8569250061fa512e1363423c93ebd461dae6e587230bcee08bb422f"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-result-historique151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-result-historique151.log",
+      "kind": "file",
+      "bytes": 1141,
+      "sha256": "d8eb31435cca7fe6ed17ea7d7efab36548e44a53ab5af7fa0f379372e5c997f3"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/red-workers151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/red-workers151.log",
+      "kind": "file",
+      "bytes": 9203,
+      "sha256": "e3398730c6c56c124b3befd1867ff6a9e695fffeff86f8da2ca4cae7f4435e5f"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/regression-idempotency151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/regression-idempotency151.log",
+      "kind": "file",
+      "bytes": 4504,
+      "sha256": "cc0b1a0852eb08e54dc44d275d59103ab68c3c38852db98f45d801e485984240"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/regression-store151.log",
+      "relative_path": "specs/151-attente-fin-de-tache/validation/regression-store151.log",
+      "kind": "file",
+      "bytes": 5295,
+      "sha256": "0321b6d3fe4419af7442733851c8b2a20703ec167808d3344e5598fbae0e95f1"
+    }
+  ],
+  "tracked_files": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/.specify/feature.json",
+      "relative_path": ".specify/feature.json",
+      "bytes": 60,
+      "sha256": "4e66bc14525e1232e30a2ef12c0d9dbdc7ddb6d2d85b5b41f7e5c87b05f69589",
+      "baseline_sha256": "bd48d4b3ae77a101d0cf5dc5b18d13bdbe2dac5c88560d5f8210e2a374222464",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "session_selector151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/communication/client.rs",
+      "relative_path": "crates/bridget-daemon/src/communication/client.rs",
+      "bytes": 85251,
+      "sha256": "5be7815cd53bb0486127cdb7fc1dd46d65b1a583b58908803bfa7cb0d72b192f",
+      "baseline_sha256": "c38ef972463779a59c00c6ace610e0369e1a8e40ed2ce732b0c974854da6cd6b",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/daemon.rs",
+      "relative_path": "crates/bridget-daemon/src/daemon.rs",
+      "bytes": 1280731,
+      "sha256": "0156a588e24e7d75b16047e209d2bf450b1d83487766d5cdccd4b96910d85c18",
+      "baseline_sha256": "9980e62eba124f2147a4ccd9b209469326db98d94de73f61edb34b6913ac26f2",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "relative_path": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "bytes": 227850,
+      "sha256": "d956659a94076114de8810af76f83e5319c41edf4ea4f07d85d59e9e8aa126bb",
+      "baseline_sha256": "2d98e7434f64017da0d3c40c74e6075b8445f7614bd7604c0a2989612df10af8",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "relative_path": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "bytes": 117391,
+      "sha256": "1ab54d6ce643f0074035e79e86541d7f4976df2a4c5a035c1588aa3ec25289db",
+      "baseline_sha256": "7643ab73d5dfdd2e8c802e3edda5a34167931ae3c42711b1ec8b261ea59a8cc3",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "relative_path": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "bytes": 40860,
+      "sha256": "4a9f8c95922d86fd7afed04eb9cef49ce312505b1552a2e53ca64a9623178b1a",
+      "baseline_sha256": "487f7ab72147b91ffa8efda641ec89225aba4a3677c24e7044ff2942d3437e6c",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/delegation.rs",
+      "relative_path": "crates/bridget-daemon/src/delegation.rs",
+      "bytes": 18398,
+      "sha256": "910740ad8247a5357473ed6c9046d204ff0289cfa56d9f2398678427a8e4009e",
+      "baseline_sha256": "2e951fc860a48e9089f70a8cc5074eda992ce87710095ab44249769e517df6f1",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/delegation_lineage.rs",
+      "relative_path": "crates/bridget-daemon/src/delegation_lineage.rs",
+      "bytes": 23695,
+      "sha256": "6767b930e5c8fe7ec0dc7874ebc3dd0876ffecd08e82d58d305f4d590649d256",
+      "baseline_sha256": "dc0b9f1c445b48f655020b334f081f42e47d049ed6f77e1515a8392252993e4b",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "relative_path": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "bytes": 49759,
+      "sha256": "2f1d2e19e4c5432405ab3e63a070609745ac91602b149016dfe9d129a8f9a888",
+      "baseline_sha256": "fff0ca569903e9bf9ee78c679e232318aef48e13129afafd2cfef9ab53b01656",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/delegation_mcp.rs",
+      "relative_path": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "bytes": 16070,
+      "sha256": "96726f10d229ac04445b42c6644bd27858a3c39b02a07ef156e5b14a5508b275",
+      "baseline_sha256": "ba28f65e520364a007b51d18b960050c22947a818db28c8f2f18d65cb869bb8c",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/desired_state.rs",
+      "relative_path": "crates/bridget-daemon/src/desired_state.rs",
+      "bytes": 39471,
+      "sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "baseline_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": true,
+      "category": "imported150_byte_identical"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/fleet.rs",
+      "relative_path": "crates/bridget-daemon/src/fleet.rs",
+      "bytes": 98498,
+      "sha256": "fc8f5d387abcdafff6893b093f8285194a08533d08f3f3e39d86a0e4311ffea2",
+      "baseline_sha256": "fc8f5d387abcdafff6893b093f8285194a08533d08f3f3e39d86a0e4311ffea2",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": true,
+      "category": "imported150_byte_identical"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/idempotency.rs",
+      "relative_path": "crates/bridget-daemon/src/idempotency.rs",
+      "bytes": 45745,
+      "sha256": "e15ce11deaa636d25c6e47c06aa59f513773c992d902c87f98bbef15d06308ff",
+      "baseline_sha256": "067733912da9dbf4be350ca6a5bbc4277fc44ead50e397deb6e528ab30e7acfc",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "relative_path": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "bytes": 33485,
+      "sha256": "83de935b14facf6b17015f4a9f27dda18c6fde9fac5c86b5e4274cd01486ec3d",
+      "baseline_sha256": "2fe5e502c6e357adac0bb0a21e04cdaf00696521d743e82c4a2c17b3f29903ad",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/idempotency/tests.rs",
+      "relative_path": "crates/bridget-daemon/src/idempotency/tests.rs",
+      "bytes": 92885,
+      "sha256": "fa87719602fcdc70f01b4399b4a329c17c1a2b2e47bb31f234b4417defcd3d6f",
+      "baseline_sha256": "70c9430fffaf3f6103423b0f7c64a46318bfb7f26c8ff48633374e437da060dc",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/mcp.rs",
+      "relative_path": "crates/bridget-daemon/src/mcp.rs",
+      "bytes": 291452,
+      "sha256": "9c92d2dc2d7b8dbf91698b31c2ff551819a80695b187c2e0cde95e4e4a20f2af",
+      "baseline_sha256": "bd7919cb6541f9c1021487e36f953315047369d5372e4716399e8ea2facb5cd7",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/referent_control.rs",
+      "relative_path": "crates/bridget-daemon/src/referent_control.rs",
+      "bytes": 31272,
+      "sha256": "98d1573a2a401fbbab7d6d6d44d99a96b1a66f386775a7fabca370bd01a5656b",
+      "baseline_sha256": "98d1573a2a401fbbab7d6d6d44d99a96b1a66f386775a7fabca370bd01a5656b",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": true,
+      "category": "imported150_byte_identical"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/store.rs",
+      "relative_path": "crates/bridget-daemon/src/store.rs",
+      "bytes": 28236,
+      "sha256": "162ecbdd284a461e5d845fc02131b9a33a1f4295dbe41287ec757dea861be69c",
+      "baseline_sha256": "464980db0e428c244a7f0db9db2257687d1ca03db8773b80018f5a1b0490c021",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/store/ledger_requests.rs",
+      "relative_path": "crates/bridget-daemon/src/store/ledger_requests.rs",
+      "bytes": 54873,
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "baseline_sha256": "448dd1e6b298ff3da52c0448d0fd83a46f8b09d6257b3b4f23196f33a1cf76c6",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/store/service_events.rs",
+      "relative_path": "crates/bridget-daemon/src/store/service_events.rs",
+      "bytes": 34448,
+      "sha256": "f4fd412c80127af0e2427ce44847eb3f588ef04277d424cc04bb3d326ce66377",
+      "baseline_sha256": "81e096080f706bd43608db7379ffc2529c6187fc11899a26ee2f6b01675ad815",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/store/tests.rs",
+      "relative_path": "crates/bridget-daemon/src/store/tests.rs",
+      "bytes": 80296,
+      "sha256": "fd02aa83f9b69a6c50cf539221579b8c52eefacee531d3ce2a9be114f4a16246",
+      "baseline_sha256": "18c9ae3167431e84f5744d28d0ea0dd0b7e41c5ff5b853c0affa5a87baa2159e",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/t3code.rs",
+      "relative_path": "crates/bridget-daemon/src/t3code.rs",
+      "bytes": 261543,
+      "sha256": "cc7e2c687f6e4329b43f2fb0b41e7bdc1a01839cf792e337202a51545db515d7",
+      "baseline_sha256": "1d5757373d8791c8a5c80628207351df3d30d5bb7e0fc5d8ab0339250b1ab4ab",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/src/wrapper.rs",
+      "relative_path": "crates/bridget-daemon/src/wrapper.rs",
+      "bytes": 420788,
+      "sha256": "fbf66d83ea4046ae5886ee4a7c5ba957033c294582bc526c60609f3a718c583b",
+      "baseline_sha256": "49f3a304d9504fe66882ce282d14d5119132ace4a0e4ddd02b017154ad5b29d1",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "relative_path": "crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "bytes": 15616,
+      "sha256": "9168968841e6d4a7f4a841d69e521cf6d103b2435ade446d238dbbb616914bc1",
+      "baseline_sha256": "3fcecfc731aa7a66d9fa15d3430c178954d7ad6ddf2330bc7187a275e0173404",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "relative_path": "crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "bytes": 11721,
+      "sha256": "92c534290a6efc205f6371a81045ca37a661c37bdcb2a1d99bf0d035d79152e8",
+      "baseline_sha256": "2ad94b8efcb21dccf8604bb18cadd8ba8e350517f2c164ed5a295a150fa37bc8",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/tests/core_089_status_test.rs",
+      "relative_path": "crates/bridget-daemon/tests/core_089_status_test.rs",
+      "bytes": 10394,
+      "sha256": "c46974efbd16ee0e583627a5ce7791f6f71294ec5d8e98c93bb904e319213b63",
+      "baseline_sha256": "c3bd24b47f8ff652339547748cf93da73abba23ea262c5810630d4ec2c656448",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/tests/fixtures/native_delegation_148.py",
+      "relative_path": "crates/bridget-daemon/tests/fixtures/native_delegation_148.py",
+      "bytes": 2196,
+      "sha256": "fb829aa9b875d4735d828d458e1e38c54bf17ad111a5fe46cefab9cb1ba44c1d",
+      "baseline_sha256": "3fb663cbdcaa2759053ee8900c00012c83409522bda300e5262af12b74e3f754",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "relative_path": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "bytes": 36775,
+      "sha256": "d3befb0d77cf59359725f9cef5ee18b69d864216afeff9bba97eb5fe3871f1c8",
+      "baseline_sha256": "862fc1681b45de7bd59b8369057486e38fb508bc72d94e7b4b0830f08675d363",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "tests_or_format151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-transport/src/jsonl.rs",
+      "relative_path": "crates/bridget-transport/src/jsonl.rs",
+      "bytes": 13526,
+      "sha256": "3d188a50bb2dc0ea106c6461824df88f6b467dfb6e31c1375c7fc9201693378d",
+      "baseline_sha256": "ef4d2fa01e26aa67d7c73bb046d334ec767bf960acb9a2660123de41ec29d452",
+      "baseline_source": "committed_base",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/crates/bridget-transport/src/protocol.rs",
+      "relative_path": "crates/bridget-transport/src/protocol.rs",
+      "bytes": 294801,
+      "sha256": "96eedf04c4b8ed46181fcd95465d412924bb7080d7c5c4ab7b17e744fff5f912",
+      "baseline_sha256": "9b119d3292804e8c0e85156489b98e92e83d331bbda598acef7e96883e77be42",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "production151_with_inline_tests_possible"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/docs/delegation-native.md",
+      "relative_path": "docs/delegation-native.md",
+      "bytes": 23109,
+      "sha256": "cf187c3851b1e1ccede6bb5f82f30bc73f80f6c67ea0d3c56a3467714db66840",
+      "baseline_sha256": "17a1eb1f7c2c3e1eb4dfda3b2f6eec9c14c6eec5e28e8a42f82940b8a2dd1d35",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "documentation151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/skills/bridget/SKILL.md",
+      "relative_path": "skills/bridget/SKILL.md",
+      "bytes": 46444,
+      "sha256": "0524bed7a8b7e69c3a2758181912951c753cd9b3b4c75639e804825bf9e3c954",
+      "baseline_sha256": "68f6ab7ff81df5398d5d608b31697f00710211d534915ec72fd0b890dc94b224",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "documentation151"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/skills/bridget/references/commandes.md",
+      "relative_path": "skills/bridget/references/commandes.md",
+      "bytes": 67249,
+      "sha256": "fffce496dc7054fd93a8b9e5cb4c2dfa389bac14a2cbfb14e9a3c8c3a296cd71",
+      "baseline_sha256": "2c6f07758419dcec7b288ce5376a581ee1684a931aafaed64e13806ffb1d6288",
+      "baseline_source": "verified_dependency150_receipt",
+      "byte_identical_to_imported_150": false,
+      "category": "documentation151"
+    }
+  ],
+  "prior_stage": {
+    "stage": "T023_before_ack",
+    "artifacts": [
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/diff-151.patch",
+        "bytes": 467661,
+        "sha256": "c4a3b89a820fbf5acda81b905824d57ed482c2d8ac49f2d5bb7baf0c6cb9eea0",
+        "preserved_byte_identical": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/delta151-vs150.patch",
+        "bytes": 258543,
+        "sha256": "d08dc4e38d4c8be32bd012f56537c93b161d44bd319726b7e23bea1be55a702a",
+        "preserved_byte_identical": true
+      },
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/151-attente-fin-de-tache/specs/151-attente-fin-de-tache/validation/snapshot-151-manifest.json",
+        "bytes": 77334,
+        "sha256": "02e69b9e1c747ff2abbd65bbc9c22458785e148e9487c6a1e859d77d7d084c08",
+        "preserved_byte_identical": true
+      }
+    ]
+  },
+  "main_and_150_unchanged": {
+    "committed_head": "1f2c661d39a9ce106723a93ac883f76ab9fe52c6",
+    "main_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "main_diff_bytes": 0,
+    "live150_diff_sha256": "4fcfefe1bef62f463ccf0154a14bc9d43755c2fe8cd2c173f1859a7e74569afb",
+    "source150_file_hashes_exact": true,
+    "no_git_mutation": true
+  }
+}

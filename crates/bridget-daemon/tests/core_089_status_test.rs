@@ -120,6 +120,7 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
                     host: "fixture".into(),
                     db_path: "/fixture".into(),
                     instance_id: "fixture".into(),
+                    features: Vec::new(),
                 },
             ] {
                 let mut line = String::new();

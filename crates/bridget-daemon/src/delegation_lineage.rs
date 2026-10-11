@@ -220,17 +220,36 @@ impl DelegationStore {
 
     /// Suppression atomique d'un arbre : pierres tombales, reçus d'annulation, lignes,
     /// nouvelle génération. Le propriétaire racine est signalé après le commit.
-    fn delete_tree(&self, tree: &[Task], now: i64) -> Result<(),String> {
-        let tx=self.conn.unchecked_transaction().map_err(|e|e.to_string())?;
+    fn delete_tree(&self, tree: &[Task], now: i64) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
         for task in tree {
             tx.execute("INSERT OR REPLACE INTO native_delegation_tombstones(owner,request_id,purged_at) SELECT json_extract(payload,'$.owner'),request_id,?2 FROM native_delegations WHERE task_id=?1",params![task.task_id,now]).map_err(|e|e.to_string())?;
-            tx.execute("DELETE FROM native_delegation_cancel_receipts WHERE task_id=?1",[&task.task_id]).map_err(|e|e.to_string())?;
-            tx.execute("DELETE FROM native_delegations WHERE task_id=?1",[&task.task_id]).map_err(|e|e.to_string())?;
+            tx.execute(
+                "DELETE FROM native_delegation_cancel_receipts WHERE task_id=?1",
+                [&task.task_id],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "DELETE FROM native_delegations WHERE task_id=?1",
+                [&task.task_id],
+            )
+            .map_err(|e| e.to_string())?;
         }
-        let mutation=ProjectionMutation{generation:uuid::Uuid::new_v4().to_string(),seq:1};
-        tx.execute("UPDATE native_delegation_projection_meta SET generation=?1,seq=?2 WHERE singleton=1",params![mutation.generation,mutation.seq]).map_err(|e|e.to_string())?;
-        tx.commit().map_err(|e|e.to_string())?;
-        self.committed(tree[0].root_owner(),mutation);
+        let mutation = ProjectionMutation {
+            generation: uuid::Uuid::new_v4().to_string(),
+            seq: 1,
+        };
+        tx.execute(
+            "UPDATE native_delegation_projection_meta SET generation=?1,seq=?2 WHERE singleton=1",
+            params![mutation.generation, mutation.seq],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.wait_epoch.bump();
+        self.committed(tree[0].root_owner(), mutation);
         Ok(())
     }
 
@@ -242,23 +261,42 @@ impl DelegationStore {
         tx.execute("INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",params![task.task_id,task.owner_instance,request_id,canonical,payload]).map_err(|e|e.to_string())?;
         let mutation=increment(&tx).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e|e.to_string())?;
+        self.wait_epoch.bump();
         self.committed(task.root_owner(),mutation);
         Ok(())
     }
 
-    pub(super) fn save_projected(&self, task: &Task) -> Result<(),String> {
-        let old=self.get(&task.task_id)?.ok_or("task_unavailable")?;
-        let mut task=stamp(task.clone(),Some(&old));
+    pub(super) fn save_projected(&self, task: &Task) -> Result<(), String> {
+        let old = self.get(&task.task_id)?.ok_or("task_unavailable")?;
+        let mut task = stamp(task.clone(), Some(&old));
         // Ces références ne suivent jamais une instance runtime ou un retry.
-        task.root_owner_agent_id=old.root_owner_agent_id.clone();
-        task.parent_task_id=old.parent_task_id.clone();
-        let changed=visible_changed(&old,&task) || old.started_at!=task.started_at || old.completed_at!=task.completed_at;
-        let payload=serde_json::to_string(&task).map_err(|e|e.to_string())?;
-        let tx=self.conn.unchecked_transaction().map_err(|e|e.to_string())?;
-        tx.execute("UPDATE native_delegations SET payload=?2,owner_instance=?3 WHERE task_id=?1",params![task.task_id,payload,task.owner_instance]).map_err(|e|e.to_string())?;
-        let mutation=if changed {Some(increment(&tx).map_err(|e|e.to_string())?)} else {None};
-        tx.commit().map_err(|e|e.to_string())?;
-        if let Some(mutation)=mutation {self.committed(task.root_owner(),mutation)}
+        task.root_owner_agent_id = old.root_owner_agent_id.clone();
+        task.parent_task_id = old.parent_task_id.clone();
+        // Seule acknowledge_tasks pose ce fait ; une copie stale ne le remplace pas.
+        task.acknowledged_at = old.acknowledged_at;
+        let changed = visible_changed(&old, &task)
+            || old.started_at != task.started_at
+            || old.completed_at != task.completed_at;
+        let payload = serde_json::to_string(&task).map_err(|e| e.to_string())?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE native_delegations SET payload=?2,owner_instance=?3 WHERE task_id=?1",
+            params![task.task_id, payload, task.owner_instance],
+        )
+        .map_err(|e| e.to_string())?;
+        let mutation = if changed {
+            Some(increment(&tx).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        tx.commit().map_err(|e| e.to_string())?;
+        self.wait_epoch.bump();
+        if let Some(mutation) = mutation {
+            self.committed(task.root_owner(), mutation)
+        }
         Ok(())
     }
 
@@ -330,6 +368,7 @@ impl DelegationStore {
         let receipt=json!({"version":1,"task_id":task_id,"status":changed.state});
         tx.execute("INSERT INTO native_delegation_cancel_receipts(root,request_id,task_id,receipt) VALUES(?1,?2,?3,?4)",params![root,request_id,task_id,receipt.to_string()]).map_err(|_|E::StoreUnavailable)?;
         tx.commit().map_err(|_|E::StoreUnavailable)?;
+        self.wait_epoch.bump();
         if let Some(m)=mutation {self.committed(root,m)}
         Ok((receipt,drives))
     }

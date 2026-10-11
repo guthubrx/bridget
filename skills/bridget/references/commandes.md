@@ -1,7 +1,7 @@
-# Commandes Bridget et accès 094–138
+# Commandes Bridget et accès 094–151
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
-réponse liée de base. Elle décrit le contrat étendu à la session 138 ; elle ne prouve
+réponse liée de base. Elle décrit le contrat étendu à la session 151 ; elle ne prouve
 ni que le binaire installé correspond à cette version, ni qu'un serveur MCP déjà
 ouvert a rechargé son catalogue.
 
@@ -95,7 +95,7 @@ Exception133 : un sous-agent interne T3 attesté ne peut utiliser que
 `bridget_who` et `bridget_send`, avec provenance enfant et routage du parent.
 Il n'a ni boîte de réception ni identité durable ; la réponse revient au parent.
 
-La politique fournisseur100, étendue en148, autorise la liste fermée des outils
+La politique fournisseur100, étendue en151, autorise la liste fermée des outils
 Bridget ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 
@@ -119,6 +119,9 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent. `reply_timeout` (entier, 60 à 86 400 secondes, défaut 3600) fixe le délai de réponse de la mission ; il fait partie de l'enveloppe de rejeu.
 - `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant.
 - `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id`.
+- `bridget_task_wait` — attendre de 1 à 16 tâches distinctes du parent, avec `task_ids` ; `wait_timeout` entier de 1 à 3600 secondes, défaut 600. Lecture pure, retour dès qu'une tâche termine.
+- `bridget_request_wait` — attendre sa demande suivie, avec `request_id` égal à l'`id` rendu par `bridget_send` avec `reply:true` ; mêmes bornes de `wait_timeout`. Lecture pure, sans nouvel envoi.
+- `bridget_task_ack` — déclarer la lecture de 1 à 16 tâches distinctes du parent, avec `task_ids`, en `result_available` ou `failed`. Accusé informatif, sans effet sur la remise ou la purge.
 
 Ces quatre outils148 utilisent le moteur Bridget avec ou sans T3. Le profil
 Bridget `glm` ne se confond pas avec l'instance fournisseur T3 `claude_glm`.
@@ -147,6 +150,117 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Attente et boîte de fin de tâche (151)
+
+Les trois outils exigent un daemon annonçant `wait_v1` dans `features` et un catalogue
+MCP 151 chargé. La sonde `DaemonIdentityRequest` a un budget de 3 secondes.
+Un ancien daemon sans cette fonctionnalité donne `wait_unsupported` avant toute
+trame nouvelle. Installer des fichiers ne recharge pas une session MCP vivante.
+Les paramètres inconnus ou de type incorrect donnent `InvalidParams`.
+
+```json
+{"name":"bridget_task_wait","arguments":{"task_ids":["<task_id_a>","<task_id_b>"],"wait_timeout":600}}
+```
+
+```json
+{"name":"bridget_request_wait","arguments":{"request_id":"<id_rendu_par_bridget_send>","wait_timeout":600}}
+```
+
+```json
+{"name":"bridget_task_ack","arguments":{"task_ids":["<task_id_lu>"]}}
+```
+
+### Lire les résultats
+
+`bridget_task_wait` rend `version: 1`, `timed_out`, `waited_secs`, `ready` et `pending`.
+`ready` contient toutes les tâches terminées au retour, `pending` les autres ids ;
+les listes suivent l'ordre d'entrée. Il suffit qu'une tâche soit `result_available`,
+`failed` ou `cancelled` pour rendre la main. Si aucune ne finit dans le délai,
+`timed_out: true` ; les missions continuent. Le statut garde `result` complet ;
+les entrées de `ready` l'omettent.
+
+L'attente et `bridget_task_status` sont des lectures pures. Aucune remise marquée,
+aucun message supprimé, aucun nettoyage ou purge. Un résultat peut être lu par
+l'attente puis arriver par message. La lecture ne supprime pas cette copie.
+
+| Champ ajouté aux vues de tâche | Contrat |
+|---|---|
+| `work_state` | `working` pour `queued`, `starting`, `mission_pending`, `working`, `cancelling` ; sinon `waiting_for_children`, `result_available`, `failed`, `cancelled`. |
+| `summary` | Début stable du résultat publié, 2048 octets au plus sur frontière UTF-8 ; `null` hors `result_available`. |
+| `summary_truncated` | Vrai lorsque le résultat dépasse le résumé. |
+| `result_bytes` | Taille en octets, ou `null` sans résultat conservé. |
+| `detail` | `{"tool":"bridget_task_status","task_id":"…"}` pour un résultat ou un échec ; `null` sinon. |
+| `mailbox` | `null` pour une tâche non terminée ou annulée ; sinon `{"state":"…"}`. |
+
+| État de boîte | Sens |
+|---|---|
+| `pending` | Résultat ou avis prêt, sans envoi engagé. |
+| `claimed` | Envoi engagé sans preuve d'accusé ; inclut une phase indéterminée, orpheline ou absente. |
+| `delivered` | Phase `acked` ou preuve durable `delivery_acked`. |
+| `acknowledged` | Lecture déclarée par le parent. Ne prouve pas la livraison du message. |
+
+Une tâche purgée donne `task_unavailable`, sans entrée de boîte.
+
+### Attendre une réponse et déclarer la lecture
+
+`bridget_request_wait` rend `version: 1`, `state`, `timed_out_wait`, `waited_secs`,
+`reply` et `reply_reason`. Les états sont `answered`, `open`, `timed_out`, `cancelled`.
+`open` signifie que l'appel a expiré et laisse la demande ouverte ; seul ce cas rend
+`timed_out_wait: true`. `timed_out` suit l'échéance de la demande, même si sa ligne
+reste `open` : l'attente ne l'écrit pas. Le délai d'attente est distinct du
+`reply_timeout` de l'envoi.
+
+`reply` contient `id`, `from`, `summary` et `summary_truncated`. Le champ `summary`
+garde au plus 1024 octets UTF-8 du corps. Le premier passage à `answered` le fige dans
+la même transaction. Le ledger n'est pas consulté : sa clé de message peut être
+remplacée. Sans résumé conservé, une demande `answered` rend `reply: null` et
+`reply_reason: "reply_unavailable"` (guichet, ancienne ligne, enveloppe indisponible).
+Une réponse tardive après clôture du guichet garde ce `null`.
+
+La réponse est aussi injectée par le chemin normal et peut être vue deux fois
+(FR-030). Après une coupure, rappeler l'attente avec le même `request_id`, sans
+renvoyer la demande ni changer sa clé.
+
+`bridget_task_ack` écrit `acknowledged_at` une fois. Sa réponse porte `version: 1`,
+`acknowledged` (nouveaux accusés) et `already` (déjà déclarés). Toute la liste est validée
+avant écriture. Une tâche non terminée ou annulée rend `task_not_ready` pour tout
+l'appel. Cet accusé informatif ne change ni remise, ni message, ni nettoyage,
+ni purge, ni projection Lineage.
+
+### Bornes et refus
+
+Le catalogue annonce `wait_timeout_default_secs: 600` et
+`wait_timeout_max_secs: 3600`. Les attentes restent possibles pendant la pause.
+Elles se réveillent sur événement ; le filet interne de 5 secondes est aussi borné
+par le délai restant, et par l'échéance de la demande. Le client garde sa connexion
+`wait_timeout + 10` secondes.
+
+Limites cumulées : 4 attentes par processus MCP et 64 dans le daemon pour les tâches
+et les demandes. La capacité de façade peut être refusée avant la validation des
+arguments. Annulation MCP, fermeture du client, EOF du MCP ou arrêt du daemon :
+les attentes sont libérées en 6 secondes au plus. L'annulation MCP et l'EOF ferment
+leurs sockets ; le socket de sonde est annulable aussi. Un redémarrage du daemon fait échouer
+l'appel (`daemon_unreachable` côté client) ; un rappel en lecture pure reste possible.
+
+Le seul montage Codex de Bridget pose `tool_timeout_sec = 3700`. Hors de ce montage,
+choisir un `wait_timeout` inférieur au délai d'outil de l'hôte. Aucune commande CLI
+humaine n'est ajoutée.
+
+| Refus | Outils et cause |
+|---|---|
+| `InvalidParams` | Les trois : champ inconnu ou type incorrect dans la façade MCP. |
+| `invalid_request` | Les trois : demande invalide ; liste de tâches vide, plus de 16 ou avec doublon. |
+| `wait_timeout_out_of_range` | Les deux attentes : valeur hors de 1 à 3600 secondes. |
+| `wait_unsupported` | Les trois : absence de `wait_v1`. |
+| `task_unavailable` | Attente, statut ou accusé : tâche inconnue, purgée ou étrangère au parent. |
+| `request_unavailable` | Attente de demande : demande inconnue ou émise par un autre agent. |
+| `wait_capacity` | Les deux attentes : 4 créneaux façade ou 64 créneaux daemon occupés. |
+| `task_not_ready` | Accusé : tâche non terminée ou annulée. |
+
+L'attente de tâches applique côté daemon : `invalid_request`,
+`wait_timeout_out_of_range`, `wait_unsupported`, `task_unavailable`, `wait_capacity`.
+Un refus ne donne aucun résultat partiel et n'écrit aucun état.
 
 ## Fils partagés (102)
 
@@ -852,7 +966,7 @@ réelle a été réussie ; vérifier le catalogue et les résultats des appels.
 
 ## Version active et rechargement
 
-Comparer le catalogue réellement retourné par le client avec les seize noms
+Comparer le catalogue réellement retourné par le client avec les vingt-trois noms
 ci-dessus avant d'annoncer la disponibilité des outils. Un binaire installé et un
 serveur MCP vivant sont deux processus distincts : une ancienne session garde
 son ancien binaire et son ancien catalogue. Les garanties de domaine exigent en

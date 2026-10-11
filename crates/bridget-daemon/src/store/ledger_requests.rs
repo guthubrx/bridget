@@ -267,6 +267,24 @@ impl Store {
         }
     }
 
+    /// Snapshot cohérent de l'attente, sans lire le ledger ni changer l'état.
+    /// O(log n) par l'index primaire id ; le filtre sender protège la propriété.
+    pub fn request_wait_snapshot(
+        &self,
+        id: &str,
+        sender: &str,
+    ) -> Result<Option<(String, i64, Option<String>)>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT state, deadline_at, reply_summary
+                 FROM tracked_requests WHERE id = ?1 AND sender = ?2",
+                params![id, sender],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)
+    }
+
     pub fn requests_for_sender(&self, sender: &str) -> Result<Vec<TrackedRequest>, StoreError> {
         self.query_requests("SELECT id, sender, target, state, created_at, deadline_at, escalation_level, cancel_reason, completed_at FROM tracked_requests WHERE sender = ?1 ORDER BY created_at DESC", rusqlite::params![sender])
     }
@@ -354,13 +372,15 @@ impl Store {
         id: &str,
         responder: &str,
         recipient: &str,
+        reply_summary: Option<&str>,
     ) -> Result<bool, StoreError> {
         let transaction = self
             .conn
             .unchecked_transaction()
             .map_err(StoreError::Sqlite)?;
-        let answered = mark_answered_in_transaction(&transaction, id, responder, recipient)
-            .map_err(StoreError::Sqlite)?;
+        let answered =
+            mark_answered_in_transaction(&transaction, id, responder, recipient, reply_summary)
+                .map_err(StoreError::Sqlite)?;
         transaction.commit().map_err(StoreError::Sqlite)?;
         Ok(answered)
     }
@@ -681,14 +701,28 @@ pub(crate) fn mark_answered_in_transaction(
     id: &str,
     responder: &str,
     recipient: &str,
+    reply_summary: Option<&str>,
 ) -> Result<bool, rusqlite::Error> {
     let changed = transaction.execute(
         "UPDATE tracked_requests
-         SET state = 'answered', completed_at = ?1
-         WHERE id = ?2 AND sender = ?3 AND target = ?4 AND state = 'open'",
-        rusqlite::params![now_secs(), id, recipient, responder],
+         SET state = 'answered', completed_at = ?1, reply_summary = ?2
+         WHERE id = ?3 AND sender = ?4 AND target = ?5 AND state = 'open'",
+        rusqlite::params![now_secs(), reply_summary, id, recipient, responder],
     )?;
     Ok(changed == 1)
+}
+
+/// Résumé figé depuis l'enveloppe accusée, indépendant de la clé du ledger.
+/// O(1024 + |id| + |from|) : seul le début du corps est sérialisé.
+pub(crate) fn request_reply_summary(message: &bridget_core::BridgetMessage) -> String {
+    let end = search::floor_char_boundary(&message.body, 1024);
+    serde_json::json!({
+        "id": message.id,
+        "from": message.from,
+        "summary": &message.body[..end],
+        "summary_truncated": end < message.body.len(),
+    })
+    .to_string()
 }
 /// Insère le message livré dans le ledger sans quitter la transaction en
 /// cours. La clé `(id, target)` rend une reprise du même message idempotente.

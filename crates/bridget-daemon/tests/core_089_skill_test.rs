@@ -7,8 +7,8 @@ use fixture::*;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-fn examples() -> Vec<Value> {
-    include_str!("../../../skills/bridget/SKILL.md")
+fn examples(section: &str) -> Vec<Value> {
+    section
         .split("```json\n")
         .skip(1)
         .flat_map(|block| {
@@ -146,11 +146,50 @@ fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
             }
         ));
     }
-    let mut examples = examples();
+    let skill = include_str!("../../../skills/bridget/SKILL.md");
+    assert_eq!(
+        examples(skill).len(),
+        9,
+        "les neuf JSON publiés doivent tous avoir un banc explicite"
+    );
+    // Le contrat138 commence à ce titre et couvre aussi les chapitres suivants
+    // d'envoi, de réponse et de ledger. Tous ses JSON doivent être exécutés.
+    let (before_138, communication_138) = skill
+        .split_once("### Privilégier le même projet — contrat 138\n")
+        .expect("titre stable du contrat de communication138");
+    let waiting_151 = before_138
+        .split_once("### Attendre et déclarer la lecture - contrat 151\n")
+        .expect("titre stable du contrat d'attente151")
+        .1;
+    let mut waits = examples(waiting_151);
+    assert_eq!(
+        waits,
+        vec![
+            json!({"name":"bridget_task_wait","arguments":{"task_ids":["<task_id>"],"wait_timeout":600}}),
+            json!({"name":"bridget_request_wait","arguments":{"request_id":"<id_rendu_par_bridget_send>","wait_timeout":600}}),
+            json!({"name":"bridget_task_ack","arguments":{"task_ids":["<task_id>"]}}),
+        ],
+        "les trois exemples151 doivent garder leurs noms, arguments et ordre"
+    );
+    // RequestWait est exécuté ici. TaskWait et Ack relèvent du banc E2E natif ;
+    // cette assertion JSON ne constitue pas leur preuve d'exécution.
+    let mut examples = examples(communication_138);
     assert_eq!(
         examples.len(),
         6,
-        "chaque exemple doit être exécuté, sans filtre"
+        "chaque exemple de communication138 doit être exécuté, sans filtre"
+    );
+    assert_eq!(
+        examples,
+        vec![
+            json!({"name":"bridget_who","arguments":{"scope":"global"}}),
+            json!({"name":"bridget_send","arguments":{"to":"<destinataire_uuid>","body":"Compare le contrat partagé.","cross_project_reason":"Relecture volontaire entre les deux projets"}}),
+            json!({"name":"bridget_who","arguments":{}}),
+            json!({"name":"bridget_send","arguments":{"to":"<destinataire_uuid>","body":"Vérifie ce correctif et signale les régressions constatées.","reply":true,"reply_timeout":120}}),
+            json!({"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Tests passés ; aucune régression dans le périmètre vérifié.","in_reply_to":"<message_id_integral>"}}),
+            json!({"name":"bridget_ledger","arguments":{"view":"both","limit":20}}),
+        ],
+        "les six exemples138 doivent garder leurs noms, arguments et ordre"
     );
     let mut mcp = McpProcess::start(&root, ACTOR, "089-skill-a");
     initialize(&mut mcp);
@@ -205,6 +244,25 @@ fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
         assert!(text.contains(example["arguments"]["body"].as_str().unwrap()));
     }
     mcp.stop();
+    // L'attente publiée151 appartient au demandeur initial, après une réponse
+    // corrélée connue. Seul le placeholder request_id est remplacé.
+    let mut parent_mcp = McpProcess::start(&root, ACTOR, "089-skill-a");
+    initialize(&mut parent_mcp);
+    let before_wait = call(&mut parent_mcp, &examples[5]);
+    waits[1]["arguments"]["request_id"] = question["id"].clone();
+    let waited = call(&mut parent_mcp, &waits[1]);
+    assert_eq!(waited["state"], "answered");
+    assert_eq!(waited["timed_out_wait"], false);
+    assert_eq!(waited["reply"]["id"], answer["id"]);
+    assert_eq!(waited["reply"]["from"], RECIPIENT);
+    assert_eq!(waited["reply"]["summary"], examples[4]["arguments"]["body"]);
+    assert_eq!(waited["reply"]["summary_truncated"], false);
+    assert!(waited["reply_reason"].is_null());
+    assert_eq!(call(&mut parent_mcp, &examples[5]), before_wait);
+    assert_no_delivery(&mut actor);
+    assert_no_delivery(&mut recipient);
+    assert_no_delivery(&mut external);
+    parent_mcp.stop();
     drop(actor);
     drop(recipient);
     drop(external);

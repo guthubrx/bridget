@@ -376,10 +376,14 @@ impl Store {
                 .optional()
                 .map_err(StoreError::Sqlite)?;
             let answered = match recipient {
-                Some(recipient) => {
-                    mark_answered_in_transaction(&tx, linked_request_id, &row.sender, &recipient)
-                        .map_err(StoreError::Sqlite)?
-                }
+                Some(recipient) => mark_answered_in_transaction(
+                    &tx,
+                    linked_request_id,
+                    &row.sender,
+                    &recipient,
+                    None,
+                )
+                .map_err(StoreError::Sqlite)?,
                 None => false,
             };
             if answered {

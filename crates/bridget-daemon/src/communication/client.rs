@@ -1,4 +1,4 @@
-//! Client Unix partagé : une seule inscription auxiliaire et un seul budget CLI/MCP.
+//! Client Unix partagé : inscription auxiliaire commune et budget borné par opération.
 //! Aucune logique de présentation ni accès client au stockage du daemon.
 
 use bridget_transport::protocol::{
@@ -19,6 +19,17 @@ mod lineage;
 pub(crate) use lineage::human_lineage;
 
 pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
+
+/// Sonde sans identité auxiliaire : budget propre, avant toute trame 151.
+pub(crate) fn daemon_supports_wait(socket: &Path) -> bool {
+    let Ok(mut connection) =
+        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(3))
+    else {
+        return false;
+    };
+    matches!(connection.exchange(&WrapperToDaemon::DaemonIdentityRequest),
+        Ok(DaemonToWrapper::DaemonIdentityReport { features, .. }) if features.iter().any(|feature| feature == "wait_v1"))
+}
 
 pub(crate) fn deserialize_project_reason<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -940,11 +951,29 @@ impl DaemonConnection {
     }
 
     pub(crate) fn connect_until(socket: &Path, deadline: Instant) -> Result<Self, ClientError> {
-        let stream =
-            connect_nonblocking(socket, deadline).map_err(|error| ClientError::Technical {
-                code: "daemon_unreachable",
-                message: format!("daemon Bridget injoignable : {error}"),
-            })?;
+        let contextual = crate::mcp::check_tool_call(None)?;
+        let connected = if contextual {
+            let mut registered = false;
+            let mut checkpoint = |stream: &UnixStream| {
+                crate::mcp::check_tool_call(if registered { None } else { Some(stream) }).map_err(
+                    |_| io::Error::new(io::ErrorKind::Interrupted, "appel MCP interrompu"),
+                )?;
+                registered = true;
+                Ok(())
+            };
+            bridget_transport::jsonl::connect_nonblocking_with(
+                socket,
+                deadline,
+                Some(&mut checkpoint),
+            )
+        } else {
+            connect_nonblocking(socket, deadline)
+        };
+        crate::mcp::check_tool_call(None)?;
+        let stream = connected.map_err(|error| ClientError::Technical {
+            code: "daemon_unreachable",
+            message: format!("daemon Bridget injoignable : {error}"),
+        })?;
         let reader_stream = stream.try_clone().map_err(|error| ClientError::Technical {
             code: "daemon_unreachable",
             message: format!("impossible de dupliquer le socket daemon : {error}"),
@@ -956,6 +985,11 @@ impl DaemonConnection {
             poisoned: false,
             max_response_bytes: MAX_DAEMON_RESPONSE_BYTES,
         })
+    }
+
+    /// Après le handshake borné, seul l'échange d'attente reçoit son budget long.
+    pub(crate) fn set_deadline(&mut self, deadline: Instant) {
+        self.deadline = deadline;
     }
 
     pub(crate) fn exchange(
@@ -1113,7 +1147,7 @@ impl DaemonConnection {
             .checked_duration_since(Instant::now())
             .ok_or_else(|| ClientError::Technical {
                 code,
-                message: "budget total de 10 s dépassé".to_string(),
+                message: "budget total de la connexion dépassé".to_string(),
             })?;
         self.writer
             .set_write_timeout(Some(remaining))
@@ -1156,7 +1190,7 @@ pub(crate) fn registered_connection(
     )
 }
 
-fn registered_connection_until(
+pub(crate) fn registered_connection_until(
     identity: &str,
     instance_id: &str,
     socket: &Path,
@@ -1198,6 +1232,62 @@ pub(crate) fn unexpected_response<T>(_response: DaemonToWrapper) -> Result<T, Cl
 #[cfg(test)]
 mod security_tests {
     use super::*;
+
+    #[test]
+    fn native151_facade_sonde_attente_annonce_et_ancien_daemon() {
+        for supports_wait in [true, false] {
+            let path = crate::mcp_identity::mock_socket("wait-probe");
+            let listener = UnixListener::bind(&path).unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::DaemonIdentityRequest
+                ));
+                let mut report = serde_json::json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture"});
+                if supports_wait {
+                    report["features"] = serde_json::json!(["wait_v1"]);
+                }
+                writeln!(stream, "{report}").unwrap();
+                line.clear();
+                assert_eq!(
+                    reader.read_line(&mut line).unwrap(),
+                    0,
+                    "aucune trame nouvelle après la sonde"
+                );
+            });
+            let supported = daemon_supports_wait(&path);
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            assert_eq!(supported, supports_wait);
+        }
+    }
+
+    #[test]
+    fn native151_facade_sonde_attente_budget_trois_secondes() {
+        let path = crate::mcp_identity::mock_socket("wait-probe-timeout");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            line.clear();
+            assert_eq!(reader.read_line(&mut line).unwrap(), 0);
+        });
+        let start = Instant::now();
+        let supported = daemon_supports_wait(&path);
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(!supported);
+        assert!((Duration::from_secs(2)..Duration::from_secs(5)).contains(&start.elapsed()));
+    }
 
     #[test]
     fn spec147_members_client_uses_one_combined_hello_and_refuses_old_peer() {

@@ -25,6 +25,17 @@ pub fn validate_unix_socket_path(socket: &Path) -> io::Result<()> {
 
 /// Connexion Unix sous échéance absolue, partagée par les clients et pilotes.
 pub fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixStream> {
+    connect_nonblocking_with(socket, deadline, None)
+}
+
+/// Même connexion ; le callback observe le socket et peut interrompre l'opération.
+/// Complexité : O(L + r), L longueur du chemin Unix bornée par sockaddr_un, r itérations de poll sous échéance.
+/// Ajouter la somme des coûts du callback ; EINTR peut augmenter r.
+pub fn connect_nonblocking_with(
+    socket: &Path,
+    deadline: Instant,
+    mut checkpoint: Option<&mut dyn FnMut(&UnixStream) -> io::Result<()>>,
+) -> io::Result<UnixStream> {
     if deadline <= Instant::now() {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
@@ -52,14 +63,17 @@ pub fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixS
     }
     // Propriétaire dès l'ouverture : toute sortie par ? ferme le descripteur,
     // y compris l'expiration entre connect et poll (ancien chemin de fuite).
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-    let fd = owned.as_raw_fd();
+    let stream = UnixStream::from(unsafe { OwnedFd::from_raw_fd(fd) });
+    let fd = stream.as_raw_fd();
     if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
         return Err(io::Error::last_os_error());
     }
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
+    }
+    if let Some(checkpoint) = checkpoint.as_mut() {
+        checkpoint(&stream)?;
     }
     let result = unsafe {
         libc::connect(
@@ -79,13 +93,21 @@ pub fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixS
             revents: 0,
         };
         loop {
+            if let Some(checkpoint) = checkpoint.as_mut() {
+                checkpoint(&stream)?;
+            }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .filter(|d| !d.is_zero())
                 .ok_or_else(|| {
                     io::Error::new(io::ErrorKind::TimedOut, "budget connexion dépassé")
                 })?;
-            let timeout = remaining.as_millis().max(1).min(i32::MAX as u128) as libc::c_int;
+            let poll_budget = if checkpoint.is_some() {
+                remaining.min(Duration::from_millis(100))
+            } else {
+                remaining
+            };
+            let timeout = poll_budget.as_millis().max(1).min(i32::MAX as u128) as libc::c_int;
             let ready = unsafe { libc::poll(&mut pollfd, 1, timeout) };
             if ready > 0 {
                 break;
@@ -96,6 +118,9 @@ pub fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixS
                     continue;
                 }
                 return Err(error);
+            }
+            if checkpoint.is_some() {
+                continue;
             }
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -126,7 +151,9 @@ pub fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixS
             "budget connexion dépassé",
         ));
     }
-    let stream = UnixStream::from(owned);
+    if let Some(checkpoint) = checkpoint.as_mut() {
+        checkpoint(&stream)?;
+    }
     stream.set_nonblocking(false)?;
     Ok(stream)
 }
@@ -253,6 +280,53 @@ pub fn read_unix_line(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn native151_fd_observe_avant_connect_sur_backlog_reel_plein() {
+        use std::os::unix::net::UnixListener;
+        let path = std::env::temp_dir().join(format!("c151-{}", std::process::id()));
+        let listener = UnixListener::bind(&path).unwrap();
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
+        let mut fillers = Vec::new();
+        let refusal = loop {
+            assert!(fillers.len() < 64, "backlog réel non saturé");
+            match connect_nonblocking(&path, Instant::now() + Duration::from_millis(150)) {
+                Ok(stream) => fillers.push(stream),
+                Err(error) => break error,
+            }
+        };
+        let mut observed = 0;
+        let mut checkpoint = |stream: &UnixStream| {
+            observed += 1;
+            assert!(stream.as_raw_fd() >= 0);
+            assert_eq!(
+                unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+                libc::FD_CLOEXEC
+            );
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "annulation synthétique avant dial",
+            ))
+        };
+        let start = Instant::now();
+        let error = connect_nonblocking_with(
+            &path,
+            start + Duration::from_secs(10),
+            Some(&mut checkpoint),
+        )
+        .unwrap_err();
+        let elapsed = start.elapsed();
+        drop(fillers);
+        drop(listener);
+        std::fs::remove_file(path).unwrap();
+        eprintln!(
+            "FD151 backlog réel : refus noyau={refusal:?}, observations={observed}, annulation={error:?}, durée={} µs",
+            elapsed.as_micros()
+        );
+        assert_eq!(observed, 1, "FD absent du callback avant connect");
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert!(elapsed < Duration::from_millis(200));
+    }
 
     #[test]
     fn borne_lf_inclus_et_deux_trames_preservees() {

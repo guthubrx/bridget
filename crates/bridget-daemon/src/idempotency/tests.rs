@@ -86,6 +86,259 @@ fn reserve(store: &IdempotencyStore, bytes: &[u8]) -> Reservation {
 }
 
 #[test]
+fn native151_envoi_resume_fige_migration_idempotence_preserve_ancienne_demande() {
+    let path = TempDbGuard::new("bridget-151-idempotence");
+    {
+        let legacy = Connection::open(path.path()).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE tracked_requests (
+                    id TEXT PRIMARY KEY, sender TEXT NOT NULL, target TEXT NOT NULL,
+                    state TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    deadline_at INTEGER NOT NULL, escalation_level INTEGER NOT NULL DEFAULT 0,
+                    cancel_reason TEXT, completed_at INTEGER
+                 );
+                 INSERT INTO tracked_requests VALUES
+                    ('ancienne', 'parent', 'enfant', 'answered', 1, 2, 0, NULL, 3);",
+            )
+            .unwrap();
+    }
+    for _ in 0..2 {
+        let store = IdempotencyStore::open(path.path()).unwrap();
+        let snapshot: (String, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT state, reply_summary FROM tracked_requests WHERE id='ancienne'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(snapshot, ("answered".into(), None));
+    }
+}
+
+#[test]
+fn native151_envoi_resume_fige_deux_scopes_resistent_au_remplacement_du_ledger() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for (scope, request, responder, body, delivery) in [
+        (
+            "012_scope_aaaaaaaaaaaa",
+            "demande-a",
+            "enfant-a",
+            "première réponse",
+            "remise-a",
+        ),
+        (
+            "012_scope_bbbbbbbbbbbb",
+            "demande-b",
+            "enfant-b",
+            "seconde réponse",
+            "remise-b",
+        ),
+    ] {
+        store
+            .conn
+            .execute(
+                "INSERT INTO tracked_requests (id, sender, target, state, created_at, deadline_at)
+                 VALUES (?1, 'parent', ?2, 'open', ?3, ?4)",
+                params![request, responder, NOW, NOW + HORIZON],
+            )
+            .unwrap();
+        let key = IdempotencyKey::new(scope, OperationKind::Send, "reponse-partagee").unwrap();
+        assert!(matches!(
+            store
+                .reserve(&key, body.as_bytes(), NOW, HORIZON, NOW, 30)
+                .unwrap(),
+            Reservation::Prepared { .. }
+        ));
+        let mut message = bridget_core::BridgetMessage::new(responder, "parent", body);
+        message.id = "reponse-partagee".into();
+        message.in_reply_to = Some(request.into());
+        store
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: delivery.into(),
+                    recipient_instance_id: "instance-parent".into(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .acknowledge_send_delivery(delivery, "instance-parent", 1)
+                .unwrap(),
+            Some(request.into())
+        );
+        assert_eq!(
+            store
+                .acknowledge_send_delivery(delivery, "instance-parent", 1)
+                .unwrap(),
+            None
+        );
+    }
+    let ledger_body: String = store
+        .conn
+        .query_row(
+            "SELECT body FROM ledger WHERE id='reponse-partagee' AND target='parent'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ledger_body, "seconde réponse");
+    for (request, responder, body) in [
+        ("demande-a", "enfant-a", "première réponse"),
+        ("demande-b", "enfant-b", "seconde réponse"),
+    ] {
+        let encoded: String = store
+            .conn
+            .query_row(
+                "SELECT reply_summary FROM tracked_requests WHERE id=?1",
+                [request],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap(),
+            serde_json::json!({"id":"reponse-partagee", "from":responder, "summary":body, "summary_truncated":false})
+        );
+    }
+}
+
+#[test]
+fn native151_envoi_resume_fige_frontieres_utf8_et_taille_du_corps() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for (index, (body, expected, truncated)) in [
+        (String::new(), String::new(), false),
+        ("a".repeat(1023), "a".repeat(1023), false),
+        ("a".repeat(1024), "a".repeat(1024), false),
+        ("a".repeat(1025), "a".repeat(1024), true),
+        (format!("{}€", "a".repeat(1023)), "a".repeat(1023), true),
+        (
+            format!("{}€", "a".repeat(1021)),
+            format!("{}€", "a".repeat(1021)),
+            false,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = format!("demande-{index}");
+        store
+            .conn
+            .execute(
+                "INSERT INTO tracked_requests (id, sender, target, state, created_at, deadline_at)
+             VALUES (?1, 'parent', 'enfant', 'open', ?2, ?3)",
+                params![request, NOW, NOW + HORIZON],
+            )
+            .unwrap();
+        let id = format!("reponse-{index}");
+        let key = IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, &id).unwrap();
+        assert!(matches!(
+            store
+                .reserve(&key, body.as_bytes(), NOW, HORIZON, NOW, 30)
+                .unwrap(),
+            Reservation::Prepared { .. }
+        ));
+        let mut message = bridget_core::BridgetMessage::new("enfant", "parent", body);
+        message.id = id.clone();
+        message.in_reply_to = Some(request.clone());
+        store
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: id.clone(),
+                    recipient_instance_id: "instance-parent".into(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                },
+            )
+            .unwrap();
+        store
+            .acknowledge_send_delivery(&id, "instance-parent", 1)
+            .unwrap();
+        let encoded: String = store
+            .conn
+            .query_row(
+                "SELECT reply_summary FROM tracked_requests WHERE id=?1",
+                [&request],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(reply["summary"], expected);
+        assert_eq!(reply["summary_truncated"], truncated);
+        assert!(reply["summary"].as_str().unwrap().len() <= 1024);
+    }
+}
+
+#[test]
+fn native151_envoi_resume_fige_et_accuse_sont_atomiques() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    store
+        .conn
+        .execute_batch(
+            "INSERT INTO tracked_requests (id, sender, target, state, created_at, deadline_at)
+             VALUES ('demande-atomique', 'parent', 'enfant', 'open', 1, 2);
+             CREATE TRIGGER refuser_resume BEFORE UPDATE OF reply_summary ON tracked_requests
+             BEGIN SELECT RAISE(ABORT, 'faute injectée sur le résumé'); END;",
+        )
+        .unwrap();
+    let key = key();
+    assert!(matches!(
+        reserve(&store, b"reponse"),
+        Reservation::Prepared { .. }
+    ));
+    let mut message = bridget_core::BridgetMessage::new("enfant", "parent", "réponse atomique");
+    message.id = key.idempotency_key.clone();
+    message.in_reply_to = Some("demande-atomique".into());
+    store
+        .begin_send_delivery(
+            &key,
+            &SendDelivery {
+                delivery_id: "remise-atomique".into(),
+                recipient_instance_id: "instance-parent".into(),
+                delivery_generation: 1,
+                expires_at: NOW + HORIZON,
+                message_bytes: serde_json::to_vec(&message).unwrap(),
+            },
+        )
+        .unwrap();
+    assert!(
+        store
+            .acknowledge_send_delivery("remise-atomique", "instance-parent", 1)
+            .is_err()
+    );
+    assert_eq!(delivery_phase(&store, "remise-atomique"), "dispatching");
+    assert!(matches!(
+        store.lookup(&key, NOW).unwrap(),
+        LookupResult::OutcomeUnknown { .. }
+    ));
+    let state: String = store
+        .conn
+        .query_row(
+            "SELECT state FROM tracked_requests WHERE id='demande-atomique'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "open");
+    store
+        .conn
+        .execute_batch("DROP TRIGGER refuser_resume")
+        .unwrap();
+    assert_eq!(
+        store
+            .acknowledge_send_delivery("remise-atomique", "instance-parent", 1)
+            .unwrap(),
+        Some("demande-atomique".into())
+    );
+}
+
+#[test]
 fn migration_v3_ajoute_la_definition_resolue_aux_sagas_existantes() {
     let path = std::env::temp_dir().join(format!(
         "bridget-idempotency-definition-migration-{}.db",
@@ -2264,31 +2517,55 @@ fn native150_purge_phase_de_remise_cinq_cas() {
         expires_at: NOW + HORIZON,
         message_bytes: sample_message_bytes(id, "peer-1"),
     };
-    let key_for = |id: &str| {
-        IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, id).unwrap()
-    };
+    let key_for =
+        |id: &str| IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, id).unwrap();
     let begin = |store: &mut IdempotencyStore, id: &str, instance: &str, generation: u64| {
         let key = key_for(id);
-        store.reserve(&key, id.as_bytes(), NOW, HORIZON, NOW, 30).unwrap();
-        store.begin_send_delivery(&key, &delivery(id, instance, generation)).unwrap();
+        store
+            .reserve(&key, id.as_bytes(), NOW, HORIZON, NOW, 30)
+            .unwrap();
+        store
+            .begin_send_delivery(&key, &delivery(id, instance, generation))
+            .unwrap();
         key
     };
     // Absente : aucune ligne pour la clé.
-    assert_eq!(store.send_delivery_phase(&key_for("absente")).unwrap(), None);
+    assert_eq!(
+        store.send_delivery_phase(&key_for("absente")).unwrap(),
+        None
+    );
     // dispatching : remise déposée, non accusée.
     let en_vol = begin(&mut store, "en-vol", "instance-1", 1);
-    assert_eq!(store.send_delivery_phase(&en_vol).unwrap().as_deref(), Some("dispatching"));
+    assert_eq!(
+        store.send_delivery_phase(&en_vol).unwrap().as_deref(),
+        Some("dispatching")
+    );
     // acked.
     let accusee = begin(&mut store, "accusee", "instance-2", 2);
-    store.acknowledge_send_delivery("accusee", "instance-2", 2).unwrap();
-    assert_eq!(store.send_delivery_phase(&accusee).unwrap().as_deref(), Some("acked"));
+    store
+        .acknowledge_send_delivery("accusee", "instance-2", 2)
+        .unwrap();
+    assert_eq!(
+        store.send_delivery_phase(&accusee).unwrap().as_deref(),
+        Some("acked")
+    );
     // indeterminate : masquée par `send_delivery`, visible ici.
     let quarantaine = begin(&mut store, "quarantaine", "instance-3", 3);
-    store.mark_delivery_indeterminate("quarantaine", "instance-3", 3).unwrap();
+    store
+        .mark_delivery_indeterminate("quarantaine", "instance-3", 3)
+        .unwrap();
     assert_eq!(store.send_delivery(&quarantaine).unwrap(), None);
-    assert_eq!(store.send_delivery_phase(&quarantaine).unwrap().as_deref(), Some("indeterminate"));
+    assert_eq!(
+        store.send_delivery_phase(&quarantaine).unwrap().as_deref(),
+        Some("indeterminate")
+    );
     // orphaned.
     let orpheline = begin(&mut store, "orpheline", "instance-4", 4);
-    store.orphan_dispatching_for_instance("instance-4", "destinataire purgé").unwrap();
-    assert_eq!(store.send_delivery_phase(&orpheline).unwrap().as_deref(), Some("orphaned"));
+    store
+        .orphan_dispatching_for_instance("instance-4", "destinataire purgé")
+        .unwrap();
+    assert_eq!(
+        store.send_delivery_phase(&orpheline).unwrap().as_deref(),
+        Some("orphaned")
+    );
 }

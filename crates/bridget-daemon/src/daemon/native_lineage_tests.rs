@@ -76,6 +76,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         failure_sent: false,
         reply_timeout: None,
         delivery_acked: false,
+        acknowledged_at: None,
     }
 }
 
@@ -977,10 +978,21 @@ fn native150_pause_annulation_humaine_disponible() {
         .unwrap();
         assert!(crate::referent_control::read(conn).unwrap().paused);
     }
-    let cancel = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}));
-    assert_eq!(cancel, json!({"version":1,"task_id":task_id,"status":"cancelling"}), "{cancel}");
+    let cancel = call(
+        &state,
+        &root,
+        json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}),
+    );
+    assert_eq!(
+        cancel,
+        json!({"version":1,"task_id":task_id,"status":"cancelling"}),
+        "{cancel}"
+    );
     // Le reçu est durable : le rejeu rend le même reçu, toujours en pause.
-    let rejoue = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}));
+    let rejoue = call(
+        &state,
+        &root,
+        json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}),
+    );
     assert_eq!(rejoue, cancel);
 }
-

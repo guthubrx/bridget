@@ -3,6 +3,35 @@ use bridget_transport::protocol::{NativeDelegationRequest, ResolvedAgentDefiniti
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+
+/// Compteur éphémère commun aux lectures en attente. Chaque opération est O(1).
+/// Ordre des verrous : état puis compteur. Ne jamais garder le compteur en prenant l'état.
+#[derive(Clone, Default)]
+pub(crate) struct WaitEpoch(Arc<(Mutex<u64>, Condvar)>);
+
+impl WaitEpoch {
+    pub fn get(&self) -> u64 {
+        *self.0.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn bump(&self) {
+        let mut epoch = self.0.0.lock().unwrap_or_else(|e| e.into_inner());
+        *epoch = epoch.wrapping_add(1);
+        self.0.1.notify_all();
+    }
+
+    pub fn wait_changed(&self, seen: u64, slice: Duration) {
+        let epoch = self.0.0.lock().unwrap_or_else(|e| e.into_inner());
+        drop(
+            self.0
+                .1
+                .wait_timeout_while(epoch, slice, |epoch| *epoch == seen)
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+    }
+}
 
 #[path = "delegation_lineage.rs"]
 mod lineage;
@@ -13,6 +42,7 @@ pub(crate) struct DelegationStore {
     changes: std::cell::RefCell<std::collections::BTreeMap<String, ProjectionMutation>>,
     notify: std::sync::mpsc::SyncSender<()>,
     receiver: std::cell::RefCell<Option<std::sync::mpsc::Receiver<()>>>,
+    wait_epoch: WaitEpoch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +90,9 @@ pub(crate) struct Task {
     /// Preuve durable que la remise du résultat ou de l'avis d'échec a été accusée.
     #[serde(default)]
     pub delivery_acked: bool,
+    /// Lecture explicite du parent ; distincte de la preuve de livraison.
+    #[serde(default)]
+    pub acknowledged_at: Option<i64>,
 }
 
 impl Task {
@@ -92,9 +125,19 @@ impl DelegationStore {
             changes: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             notify,
             receiver: std::cell::RefCell::new(Some(receiver)),
+            wait_epoch: WaitEpoch::default(),
         };
         store.initialize_lineage()?;
         Ok(store)
+    }
+
+    pub fn wait_epoch(&self) -> WaitEpoch {
+        self.wait_epoch.clone()
+    }
+
+    #[cfg(test)]
+    pub fn test_connection(&self) -> &Connection {
+        &self.conn
     }
 
     #[cfg(test)]
@@ -140,6 +183,51 @@ impl DelegationStore {
 
     pub fn save(&self, task: &Task) -> Result<(), String> {
         self.save_projected(task)
+    }
+
+    /// O(k) lectures et écritures indexées, k <= 16. Le daemon a validé le lot.
+    /// Un seul commit ; aucun stamp, projection ou fait de livraison modifié.
+    pub fn acknowledge_tasks(
+        &self,
+        task_ids: &[String],
+        now: i64,
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        let mut acknowledged = Vec::with_capacity(task_ids.len());
+        let mut already = Vec::with_capacity(task_ids.len());
+        for id in task_ids {
+            let saved: Option<Option<i64>> = tx
+                .query_row(
+                    "SELECT json_extract(payload,'$.acknowledged_at') FROM native_delegations WHERE task_id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let saved = saved.ok_or("task_unavailable")?;
+            if saved.is_some() {
+                already.push(id.clone());
+            } else {
+                let changed = tx
+                    .execute(
+                        "UPDATE native_delegations SET payload=json_set(payload,'$.acknowledged_at',?2) WHERE task_id=?1 AND json_extract(payload,'$.acknowledged_at') IS NULL",
+                        params![id, now],
+                    )
+                    .map_err(|error| error.to_string())?;
+                if changed != 1 {
+                    return Err("task_unavailable".into());
+                }
+                acknowledged.push(id.clone());
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        if !acknowledged.is_empty() {
+            self.wait_epoch.bump();
+        }
+        Ok((acknowledged, already))
     }
 
     pub fn get(&self, task_id: &str) -> Result<Option<Task>, String> {
@@ -299,6 +387,36 @@ impl DelegationStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native151_attente_compteur_reveil_et_lecture_non_bloquante() {
+        let epoch = WaitEpoch::default();
+        let sleeper = epoch.clone();
+        let seen = epoch.get();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let join = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            sleeper.wait_changed(seen, Duration::from_secs(60));
+        });
+        started_rx.recv().unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(epoch.get(), 0);
+        epoch.bump();
+        join.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert_eq!(epoch.get(), 1);
+    }
+
+    #[test]
+    fn native151_attente_compteur_tranche_et_evenement_deja_passe() {
+        let epoch = WaitEpoch::default();
+        let start = std::time::Instant::now();
+        epoch.wait_changed(0, Duration::from_millis(40));
+        assert!(start.elapsed() >= Duration::from_millis(35));
+        epoch.bump();
+        let start = std::time::Instant::now();
+        epoch.wait_changed(0, Duration::from_secs(60));
+        assert!(start.elapsed() < Duration::from_millis(100));
+    }
     #[test]
     fn grant_survives_restart_and_revoke() {
         let dir = std::env::temp_dir().join(format!("bridget-native-{}", uuid::Uuid::new_v4()));

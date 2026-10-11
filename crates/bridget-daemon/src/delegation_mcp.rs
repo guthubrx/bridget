@@ -1,16 +1,74 @@
 //! Même façade native pour les agents T3, CLI et MCP externes.
-use crate::communication::client::{ClientError, registered_connection, unexpected_response};
+use crate::communication::client::{
+    ClientError, daemon_supports_wait, registered_connection, registered_connection_until,
+    unexpected_response,
+};
 use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{NativeDelegationRequest, SpawnPosture};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::path::Path;
+use std::time::{Duration, Instant};
+
+pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
+pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
+
+/// Validation commune des deux outils d'attente : forme JSON puis bornes métier.
+pub(crate) fn parse_wait_timeout(
+    args: &serde_json::Map<String, Value>,
+) -> Result<u64, ClientError> {
+    let seconds = match args.get("wait_timeout") {
+        None => WAIT_TIMEOUT_DEFAULT_SECS,
+        Some(Value::Number(value)) if value.is_u64() => value.as_u64().expect("entier positif"),
+        Some(Value::Number(value)) if value.is_i64() => 0,
+        _ => {
+            return Err(ClientError::InvalidParams(
+                "wait_timeout doit être un entier".into(),
+            ));
+        }
+    };
+    if !(1..=WAIT_TIMEOUT_MAX_SECS).contains(&seconds) {
+        return Err(ClientError::Technical {
+            code: "native_delegation_refused",
+            message: "wait_timeout_out_of_range".into(),
+        });
+    }
+    Ok(seconds)
+}
+
+/// O(k), k <= 16 : la liste ne porte aucune autorité de parent.
+fn parse_task_ids(args: &Value) -> Result<Vec<String>, ClientError> {
+    let ids = args
+        .get("task_ids")
+        .and_then(Value::as_array)
+        .filter(|ids| (1..=16).contains(&ids.len()))
+        .ok_or_else(|| {
+            ClientError::InvalidParams("task_ids doit contenir 1 à 16 chaînes distinctes".into())
+        })?;
+    let mut seen = HashSet::with_capacity(ids.len());
+    ids.iter()
+        .map(|id| {
+            let id = id.as_str().filter(|id| !id.is_empty()).ok_or_else(|| {
+                ClientError::InvalidParams("task_ids doit contenir des chaînes non vides".into())
+            })?;
+            if !seen.insert(id) {
+                return Err(ClientError::InvalidParams(
+                    "task_ids contient un doublon".into(),
+                ));
+            }
+            Ok(id.to_string())
+        })
+        .collect()
+}
 
 pub(crate) fn tools() -> Vec<Value> {
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+        json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+        json!({"name":"bridget_task_ack","description":"Déclare avoir lu le résultat ou l'échec de ses tâches natives. Cet accusé est informatif ; il ne remplace pas le message normal et ne modifie ni remise, ni nettoyage, ni rétention.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ]
 }
@@ -37,6 +95,8 @@ pub(crate) fn execute(
             "reply_timeout",
         ],
         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
+        "bridget_task_wait" => &["task_ids", "wait_timeout"],
+        "bridget_task_ack" => &["task_ids"],
         _ => return Err(ClientError::InvalidParams("outil natif inconnu".into())),
     };
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
@@ -66,8 +126,10 @@ pub(crate) fn execute(
             cwd: string("cwd")?,
             posture: match args.get("posture") {
                 None => None,
-                Some(Value::String(value)) if value=="discovery" => Some(SpawnPosture::Discovery),
-                Some(Value::String(value)) if value=="development" => Some(SpawnPosture::Development),
+                Some(Value::String(value)) if value == "discovery" => Some(SpawnPosture::Discovery),
+                Some(Value::String(value)) if value == "development" => {
+                    Some(SpawnPosture::Development)
+                }
                 _ => return Err(ClientError::InvalidParams("posture invalide".into())),
             },
             reply_timeout: match args.get("reply_timeout") {
@@ -82,12 +144,42 @@ pub(crate) fn execute(
         "bridget_task_cancel" => NativeDelegationRequest::Cancel {
             task_id: string("task_id")?,
         },
+        "bridget_task_wait" => NativeDelegationRequest::Wait {
+            task_ids: parse_task_ids(args)?,
+            wait_timeout: Some(parse_wait_timeout(object)?),
+        },
+        "bridget_task_ack" => NativeDelegationRequest::Ack {
+            task_ids: parse_task_ids(args)?,
+        },
         _ => unreachable!(),
     };
-    let mut connection = registered_connection(&identity.name, &identity.instance_id, socket)?;
-    let message=match crate::t3code_mcp::private_proof() {
-        Some(proof)=>WrapperToDaemon::NativeDelegationT3{request,proof},
-        None=>WrapperToDaemon::NativeDelegation{request},
+    if matches!(
+        &request,
+        NativeDelegationRequest::Wait { .. } | NativeDelegationRequest::Ack { .. }
+    ) && !daemon_supports_wait(socket)
+    {
+        return Err(ClientError::Technical {
+            code: "native_delegation_refused",
+            message: "wait_unsupported".into(),
+        });
+    }
+    let mut connection = if let NativeDelegationRequest::Wait { wait_timeout, .. } = &request {
+        let deadline = Instant::now()
+            + Duration::from_secs(wait_timeout.unwrap_or(WAIT_TIMEOUT_DEFAULT_SECS) + 10);
+        let mut connection = registered_connection_until(
+            &identity.name,
+            &identity.instance_id,
+            socket,
+            Instant::now() + Duration::from_secs(3),
+        )?;
+        connection.set_deadline(deadline);
+        connection
+    } else {
+        registered_connection(&identity.name, &identity.instance_id, socket)?
+    };
+    let message = match crate::t3code_mcp::private_proof() {
+        Some(proof) => WrapperToDaemon::NativeDelegationT3 { request, proof },
+        None => WrapperToDaemon::NativeDelegation { request },
     };
     match connection.exchange(&message)? {
         DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
@@ -104,6 +196,89 @@ pub(crate) fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native151_facade_task_wait_schema_ferme_et_lecture_pure() {
+        let wait = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_task_wait")
+            .expect("outil d'attente présent");
+        assert_eq!(wait["inputSchema"]["additionalProperties"], false);
+        assert_eq!(wait["inputSchema"]["required"], json!(["task_ids"]));
+        assert_eq!(wait["inputSchema"]["properties"]["task_ids"]["minItems"], 1);
+        assert_eq!(
+            wait["inputSchema"]["properties"]["task_ids"]["maxItems"],
+            16
+        );
+        assert_eq!(
+            wait["inputSchema"]["properties"]["task_ids"]["uniqueItems"],
+            true
+        );
+        assert_eq!(
+            wait["inputSchema"]["properties"]["wait_timeout"]["default"],
+            600
+        );
+        assert_eq!(
+            wait["inputSchema"]["properties"]["wait_timeout"]["maximum"],
+            3600
+        );
+        assert_eq!(wait["annotations"]["readOnlyHint"], true);
+        assert_eq!(wait["annotations"]["destructiveHint"], false);
+    }
+
+    #[test]
+    fn native151_facade_task_wait_bornes_et_types_avant_connexion() {
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for value in [json!(-1), json!(0), json!(3601), json!(u64::MAX)] {
+            let refusal = execute(
+                &identity,
+                "bridget_task_wait",
+                &json!({"task_ids":["task"],"wait_timeout":value}),
+                Path::new("/missing"),
+            );
+            assert!(
+                matches!(refusal, Err(ClientError::Technical { code: "native_delegation_refused", message }) if message == "wait_timeout_out_of_range")
+            );
+        }
+        for value in [json!(null), json!(1.5), json!("1"), json!(true)] {
+            assert!(matches!(
+                execute(
+                    &identity,
+                    "bridget_task_wait",
+                    &json!({"task_ids":["task"],"wait_timeout":value}),
+                    Path::new("/missing")
+                ),
+                Err(ClientError::InvalidParams(_))
+            ));
+        }
+        for args in [
+            json!({"task_ids":["task"],"parent":"forged"}),
+            json!({"task_ids":[]}),
+            json!({"task_ids":["task","task"]}),
+            json!({"task_ids":vec!["task";17]}),
+            json!({"task_ids":[""]}),
+            json!({"task_ids":[1]}),
+        ] {
+            assert!(matches!(
+                execute(&identity, "bridget_task_wait", &args, Path::new("/missing")),
+                Err(ClientError::InvalidParams(_))
+            ));
+        }
+        for value in [None, Some(json!(1)), Some(json!(3600))] {
+            let mut args = json!({"task_ids":["task"]});
+            if let Some(value) = value {
+                args["wait_timeout"] = value;
+            }
+            assert!(
+                matches!(execute(&identity, "bridget_task_wait", &args, Path::new("/missing")), Err(ClientError::Technical { code: "native_delegation_refused", message }) if message == "wait_unsupported")
+            );
+        }
+    }
+
     #[test]
     fn closed_arguments_reject_forged_parent_without_connecting() {
         let identity = ResolvedIdentity {
@@ -120,7 +295,7 @@ mod tests {
             ),
             Err(ClientError::InvalidParams(_))
         ));
-        assert_eq!(tools().len(), 4);
+        assert_eq!(tools().len(), 6);
     }
 
     #[test]

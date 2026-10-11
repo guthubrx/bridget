@@ -2030,6 +2030,14 @@ pub enum NativeDelegationRequest {
     Cancel {
         task_id: String,
     },
+    Wait {
+        task_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wait_timeout: Option<u64>,
+    },
+    Ack {
+        task_ids: Vec<String>,
+    },
     /// Réservé au contrôle humain local ; jamais exposé comme outil d'agent.
     Grant {
         agent_id: String,
@@ -2821,6 +2829,10 @@ pub enum WrapperToDaemon {
     NativeDelegationT3 {
         request: NativeDelegationRequest,
         proof: NativePermissionProof,
+    },
+    RequestWait {
+        request_id: String,
+        wait_timeout: u64,
     },
     /// Observation du fournisseur par la connexion primaire de son wrapper.
     NativePermissionFact {
@@ -3754,6 +3766,13 @@ pub enum DaemonToWrapper {
     NativeDelegationResult {
         result: serde_json::Value,
     },
+    RequestWaitResult {
+        state: String,
+        timed_out_wait: bool,
+        waited_secs: u64,
+        reply: Option<serde_json::Value>,
+        reply_reason: Option<String>,
+    },
     HumanLineageResult {
         result: serde_json::Value,
     },
@@ -4191,6 +4210,8 @@ pub enum DaemonToWrapper {
         host: String,
         db_path: String,
         instance_id: String,
+        #[serde(default)]
+        features: Vec<String>,
     },
     /// Réponse à UsageWindow. `aggregate: None` signifie « aucun échantillon
     /// attesté dans la fenêtre » — le greffe doit rendre « inconnu », pas zéro.
@@ -6129,12 +6150,14 @@ mod tests {
             host: "monordinateur".to_string(),
             db_path: "/Users/moi/.cache/bridget/bridget.db".to_string(),
             instance_id: "daemon-7f0c01d2".to_string(),
+            features: Vec::new(),
         };
         match decode::<DaemonToWrapper>(&encode(&report).unwrap()).unwrap() {
             DaemonToWrapper::DaemonIdentityReport {
                 host,
                 db_path,
                 instance_id,
+                ..
             } => {
                 assert_eq!(host, "monordinateur");
                 assert_eq!(db_path, "/Users/moi/.cache/bridget/bridget.db");
@@ -7883,5 +7906,52 @@ mod spec104_search_contract_tests {
             panic!("variante attendue : Delegate");
         };
         assert_eq!(reply_timeout, Some(120));
+    }
+
+    #[test]
+    fn native151_protocole_attente_aller_retour_et_champs_fermes() {
+        let wire = r#"{"operation":"wait","task_ids":["one","two"],"wait_timeout":7}"#;
+        let request: NativeDelegationRequest = serde_json::from_str(wire).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(), wire);
+        assert!(
+            serde_json::from_str::<NativeDelegationRequest>(
+                r#"{"operation":"wait","task_ids":["one"],"parent":"forged"}"#
+            )
+            .is_err()
+        );
+        let missing = r#"{"operation":"wait","task_ids":["one"]}"#;
+        let request: NativeDelegationRequest = serde_json::from_str(missing).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(), missing);
+    }
+
+    #[test]
+    fn native151_protocole_demande_et_reponse_aller_retour() {
+        let request = r#"{"type":"RequestWait","request_id":"request","wait_timeout":3}"#;
+        let decoded: WrapperToDaemon = decode(request).unwrap();
+        assert_eq!(encode(&decoded).unwrap(), request);
+        let response = r#"{"type":"RequestWaitResult","state":"answered","timed_out_wait":false,"waited_secs":1,"reply":{"summary":"done"},"reply_reason":null}"#;
+        let decoded: DaemonToWrapper = decode(response).unwrap();
+        assert_eq!(encode(&decoded).unwrap(), response);
+    }
+
+    #[test]
+    fn native151_protocole_identite_ancienne_liste_vide() {
+        let report: DaemonToWrapper = decode(
+            r#"{"type":"DaemonIdentityReport","host":"host","db_path":"db","instance_id":"instance"}"#
+        ).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&encode(&report).unwrap()).unwrap();
+        assert_eq!(value["features"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn native151_protocole_variantes_historiques_octets_stables() {
+        for wire in [
+            r#"{"operation":"catalogue"}"#,
+            r#"{"operation":"status","task_id":"task"}"#,
+            r#"{"operation":"cancel","task_id":"task"}"#,
+        ] {
+            let decoded: NativeDelegationRequest = serde_json::from_str(wire).unwrap();
+            assert_eq!(serde_json::to_string(&decoded).unwrap(), wire);
+        }
     }
 }

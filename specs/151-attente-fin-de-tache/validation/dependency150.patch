@@ -1,0 +1,2421 @@
+diff --git a/crates/bridget-daemon/src/daemon.rs b/crates/bridget-daemon/src/daemon.rs
+index 24086944..e946e1b8 100644
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -7170,6 +7170,38 @@ const SEND_PURGE_GRACE_SECS: i64 = 30 * 24 * 3600;
+ /// Âge minimal d'un nom ou d'une preuve d'identité orphelins avant retrait.
+ const IDENTITY_FILES_MIN_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+ 
++/// Entretien des magasins SQLite, sous le verrou de l'état. Ordre imposé (session 150) :
++/// la recopie des accusés natifs précède `purge_expired_sends`, qui efface les remises
++/// quelle que soit leur phase ; la purge des arbres suit, jamais au démarrage.
++fn maintain_stores(st: &DaemonState, now: i64) {
++    match st.idempotency.settle_expired_dispatching(now) {
++        Ok(0) => {}
++        Ok(count) => info!(
++            "entretien: {count} remise(s) expirée(s) passée(s) de « en vol » à « sort inconnu »"
++        ),
++        Err(error) => warn!("entretien: remises expirées : {error}"),
++    }
++    // Sans preuve enregistrée, les remises ne sont pas effacées dans ce passage.
++    match native_delegation::copy_delivery_acks(st) {
++        Ok(acked) => {
++            if acked > 0 {
++                info!("entretien: {acked} accusé(s) de remise native recopié(s) dans les tâches");
++            }
++            match st.idempotency.purge_expired_sends(now, SEND_PURGE_GRACE_SECS) {
++                Ok(0) => {}
++                Ok(count) => {
++                    info!("entretien: {count} envoi(s) expiré(s) depuis plus de 30 jours purgé(s)")
++                }
++                Err(error) => warn!("entretien: purge des envois : {error}"),
++            }
++        }
++        Err(error) => {
++            warn!("entretien: accusés natifs non recopiés, purge des envois suspendue : {error}")
++        }
++    }
++    native_delegation::maintain_retention(st, now);
++}
++
+ /// Session 116 : un passage d'entretien. Chaque étape est indépendante : un
+ /// échec est journalisé et n'empêche pas les suivantes. Le verrou de l'état
+ /// n'est tenu que pour les deux requêtes SQL et la lecture des instances
+@@ -7178,23 +7210,7 @@ fn run_maintenance(state: &Arc<Mutex<DaemonState>>, root: &std::path::Path) {
+     let now = unix_now_secs();
+     let connected: HashSet<String> = {
+         let st = state.lock().unwrap_or_else(|e| e.into_inner());
+-        match st.idempotency.settle_expired_dispatching(now) {
+-            Ok(0) => {}
+-            Ok(count) => info!(
+-                "entretien: {count} remise(s) expirée(s) passée(s) de « en vol » à « sort inconnu »"
+-            ),
+-            Err(error) => warn!("entretien: remises expirées : {error}"),
+-        }
+-        match st
+-            .idempotency
+-            .purge_expired_sends(now, SEND_PURGE_GRACE_SECS)
+-        {
+-            Ok(0) => {}
+-            Ok(count) => {
+-                info!("entretien: {count} envoi(s) expiré(s) depuis plus de 30 jours purgé(s)")
+-            }
+-            Err(error) => warn!("entretien: purge des envois : {error}"),
+-        }
++        maintain_stores(&st, now);
+         st.conn_instances.values().cloned().collect()
+     };
+     let identite = crate::mcp_identity::purge_stale_identity_files(
+diff --git a/crates/bridget-daemon/src/daemon/native_delegation.rs b/crates/bridget-daemon/src/daemon/native_delegation.rs
+index a494aa0b..8fd0aded 100644
+--- a/crates/bridget-daemon/src/daemon/native_delegation.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation.rs
+@@ -5,6 +5,9 @@ use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, Spawn
+ use serde_json::{Value, json};
+ use std::path::Path;
+ const MISSION_REPLY_LIMIT_SECS: i64 = 3600;
++/// Bornes du délai de réponse choisi par le parent (session 150).
++const MISSION_REPLY_MIN_SECS: u64 = 60;
++const MISSION_REPLY_MAX_SECS: u64 = 86_400;
+ 
+ enum ParentPermission {
+     Root(PathBuf, SpawnPosture),
+@@ -313,7 +316,9 @@ fn handle_with_fact(conn:&str,request:NativeDelegationRequest,fact:Option<bridge
+             Err(code) => failure(&code),
+         }
+     };
+-    if drives {
++    // Un refus ne crée ni ne modifie aucune tâche active : il ne doit pas faire
++    // avancer les autres tâches (une purge de borne éventuelle ne retire que des arbres soldés).
++    if drives && result["status"] != "refused" {
+         tick(state);
+     }
+     DaemonToWrapper::NativeDelegationResult { result }
+@@ -389,7 +394,7 @@ fn handle_locked_with_project(
+                         "development_refusal":development.err()})
+                 }).collect();
+             Ok(
+-                json!({"version":1,"providers":entries,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS}),
++                json!({"version":1,"providers":entries,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS}),
+             )
+         }
+         NativeDelegationRequest::Delegate {
+@@ -400,6 +405,7 @@ fn handle_locked_with_project(
+             task,
+             cwd,
+             posture,
++            reply_timeout,
+         } => {
+             if request_id.is_empty()
+                 || request_id.len() > 128
+@@ -409,6 +415,9 @@ fn handle_locked_with_project(
+             {
+                 return Err("invalid_request".into());
+             }
++            if reply_timeout.is_some_and(|secs| !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs)) {
++                return Err("reply_timeout_out_of_range".into());
++            }
+             let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+             if let Some(mut saved) = st
+                 .delegation_store
+@@ -417,6 +426,16 @@ fn handle_locked_with_project(
+                 recover_owner(st, &mut saved, &owner, &instance)?;
+                 return Ok(task_view(&saved));
+             }
++            // ADR 027 : garde unique des puits autonomes. Après le rejeu (une clé admise ou
++            // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
++            let control = crate::referent_control::read(st.store.connection())
++                .map_err(|_| "control_state_unavailable")?;
++            if matches!(
++                crate::referent_control::admit_autonomous_effect(crate::referent_control::AutonomousEffect::NativeDelegation, &control),
++                crate::referent_control::Admission::Deferred { .. }
++            ) {
++                return Err("referent_paused".into());
++            }
+             let fact=parent_fact(st,&owner,&instance,Some(request_id),attested)?;
+             let frozen_cwd=if let Some(fact)=&fact{
+                 let path=std::fs::canonicalize(cwd).map_err(|_|"cwd_unavailable")?;
+@@ -438,17 +457,23 @@ fn handle_locked_with_project(
+                 let scoped=st.registry.for_inherited_delegation(agent_type,model,effort.as_deref(),&policy)?;
+                 (scoped,Some(crate::native_permissions::snapshot(&owner,&instance,fact,policy,&frozen_cwd)),Some(effective))
+             }else{(st.registry.for_delegation(agent_type,model,effort.as_deref(),SpawnPosture::Discovery)?,None,Some(SpawnPosture::Discovery))};
+-            let tasks = st.delegation_store.tasks()?;
+-            if tasks.len() >= 4096
+-                || tasks.iter().filter(|task| !task.terminal()).count() >= 128
+-                || tasks
+-                    .iter()
+-                    .filter(|task| task.owner_instance == instance && !task.terminal())
+-                    .count()
+-                    >= 16
+-            {
++            // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
++            let (active, instance_active, mut retained) = st.delegation_store.admission_counts(&instance)?;
++            if active >= 128 || instance_active >= 16 {
+                 return Err("task_limit".into());
+             }
++            if retained >= crate::delegation::MAX_RETAINED_TASKS {
++                // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
++                // arbres soldés du plus ancien au plus récent), puis seulement refus.
++                if let Err(error) = copy_delivery_acks(st) {
++                    warn!("rétention native: accusés non recopiés avant la purge de borne : {error}");
++                }
++                purge_retained(st, unix_timestamp(), Some(crate::delegation::MAX_RETAINED_TASKS), usize::MAX);
++                retained = st.delegation_store.admission_counts(&instance)?.2;
++                if retained >= crate::delegation::MAX_RETAINED_TASKS {
++                    return Err("retention_saturated".into());
++                }
++            }
+             let task_id = Uuid::new_v4().to_string();
+             let executions = st
+                 .execution_store
+@@ -467,6 +492,13 @@ fn handle_locked_with_project(
+                     }
+                     let link=st.fleet.agent_link_for_child(&instance).map_err(|e|e.to_string())?.ok_or("parent_task_unavailable")?;
+                     if link.delegation_id.as_deref()!=Some(parent.task_id.as_str()) {return Err("parent_task_unavailable".into())}
++                    // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
++                    // Sans délai explicite, comportement 149 : aucun contrôle.
++                    if let (Some(secs), Some(deadline)) = (reply_timeout, parent.mission_deadline_at)
++                        && i64::try_from(*secs).map_or(true, |secs| secs > deadline.saturating_sub(unix_timestamp()))
++                    {
++                        return Err("reply_timeout_exceeds_parent".into());
++                    }
+                     st.delegation_store.parent_lineage(&parent)?
+                 },
+                 None=>(owner.clone(),None),
+@@ -498,6 +530,8 @@ fn handle_locked_with_project(
+                 result_sent: false,
+                 cleanup_done: false,
+                 failure_sent: false,
++                reply_timeout: reply_timeout.and_then(|secs| i64::try_from(secs).ok()),
++                delivery_acked: false,
+             };
+             st.delegation_store
+                 .insert(&record, request_id, &canonical)?;
+@@ -1004,7 +1038,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
+                     .map(|snapshot| snapshot.created_at)
+                     .unwrap_or(task.created_at);
+                 task.mission_deadline_at =
+-                    Some(admitted_at.saturating_add(MISSION_REPLY_LIMIT_SECS));
++                    Some(admitted_at.saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)));
+                 if let Err(error) = st.delegation_store.save(&task) {
+                     error!("échéance native non persistée: {error}");
+                     continue;
+@@ -1140,7 +1174,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
+                 let mut message = bridget_core::BridgetMessage::new(&task.owner, &task.child, body);
+                 message.id = task.mission.clone();
+                 message.reply = true;
+-                message.reply_timeout = Some(3600);
++                message.reply_timeout = u64::try_from(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).ok();
+                 message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+                 let response = send_as(
+                     &mut st,
+@@ -1167,7 +1201,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
+                             .map(|snapshot| snapshot.created_at)
+                             .unwrap_or(task.created_at);
+                         task.mission_deadline_at
+-                            .get_or_insert(admitted_at.saturating_add(MISSION_REPLY_LIMIT_SECS));
++                            .get_or_insert(admitted_at.saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)));
+                     }
+                     DaemonToWrapper::IdempotencyResult {
+                         issue:
+@@ -1187,6 +1221,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
+                 }
+                 let _ = st.delegation_store.save(&task);
+             }
++            if task.state == "working" {
++                align_request_deadline(&st, &task);
++            }
+             let execution_id = format!("execution-{}", task.mission);
+             // completed seul ne prouve pas la réponse corrélée. On attend
+             // la capture, sans inventer un succès vide.
+@@ -1480,6 +1517,159 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
+     }
+ }
+ 
++/// Délai explicite seulement : le suivi durable de la demande suit l'échéance de la
++/// mission (`mission_deadline_at`). L'enveloppe de l'envoi (octets) ne change pas.
++/// Appelée à chaque tick d'une mission `working` : un échec d'écriture est donc réessayé
++/// au tick suivant, tant que l'échéance du suivi diffère. Une demande close n'est pas rouverte.
++/// Complexité : O(1) — une lecture indexée par mission, une écriture seulement si l'échéance diffère.
++fn align_request_deadline(st: &DaemonState, task: &Task) {
++    let (Some(_), Some(deadline)) = (task.reply_timeout, task.mission_deadline_at) else {
++        return;
++    };
++    match st.store.get_request(&task.mission) {
++        Ok(Some(tracked)) if tracked.state == "open" && tracked.deadline_at != deadline => {
++            if let Err(error) = st.store.set_request_deadline(&task.mission, deadline) {
++                warn!("suivi de mission {} non aligné sur son échéance, nouvel essai au prochain tick : {error}", task.mission);
++            }
++        }
++        Ok(_) => {}
++        Err(error) => warn!("suivi de mission {} illisible, nouvel essai au prochain tick : {error}", task.mission),
++    }
++}
++
++/// Purge les arbres de tâches soldés, sous le verrou du daemon (R2, R6, R10).
++/// Le contrôle de vivacité est refait ici, au moment de la suppression : un
++/// sous-agent connecté, en cours de lancement ou désiré `Running` conserve son
++/// arbre. Avant la suppression, chaque enfant est décommissionné pour qu'une
++/// entrée `Stopped` ne puisse plus être relancée. Un échec de décommission
++/// conserve l'arbre. `bound` : voir `DelegationStore::purge_trees`.
++/// `max_trees` : plafond d'arbres supprimés par appel. L'entretien le fixe à 128 par
++/// passage (âge et borne cumulés) ; l'admission passe `usize::MAX`, sans limite.
++/// Complexité : O(S + F + P + M + n log n) — S sagas, F entrées de flotte, P présences,
++/// M lancements gérés, n ≤ 4096 tâches.
++pub(super) fn purge_retained(st: &DaemonState, now: i64, bound: Option<usize>, max_trees: usize) -> usize {
++    let (launching, desired) = match (
++        st.idempotency.spawn_commands(&st.fleet.supervisor_scope()),
++        st.fleet.desired_fleet(),
++    ) {
++        (Ok(sagas), Ok(desired)) => (sagas, desired),
++        (Err(error), _) => {
++            warn!("rétention native: sagas de lancement illisibles, aucune purge : {error}");
++            return 0;
++        }
++        (_, Err(error)) => {
++            warn!("rétention native: flotte illisible, aucune purge : {error}");
++            return 0;
++        }
++    };
++    // Complexité : O(1) par enfant grâce à ces ensembles construits une fois.
++    let present: HashSet<&str> = st
++        .presences
++        .values()
++        .filter(|presence| matches!(presence.state.as_str(), "connected" | "busy"))
++        .map(|presence| presence.name.as_str())
++        .collect();
++    let spawning: HashSet<&str> = st.managed_spawns.values().map(|spawn| spawn.lease.name.as_str()).collect();
++    let launching: HashSet<&str> = launching
++        .iter()
++        .filter(|saga| {
++            matches!(
++                saga.state,
++                crate::idempotency::SpawnCommandState::Requested
++                    | crate::idempotency::SpawnCommandState::Reserved
++                    | crate::idempotency::SpawnCommandState::Starting
++            )
++        })
++        .map(|saga| saga.name.as_str())
++        .collect();
++    let may_run = |child: &str| {
++        st.router.get_agent(child).is_some()
++            || present.contains(child)
++            || st.decommissioning_names.contains(child)
++            || spawning.contains(child)
++            || launching.contains(child)
++            || desired
++                .equipiers
++                .get(child)
++                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Running)
++    };
++    let purged = st.delegation_store.purge_trees(now, bound, max_trees, |tree| {
++        if tree.iter().any(|task| may_run(&task.child)) {
++            return false;
++        }
++        let children: Vec<&str> = tree.iter().map(|task| task.child.as_str()).collect();
++        match st.fleet.decommission_all(&children) {
++            Ok(_) => true,
++            Err(error) => {
++                warn!("rétention native: décommission de l'arbre {} refusée, arbre conservé : {error}", tree[0].task_id);
++                false
++            }
++        }
++    });
++    match purged {
++        Ok(count) => count,
++        Err(error) => {
++            warn!("rétention native: purge interrompue : {error}");
++            0
++        }
++    }
++}
++
++/// Recopie l'accusé des remises natives dans la tâche (`delivery_acked`), preuve
++/// durable que `purge_expired_sends` ne peut plus effacer (R2.2). Lit la phase de
++/// `native-result-<task>` ou `native-failure-<task>` sous `issuer_scope(task_id)`.
++/// Sans lot : le total de tâches est borné à 4096. Une remise indéterminée ou
++/// effacée ne produit aucune preuve : l'arbre reste conservé. Rend le nombre de
++/// preuves recopiées, ou une erreur dès qu'une lecture ou une écriture échoue :
++/// l'appelant ne doit alors pas effacer les remises.
++/// Complexité : O(n log n) — n ≤ 4096 tâches, une lecture indexée par tâche en attente.
++pub(super) fn copy_delivery_acks(st: &DaemonState) -> Result<usize, String> {
++    let mut copied = 0;
++    for mut task in st.delegation_store.tasks()?.into_iter().filter(|task| !task.delivery_acked) {
++        let prefix = match task.state.as_str() {
++            "result_available" if task.result_sent => "native-result-",
++            "failed" if task.failure_sent => "native-failure-",
++            _ => continue,
++        };
++        let key = IdempotencyKey::new(
++            &crate::communication::issuer_scope(&task.task_id),
++            OperationKind::Send,
++            &format!("{prefix}{}", task.task_id),
++        )
++        .map_err(|error| error.to_string())?;
++        let phase = st.idempotency.send_delivery_phase(&key).map_err(|error| error.to_string())?;
++        if phase.as_deref() != Some("acked") {
++            continue;
++        }
++        task.delivery_acked = true;
++        st.delegation_store.save(&task).map_err(|error| format!("accusé de {} non persisté : {error}", task.task_id))?;
++        copied += 1;
++    }
++    Ok(copied)
++}
++
++/// Passage d'entretien de la rétention : arbres soldés de plus de 7 jours, puis
++/// purge de borne, puis pierres tombales de plus de 30 jours. Au plus 128 arbres
++/// supprimés par passage, âge et borne cumulés.
++pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
++    let max_trees = crate::disk_hygiene::MAX_ENTRIES_PER_PASS;
++    let mut trees = purge_retained(st, now, None, max_trees);
++    // Purge de borne : une base au-dessus de 4096 tâches (écriture externe, ancien
++    // volume) redescend par lots, sans attendre une admission. Le quota de 128 arbres
++    // est partagé avec la purge d'âge : le second appel ne reçoit que le reste.
++    let over = st.delegation_store.admission_counts("").map(|counts| counts.2 >= crate::delegation::MAX_RETAINED_TASKS);
++    let reste = max_trees.saturating_sub(trees);
++    if over.unwrap_or(false) && reste > 0 {
++        trees += purge_retained(st, now, Some(crate::delegation::MAX_RETAINED_TASKS), reste);
++    }
++    if trees > 0 {
++        info!("entretien: {trees} arbre(s) de délégation native purgé(s)");
++    }
++    if let Err(error) = st.delegation_store.purge_expired_tombstones(now) {
++        warn!("entretien: pierres tombales de délégation : {error}");
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -1535,6 +1725,7 @@ mod tests {
+             task: "Inspecte les faits locaux".into(),
+             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+             posture: Some(SpawnPosture::Discovery),
++            reply_timeout: None,
+         }
+     }
+     fn cleanup(config: &DaemonConfig) {
+@@ -2439,6 +2630,7 @@ mod tests {
+             task: "Analyse les faits".into(),
+             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+             posture: Some(SpawnPosture::Discovery),
++            reply_timeout: None,
+         };
+         handle_locked("conn-1", job, &mut st).unwrap();
+         let shared = Arc::new(Mutex::new(st));
+@@ -2707,6 +2899,868 @@ mod tests {
+         drop(shared);
+         cleanup(&config);
+     }
++
++    const JOUR_150: i64 = 24 * 3600;
++
++    /// Termine une tâche et la rend purgeable (annulée, nettoyée).
++    fn solder_150(st: &DaemonState, task_id: &str) {
++        let mut task = st.delegation_store.get(task_id).unwrap().unwrap();
++        task.state = "cancelled".into();
++        task.cleanup_done = true;
++        st.delegation_store.save(&task).unwrap();
++    }
++
++    #[test]
++    fn native150_purge_rejeu_cle_purgee() {
++        let (mut st, config, _rx, _reader) = fixture("n150-rejeu-purge");
++        let first = handle_locked("conn-1", request("cle"), &mut st).unwrap();
++        solder_150(&st, first["task_id"].as_str().unwrap());
++        let now = unix_timestamp() + 8 * JOUR_150;
++        assert_eq!(st.delegation_store.purge_trees(now, None, usize::MAX, |_| true).unwrap(), 1);
++        // La clé purgée est refusée, quelle que soit l'enveloppe, sans tâche créée.
++        assert_eq!(
++            handle_locked("conn-1", request("cle"), &mut st).unwrap_err(),
++            "request_expired"
++        );
++        let mut autre = request("cle");
++        if let NativeDelegationRequest::Delegate { task, .. } = &mut autre {
++            *task = "autre mission".into();
++        }
++        assert_eq!(
++            handle_locked("conn-1", autre, &mut st).unwrap_err(),
++            "request_expired"
++        );
++        assert!(st.delegation_store.tasks().unwrap().is_empty());
++        // Une clé jamais vue reste admise.
++        assert!(handle_locked("conn-1", request("neuve"), &mut st).is_ok());
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_pierre_expiree_libere_la_cle() {
++        let (mut st, config, _rx, _reader) = fixture("n150-pierre");
++        let first = handle_locked("conn-1", request("cle"), &mut st).unwrap();
++        solder_150(&st, first["task_id"].as_str().unwrap());
++        let purged_at = unix_timestamp() + 8 * JOUR_150;
++        assert_eq!(st.delegation_store.purge_trees(purged_at, None, usize::MAX, |_| true).unwrap(), 1);
++        // Moins de 30 jours après la purge : la pierre reste, la clé reste refusée.
++        assert_eq!(st.delegation_store.purge_expired_tombstones(purged_at + 29 * JOUR_150).unwrap(), 0);
++        assert_eq!(
++            handle_locked("conn-1", request("cle"), &mut st).unwrap_err(),
++            "request_expired"
++        );
++        // Au-delà : pierre purgée, clé libre, nouvelle tâche.
++        assert_eq!(st.delegation_store.purge_expired_tombstones(purged_at + 30 * JOUR_150).unwrap(), 1);
++        let again = handle_locked("conn-1", request("cle"), &mut st).unwrap();
++        assert_ne!(again["task_id"], first["task_id"]);
++        cleanup(&config);
++    }
++
++    /// Crée une tâche native puis la solde : elle ne dépend plus que du contrôle de vivacité.
++    fn tache_soldee_150(st: &mut DaemonState, key: &str) -> Task {
++        let first = handle_locked("conn-1", request(key), st).unwrap();
++        let id = first["task_id"].as_str().unwrap().to_string();
++        solder_150(st, &id);
++        st.delegation_store.get(&id).unwrap().unwrap()
++    }
++
++    fn ordre_lancement_150(child: &str, command_id: &str) -> FleetSpawnOrder {
++        let now = unix_timestamp();
++        FleetSpawnOrder {
++            posture: None,
++            agent_type: "native-test".into(),
++            requested_name: Some(child.into()),
++            cwd: std::env::temp_dir(),
++            persistent: false,
++            command_id: command_id.into(),
++            issued_at: now,
++            deadline_at: now + 60,
++            project: None,
++            ownership: None,
++        }
++    }
++
++    #[test]
++    fn native150_purge_enfant_present_conserve() {
++        let (mut st, config, _rx, _reader) = fixture("n150-present");
++        let task = tache_soldee_150(&mut st, "cle");
++        let aged = unix_timestamp() + 8 * JOUR_150;
++        let mut presence = st.presences.get("instance-1").unwrap().clone();
++        presence.name = task.child.clone();
++        presence.state = "connected".into();
++        st.presences.insert("instance-enfant".into(), presence);
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "enfant connecté");
++        st.presences.get_mut("instance-enfant").unwrap().state = "busy".into();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "enfant occupé");
++        st.presences.get_mut("instance-enfant").unwrap().state = "stopped".into();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1, "enfant arrêté : arbre purgé");
++        assert!(st.delegation_store.tasks().unwrap().is_empty());
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_lancement_en_cours_conserve() {
++        let (mut st, config, _rx, _reader) = fixture("n150-lancement");
++        let task = tache_soldee_150(&mut st, "cle");
++        let aged = unix_timestamp() + 8 * JOUR_150;
++        // Saga de lancement sous le superviseur : réservée, pas encore connectée.
++        let lease = match st.fleet.request_spawn(&ordre_lancement_150(&task.child, "saga-150"), unix_timestamp()).unwrap() {
++            crate::fleet::SpawnSubmission::Start(lease) => lease,
++            other => panic!("réservation inattendue: {other:?}"),
++        };
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "saga requested/reserved");
++        let definition = st.registry.resolved_definition("native-test").unwrap();
++        st.fleet.mark_starting(&lease, unix_timestamp(), &definition).unwrap();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "saga starting");
++        // Lancement suivi par le daemon (managed_spawns), indépendamment de la saga.
++        st.fleet.register_connected(&lease, &lease.instance_id, unix_timestamp()).unwrap();
++        st.fleet.mark_stopped(&task.child).unwrap();
++        st.managed_spawns.insert(
++            lease.command_id.clone(),
++            ManagedSpawnRecord {
++                lease: lease.clone(),
++                agent_type: "native-test".into(),
++                requester_conns: Vec::new(),
++                wrapper_conn: None,
++                stop: Arc::new(ManagedStopControl::new()),
++            },
++        );
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "managed_spawns");
++        st.managed_spawns.clear();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_agent_route_conserve() {
++        let (mut st, config, _rx, _reader) = fixture("n150-route");
++        let task = tache_soldee_150(&mut st, "cle");
++        let aged = unix_timestamp() + 8 * JOUR_150;
++        // Route de routeur vivante, sans présence : l'enfant peut encore recevoir un message.
++        st.router.register(&task.child, &bridget_core::AgentType::Codex, "conn-enfant").unwrap();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "agent routé");
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
++        st.router.unregister_by_conn("conn-enfant").unwrap();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1, "route retirée : arbre purgé");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_decommission_en_cours_conserve() {
++        let (mut st, config, _rx, _reader) = fixture("n150-decommission");
++        let task = tache_soldee_150(&mut st, "cle");
++        let aged = unix_timestamp() + 8 * JOUR_150;
++        // Une décommission déjà en cours (autre chemin) garde l'arbre jusqu'à sa fin.
++        st.decommissioning_names.insert(task.child.clone());
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "décommission en cours");
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
++        st.decommissioning_names.remove(&task.child);
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1, "décommission terminée : arbre purgé");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_entree_stopped_decommissionnee() {
++        let (mut st, config, _rx, _reader) = fixture("n150-stopped");
++        let task = tache_soldee_150(&mut st, "cle");
++        let aged = unix_timestamp() + 8 * JOUR_150;
++        let lease = match st.fleet.request_spawn(&ordre_lancement_150(&task.child, "saga-stop"), unix_timestamp()).unwrap() {
++            crate::fleet::SpawnSubmission::Start(lease) => lease,
++            other => panic!("réservation inattendue: {other:?}"),
++        };
++        let definition = st.registry.resolved_definition("native-test").unwrap();
++        st.fleet.mark_starting(&lease, unix_timestamp(), &definition).unwrap();
++        st.fleet.register_connected(&lease, &lease.instance_id, unix_timestamp()).unwrap();
++        // Entrée désirée Running : le sous-agent peut tourner, l'arbre reste.
++        assert_eq!(
++            st.fleet.desired_entry(&task.child).unwrap().unwrap().lifecycle_state,
++            DesiredLifecycleState::Running
++        );
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0);
++        // Entrée Stopped : relançable ; la purge la décommissionne avant de supprimer.
++        st.fleet.mark_stopped(&task.child).unwrap();
++        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1);
++        assert_eq!(
++            st.fleet.desired_entry(&task.child).unwrap().unwrap().lifecycle_state,
++            DesiredLifecycleState::Decommissioned
++        );
++        assert!(st.delegation_store.tasks().unwrap().is_empty());
++        cleanup(&config);
++    }
++
++    /// Dépose une remise native sous la clé et le périmètre de la tâche, puis l'accuse ou non.
++    fn remise_native_150(st: &mut DaemonState, task: &Task, prefix: &str, accuser: bool) -> String {
++        let id = format!("{prefix}{}", task.task_id);
++        let key = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &id).unwrap();
++        let now = unix_timestamp();
++        st.idempotency
++            .reserve(&key, id.as_bytes(), now, CLIENT_IDEMPOTENCY_HORIZON_SECS, now, CLIENT_ISSUED_AT_TOLERANCE_SECS)
++            .unwrap();
++        let mut message = bridget_core::BridgetMessage::new(&task.child, &task.owner, "sortie");
++        message.id = id.clone();
++        let delivery = SendDelivery {
++            delivery_id: format!("delivery-{id}"),
++            recipient_instance_id: "instance-1".into(),
++            delivery_generation: 1,
++            expires_at: now + CLIENT_IDEMPOTENCY_HORIZON_SECS,
++            message_bytes: serde_json::to_vec(&message).unwrap(),
++        };
++        st.idempotency.begin_send_delivery(&key, &delivery).unwrap();
++        if accuser {
++            st.idempotency.acknowledge_send_delivery(&delivery.delivery_id, "instance-1", 1).unwrap();
++        }
++        delivery.delivery_id
++    }
++
++    /// Copie le modèle en tâche terminale `etat`, remise envoyée, nettoyage fait.
++    fn semer_terminale_150(st: &DaemonState, modele: &Task, i: usize, etat: &str) -> Task {
++        let mut task = modele.clone();
++        task.task_id = format!("t150-{i:04}");
++        task.child = format!("child-150-{i:04}");
++        task.mission = format!("mission-150-{i:04}");
++        task.state = etat.into();
++        task.cleanup_done = true;
++        task.result = Some("sortie".into());
++        task.result_sent = etat == "result_available";
++        task.failure_sent = etat == "failed";
++        task.completed_at = Some(unix_timestamp() + 120 * JOUR_150);
++        st.delegation_store.insert(&task, &format!("req-150-{i:04}"), b"canon").unwrap();
++        task
++    }
++
++    #[test]
++    fn native150_purge_accuse_recopie() {
++        let (mut st, config, _rx, _reader) = fixture("n150-accuse");
++        let modele = tache_soldee_150(&mut st, "modele");
++        let resultat = semer_terminale_150(&st, &modele, 1, "result_available");
++        let echec = semer_terminale_150(&st, &modele, 2, "failed");
++        let non_accusee = semer_terminale_150(&st, &modele, 3, "result_available");
++        remise_native_150(&mut st, &resultat, "native-result-", true);
++        remise_native_150(&mut st, &echec, "native-failure-", true);
++        remise_native_150(&mut st, &non_accusee, "native-result-", false);
++        assert_eq!(copy_delivery_acks(&st).unwrap(), 2);
++        let acked = |id: &str| st.delegation_store.get(id).unwrap().unwrap().delivery_acked;
++        assert!(acked(&resultat.task_id) && acked(&echec.task_id));
++        assert!(!acked(&non_accusee.task_id), "remise en vol : aucune preuve");
++        assert_eq!(copy_delivery_acks(&st).unwrap(), 0, "idempotent");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_outcome_unknown_puis_remise_effacee_conserve() {
++        let (mut st, config, _rx, _reader) = fixture("n150-inconnu");
++        let modele = tache_soldee_150(&mut st, "modele");
++        let task = semer_terminale_150(&st, &modele, 1, "result_available");
++        let livraison = remise_native_150(&mut st, &task, "native-result-", false);
++        st.idempotency.mark_delivery_indeterminate(&livraison, "instance-1", 1).unwrap();
++        assert_eq!(copy_delivery_acks(&st).unwrap(), 0, "remise indéterminée : pas d'accusé");
++        // L'entretien efface la remise (ligne absente) : toujours aucune preuve.
++        let loin = unix_timestamp() + 2 * CLIENT_IDEMPOTENCY_HORIZON_SECS;
++        assert_eq!(st.idempotency.purge_expired_sends(loin, 0).unwrap(), 1);
++        assert_eq!(copy_delivery_acks(&st).unwrap(), 0);
++        // L'arbre ne se purge pas, même très ancien et sous pression de borne :
++        // seul l'arbre modèle (annulé, sans remise due) part.
++        assert_eq!(purge_retained(&st, unix_timestamp() + 90 * JOUR_150, Some(1), usize::MAX), 1);
++        assert!(st.delegation_store.get(&task.task_id).unwrap().is_some());
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_129_accuses_expires_tous_recopies() {
++        let (mut st, config, _rx, _reader) = fixture("n150-129");
++        let modele = tache_soldee_150(&mut st, "modele");
++        let total = crate::disk_hygiene::MAX_ENTRIES_PER_PASS + 1;
++        let ids: Vec<String> = (1..=total)
++            .map(|i| {
++                let task = semer_terminale_150(&st, &modele, i, "result_available");
++                remise_native_150(&mut st, &task, "native-result-", true);
++                task.task_id
++            })
++            .collect();
++        // Toutes les remises ont expiré : l'entretien recopie AVANT de les effacer.
++        // Les tâches finissent dans le futur : l'âge les protège de la purge d'arbre.
++        let loin = unix_timestamp() + 90 * JOUR_150;
++        super::super::maintain_stores(&st, loin);
++        let cle = IdempotencyKey::new(&crate::communication::issuer_scope(&ids[0]), OperationKind::Send, &format!("native-result-{}", ids[0])).unwrap();
++        assert_eq!(st.idempotency.send_delivery_phase(&cle).unwrap(), None, "remise effacée");
++        for id in &ids {
++            assert!(st.delegation_store.get(id).unwrap().unwrap().delivery_acked, "{id}");
++        }
++        cleanup(&config);
++    }
++
++    /// Sème des tâches terminales ou actives par SQL direct (une transaction), sans
++    /// passer par l'admission. `completed_at` croît avec `i` : plus petit = plus ancien.
++    #[allow(clippy::too_many_arguments)]
++    fn semer_brut_150(
++        config: &DaemonConfig,
++        modele: &Task,
++        debut: usize,
++        nombre: usize,
++        etat: &str,
++        acquittee: bool,
++        instance: &str,
++        fin_base: i64,
++    ) {
++        let mut conn = rusqlite::Connection::open(&config.db_path).unwrap();
++        conn.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
++        let tx = conn.transaction().unwrap();
++        for i in debut..debut + nombre {
++            let mut task = modele.clone();
++            task.task_id = format!("b150-{i:05}");
++            task.child = format!("child-b150-{i:05}");
++            task.mission = format!("mission-b150-{i:05}");
++            task.owner_instance = instance.into();
++            task.root_owner_agent_id = task.owner.clone();
++            task.state = etat.into();
++            task.cleanup_done = matches!(etat, "result_available" | "failed" | "cancelled");
++            task.delivery_acked = acquittee;
++            task.result_sent = etat == "result_available";
++            task.result = (etat == "result_available").then(|| "sortie".to_string());
++            task.completed_at = task.cleanup_done.then_some(fin_base + i as i64);
++            tx.execute(
++                "INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",
++                rusqlite::params![task.task_id, task.owner_instance, format!("req-b150-{i:05}"), b"canon".to_vec(), serde_json::to_string(&task).unwrap()],
++            )
++            .unwrap();
++        }
++        tx.commit().unwrap();
++    }
++
++    fn modele_150(st: &mut DaemonState) -> Task {
++        let mut modele = tache_soldee_150(st, "modele-admission");
++        // Le modèle est purgé du magasin : seules ses données servent de gabarit.
++        st.delegation_store.purge_trees(unix_timestamp() + 90 * JOUR_150, None, usize::MAX, |_| true).unwrap();
++        modele.parent_task_id = None;
++        modele
++    }
++
++    #[test]
++    fn native150_admission_apres_5000_terminees() {
++        let (mut st, config, _rx, _reader) = fixture("n150-5000");
++        let modele = modele_150(&mut st);
++        semer_brut_150(&config, &modele, 0, 5000, "result_available", true, "instance-autre", 1_000);
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 5000);
++        let admise = handle_locked("conn-1", request("apres-5000"), &mut st).unwrap();
++        assert_eq!(admise["status"], "queued");
++        let restantes = st.delegation_store.tasks().unwrap().len();
++        assert!(restantes <= 4096, "la borne de rétention tient : {restantes}");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_admission_saturation_sans_purgeable() {
++        let (mut st, config, _rx, _reader) = fixture("n150-saturation");
++        let modele = modele_150(&mut st);
++        // 4096 résultats jamais accusés : rien n'est purgeable, aucune perte permise.
++        semer_brut_150(&config, &modele, 0, 4096, "result_available", false, "instance-autre", 1_000);
++        assert_eq!(
++            handle_locked("conn-1", request("sature"), &mut st).unwrap_err(),
++            "retention_saturated"
++        );
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 4096, "aucune écriture ni purge");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_admission_limites_actives_inchangees() {
++        let (mut st, config, _rx, _reader) = fixture("n150-actives");
++        let modele = modele_150(&mut st);
++        // 16 actives pour l'instance appelante : la 17e est refusée.
++        semer_brut_150(&config, &modele, 0, 16, "working", false, "instance-1", 0);
++        assert_eq!(handle_locked("conn-1", request("17e"), &mut st).unwrap_err(), "task_limit");
++        // 128 actives au total (autres instances) : refus aussi pour une instance libre.
++        sqlite_supprimer_instance_150(&config, "instance-1");
++        semer_brut_150(&config, &modele, 16, 128, "working", false, "instance-autre", 0);
++        assert_eq!(handle_locked("conn-1", request("129e"), &mut st).unwrap_err(), "task_limit");
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 128);
++        cleanup(&config);
++    }
++
++    fn sqlite_supprimer_instance_150(config: &DaemonConfig, instance: &str) {
++        rusqlite::Connection::open(&config.db_path)
++            .unwrap()
++            .execute("DELETE FROM native_delegations WHERE owner_instance=?1", [instance])
++            .unwrap();
++    }
++
++    #[test]
++    fn native150_admission_purge_de_borne_plus_ancien_d_abord() {
++        let (mut st, config, _rx, _reader) = fixture("n150-borne");
++        let modele = modele_150(&mut st);
++        // 4096 arbres soldés de moins de 7 jours : l'âge ne protège plus sous pression.
++        let recent = unix_timestamp() - 3600;
++        semer_brut_150(&config, &modele, 0, 4096, "result_available", true, "instance-autre", recent - 5000);
++        let admise = handle_locked("conn-1", request("borne"), &mut st).unwrap();
++        assert_eq!(admise["status"], "queued");
++        let ids: HashSet<String> = st.delegation_store.tasks().unwrap().into_iter().map(|t| t.task_id).collect();
++        assert_eq!(ids.len(), 4096, "le total ne dépasse jamais 4096");
++        assert!(!ids.contains("b150-00000"), "le plus ancien est purgé en premier");
++        assert!(ids.contains("b150-00001"), "un seul arbre est libéré");
++        assert!(ids.contains(admise["task_id"].as_str().unwrap()));
++        cleanup(&config);
++    }
++
++    /// Pause ou levée du référent, comme le principal humain le ferait.
++    fn pauser_150(st: &DaemonState, pause: bool) {
++        let conn = st.store.connection();
++        let generation = crate::referent_control::read(conn).unwrap().generation;
++        crate::referent_control::set(
++            conn,
++            crate::referent_control::ControlMutation {
++                command_id: &format!("pause-150-{generation}"),
++                expected_generation: generation,
++                paused: Some(pause),
++                auto_objectives_cap: None,
++                reason: pause.then_some("test 150"),
++                actor: "humain",
++                now: unix_timestamp(),
++                agent_posture: None,
++                auto_reassignment: None,
++            },
++        )
++        .unwrap()
++        .unwrap();
++    }
++
++    #[test]
++    fn native150_pause_refuse_nouvelle_cle() {
++        let (mut st, config, rx, _reader) = fixture("n150-pause");
++        pauser_150(&st, true);
++        assert_eq!(handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(), "referent_paused");
++        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée");
++        assert!(rx.try_recv().is_err());
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_pause_etat_illisible_refus_ferme() {
++        let (mut st, config, _rx, _reader) = fixture("n150-pause-illisible");
++        st.store.connection().execute("DELETE FROM control_state WHERE id = 1", []).unwrap();
++        assert_eq!(handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(), "control_state_unavailable");
++        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_pause_rejeu_cle_admise_rend_la_tache() {
++        let (mut st, config, _rx, _reader) = fixture("n150-pause-rejeu");
++        let first = handle_locked("conn-1", request("admise"), &mut st).unwrap();
++        pauser_150(&st, true);
++        assert_eq!(handle_locked("conn-1", request("admise"), &mut st).unwrap(), first);
++        // Un rejeu d'une clé purgée garde son refus propre, avant la pause.
++        solder_150(&st, first["task_id"].as_str().unwrap());
++        st.delegation_store.purge_trees(unix_timestamp() + 8 * JOUR_150, None, usize::MAX, |_| true).unwrap();
++        assert_eq!(handle_locked("conn-1", request("admise"), &mut st).unwrap_err(), "request_expired");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_pause_cle_libre_apres_levee() {
++        let (mut st, config, _rx, _reader) = fixture("n150-pause-levee");
++        pauser_150(&st, true);
++        assert_eq!(handle_locked("conn-1", request("k"), &mut st).unwrap_err(), "referent_paused");
++        pauser_150(&st, false);
++        let admise = handle_locked("conn-1", request("k"), &mut st).unwrap();
++        assert_eq!(admise["status"], "queued");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_pause_statut_et_annulation_disponibles() {
++        let (mut st, config, _rx, _reader) = fixture("n150-pause-lecture");
++        let first = handle_locked("conn-1", request("k"), &mut st).unwrap();
++        let task_id = first["task_id"].as_str().unwrap().to_string();
++        pauser_150(&st, true);
++        let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
++        assert_eq!(catalogue["version"], 1);
++        let statut = handle_locked("conn-1", NativeDelegationRequest::Status { task_id: task_id.clone() }, &mut st).unwrap();
++        assert_eq!(statut["task_id"], first["task_id"]);
++        let annulee = handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id }, &mut st).unwrap();
++        assert_eq!(annulee["status"], "cancelling");
++        cleanup(&config);
++    }
++
++    fn request_delai_150(key: &str, reply_timeout: Option<u64>) -> NativeDelegationRequest {
++        let mut req = request(key);
++        if let NativeDelegationRequest::Delegate { reply_timeout: slot, .. } = &mut req {
++            *slot = reply_timeout;
++        }
++        req
++    }
++
++    #[test]
++    fn native150_delai_bornes() {
++        let (mut st, config, _rx, _reader) = fixture("n150-delai-bornes");
++        for hors_bornes in [0, 59, 86_401, u64::MAX] {
++            assert_eq!(
++                handle_locked("conn-1", request_delai_150("hors", Some(hors_bornes)), &mut st).unwrap_err(),
++                "reply_timeout_out_of_range",
++                "{hors_bornes}"
++            );
++        }
++        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche, aucune valeur corrigée");
++        for (cle, secs) in [("min", 60), ("max", 86_400), ("milieu", 1_800)] {
++            let admise = handle_locked("conn-1", request_delai_150(cle, Some(secs)), &mut st).unwrap();
++            let task = st.delegation_store.get(admise["task_id"].as_str().unwrap()).unwrap().unwrap();
++            assert_eq!(task.reply_timeout, Some(secs as i64));
++        }
++        // Sans valeur : rien n'est stocké, le défaut 3600 s s'applique plus tard.
++        let defaut = handle_locked("conn-1", request_delai_150("defaut", None), &mut st).unwrap();
++        assert_eq!(st.delegation_store.get(defaut["task_id"].as_str().unwrap()).unwrap().unwrap().reply_timeout, None);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_delai_rejeu_autre_valeur_envelope_mismatch() {
++        let (mut st, config, _rx, _reader) = fixture("n150-delai-rejeu");
++        let first = handle_locked("conn-1", request_delai_150("k", Some(120)), &mut st).unwrap();
++        assert_eq!(handle_locked("conn-1", request_delai_150("k", Some(120)), &mut st).unwrap(), first);
++        for autre in [Some(121), None, Some(3600)] {
++            assert_eq!(
++                handle_locked("conn-1", request_delai_150("k", autre), &mut st).unwrap_err(),
++                "envelope_mismatch",
++                "{autre:?}"
++            );
++        }
++        // « omis » et « 3600 explicite » sont deux enveloppes.
++        handle_locked("conn-1", request_delai_150("omis", None), &mut st).unwrap();
++        assert_eq!(
++            handle_locked("conn-1", request_delai_150("omis", Some(3600)), &mut st).unwrap_err(),
++            "envelope_mismatch"
++        );
++        cleanup(&config);
++    }
++
++    /// Une mission parente en cours (`working`, échéance posée) dont l'enfant délègue à son tour.
++    fn parent_en_cours_150(delai: Option<u64>, retard: i64) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
++        parent_en_cours_bloque_150(delai, retard, false)
++    }
++
++    /// `bloquer_suivi` : toute mise à jour d'échéance du suivi échoue pendant l'envoi de la mission.
++    fn parent_en_cours_bloque_150(delai: Option<u64>, retard: i64, bloquer_suivi: bool) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
++        use std::io::BufRead;
++        let (mut st, config, rx, _parent_reader) = fixture("n150-delai-parent");
++        let first = handle_locked("conn-1", request_delai_150("parent", delai), &mut st).unwrap();
++        let task_id = first["task_id"].as_str().unwrap().to_owned();
++        if retard > 0 {
++            // Lancement retardé : la tâche a été admise `retard` secondes avant d'être lancée.
++            let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
++            task.created_at -= retard;
++            st.delegation_store.save(&task).unwrap();
++        }
++        let shared = Arc::new(Mutex::new(st));
++        tick(&shared);
++        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
++            panic!("Start attendu")
++        };
++        let (child_writer, mut child_reader) = super::super::presence_tests::control_socket("n150child");
++        child_reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
++        {
++            let mut st = shared.lock().unwrap();
++            assert!(matches!(
++                handle_register_with_channel(
++                    "child-conn", 2, "native-test".into(), prepared.lease.name.clone(),
++                    Some(st.host.clone()), Some("codex_app_server".into()),
++                    ChannelReport::Known("unix".into()), Some(PresenceMode::Acp), None,
++                    Some("macOS".into()), Some(prepared.lease.instance_id.clone()), None,
++                    false, Some(true), &mut st
++                ),
++                DaemonToWrapper::Registered { .. }
++            ));
++            st.connections.insert("child-conn".into(), child_writer);
++            st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
++            st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
++            st.managed_spawns.get_mut(&task_id).unwrap().wrapper_conn = Some("child-conn".into());
++        }
++        if bloquer_suivi {
++            rusqlite::Connection::open(&config.db_path)
++                .unwrap()
++                .execute_batch("CREATE TRIGGER s150_suivi_bloque BEFORE UPDATE OF deadline_at ON tracked_requests BEGIN SELECT RAISE(ABORT,'bloque'); END;")
++                .unwrap();
++        }
++        tick(&shared);
++        let mut line = String::new();
++        child_reader.read_line(&mut line).unwrap();
++        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap() else {
++            panic!("mission idempotente attendue")
++        };
++        let deadline = {
++            let st = shared.lock().unwrap();
++            let parent = st.delegation_store.get(&task_id).unwrap().unwrap();
++            assert_eq!(parent.state, "working");
++            parent.mission_deadline_at.expect("échéance du parent posée")
++        };
++        (shared, config, task_id, deadline, message)
++    }
++
++    #[test]
++    fn native150_delai_enfant_explicite_trop_long() {
++        let (shared, config, parent_id, deadline, _) = parent_en_cours_150(None, 0);
++        let mut st = shared.lock().unwrap();
++        // Il reste au plus 3600 s au parent : 3601 s explicites le dépassent.
++        assert!(deadline - unix_timestamp() <= 3600);
++        assert_eq!(
++            handle_locked("child-conn", request_delai_150("sous-long", Some(3601)), &mut st).unwrap_err(),
++            "reply_timeout_exceeds_parent"
++        );
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1, "aucune tâche créée");
++        let court = handle_locked("child-conn", request_delai_150("sous-court", Some(120)), &mut st).unwrap();
++        let sous = st.delegation_store.get(court["task_id"].as_str().unwrap()).unwrap().unwrap();
++        assert_eq!(sous.parent_task_id.as_deref(), Some(parent_id.as_str()));
++        assert_eq!(sous.reply_timeout, Some(120));
++        drop(st);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_delai_enfant_implicite_inchange() {
++        let (shared, config, _parent_id, _deadline, _) = parent_en_cours_150(None, 0);
++        let mut st = shared.lock().unwrap();
++        // Sans délai explicite : aucun contrôle, comme en 149.
++        let implicite = handle_locked("child-conn", request_delai_150("sous-implicite", None), &mut st).unwrap();
++        let sous = st.delegation_store.get(implicite["task_id"].as_str().unwrap()).unwrap().unwrap();
++        assert_eq!(sous.reply_timeout, None);
++        drop(st);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_delai_applique_echeance_et_suivi() {
++        let (shared, config, task_id, deadline, message) = parent_en_cours_150(Some(120), 0);
++        assert_eq!(message.reply_timeout, Some(120), "suivi de la demande de mission");
++        let created_at = shared.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap().created_at;
++        assert!((120..=125).contains(&(deadline - created_at)), "échéance = admission + 120 s : {}", deadline - created_at);
++        drop(shared);
++        cleanup(&config);
++        // Sans délai explicite : 3600 s, comme en 149.
++        let (shared, config, _task_id, _deadline, message) = parent_en_cours_150(None, 0);
++        assert_eq!(message.reply_timeout, Some(3600));
++        drop(shared);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_pause_precede_refus_de_droits() {
++        let (mut st, config, _rx, _reader) = fixture("n150-pause-droits");
++        st.delegation_store
++            .grant("instance-1", Path::new("/tmp"), SpawnPosture::Development, true)
++            .unwrap();
++        // Contrôle positif : sans pause, la révocation donne le refus de droits.
++        assert_eq!(handle_locked("conn-1", request("k1"), &mut st).unwrap_err(), "delegation_grant_required");
++        pauser_150(&st, true);
++        assert_eq!(handle_locked("conn-1", request("k2"), &mut st).unwrap_err(), "referent_paused");
++        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune écriture");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_statut_tache_purgee_rend_task_unavailable() {
++        let (mut st, config, _rx, _reader) = fixture("n150-statut-purge");
++        let first = handle_locked("conn-1", request("k"), &mut st).unwrap();
++        let task_id = first["task_id"].as_str().unwrap().to_string();
++        solder_150(&st, &task_id);
++        assert_eq!(st.delegation_store.purge_trees(unix_timestamp() + 8 * JOUR_150, None, usize::MAX, |_| true).unwrap(), 1);
++        assert_eq!(
++            handle_locked("conn-1", NativeDelegationRequest::Status { task_id }, &mut st).unwrap_err(),
++            "task_unavailable"
++        );
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_delai_enfant_explicite_parent_sans_echeance() {
++        let (shared, config, parent_id, _deadline, _) = parent_en_cours_150(None, 0);
++        let mut st = shared.lock().unwrap();
++        // Parent sans échéance durable : aucun contrôle (R8), même pour le maximum.
++        let mut parent = st.delegation_store.get(&parent_id).unwrap().unwrap();
++        parent.mission_deadline_at = None;
++        st.delegation_store.save(&parent).unwrap();
++        let admise = handle_locked("child-conn", request_delai_150("sous-sans-echeance", Some(86_400)), &mut st).unwrap();
++        let sous = st.delegation_store.get(admise["task_id"].as_str().unwrap()).unwrap().unwrap();
++        assert_eq!(sous.reply_timeout, Some(86_400));
++        drop(st);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_echec_recopie_suspend_purge_des_envois() {
++        let (mut st, config, _rx, _reader) = fixture("n150-echec-recopie");
++        let modele = tache_soldee_150(&mut st, "modele");
++        let task = semer_terminale_150(&st, &modele, 1, "result_available");
++        remise_native_150(&mut st, &task, "native-result-", true);
++        let cle = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &format!("native-result-{}", task.task_id)).unwrap();
++        let loin = unix_timestamp() + 90 * JOUR_150;
++        // Écriture impossible : la preuve d'accusé ne peut pas être enregistrée.
++        let externe = rusqlite::Connection::open(&config.db_path).unwrap();
++        externe.execute_batch("CREATE TRIGGER s150_bloque BEFORE UPDATE ON native_delegations BEGIN SELECT RAISE(ABORT,'bloque'); END;").unwrap();
++        assert!(copy_delivery_acks(&st).is_err());
++        super::super::maintain_stores(&st, loin);
++        assert_eq!(st.idempotency.send_delivery_phase(&cle).unwrap().as_deref(), Some("acked"), "la remise survit au passage");
++        assert!(!st.delegation_store.get(&task.task_id).unwrap().unwrap().delivery_acked);
++        // L'écriture revient : la preuve est recopiée, puis seulement la remise est purgée.
++        externe.execute_batch("DROP TRIGGER s150_bloque;").unwrap();
++        super::super::maintain_stores(&st, loin);
++        assert!(st.delegation_store.get(&task.task_id).unwrap().unwrap().delivery_acked);
++        assert_eq!(st.idempotency.send_delivery_phase(&cle).unwrap(), None);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_purge_arbre_volumineux_une_ecriture_de_flotte() {
++        let (mut st, config, _rx, _reader) = fixture("n150-lot-flotte");
++        let modele = tache_soldee_150(&mut st, "modele");
++        let definition = st.registry.resolved_definition("native-test").unwrap();
++        // Arbre : une racine et 4 enfants, chacun avec une entrée de flotte réellement présente.
++        let mut ids = Vec::new();
++        for i in 0..5 {
++            let mut task = modele.clone();
++            task.task_id = format!("lot150-{i}");
++            task.child = Uuid::new_v4().to_string();
++            task.mission = Uuid::new_v4().to_string();
++            task.parent_task_id = (i > 0).then(|| "lot150-0".to_string());
++            task.state = "cancelled".into();
++            task.cleanup_done = true;
++            task.completed_at = Some(unix_timestamp() + 120 * JOUR_150);
++            st.delegation_store.insert(&task, &format!("req-lot150-{i}"), b"canon").unwrap();
++            let lease = match st.fleet.request_spawn(&ordre_lancement_150(&task.child, &format!("saga-lot-{i}")), unix_timestamp()).unwrap() {
++                crate::fleet::SpawnSubmission::Start(lease) => lease,
++                other => panic!("réservation inattendue: {other:?}"),
++            };
++            st.fleet.mark_starting(&lease, unix_timestamp(), &definition).unwrap();
++            st.fleet.register_connected(&lease, &lease.instance_id, unix_timestamp()).unwrap();
++            st.fleet.mark_stopped(&task.child).unwrap();
++            ids.push(task.child);
++        }
++        let avant = st.fleet.desired_write_count();
++        assert_eq!(purge_retained(&st, unix_timestamp() + 200 * JOUR_150, None, usize::MAX), 2, "modèle + arbre de test");
++        assert_eq!(st.fleet.desired_write_count() - avant, 1, "une seule écriture de flotte pour tout l'arbre");
++        for child in &ids {
++            assert_eq!(
++                st.fleet.desired_entry(child).unwrap().unwrap().lifecycle_state,
++                DesiredLifecycleState::Decommissioned
++            );
++        }
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_pause_refus_par_le_gestionnaire_complet_ne_fait_rien_avancer() {
++        let (mut st, config, rx, _reader) = fixture("n150-gestionnaire");
++        // Tâche préexistante en attente : seul un tick la ferait avancer.
++        let attente = handle_locked("conn-1", request("attente"), &mut st).unwrap();
++        pauser_150(&st, true);
++        let shared = Arc::new(Mutex::new(st));
++        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("refusee"), &shared) else {
++            panic!("résultat attendu")
++        };
++        assert_eq!(result["code"], "referent_paused", "{result}");
++        assert!(rx.try_recv().is_err(), "un refus ne lance aucun tick");
++        let task = shared.lock().unwrap().delegation_store.get(attente["task_id"].as_str().unwrap()).unwrap().unwrap();
++        assert_eq!(task.state, "queued");
++        // Contrôle positif : une délégation admise (clé déjà admise) fait avancer le tick.
++        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("attente"), &shared) else {
++            panic!("résultat attendu")
++        };
++        assert_eq!(result["status"], "queued");
++        assert!(matches!(rx.try_recv(), Ok(ManagedSupervisorCommand::Start { .. })));
++        drop(shared);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_entretien_purge_de_borne_sans_admission() {
++        let (mut st, config, _rx, _reader) = fixture("n150-entretien-borne");
++        let modele = modele_150(&mut st);
++        // 5000 arbres soldés et récents : seule la pression de borne peut les purger.
++        let recent = unix_timestamp() - 3600;
++        semer_brut_150(&config, &modele, 0, 5000, "result_available", true, "instance-autre", recent - 6000);
++        let mut precedent = 5000;
++        let mut passes = 0;
++        loop {
++            super::super::maintain_stores(&st, unix_timestamp());
++            let restantes = st.delegation_store.tasks().unwrap().len();
++            assert!(precedent - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS, "au plus 128 arbres par passage");
++            if restantes == precedent {
++                break;
++            }
++            precedent = restantes;
++            passes += 1;
++            assert!(passes <= 10, "la purge doit converger");
++        }
++        assert!(precedent < 4096, "total sous la borne : {precedent}");
++        assert!(precedent >= 4096 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS, "pas de purge au-delà du nécessaire : {precedent}");
++        assert!(passes >= 8, "plusieurs passages : {passes}");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_entretien_borne_et_age_cumulent_au_plus_128() {
++        let (mut st, config, _rx, _reader) = fixture("n150-entretien-cumul");
++        let modele = modele_150(&mut st);
++        // 200 arbres soldés de plus de 7 jours (purge d'âge) et 4100 récents (pression de borne).
++        let ancien = unix_timestamp() - 30 * JOUR_150;
++        let recent = unix_timestamp() - 3600;
++        semer_brut_150(&config, &modele, 0, 200, "result_available", true, "instance-autre", ancien);
++        semer_brut_150(&config, &modele, 200, 4100, "result_available", true, "instance-autre", recent - 6000);
++        assert_eq!(st.delegation_store.tasks().unwrap().len(), 4300);
++        super::super::maintain_stores(&st, unix_timestamp());
++        let restantes = st.delegation_store.tasks().unwrap().len();
++        assert!(
++            4300 - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
++            "au plus 128 arbres par passage, âge et borne cumulés : {restantes}"
++        );
++        assert_eq!(restantes, 4300 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS, "le quota du passage est consommé");
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_delai_suivi_realigne_apres_echec_d_ecriture() {
++        // Écriture du suivi impossible au moment de l'envoi : il garde l'échéance datée de la création.
++        let (shared, config, task_id, deadline, message) = parent_en_cours_bloque_150(Some(120), 30, true);
++        let suivi_deadline = |shared: &Arc<Mutex<DaemonState>>| {
++            shared.lock().unwrap().store.get_request(&message.id).unwrap().expect("demande suivie").deadline_at
++        };
++        assert_ne!(suivi_deadline(&shared), deadline, "premier alignement échoué");
++        // Tant que l'écriture échoue, le tick réessaie sans casser la tâche.
++        tick(&shared);
++        assert_ne!(suivi_deadline(&shared), deadline);
++        assert_eq!(shared.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap().state, "working");
++        // L'écriture revient : le tick suivant réaligne le suivi sur mission_deadline_at.
++        rusqlite::Connection::open(&config.db_path).unwrap().execute_batch("DROP TRIGGER s150_suivi_bloque;").unwrap();
++        tick(&shared);
++        assert_eq!(suivi_deadline(&shared), deadline, "suivi réaligné");
++        drop(shared);
++        cleanup(&config);
++    }
++
++    #[test]
++    fn native150_delai_suivi_aligne_sur_admission_apres_lancement_retarde() {
++        // Délai explicite, lancement retardé de 30 s : le suivi durable suit l'admission de la mission.
++        let (shared, config, task_id, deadline, message) = parent_en_cours_150(Some(120), 30);
++        {
++            let st = shared.lock().unwrap();
++            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
++            let suivi = st.store.get_request(&message.id).unwrap().expect("demande suivie");
++            assert_eq!(suivi.deadline_at, deadline, "suivi aligné sur mission_deadline_at");
++            assert!(deadline - task.created_at >= 150, "l'échéance compte depuis l'admission, pas la création");
++        }
++        // L'enveloppe de l'envoi de mission n'a pas changé : le délai reste celui du parent.
++        assert_eq!(message.reply_timeout, Some(120));
++        drop(shared);
++        cleanup(&config);
++        // Sans délai explicite : comportement 149 inchangé (suivi daté de la création).
++        let (shared, config, task_id, deadline, message) = parent_en_cours_150(None, 30);
++        {
++            let st = shared.lock().unwrap();
++            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
++            let suivi = st.store.get_request(&message.id).unwrap().expect("demande suivie");
++            assert_eq!(suivi.deadline_at, task.created_at + 3600);
++            assert!(deadline > suivi.deadline_at);
++        }
++        drop(shared);
++        cleanup(&config);
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs b/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs
+index 06c071f1..37eabed4 100644
+--- a/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs
+@@ -170,6 +170,7 @@ fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Opti
+         task: "Mission fixture 149".into(),
+         cwd: cwd.into(),
+         posture,
++        reply_timeout: None,
+     }
+ }
+ 
+@@ -192,7 +193,10 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
+     // Aucune invitation à un grant humain : la forme de la réponse est fermée.
+     let mut clés: Vec<&str> = catalogue.as_object().unwrap().keys().map(String::as_str).collect();
+     clés.sort();
+-    assert_eq!(clés, ["cwd_root", "cwd_scope", "max_children", "max_depth", "mission_reply_limit_secs", "providers", "version"]);
++    assert_eq!(clés, ["cwd_root", "cwd_scope", "max_children", "max_depth", "mission_reply_limit_secs", "mission_reply_max_secs", "mission_reply_min_secs", "providers", "version"]);
++    assert_eq!(catalogue["mission_reply_limit_secs"], 3600);
++    assert_eq!(catalogue["mission_reply_min_secs"], 60);
++    assert_eq!(catalogue["mission_reply_max_secs"], 86_400);
+     for entry in fixture_entries(&catalogue) {
+         assert_eq!(entry["inherit"], true, "{}", entry["agent_type"]);
+         assert_eq!(entry["development"], true, "{}", entry["agent_type"]);
+@@ -329,6 +333,8 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
+         result_sent: false,
+         cleanup_done: false,
+         failure_sent: false,
++        reply_timeout: None,
++        delivery_acked: false,
+     }
+ }
+ 
+diff --git a/crates/bridget-daemon/src/daemon/native_lineage_tests.rs b/crates/bridget-daemon/src/daemon/native_lineage_tests.rs
+index b604ad63..483db1db 100644
+--- a/crates/bridget-daemon/src/daemon/native_lineage_tests.rs
++++ b/crates/bridget-daemon/src/daemon/native_lineage_tests.rs
+@@ -57,6 +57,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
+             task: format!("Mission {task_id}\n"),
+             cwd: "/tmp".into(),
+             posture: None,
++            reply_timeout: None,
+         },
+         permission_snapshot: None,
+         effective_posture: None,
+@@ -73,6 +74,8 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
+         result_sent: false,
+         cleanup_done: false,
+         failure_sent: false,
++        reply_timeout: None,
++        delivery_acked: false,
+     }
+ }
+ 
+@@ -895,3 +898,89 @@ fn native149_snapshot_v2_exclut_le_filtre_avant_normalisation() {
+     let parse = crate::t3code_contract_v2::parse_snapshot(&coquille.to_string()).unwrap();
+     assert_eq!(parse.threads.len(), 2);
+ }
++
++// ---------------------------------------------------------------------------
++// Session 150 : la purge d'entretien force un Resync, l'ouverture ne purge rien.
++// ---------------------------------------------------------------------------
++
++/// Tâche annulée, nettoyée et finie en 1970 : purgeable dès le premier passage.
++fn tache_ancienne_150(task_id: &str, owner: &str) -> crate::delegation::Task {
++    let mut task = lineage_task(task_id, owner, "cancelled");
++    task.cleanup_done = true;
++    task.completed_at = Some(1_000);
++    task
++}
++
++#[test]
++fn native150_purge_entretien_signale_resync() {
++    let (state, root, _peer) = fixture("l150-resync", "human_lineage_watch_v1");
++    let task_id = "15000000-0000-4000-8000-00000000000a";
++    {
++        let st = state.lock().unwrap();
++        st.delegation_store.insert(&tache_ancienne_150(task_id, &owner_agent()), "req-150a", b"c").unwrap();
++    }
++    let (client, mut reader, handle) = open_watch_socket(&state, &root);
++    assert_eq!(next_event(&mut reader)["status"], "ready");
++    let avant = state.lock().unwrap().delegation_store.projection_meta().unwrap();
++    {
++        let st = state.lock().unwrap();
++        super::super::maintain_stores(&st, super::super::unix_now_secs());
++        assert!(st.delegation_store.get(task_id).unwrap().is_none(), "arbre purgé");
++    }
++    let resync = next_event(&mut reader);
++    assert_eq!(resync["status"], "resync", "{resync}");
++    assert_ne!(resync["generation"], json!(avant.generation));
++    // Le lecteur refait une lecture complète : plus de tâche fantôme.
++    let page = state.lock().unwrap().delegation_store.lineage_page(&owner_agent(), 10, None, |_| false).unwrap();
++    assert!(page["tasks"].as_array().unwrap().is_empty());
++    drop(reader);
++    drop(client);
++    drop(handle);
++}
++
++#[test]
++fn native150_purge_ouverture_du_daemon_ne_purge_rien() {
++    let (st, config) = crate::daemon::presence_tests::state_with_registered_agent("l150-ouverture");
++    st.delegation_store.insert(&tache_ancienne_150("15000000-0000-4000-8000-00000000000b", "proprietaire-150"), "req-150b", b"c").unwrap();
++    drop(st);
++    let (tx, _rx) = mpsc::channel();
++    let rouvert = DaemonState::new(&config, tx).unwrap();
++    assert_eq!(rouvert.delegation_store.tasks().unwrap().len(), 1, "aucune purge à l'ouverture");
++    drop(rouvert);
++    let _ = std::fs::remove_file(&config.db_path);
++}
++
++#[test]
++fn native150_pause_annulation_humaine_disponible() {
++    let (state, root, _peer) = fixture("l150-pause-cancel", "human_lineage_cancel_v1");
++    let task_id = "15000000-0000-4000-8000-00000000000c";
++    {
++        let st = state.lock().unwrap();
++        st.delegation_store.insert(&lineage_task(task_id, &owner_agent(), "queued"), "req-150c", b"c").unwrap();
++        let conn = st.store.connection();
++        let generation = crate::referent_control::read(conn).unwrap().generation;
++        crate::referent_control::set(
++            conn,
++            crate::referent_control::ControlMutation {
++                command_id: "pause-150-lineage",
++                expected_generation: generation,
++                paused: Some(true),
++                auto_objectives_cap: None,
++                reason: Some("test 150"),
++                actor: "humain",
++                now: 1_788_400_000,
++                agent_posture: None,
++                auto_reassignment: None,
++            },
++        )
++        .unwrap()
++        .unwrap();
++        assert!(crate::referent_control::read(conn).unwrap().paused);
++    }
++    let cancel = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}));
++    assert_eq!(cancel, json!({"version":1,"task_id":task_id,"status":"cancelling"}), "{cancel}");
++    // Le reçu est durable : le rejeu rend le même reçu, toujours en pause.
++    let rejoue = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}));
++    assert_eq!(rejoue, cancel);
++}
++
+diff --git a/crates/bridget-daemon/src/delegation.rs b/crates/bridget-daemon/src/delegation.rs
+index 3971a522..49785f22 100644
+--- a/crates/bridget-daemon/src/delegation.rs
++++ b/crates/bridget-daemon/src/delegation.rs
+@@ -6,7 +6,7 @@ use std::path::Path;
+ 
+ #[path = "delegation_lineage.rs"]
+ mod lineage;
+-pub(crate) use lineage::ProjectionMutation;
++pub(crate) use lineage::{MAX_RETAINED_TASKS, ProjectionMutation};
+ 
+ pub(crate) struct DelegationStore {
+     conn: Connection,
+@@ -54,6 +54,12 @@ pub(crate) struct Task {
+     pub cleanup_done: bool,
+     #[serde(default)]
+     pub failure_sent: bool,
++    /// Délai de réponse choisi à la délégation (secondes) ; absent = 3600.
++    #[serde(default)]
++    pub reply_timeout: Option<i64>,
++    /// Preuve durable que la remise du résultat ou de l'avis d'échec a été accusée.
++    #[serde(default)]
++    pub delivery_acked: bool,
+ }
+ 
+ impl Task {
+@@ -123,6 +129,7 @@ impl DelegationStore {
+                 .map(Some)
+                 .map_err(|error| error.to_string()),
+             Some(_) => Err("envelope_mismatch".into()),
++            None if self.tombstoned(owner, request_id)? => Err("request_expired".into()),
+             None => Ok(None),
+         }
+     }
+@@ -166,6 +173,21 @@ impl DelegationStore {
+             .collect()
+     }
+ 
++    /// Comptages d'admission : (tâches actives, actives de l'instance, tâches conservées).
++    /// Complexité : O(a) pour les actives (a ≤ 128, recherche par l'index d'état),
++    /// O(n) pour le total (balayage de l'index, n ≤ 4096) ; aucun payload n'est lu.
++    pub fn admission_counts(&self, instance: &str) -> Result<(usize, usize, usize), String> {
++        const ACTIVE: &str = "json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling')";
++        let count = |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<usize, String> {
++            self.conn.query_row(&sql, args, |row| row.get(0)).map_err(|error| error.to_string())
++        };
++        Ok((
++            count(format!("SELECT count(*) FROM native_delegations WHERE {ACTIVE}"), &[])?,
++            count(format!("SELECT count(*) FROM native_delegations WHERE owner_instance=?1 AND {ACTIVE}"), &[&instance])?,
++            count("SELECT count(*) FROM native_delegations".into(), &[])?,
++        ))
++    }
++
+     pub fn pending(&self) -> Result<Vec<Task>, String> {
+         let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.state') NOT IN ('failed','cancelled','result_available') OR (json_extract(payload,'$.state')='result_available' AND (json_extract(payload,'$.result_sent')=0 OR coalesce(json_extract(payload,'$.cleanup_done'),0)=0)) OR (json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) ORDER BY task_id").map_err(|error|error.to_string())?;
+         statement
+diff --git a/crates/bridget-daemon/src/delegation_lineage.rs b/crates/bridget-daemon/src/delegation_lineage.rs
+index 3ec4a21a..650ccb72 100644
+--- a/crates/bridget-daemon/src/delegation_lineage.rs
++++ b/crates/bridget-daemon/src/delegation_lineage.rs
+@@ -22,6 +22,24 @@ struct Cursor {
+     task_id: String,
+ }
+ 
++/// Borne de rétention publiée aux lecteurs T3 (contrats 148 et 149).
++pub(crate) const MAX_RETAINED_TASKS: usize = 4096;
++/// Âge minimal d'un arbre purgeable hors pression de borne.
++const RETENTION_SECS: i64 = 7 * 24 * 3600;
++/// Durée de vie d'une pierre tombale de clé de rejeu (comme `purge_expired_sends`).
++const TOMBSTONE_SECS: i64 = 30 * 24 * 3600;
++
++/// Arbre soldé : chaque tâche est terminale et nettoyée, et toute remise due
++/// (résultat ou avis d'échec) est accusée. Une tâche annulée n'attend aucune remise.
++fn tree_settled(tree: &[Task]) -> bool {
++    tree.iter().all(|t| t.terminal() && t.cleanup_done && (t.state == "cancelled" || t.delivery_acked))
++}
++
++/// Dernière fin de l'arbre ; `updated_at` pour les tâches 148 sans `completed_at`.
++fn tree_age(tree: &[Task]) -> i64 {
++    tree.iter().map(|t| t.completed_at.unwrap_or(t.updated_at)).max().unwrap_or(0)
++}
++
+ impl Task {
+     pub fn root_owner(&self) -> &str {
+         if self.root_owner_agent_id.is_empty() { &self.owner } else { &self.root_owner_agent_id }
+@@ -73,11 +91,11 @@ fn increment(tx: &Transaction<'_>) -> rusqlite::Result<ProjectionMutation> {
+ impl DelegationStore {
+     pub(super) fn initialize_lineage(&self) -> rusqlite::Result<()> {
+         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS native_delegation_projection_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation TEXT NOT NULL,seq INTEGER NOT NULL);
+-            CREATE TABLE IF NOT EXISTS native_delegation_cancel_receipts(root TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(root,request_id));")?;
++            CREATE TABLE IF NOT EXISTS native_delegation_cancel_receipts(root TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(root,request_id));
++            CREATE TABLE IF NOT EXISTS native_delegation_tombstones(owner TEXT NOT NULL,request_id TEXT NOT NULL,purged_at INTEGER NOT NULL,PRIMARY KEY(owner,request_id));")?;
+         self.conn.execute("INSERT OR IGNORE INTO native_delegation_projection_meta(singleton,generation,seq) VALUES(1,?1,0)", [uuid::Uuid::new_v4().to_string()])?;
+         // Les anciens liens sont dérivés seulement des identités native148 durables.
+         let records = self.tasks().map_err(|_| rusqlite::Error::InvalidQuery)?;
+-        if records.len()>4096 { return Err(rusqlite::Error::InvalidQuery); }
+         let children: BTreeMap<_,_> = records.iter().map(|task| (task.child.as_str(), task)).collect();
+         let tx = self.conn.unchecked_transaction()?;
+         for record in &records {
+@@ -146,6 +164,76 @@ impl DelegationStore {
+         Ok(result)
+     }
+ 
++    /// Arbres soldés (racine sans parent + descendants), racine en tête.
++    /// Complexité : O(r · d) — r racines terminales, d taille d'arbre ; r·d ≤ lignes conservées (≤ 4096).
++    fn settled_trees(&self) -> Result<Vec<Vec<Task>>, String> {
++        let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.parent_task_id') IS NULL AND json_extract(payload,'$.state') IN ('result_available','failed','cancelled')").map_err(|e|e.to_string())?;
++        let roots:Vec<Task>=statement.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?
++            .map(|r|r.map_err(|e|e.to_string()).and_then(|p|serde_json::from_str(&p).map_err(|e|e.to_string()))).collect::<Result<_,_>>()?;
++        // Une racine qui n'est le parent de personne est un arbre d'une tâche : pas de requête récursive.
++        let parents:HashSet<String>=self.conn.prepare("SELECT DISTINCT json_extract(payload,'$.parent_task_id') FROM native_delegations WHERE json_extract(payload,'$.parent_task_id') IS NOT NULL").map_err(|e|e.to_string())?
++            .query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<_,_>>().map_err(|e|e.to_string())?;
++        let mut trees=Vec::new();
++        for root in roots {
++            let mut tree=if parents.contains(&root.task_id) {self.descendants(&root.task_id)?} else {Vec::new()};
++            tree.insert(0,root);
++            if tree_settled(&tree) {trees.push(tree)}
++        }
++        Ok(trees)
++    }
++
++    /// Purge les arbres soldés du plus ancien au plus récent, `max_trees` au plus par passage
++    /// (128 à l'entretien ; sans limite à l'admission, où la borne de rétention suffit).
++    /// Hors pression (`bound` absent), seuls les arbres finis depuis plus de 7 jours
++    /// partent ; sous pression (`bound` = borne de rétention), l'âge est ignoré et la
++    /// purge s'arrête dès que le total repasse sous la borne. `releasable` est le contrôle de vivacité des sous-agents, refait par
++    /// l'appelant sous le verrou du daemon : il retire aussi les enfants de la flotte
++    /// et rend `false` pour conserver l'arbre. Rend le nombre d'arbres supprimés.
++    /// Complexité : O(n log n) — n ≤ 4096 lignes conservées ; une transaction par arbre.
++    pub fn purge_trees(&self, now: i64, bound: Option<usize>, max_trees: usize, mut releasable: impl FnMut(&[Task])->bool) -> Result<usize,String> {
++        let mut trees:Vec<(i64,Vec<Task>)>=self.settled_trees()?.into_iter().map(|t|(tree_age(&t),t)).collect();
++        trees.sort_by(|a,b|(a.0,&a.1[0].task_id).cmp(&(b.0,&b.1[0].task_id)));
++        let mut total:usize=self.conn.query_row("SELECT count(*) FROM native_delegations",[],|r|r.get(0)).map_err(|e|e.to_string())?;
++        let mut purged=0;
++        for (age,tree) in trees {
++            if purged>=max_trees || bound.is_some_and(|b|total<b) {break}
++            if bound.is_none() && now.saturating_sub(age)<=RETENTION_SECS {break}
++            if !releasable(&tree) {continue}
++            self.delete_tree(&tree,now)?;
++            total=total.saturating_sub(tree.len());
++            purged+=1;
++        }
++        Ok(purged)
++    }
++
++    /// Libère les clés de rejeu purgées depuis 30 jours ou plus.
++    /// Complexité : O(T) — balayage des T pierres (pas d'index sur `purged_at`) ; appelée
++    /// une fois par passage d'entretien horaire, T borné par les purges des 30 derniers jours.
++    pub fn purge_expired_tombstones(&self, now: i64) -> Result<usize,String> {
++        self.conn.execute("DELETE FROM native_delegation_tombstones WHERE purged_at<=?1",[now.saturating_sub(TOMBSTONE_SECS)]).map_err(|e|e.to_string())
++    }
++
++    /// Une clé dont la tâche a été purgée se rejoue en refus, jamais en nouvelle tâche.
++    pub(super) fn tombstoned(&self, owner: &str, request_id: &str) -> Result<bool,String> {
++        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_tombstones WHERE owner=?1 AND request_id=?2)",params![owner,request_id],|r|r.get(0)).map_err(|e|e.to_string())
++    }
++
++    /// Suppression atomique d'un arbre : pierres tombales, reçus d'annulation, lignes,
++    /// nouvelle génération. Le propriétaire racine est signalé après le commit.
++    fn delete_tree(&self, tree: &[Task], now: i64) -> Result<(),String> {
++        let tx=self.conn.unchecked_transaction().map_err(|e|e.to_string())?;
++        for task in tree {
++            tx.execute("INSERT OR REPLACE INTO native_delegation_tombstones(owner,request_id,purged_at) SELECT json_extract(payload,'$.owner'),request_id,?2 FROM native_delegations WHERE task_id=?1",params![task.task_id,now]).map_err(|e|e.to_string())?;
++            tx.execute("DELETE FROM native_delegation_cancel_receipts WHERE task_id=?1",[&task.task_id]).map_err(|e|e.to_string())?;
++            tx.execute("DELETE FROM native_delegations WHERE task_id=?1",[&task.task_id]).map_err(|e|e.to_string())?;
++        }
++        let mutation=ProjectionMutation{generation:uuid::Uuid::new_v4().to_string(),seq:1};
++        tx.execute("UPDATE native_delegation_projection_meta SET generation=?1,seq=?2 WHERE singleton=1",params![mutation.generation,mutation.seq]).map_err(|e|e.to_string())?;
++        tx.commit().map_err(|e|e.to_string())?;
++        self.committed(tree[0].root_owner(),mutation);
++        Ok(())
++    }
++
+     pub(super) fn insert_projected(&self, task: &Task, request_id: &str, canonical: &[u8]) -> Result<(),String> {
+         let mut task=stamp(task.clone(),None);
+         if task.root_owner_agent_id.is_empty() { task.root_owner_agent_id=task.owner.clone(); }
+diff --git a/crates/bridget-daemon/src/delegation_lineage_tests.rs b/crates/bridget-daemon/src/delegation_lineage_tests.rs
+index d626396d..b5edafbb 100644
+--- a/crates/bridget-daemon/src/delegation_lineage_tests.rs
++++ b/crates/bridget-daemon/src/delegation_lineage_tests.rs
+@@ -40,6 +40,7 @@ fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequ
+         task: instruction.into(),
+         cwd: "/tmp".into(),
+         posture: None,
++        reply_timeout: None,
+     }
+ }
+ 
+@@ -81,6 +82,8 @@ fn task(
+         result_sent: false,
+         cleanup_done: false,
+         failure_sent: false,
++        reply_timeout: None,
++        delivery_acked: false,
+     }
+ }
+ 
+@@ -288,7 +291,8 @@ fn delegation149_migration_fermee_cycle_profondeur_et_volume() {
+     assert!(DelegationStore::open(&path).is_err());
+     drop(std::fs::remove_dir_all(dir));
+ 
+-    // Volume : au-delà de 4096 records, l'ouverture refuse.
++    // Volume : plus de 4096 lignes ne bloquent plus l'ouverture (session 150) ;
++    // le test `native150_ouverture_10000_lignes` couvre le grand volume.
+     let dir = temp_dir("volume");
+     let path = dir.join("store.sqlite");
+     {
+@@ -302,7 +306,7 @@ fn delegation149_migration_fermee_cycle_profondeur_et_volume() {
+             ).unwrap();
+         }
+     }
+-    assert!(DelegationStore::open(&path).is_err());
++    assert_eq!(DelegationStore::open(&path).unwrap().tasks().unwrap().len(), 4097);
+     drop(std::fs::remove_dir_all(dir));
+ }
+ 
+@@ -824,3 +828,270 @@ fn delegation149_parent_lineage_profondeur_et_descendants() {
+     std::fs::remove_dir_all(dir).unwrap();
+     std::fs::remove_dir_all(dir_volume).unwrap();
+ }
++
++// ---------------------------------------------------------------------------
++// Session 150 : champs ajoutés à la tâche.
++// ---------------------------------------------------------------------------
++
++#[test]
++fn native150_champs_absents_relus_par_defaut_et_accuse_silencieux() {
++    // Un payload 148/149 sans `reply_timeout` ni `delivery_acked` se relit
++    // avec `None` et `false`.
++    let dir = temp_dir("champs150");
++    let path = dir.join("store.sqlite");
++    seed_v148(&path, &[("t-150", "humain", "inst", "inst", "agent-150", Some("inst-c"))]);
++    let store = open_store(&path);
++    let ancienne = store.get("t-150").unwrap().unwrap();
++    assert_eq!(ancienne.reply_timeout, None);
++    assert!(!ancienne.delivery_acked);
++
++    // Poser `delivery_acked` n'est pas un changement visible : ni seq, ni signal.
++    let mut terminee = task("t-ack", "humain", "inst", "inst", "agent-ack", Some("inst-c"), "result_available", 100);
++    terminee.result = Some("sortie".into());
++    store.insert(&terminee, "req-t-ack", b"canon").unwrap();
++    let avant = meta(&store);
++    let _ = store.take_changes();
++    let mut accusee = store.get("t-ack").unwrap().unwrap();
++    accusee.delivery_acked = true;
++    store.save(&accusee).unwrap();
++    assert!(store.get("t-ack").unwrap().unwrap().delivery_acked);
++    assert_eq!(meta(&store).seq, avant.seq);
++    assert!(store.take_changes().is_empty());
++
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++// ---------------------------------------------------------------------------
++// Session 150 : purge par arbre (table de vérité R2, partie magasin).
++// La vivacité des sous-agents est jugée par le garde passé à `purge_trees`.
++// ---------------------------------------------------------------------------
++
++const JOUR: i64 = 24 * 3600;
++
++fn maintenant() -> i64 {
++    std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap()
++        .as_secs() as i64
++}
++
++/// Tâche d'un arbre : la racine appartient à `racine`, un enfant appartient à
++/// l'agent enfant de son parent. `etat` terminal ⇒ `cleanup_done` et remise
++/// accusée sont réglés par les paramètres.
++#[allow(clippy::too_many_arguments)]
++fn poser(
++    store: &DelegationStore,
++    task_id: &str,
++    racine: &str,
++    parent: Option<&str>,
++    etat: &str,
++    accuse: bool,
++    nettoye: bool,
++    avis_envoye: bool,
++) {
++    let owner = parent.map_or(racine.to_string(), |p| format!("agent-{p}"));
++    let mut t = task(task_id, &owner, &format!("inst-{owner}"), &format!("inst-{owner}"), &format!("agent-{task_id}"), Some(&format!("inst-agent-{task_id}")), etat, 1_000);
++    t.root_owner_agent_id = racine.into();
++    t.parent_task_id = parent.map(Into::into);
++    t.delivery_acked = accuse;
++    t.cleanup_done = nettoye;
++    t.failure_sent = avis_envoye;
++    t.result_sent = etat == "result_available";
++    if etat == "result_available" {
++        t.result = Some("sortie".into());
++    }
++    store.insert(&t, &format!("req-{task_id}"), b"canon").unwrap();
++}
++
++/// `pression` : borne artificielle de 1 ligne, pour exercer la purge de borne
++/// sans semer 4096 lignes (le test d'admission utilise la vraie borne).
++fn purger(store: &DelegationStore, now: i64, pression: bool) -> usize {
++    store.purge_trees(now, pression.then_some(1), crate::disk_hygiene::MAX_ENTRIES_PER_PASS, |_| true).unwrap()
++}
++
++fn restantes(store: &DelegationStore) -> Vec<String> {
++    store.tasks().unwrap().into_iter().map(|t| t.task_id).collect()
++}
++
++#[test]
++fn native150_purge_arbre_termine_et_accuse_purge() {
++    let dir = temp_dir("purge-ok");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "result_available", true, true, false);
++    poser(&store, "enfant", "humain", Some("racine"), "failed", true, true, true);
++    store.human_cancel("humain", "racine", "annulation-1").unwrap();
++    let avant = meta(&store);
++    let _ = store.take_changes();
++
++    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
++
++    assert!(restantes(&store).is_empty());
++    let apres = meta(&store);
++    assert_ne!(apres.generation, avant.generation, "nouvelle génération de projection");
++    assert_eq!(apres.seq, 1);
++    // Pierres tombales : une par tâche, clé = (propriétaire, request_id).
++    let pierres: i64 = store.conn.query_row("SELECT count(*) FROM native_delegation_tombstones", [], |r| r.get(0)).unwrap();
++    assert_eq!(pierres, 2);
++    // Reçu d'annulation retiré avec l'arbre.
++    let recus: i64 = store.conn.query_row("SELECT count(*) FROM native_delegation_cancel_receipts", [], |r| r.get(0)).unwrap();
++    assert_eq!(recus, 0);
++    // Propriétaire racine signalé après le commit, avec la nouvelle génération.
++    let changes = store.take_changes();
++    assert_eq!(changes.len(), 1);
++    assert_eq!(changes["humain"].generation, apres.generation);
++    // Aucune tâche fantôme dans la projection.
++    let page = store.lineage_page("humain", 100, None, |_| false).unwrap();
++    assert!(page["tasks"].as_array().unwrap().is_empty());
++
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_resultat_non_accuse_conserve() {
++    let dir = temp_dir("purge-non-accuse");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "result_available", false, true, false);
++    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
++    assert_eq!(restantes(&store), vec!["racine".to_string()]);
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_echec_sans_avis_envoye_conserve() {
++    let dir = temp_dir("purge-avis");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "failed", false, true, false);
++    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
++    assert_eq!(restantes(&store).len(), 1);
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_annule_sans_remise_purge() {
++    let dir = temp_dir("purge-annule");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "cancelled", false, true, false);
++    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
++    assert!(restantes(&store).is_empty());
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_nettoyage_inacheve_conserve() {
++    let dir = temp_dir("purge-nettoyage");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "cancelled", false, false, false);
++    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
++    assert_eq!(restantes(&store).len(), 1);
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_tache_active_dans_l_arbre_le_conserve() {
++    let dir = temp_dir("purge-active");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "result_available", true, true, false);
++    poser(&store, "enfant", "humain", Some("racine"), "working", false, false, false);
++    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
++    assert_eq!(restantes(&store).len(), 2);
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_deux_arbres_du_meme_proprietaire_sont_independants() {
++    let dir = temp_dir("purge-deux-arbres");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "termine", "humain", None, "result_available", true, true, false);
++    poser(&store, "actif", "humain", None, "working", false, false, false);
++    poser(&store, "actif-enfant", "humain", Some("actif"), "working", false, false, false);
++    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
++    let mut ids = restantes(&store);
++    ids.sort();
++    assert_eq!(ids, vec!["actif".to_string(), "actif-enfant".to_string()]);
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_arbre_recent_conserve_hors_pression() {
++    let dir = temp_dir("purge-recent");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "racine", "humain", None, "result_available", true, true, false);
++    assert_eq!(purger(&store, maintenant() + 6 * JOUR, false), 0);
++    assert_eq!(restantes(&store).len(), 1);
++    // Sous pression de borne, l'âge ne compte plus.
++    assert_eq!(purger(&store, maintenant() + 6 * JOUR, true), 1);
++    assert!(restantes(&store).is_empty());
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_le_garde_de_vivacite_peut_refuser_un_arbre() {
++    let dir = temp_dir("purge-garde");
++    let store = open_store(&dir.join("store.sqlite"));
++    poser(&store, "vivant", "humain", None, "result_available", true, true, false);
++    poser(&store, "mort", "humain", None, "result_available", true, true, false);
++    let mut vus = Vec::new();
++    let purges = store
++        .purge_trees(maintenant() + 8 * JOUR, None, crate::disk_hygiene::MAX_ENTRIES_PER_PASS, |arbre| {
++            vus.push(arbre[0].task_id.clone());
++            arbre[0].task_id != "vivant"
++        })
++        .unwrap();
++    assert_eq!(purges, 1);
++    assert_eq!(restantes(&store), vec!["vivant".to_string()]);
++    assert_eq!(vus.len(), 2, "le garde juge chaque arbre candidat");
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_purge_borne_par_passage_et_plus_ancien_d_abord() {
++    let dir = temp_dir("purge-borne");
++    let store = open_store(&dir.join("store.sqlite"));
++    let total = crate::disk_hygiene::MAX_ENTRIES_PER_PASS + 2;
++    for i in 0..total {
++        poser(&store, &format!("t-{i:03}"), "humain", None, "cancelled", false, true, false);
++    }
++    let now = maintenant() + 8 * JOUR;
++    assert_eq!(purger(&store, now, false), crate::disk_hygiene::MAX_ENTRIES_PER_PASS);
++    assert_eq!(restantes(&store).len(), 2);
++    assert_eq!(purger(&store, now, false), 2);
++    assert!(restantes(&store).is_empty());
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
++
++#[test]
++fn native150_ouverture_10000_lignes() {
++    let dir = temp_dir("ouverture-10000");
++    let path = dir.join("store.sqlite");
++    {
++        let mut conn = Connection::open(&path).unwrap();
++        conn.execute_batch(V148_DDL).unwrap();
++        let tx = conn.transaction().unwrap();
++        for i in 0..10_000 {
++            let task_id = format!("t-10k-{i}");
++            tx.execute(
++                "INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",
++                params![task_id, format!("inst-{i}"), format!("req-{task_id}"), b"v148", v148_payload(&task_id, "humain", "inst", "inst", &format!("agent-{i}"), Some("inst-c")).to_string()],
++            ).unwrap();
++        }
++        tx.commit().unwrap();
++    }
++    let store = open_store(&path);
++    assert_eq!(store.tasks().unwrap().len(), 10_000);
++    // La migration 148 a dérivé la racine de chaque ligne.
++    assert!(store.tasks().unwrap().iter().all(|t| t.root_owner_agent_id == "humain"));
++    meta(&store);
++    drop(store);
++    std::fs::remove_dir_all(dir).unwrap();
++}
+diff --git a/crates/bridget-daemon/src/delegation_mcp.rs b/crates/bridget-daemon/src/delegation_mcp.rs
+index 075cddce..f8b43835 100644
+--- a/crates/bridget-daemon/src/delegation_mcp.rs
++++ b/crates/bridget-daemon/src/delegation_mcp.rs
+@@ -9,7 +9,7 @@ use std::path::Path;
+ pub(crate) fn tools() -> Vec<Value> {
+     vec![
+         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
++        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
+         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
+     ]
+@@ -34,6 +34,7 @@ pub(crate) fn execute(
+             "task",
+             "cwd",
+             "posture",
++            "reply_timeout",
+         ],
+         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
+         _ => return Err(ClientError::InvalidParams("outil natif inconnu".into())),
+@@ -69,6 +70,11 @@ pub(crate) fn execute(
+                 Some(Value::String(value)) if value=="development" => Some(SpawnPosture::Development),
+                 _ => return Err(ClientError::InvalidParams("posture invalide".into())),
+             },
++            reply_timeout: match args.get("reply_timeout") {
++                None | Some(Value::Null) => None,
++                Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
++                _ => return Err(ClientError::InvalidParams("reply_timeout invalide".into())),
++            },
+         },
+         "bridget_task_status" => NativeDelegationRequest::Status {
+             task_id: string("task_id")?,
+@@ -116,4 +122,33 @@ mod tests {
+         ));
+         assert_eq!(tools().len(), 4);
+     }
++
++    #[test]
++    fn native150_delai_schema_liste_blanche_et_forme() {
++        let delegate = tools().into_iter().find(|tool| tool["name"] == "bridget_delegate").unwrap();
++        let property = &delegate["inputSchema"]["properties"]["reply_timeout"];
++        assert_eq!(property["type"], "integer");
++        assert_eq!((property["minimum"].as_u64(), property["maximum"].as_u64()), (Some(60), Some(86_400)));
++        assert!(!delegate["inputSchema"]["required"].as_array().unwrap().iter().any(|key| key == "reply_timeout"));
++        let identity = ResolvedIdentity { name: "owner".into(), instance_id: "instance".into(), delegated_origin: None };
++        let base = |extra: Value| {
++            let mut args = json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp"});
++            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
++            args
++        };
++        // Forme invalide : refusée avant toute connexion. Les bornes restent au daemon.
++        for invalide in [json!("abc"), json!(-5), json!(60.5), json!(true)] {
++            assert!(matches!(
++                execute(&identity, "bridget_delegate", &base(json!({"reply_timeout": invalide})), Path::new("/missing")),
++                Err(ClientError::InvalidParams(_))
++            ));
++        }
++        // Forme valide : le champ passe la liste blanche, l'échec vient de la connexion.
++        for valide in [json!(120), json!(null)] {
++            assert!(!matches!(
++                execute(&identity, "bridget_delegate", &base(json!({"reply_timeout": valide})), Path::new("/missing")),
++                Err(ClientError::InvalidParams(_))
++            ));
++        }
++    }
+ }
+diff --git a/crates/bridget-daemon/src/desired_state.rs b/crates/bridget-daemon/src/desired_state.rs
+index a8d94164..98d73580 100644
+--- a/crates/bridget-daemon/src/desired_state.rs
++++ b/crates/bridget-daemon/src/desired_state.rs
+@@ -226,6 +226,9 @@ impl std::error::Error for DesiredStateError {
+ pub struct DesiredStateStore {
+     path: PathBuf,
+     transition_lock: Mutex<()>,
++    /// Nombre d'écritures réussies de `fleet.json`, pour mesurer le coût des lots en test.
++    #[cfg(test)]
++    writes: std::sync::atomic::AtomicUsize,
+ }
+ 
+ impl DesiredStateStore {
+@@ -239,9 +242,16 @@ impl DesiredStateStore {
+         Self {
+             path: path.into(),
+             transition_lock: Mutex::new(()),
++            #[cfg(test)]
++            writes: std::sync::atomic::AtomicUsize::new(0),
+         }
+     }
+ 
++    #[cfg(test)]
++    pub(crate) fn write_count(&self) -> usize {
++        self.writes.load(std::sync::atomic::Ordering::Relaxed)
++    }
++
+     pub fn path(&self) -> &Path {
+         &self.path
+     }
+@@ -364,6 +374,34 @@ impl DesiredStateStore {
+         Ok(Some(entry.clone()))
+     }
+ 
++    /// Applique un état de cycle de vie à plusieurs entrées en une lecture et au plus
++    /// une écriture. Les noms absents sont ignorés. Rend les noms des entrées présentes.
++    /// Complexité : O(F + d) — F entrées de flotte, d noms demandés.
++    pub fn set_lifecycle_states(
++        &self,
++        names: &[&str],
++        lifecycle_state: DesiredLifecycleState,
++    ) -> Result<Vec<String>, DesiredStateError> {
++        let _transition = self
++            .transition_lock
++            .lock()
++            .unwrap_or_else(|poison| poison.into_inner());
++        let mut fleet = self.load_unlocked()?;
++        let mut present = Vec::new();
++        let mut changed = false;
++        for name in names {
++            if let Some(entry) = fleet.equipiers.get_mut(*name) {
++                changed |= entry.lifecycle_state != lifecycle_state;
++                entry.lifecycle_state = lifecycle_state;
++                present.push((*name).to_string());
++            }
++        }
++        if changed {
++            self.persist_unlocked(&fleet)?;
++        }
++        Ok(present)
++    }
++
+     /// Marque une génération arrêtée uniquement si elle possède encore
+     /// l'entrée. Une relance échouée ne peut ainsi effacer l'ancienne
+     /// définition `stopped` qu'elle tentait de remplacer.
+@@ -496,7 +534,10 @@ impl DesiredStateStore {
+                 path: self.path.clone(),
+                 source,
+             }
+-        })
++        })?;
++        #[cfg(test)]
++        self.writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        Ok(())
+     }
+ }
+ 
+diff --git a/crates/bridget-daemon/src/fleet.rs b/crates/bridget-daemon/src/fleet.rs
+index 13e4283c..088c4402 100644
+--- a/crates/bridget-daemon/src/fleet.rs
++++ b/crates/bridget-daemon/src/fleet.rs
+@@ -542,6 +542,11 @@ impl FleetSupervisor {
+             .is_some())
+     }
+ 
++    #[cfg(test)]
++    pub(crate) fn desired_write_count(&self) -> usize {
++        self.desired.write_count()
++    }
++
+     pub fn decommission(&self, name: &str) -> Result<bool, FleetError> {
+         let changed = self
+             .desired
+@@ -553,6 +558,18 @@ impl FleetSupervisor {
+         Ok(changed)
+     }
+ 
++    /// Décommissionne plusieurs entrées en une lecture et au plus une écriture de la flotte.
++    /// Même effet que `decommission` pour chaque nom présent.
++    pub fn decommission_all(&self, names: &[&str]) -> Result<usize, FleetError> {
++        let present = self
++            .desired
++            .set_lifecycle_states(names, DesiredLifecycleState::Decommissioned)?;
++        for name in &present {
++            self.roster.forget(name);
++        }
++        Ok(present.len())
++    }
++
+     /// Importe explicitement dans le registre v4 un ancien agent arrêté.
+     /// Le nom seul ne suffit jamais : une saga connectée et une définition
+     /// runtime complète doivent être présentes dans le store idempotent.
+diff --git a/crates/bridget-daemon/src/idempotency/send_delivery.rs b/crates/bridget-daemon/src/idempotency/send_delivery.rs
+index 1c9fff05..e9ac1d78 100644
+--- a/crates/bridget-daemon/src/idempotency/send_delivery.rs
++++ b/crates/bridget-daemon/src/idempotency/send_delivery.rs
+@@ -314,6 +314,19 @@ impl IdempotencyStore {
+         Ok(delivery.into_delivery())
+     }
+ 
++    /// Phase brute (`dispatching`, `acked`, `indeterminate`, `orphaned`) de la
++    /// remise d'une clé, `None` si la ligne n'existe pas. Contrairement à
++    /// `send_delivery`, aucune phase n'est masquée : la rétention de la
++    /// délégation native (session 150) distingue « accusée » de « effacée ».
++    ///
++    /// Complexité : O(log n) via l'index unique de la clé idempotente.
++    pub(crate) fn send_delivery_phase(
++        &self,
++        key: &IdempotencyKey,
++    ) -> Result<Option<String>, IdempotencyError> {
++        Ok(self.stored_send_delivery(key)?.map(|delivery| delivery.phase))
++    }
++
+     fn stored_send_delivery(
+         &self,
+         key: &IdempotencyKey,
+diff --git a/crates/bridget-daemon/src/idempotency/tests.rs b/crates/bridget-daemon/src/idempotency/tests.rs
+index b843f8cc..884a1ed8 100644
+--- a/crates/bridget-daemon/src/idempotency/tests.rs
++++ b/crates/bridget-daemon/src/idempotency/tests.rs
+@@ -2251,3 +2251,44 @@ fn spec116_purge_des_envois_epargne_les_lancements_et_respecte_la_marge() {
+         "la remise suit en cascade"
+     );
+ }
++
++/// Session 150 : `send_delivery_phase` rend la phase brute, y compris celles
++/// que `send_delivery` masque, et `None` pour une clé sans remise.
++#[test]
++fn native150_purge_phase_de_remise_cinq_cas() {
++    let mut store = IdempotencyStore::open_in_memory().unwrap();
++    let delivery = |id: &str, instance: &str, generation: u64| SendDelivery {
++        delivery_id: id.to_string(),
++        recipient_instance_id: instance.to_string(),
++        delivery_generation: generation,
++        expires_at: NOW + HORIZON,
++        message_bytes: sample_message_bytes(id, "peer-1"),
++    };
++    let key_for = |id: &str| {
++        IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, id).unwrap()
++    };
++    let begin = |store: &mut IdempotencyStore, id: &str, instance: &str, generation: u64| {
++        let key = key_for(id);
++        store.reserve(&key, id.as_bytes(), NOW, HORIZON, NOW, 30).unwrap();
++        store.begin_send_delivery(&key, &delivery(id, instance, generation)).unwrap();
++        key
++    };
++    // Absente : aucune ligne pour la clé.
++    assert_eq!(store.send_delivery_phase(&key_for("absente")).unwrap(), None);
++    // dispatching : remise déposée, non accusée.
++    let en_vol = begin(&mut store, "en-vol", "instance-1", 1);
++    assert_eq!(store.send_delivery_phase(&en_vol).unwrap().as_deref(), Some("dispatching"));
++    // acked.
++    let accusee = begin(&mut store, "accusee", "instance-2", 2);
++    store.acknowledge_send_delivery("accusee", "instance-2", 2).unwrap();
++    assert_eq!(store.send_delivery_phase(&accusee).unwrap().as_deref(), Some("acked"));
++    // indeterminate : masquée par `send_delivery`, visible ici.
++    let quarantaine = begin(&mut store, "quarantaine", "instance-3", 3);
++    store.mark_delivery_indeterminate("quarantaine", "instance-3", 3).unwrap();
++    assert_eq!(store.send_delivery(&quarantaine).unwrap(), None);
++    assert_eq!(store.send_delivery_phase(&quarantaine).unwrap().as_deref(), Some("indeterminate"));
++    // orphaned.
++    let orpheline = begin(&mut store, "orpheline", "instance-4", 4);
++    store.orphan_dispatching_for_instance("instance-4", "destinataire purgé").unwrap();
++    assert_eq!(store.send_delivery_phase(&orpheline).unwrap().as_deref(), Some("orphaned"));
++}
+diff --git a/crates/bridget-daemon/src/referent_control.rs b/crates/bridget-daemon/src/referent_control.rs
+index 53197341..b38cb375 100644
+--- a/crates/bridget-daemon/src/referent_control.rs
++++ b/crates/bridget-daemon/src/referent_control.rs
+@@ -111,6 +111,8 @@ pub enum AutonomousEffect {
+     ReminderNudge,
+     /// Continuation automatique d'une exécution.
+     Continuation,
++    /// Admission d'une nouvelle délégation native (session 150).
++    NativeDelegation,
+ }
+ 
+ /// Verdict de la garde unique.
+@@ -129,7 +131,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
+     match effect {
+         AutonomousEffect::ProjectRound
+         | AutonomousEffect::ReminderNudge
+-        | AutonomousEffect::Continuation => Admission::Admitted,
++        | AutonomousEffect::Continuation
++        | AutonomousEffect::NativeDelegation => Admission::Admitted,
+     }
+ }
+ 
+@@ -807,6 +810,7 @@ mod tests {
+             AutonomousEffect::ProjectRound,
+             AutonomousEffect::ReminderNudge,
+             AutonomousEffect::Continuation,
++            AutonomousEffect::NativeDelegation,
+         ] {
+             assert_eq!(
+                 admit_autonomous_effect(effect, &active),
+@@ -818,6 +822,7 @@ mod tests {
+             AutonomousEffect::ProjectRound,
+             AutonomousEffect::ReminderNudge,
+             AutonomousEffect::Continuation,
++            AutonomousEffect::NativeDelegation,
+         ] {
+             assert_eq!(
+                 admit_autonomous_effect(effect, &active),
+diff --git a/crates/bridget-daemon/src/store/ledger_requests.rs b/crates/bridget-daemon/src/store/ledger_requests.rs
+index 83168d32..8f5c2039 100644
+--- a/crates/bridget-daemon/src/store/ledger_requests.rs
++++ b/crates/bridget-daemon/src/store/ledger_requests.rs
+@@ -295,6 +295,20 @@ impl Store {
+         self.query_requests("SELECT id, sender, target, state, created_at, deadline_at, escalation_level, cancel_reason, completed_at FROM tracked_requests WHERE state = 'open' ORDER BY deadline_at", [])
+     }
+ 
++    /// Aligne l'échéance durable d'une demande encore ouverte (mission native à délai
++    /// explicite : le suivi compte depuis l'admission de la mission, pas depuis la création
++    /// de la tâche). Une demande close n'est pas rouverte.
++    pub fn set_request_deadline(&self, id: &str, deadline_at: i64) -> Result<bool, StoreError> {
++        let changed = self
++            .conn
++            .execute(
++                "UPDATE tracked_requests SET deadline_at = ?1 WHERE id = ?2 AND state = 'open'",
++                rusqlite::params![deadline_at, id],
++            )
++            .map_err(StoreError::Sqlite)?;
++        Ok(changed == 1)
++    }
++
+     pub fn cancel_request(
+         &mut self,
+         id: &str,
+diff --git a/crates/bridget-daemon/tests/native_delegation_e2e.rs b/crates/bridget-daemon/tests/native_delegation_e2e.rs
+index eae4c4a7..19757108 100644
+--- a/crates/bridget-daemon/tests/native_delegation_e2e.rs
++++ b/crates/bridget-daemon/tests/native_delegation_e2e.rs
+@@ -278,6 +278,7 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
+         task: task.into(),
+         cwd: root.to_string_lossy().into_owned(),
+         posture: Some(SpawnPosture::Discovery),
++        reply_timeout: None,
+     }
+ }
+ 
+diff --git a/crates/bridget-transport/src/protocol.rs b/crates/bridget-transport/src/protocol.rs
+index 6b10e3be..bff56ad8 100644
+--- a/crates/bridget-transport/src/protocol.rs
++++ b/crates/bridget-transport/src/protocol.rs
+@@ -2020,6 +2020,9 @@ pub enum NativeDelegationRequest {
+         cwd: String,
+         #[serde(default)]
+         posture: Option<SpawnPosture>,
++        /// Délai de réponse de la mission en secondes ; absent = 3600 (session 150).
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        reply_timeout: Option<u64>,
+     },
+     Status {
+         task_id: String,
+@@ -7855,4 +7858,30 @@ mod spec104_search_contract_tests {
+             serde_json::from_str(r#"{"type":"ledger_search_v2","request":{"query":"x"}}"#);
+         assert!(unknown.is_err());
+     }
++
++    #[test]
++    fn native150_delai_requete_sans_champ_garde_les_octets_149() {
++        // Sans `reply_timeout`, la requête sérialise exactement comme en 149.
++        let request = NativeDelegationRequest::Delegate {
++            request_id: "k".to_string(),
++            agent_type: "a".to_string(),
++            model: "m".to_string(),
++            effort: None,
++            task: "t".to_string(),
++            cwd: "/c".to_string(),
++            posture: None,
++            reply_timeout: None,
++        };
++        let expected = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
++        assert_eq!(serde_json::to_vec(&request).unwrap(), expected.to_vec());
++        let reread: NativeDelegationRequest = serde_json::from_slice(expected).unwrap();
++        assert_eq!(reread, request);
++        let NativeDelegationRequest::Delegate { reply_timeout, .. } = serde_json::from_str(
++            r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/c","reply_timeout":120}"#,
++        )
++        .unwrap() else {
++            panic!("variante attendue : Delegate");
++        };
++        assert_eq!(reply_timeout, Some(120));
++    }
+ }
+diff --git a/docs/delegation-native.md b/docs/delegation-native.md
+index 8c8d96f2..14c0fbad 100644
+--- a/docs/delegation-native.md
++++ b/docs/delegation-native.md
+@@ -43,7 +43,10 @@ Le parent reçoit automatiquement un résultat corrélé à la mission.
+ Un enfant actif retarde la publication du résultat de son parent.
+ Le résultat publié ne change plus. Une fin de tour ne suffit pas à le publier.
+ `bridget_task_cancel` annule sa tâche et ses descendants actifs.
+-Le catalogue annonce `mission_reply_limit_secs`, actuellement 3600 secondes.
++Le catalogue annonce `mission_reply_limit_secs` (3600 secondes, le défaut),
++`mission_reply_min_secs` (60) et `mission_reply_max_secs` (86 400).
++`reply_timeout` est facultatif : il fixe le délai de réponse de cette mission,
++en secondes entières. Sans lui, le délai reste 3600 secondes.
+ Le reçu donne `mission_deadline_at` après admission de la remise. Cette échéance
+ reste identique après rejeu ou reprise. Son expiration produit
+ `mission_reply_timeout`, puis le nettoyage de la mission. Un délai de réponse
+@@ -171,6 +174,76 @@ Preuve : l'interface web a été testée avec un daemon simulé. Aucune preuve n
+ le daemon réel, l'application de bureau ou une installation. Ne pas annoncer cette
+ fonction comme livrée.
+ 
++## Délai de réponse choisi
++
++`reply_timeout` fait partie de l'enveloppe de la demande. Rejouer la même clé avec un
++autre délai produit `envelope_mismatch`. Omettre le champ et envoyer `3600` sont deux
++enveloppes différentes.
++
++Une valeur hors de 60 à 86 400 est refusée. Bridget ne la corrige pas.
++
++Un enfant qui fixe un `reply_timeout` ne peut pas dépasser le temps restant de sa tâche
++parente. Sans `reply_timeout`, rien n'est contrôlé : le comportement reste celui de la
++session 149. La même valeur règle l'échéance de la mission et le suivi de la demande.
++Avec un délai explicite, le suivi de la demande compte depuis l'admission de la mission,
++même si le lancement de l'enfant a pris du retard.
++Les tâches déjà actives gardent leur délai de 3600 secondes.
++
++## Refus
++
++Le refus revient dans `native_delegation_refused`, avec le code ci-dessous.
++Aucun de ces refus ne crée de tâche. Aucun ne consomme la clé de rejeu.
++
++| Code | Cause |
++|---|---|
++| `referent_paused` | Le référent est en pause et la clé est nouvelle. |
++| `control_state_unavailable` | L'état de pause est illisible : Bridget refuse plutôt que de déléguer pendant une pause possible. |
++| `request_expired` | La tâche de cette clé a été purgée depuis moins de 30 jours. |
++| `retention_saturated` | 4096 tâches sont conservées et aucun arbre n'est purgeable. |
++| `reply_timeout_out_of_range` | `reply_timeout` est hors de 60 à 86 400. |
++| `reply_timeout_exceeds_parent` | Le délai explicite d'un enfant dépasse le temps restant du parent. Sans délai explicite, aucun contrôle (comportement 149). |
++
++Ordre des contrôles : identité, forme de la demande, bornes du délai, rejeu
++(`envelope_mismatch`, `request_expired`), pause (`referent_paused`, ou
++`control_state_unavailable` si l'état de pause est illisible), droits, `task_limit`,
++`retention_saturated`, lignée du parent, délai de l'enfant.
++
++`task_limit` reste pour 128 tâches actives, ou 16 enfants actifs par instance.
++L'historique cumulé ne le provoque plus.
++
++## Pause du référent
++
++Pendant la pause, une nouvelle clé reçoit `referent_paused`. Rejouer une clé déjà
++admise rend la tâche existante. La lecture du catalogue, la lecture de statut et
++l'annulation restent possibles. Après la levée de la pause, la même clé réussit.
++
++Une pause n'arrête pas encore les missions en cours. La session 152 traite ce point.
++
++## Rétention des tâches
++
++Bridget garde au plus 4096 tâches. Il purge par arbre : une tâche sans parent et tous ses
++descendants. L'entretien horaire purge les arbres finis depuis plus de 7 jours, 128 au
++plus par passage. Si 4096 tâches sont conservées, les arbres purgeables les plus anciens
++partent d'abord, même avant 7 jours. L'entretien le fait dans le même quota de 128 arbres
++par passage, partagé avec la purge d'âge. Une nouvelle délégation le fait aussi : elle
++retire seulement les arbres nécessaires pour repasser sous 4096, sans limite de 128.
++
++Un arbre n'est jamais purgé dans ces cas :
++
++- une de ses tâches est active ou son nettoyage n'est pas fini ;
++- un résultat ou un avis d'échec n'a pas été accusé par le destinataire ;
++- un de ses sous-agents est connecté, routé, en cours de lancement, en cours de
++  décommission ou désiré `Running`.
++
++Avant la purge, chaque sous-agent est retiré de la flotte. Une remise indéterminée n'a
++pas d'accusé : elle bloque donc son arbre. Si ces arbres remplissent la borne, la
++délégation est refusée avec `retention_saturated`.
++
++Après une purge, `bridget_task_status` sur cette tâche rend le refus existant de tâche
++inconnue (`task_unavailable`). La vue Lineage fait une lecture complète sans tâche
++fantôme. Le rejeu de la clé rend `request_expired` pendant 30 jours. La clé redevient
++libre au passage d'entretien qui suit ces 30 jours (1 h au plus de décalage).
++
+ ## Ce qui ne change pas
+ 
+ - Le lancement ordinaire (`bridget spawn`), ses postures et ses protections du
+diff --git a/skills/bridget/SKILL.md b/skills/bridget/SKILL.md
+index a8d6d9ad..fbed52a4 100644
+--- a/skills/bridget/SKILL.md
++++ b/skills/bridget/SKILL.md
+@@ -40,6 +40,16 @@ Le catalogue annonce le délai maximal de réponse à la mission. Le reçu donne
+ son échéance après remise ; un rejeu ne la prolonge pas. Son expiration produit
+ `mission_reply_timeout`. Un timeout de transport ou d'attente n'annule rien.
+ 
++`reply_timeout` est facultatif (60 à 86 400 secondes, défaut 3600). Il fait partie
++de l'enveloppe : le rejeu garde la même valeur. Le catalogue annonce le défaut, le
++minimum et le maximum. Un enfant ne peut pas dépasser le temps restant de sa tâche
++parente. Refus propres à la délégation, sans tâche créée ni clé consommée :
++`referent_paused` (pause du référent, nouvelle clé), `request_expired` (clé d'une
++tâche purgée depuis moins de 30 jours), `retention_saturated` (4096 tâches
++conservées, aucune purgeable), `reply_timeout_out_of_range`,
++`reply_timeout_exceeds_parent`, et `control_state_unavailable` (état de contrôle du
++référent illisible : refus fermé). Une tâche purgée rend `task_unavailable` au statut.
++
+ Le parent doit déjà avoir une identité et un projet attestés. L'enfant ne reçoit
+ pas les credentials de session T3. Le catalogue annonce les refus par posture.
+ Sans posture, l'enfant hérite de la politique prouvée du parent ; aucun grant
+diff --git a/skills/bridget/references/commandes.md b/skills/bridget/references/commandes.md
+index 46053f03..5d081714 100644
+--- a/skills/bridget/references/commandes.md
++++ b/skills/bridget/references/commandes.md
+@@ -116,7 +116,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
+ - `bridget_status` — lire la santé assainie du daemon.
+ - `bridget_control_status` — lire l'état de contrôle, le compte inbox et un historique borné.
+ - `bridget_capabilities` — lire le catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent, avec `inherit`, `development` et leurs motifs de refus.
+-- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent.
++- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent. `reply_timeout` (entier, 60 à 86 400 secondes, défaut 3600) fixe le délai de réponse de la mission ; il fait partie de l'enveloppe de rejeu.
+ - `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant.
+ - `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id`.
+ 
+@@ -132,6 +132,13 @@ grant. Les droits humains explicites restent prioritaires. L'exception133 ci-des
+ `mission_reply_limit_secs` ; le reçu indique `mission_deadline_at` après remise.
+ Ce délai durable ne se renouvelle pas sur retry. Son expiration produit
+ `mission_reply_timeout`, distinct d'une attente de transport du parent.
++Le catalogue annonce aussi `mission_reply_min_secs` (60) et `mission_reply_max_secs`
++(86 400). Refus de la session 150 : `referent_paused`, `request_expired`,
++`retention_saturated`, `reply_timeout_out_of_range`, `reply_timeout_exceeds_parent`,
++`control_state_unavailable` (état de contrôle illisible, refus fermé).
++Aucun ne crée de tâche ni ne consomme la clé. Le rejeu d'une clé déjà admise rend la
++tâche existante, même pendant la pause. Bridget garde au plus 4096 tâches et purge par
++arbre ; la lecture de statut d'une tâche purgée rend `task_unavailable`.
+ Une révocation humaine ferme l'agent après changement d'instance aussi. Seul
+ un nouveau grant explicite la lève.
+ 

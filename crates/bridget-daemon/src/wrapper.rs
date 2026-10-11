@@ -5032,7 +5032,7 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 20] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 23] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
@@ -5053,6 +5053,9 @@ const BRIDGET_SAFE_MCP_TOOLS: [&str; 20] = [
     "bridget_delegate",
     "bridget_task_status",
     "bridget_task_cancel",
+    "bridget_task_wait",
+    "bridget_request_wait",
+    "bridget_task_ack",
 ];
 
 fn append_claude_allowed_tools(args: &mut Vec<String>) {
@@ -5266,7 +5269,7 @@ fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std:
         .map(|name| format!("{name}={{approval_mode=\"approve\"}}"))
         .join(",");
     Ok(format!(
-        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment},default_tools_approval_mode=\"prompt\",tools={{{tools}}}}}"
+        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment},tool_timeout_sec=3700,default_tools_approval_mode=\"prompt\",tools={{{tools}}}}}"
     ))
 }
 
@@ -8095,7 +8098,7 @@ mod reconnect_tests {
             concat!(
                 "mcp_servers.bridget={command=\"/tmp/bridget-test\",args=[\"mcp\"],",
                 "env={HOME=\"/tmp/home\",BRIDGET_HOME=\"/tmp/state\",BRIDGET_SOCKET=\"/tmp/state/bridget.sock\"},",
-                "default_tools_approval_mode=\"prompt\",tools={",
+                "tool_timeout_sec=3700,default_tools_approval_mode=\"prompt\",tools={",
                 "bridget_who={approval_mode=\"approve\"},",
                 "bridget_send={approval_mode=\"approve\"},",
                 "bridget_ledger={approval_mode=\"approve\"},",
@@ -8115,9 +8118,37 @@ mod reconnect_tests {
                 "bridget_capabilities={approval_mode=\"approve\"},",
                 "bridget_delegate={approval_mode=\"approve\"},",
                 "bridget_task_status={approval_mode=\"approve\"},",
-                "bridget_task_cancel={approval_mode=\"approve\"}}}"
+                "bridget_task_cancel={approval_mode=\"approve\"},",
+                "bridget_task_wait={approval_mode=\"approve\"},",
+                "bridget_request_wait={approval_mode=\"approve\"},",
+                "bridget_task_ack={approval_mode=\"approve\"}}}"
             )
         );
+    }
+
+    #[test]
+    fn native151_facade_montage_bridget_autorise_attentes_et_delai() {
+        let server = serde_json::json!({"command":"/tmp/bridget-test", "env":{"HOME":"/tmp/home", "BRIDGET_HOME":"/tmp/state", "BRIDGET_SOCKET":"/tmp/state/bridget.sock"}});
+        let policy = codex_mcp_override(&server).unwrap();
+        assert!(policy.contains("tool_timeout_sec=3700"));
+        for name in [
+            "bridget_task_wait",
+            "bridget_request_wait",
+            "bridget_task_ack",
+        ] {
+            assert!(policy.contains(&format!("{name}={{approval_mode=\"approve\"}}")));
+            assert!(BRIDGET_SAFE_MCP_TOOLS.contains(&name));
+        }
+        let mut args = vec!["--config=mcp_servers.other.tool_timeout_sec=47".into()];
+        apply_managed_mcp(
+            "codex_app_server",
+            "codex",
+            &mut args,
+            "unused",
+            Path::new("/tmp/unused.sock"),
+        )
+        .unwrap();
+        assert_eq!(args[0], "--config=mcp_servers.other.tool_timeout_sec=47");
     }
 
     #[test]
@@ -8148,6 +8179,9 @@ mod reconnect_tests {
             "bridget_delegate",
             "bridget_task_status",
             "bridget_task_cancel",
+            "bridget_task_wait",
+            "bridget_request_wait",
+            "bridget_task_ack",
         ] {
             assert!(
                 policy.contains(&format!("{name}={{approval_mode=\"approve\"}}")),
@@ -8164,12 +8198,15 @@ mod reconnect_tests {
         append_claude_allowed_tools(&mut args);
         assert_eq!(args[0], "--allowedTools");
         let permitted: Vec<_> = args[1].split(',').collect();
-        assert_eq!(permitted.len(), 20);
+        assert_eq!(permitted.len(), 23);
         for tool in [
             "bridget_capabilities",
             "bridget_delegate",
             "bridget_task_status",
             "bridget_task_cancel",
+            "bridget_task_wait",
+            "bridget_request_wait",
+            "bridget_task_ack",
         ] {
             assert!(permitted.contains(&format!("mcp__bridget__{tool}").as_str()));
         }

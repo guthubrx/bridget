@@ -13,6 +13,7 @@ pub(crate) use ledger_requests::search as ledger_search;
 pub use ledger_requests::{LedgerEntry, TrackedRequest, UsageDashboardRow};
 pub(crate) use ledger_requests::{
     fold_for_search, mark_answered_in_transaction, record_message_in_transaction,
+    request_reply_summary,
 };
 use project_compat::ensure_project_bindings_runtime_schema;
 pub use project_compat::{
@@ -171,7 +172,8 @@ impl Store {
                 deadline_at INTEGER NOT NULL,
                 escalation_level INTEGER NOT NULL DEFAULT 0,
                 cancel_reason TEXT,
-                completed_at INTEGER
+                completed_at INTEGER,
+                reply_summary TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_tracked_requests_sender ON tracked_requests(sender, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tracked_requests_open ON tracked_requests(state, deadline_at);
@@ -381,6 +383,29 @@ impl Store {
              ",
         )
         .map_err(StoreError::Sqlite)?;
+        // Migration additive 151 : la transaction sérialise les ouvreurs.
+        // O(C), C = nombre fixe de colonnes de la demande ; aucune copie de données.
+        let transaction =
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+                .map_err(StoreError::Sqlite)?;
+        let has_reply_summary = transaction
+            .prepare("PRAGMA table_info(tracked_requests)")
+            .map_err(StoreError::Sqlite)?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)?
+            .iter()
+            .any(|column| column == "reply_summary");
+        if !has_reply_summary {
+            transaction
+                .execute(
+                    "ALTER TABLE tracked_requests ADD COLUMN reply_summary TEXT",
+                    [],
+                )
+                .map_err(StoreError::Sqlite)?;
+        }
+        transaction.commit().map_err(StoreError::Sqlite)?;
         // Migration additive : les échantillons historiques restent valides
         // mais sans fournisseur/modèle attesté. Ne surtout pas les compléter
         // depuis l'état courant d'un agent.

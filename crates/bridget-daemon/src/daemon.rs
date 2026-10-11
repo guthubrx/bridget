@@ -185,7 +185,292 @@ impl Metrics {
 }
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+const MAX_DAEMON_WAITS: usize = 64;
+
+/// Une réservation O(1), libérée sur chaque sortie, erreur ou panique.
+struct WaitPermit(Arc<std::sync::atomic::AtomicUsize>);
+
+impl WaitPermit {
+    fn acquire(active: &Arc<std::sync::atomic::AtomicUsize>) -> Result<Self, String> {
+        active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < MAX_DAEMON_WAITS).then_some(n + 1)
+            })
+            .map_err(|_| "wait_capacity".to_string())?;
+        Ok(Self(active.clone()))
+    }
+}
+
+impl Drop for WaitPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Sonde sans consommation et sans changer O_NONBLOCK sur la connexion partagée.
+fn wait_client_gone(peer: Option<&UnixStream>) -> bool {
+    let Some(peer) = peer else { return false };
+    let fd = peer.as_raw_fd();
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // HUP couvre aussi une fermeture qui laisse une trame suivante dans le socket.
+    if unsafe { libc::poll(&mut pfd, 1, 0) } > 0
+        && pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
+    {
+        return true;
+    }
+    let mut byte = 0u8;
+    let read = unsafe {
+        libc::recv(
+            fd,
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    read == 0
+        || (read < 0
+            && !std::io::Error::last_os_error()
+                .raw_os_error()
+                .is_some_and(|e| e == libc::EAGAIN || e == libc::EWOULDBLOCK || e == libc::EINTR))
+}
+
+/// O(log n) par snapshot indexé ; même compteur de capacité que les tâches.
+fn wait_request(
+    conn: &str,
+    id: &str,
+    timeout: u64,
+    state: &Arc<Mutex<DaemonState>>,
+    peer: Option<&UnixStream>,
+    slice: Duration,
+) -> DaemonToWrapper {
+    let result = (|| -> Result<DaemonToWrapper, String> {
+        if id.is_empty() || id.len() > 128 || id.chars().any(bridget_core::is_disallowed_control) {
+            return Err("invalid_request".into());
+        }
+        if !(1..=3600).contains(&timeout) {
+            return Err("wait_timeout_out_of_range".into());
+        }
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(timeout);
+        let (identity, epoch, active) = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                live_connection_identity(&st, conn).ok_or("identity_unavailable")?,
+                st.delegation_store.wait_epoch(),
+                st.active_waits.clone(),
+            )
+        };
+        let mut permit = None;
+        loop {
+            let seen = epoch.get();
+            if wait_client_gone(peer) || SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
+                return Err("daemon_unreachable".into());
+            }
+            let (current, reply_deadline, summary) = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if live_connection_identity(&st, conn).as_ref() != Some(&identity) {
+                    return Err("request_unavailable".into());
+                }
+                let snapshot = st
+                    .store
+                    .request_wait_snapshot(id, &identity.0)
+                    .map_err(|_| "store_unavailable")?
+                    .ok_or("request_unavailable")?;
+                if permit.is_none() {
+                    permit = Some(WaitPermit::acquire(&active)?);
+                }
+                snapshot
+            };
+            // L'échéance métier est calculée : cette lecture ne ferme jamais la ligne.
+            let now = unix_timestamp();
+            let current = if current == "open" && reply_deadline <= now {
+                "timed_out".into()
+            } else {
+                current
+            };
+            if current != "open" || Instant::now() >= deadline {
+                let reply = (current == "answered")
+                    .then(|| {
+                        summary
+                            .as_deref()
+                            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                            .filter(serde_json::Value::is_object)
+                    })
+                    .flatten();
+                let reply_reason = (current == "answered" && reply.is_none())
+                    .then(|| "reply_unavailable".to_string());
+                return Ok(DaemonToWrapper::RequestWaitResult {
+                    timed_out_wait: current == "open",
+                    state: current,
+                    waited_secs: start.elapsed().as_secs(),
+                    reply,
+                    reply_reason,
+                });
+            }
+            let until_reply = Duration::from_secs(reply_deadline.saturating_sub(now) as u64);
+            epoch.wait_changed(
+                seen,
+                slice
+                    .min(deadline.saturating_duration_since(Instant::now()))
+                    .min(until_reply),
+            );
+        }
+    })();
+    result.unwrap_or_else(|code| DaemonToWrapper::NativeDelegationResult {
+        result: serde_json::json!({"status":"refused","code":code}),
+    })
+}
+
 const PRESENCE_RETENTION: Duration = Duration::from_secs(300);
+
+#[cfg(test)]
+mod native151_sql_trace_tests {
+    use super::*;
+
+    struct TraceContext {
+        start: Instant,
+        prefix: &'static [u8],
+        selects: Mutex<Vec<Duration>>,
+    }
+
+    pub(super) struct SelectTrace {
+        connection: *mut rusqlite::ffi::sqlite3,
+        context: Box<TraceContext>,
+    }
+
+    impl SelectTrace {
+        pub(super) fn new(connection: &rusqlite::Connection, prefix: &'static [u8]) -> Self {
+            unsafe extern "C" fn observe(
+                event: u32,
+                context: *mut std::ffi::c_void,
+                _statement: *mut std::ffi::c_void,
+                sql: *mut std::ffi::c_void,
+            ) -> i32 {
+                if event != rusqlite::ffi::SQLITE_TRACE_STMT || context.is_null() || sql.is_null() {
+                    return rusqlite::ffi::SQLITE_OK;
+                }
+                // Aucun unwind ne traverse la frontière C. SQLite garantit la chaîne SQL.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let context = unsafe { &*context.cast::<TraceContext>() };
+                    let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
+                    if sql.starts_with(context.prefix) {
+                        context
+                            .selects
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .push(context.start.elapsed());
+                    }
+                }));
+                rusqlite::ffi::SQLITE_OK
+            }
+            let mut trace = Self {
+                connection: unsafe { connection.handle() },
+                context: Box::new(TraceContext {
+                    start: Instant::now(),
+                    prefix,
+                    selects: Mutex::new(Vec::new()),
+                }),
+            };
+            // Le Box garde la même adresse jusqu'à la désinstallation dans Drop.
+            assert_eq!(
+                unsafe {
+                    rusqlite::ffi::sqlite3_trace_v2(
+                        trace.connection,
+                        rusqlite::ffi::SQLITE_TRACE_STMT,
+                        Some(observe),
+                        (&mut *trace.context as *mut TraceContext).cast(),
+                    )
+                },
+                rusqlite::ffi::SQLITE_OK
+            );
+            trace
+        }
+
+        pub(super) fn assert_calm(&self, label: &str) {
+            let times = self.context.selects.lock().unwrap().clone();
+            eprintln!(
+                "SC008 {label} : SELECT pertinents={} aux millisecondes {:?}",
+                times.len(),
+                times.iter().map(Duration::as_millis).collect::<Vec<_>>()
+            );
+            assert_eq!(times.len(), 3, "{label}: {times:?}");
+            assert!(times[0] < Duration::from_millis(500), "{times:?}");
+            assert!(times[1] - times[0] >= Duration::from_secs(5), "{times:?}");
+            assert!(times[1] <= Duration::from_secs(6), "{times:?}");
+            assert!(times[2] >= Duration::from_secs(10), "{times:?}");
+            assert!(times[2] <= Duration::from_secs(12), "{times:?}");
+        }
+    }
+
+    impl Drop for SelectTrace {
+        fn drop(&mut self) {
+            // Les tests gardent l'état propriétaire vivant au-delà de ce garde.
+            unsafe {
+                rusqlite::ffi::sqlite3_trace_v2(self.connection, 0, None, std::ptr::null_mut());
+            }
+        }
+    }
+
+    #[test]
+    fn native151_sc008_request_wait_select_calme_cinq_secondes() {
+        let label = format!(
+            "n151-rq-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
+        let (mut st, config) = presence_tests::state_with_registered_agent(&label);
+        let (writer, _reader) = presence_tests::control_socket(&label);
+        st.connections.insert("conn-1".into(), writer);
+        let owner = live_connection_identity(&st, "conn-1").unwrap().0;
+        st.store
+            .create_request("calm151", &owner, "target", 3600)
+            .unwrap();
+        let before = st.store.request_wait_snapshot("calm151", &owner).unwrap();
+        let epoch = st.delegation_store.wait_epoch();
+        let seen = epoch.get();
+        let active = st.active_waits.clone();
+        let shared = Arc::new(Mutex::new(st));
+        let trace = SelectTrace::new(
+            shared.lock().unwrap().store.connection(),
+            b"SELECT state, deadline_at, reply_summary",
+        );
+        let result = wait_request(
+            "conn-1",
+            "calm151",
+            10,
+            &shared,
+            None,
+            Duration::from_secs(5),
+        );
+        assert!(
+            matches!(result,
+            DaemonToWrapper::RequestWaitResult { ref state, timed_out_wait: true, waited_secs: 10, reply: None, reply_reason: None }
+                if state == "open"),
+            "{result:?}"
+        );
+        trace.assert_calm("RequestWait");
+        drop(trace);
+        assert_eq!(epoch.get(), seen);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .request_wait_snapshot("calm151", &owner)
+                .unwrap(),
+            before
+        );
+        eprintln!(
+            "SC008 RequestWait : epoch inchangé={seen}, capacité libérée, échéance métier 3600 s et état open conservés"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+}
 
 /// Pas de scrutation des threads de fond pendant leur sieste.
 ///
@@ -736,6 +1021,7 @@ struct DaemonState {
     circuit_breaker: CircuitBreaker,
     execution_store: ExecutionStore,
     delegation_store: crate::delegation::DelegationStore,
+    active_waits: Arc<std::sync::atomic::AtomicUsize>,
     deduplicator: Deduplicator,
     envelope_guard: EnvelopeGuard,
     store: Store,
@@ -3109,6 +3395,7 @@ impl DaemonState {
             store,
             execution_store,
             delegation_store,
+            active_waits: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             idempotency,
             fleet,
             registry,
@@ -5170,7 +5457,8 @@ fn handle_connection(
                 continue;
             }
 
-            let response = handle_wrapper_message(&conn_id, msg, &state);
+            let response =
+                handle_wrapper_message_with_peer(&conn_id, msg, &state, Some(reader.get_ref()));
             let registered_just_now = matches!(response, Some(DaemonToWrapper::Registered { .. }));
             if let Some(dtw) = response {
                 let watch_terminal = matches!(
@@ -6996,6 +7284,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
     }
     for (to, from, msg_id, from_conn, timeout_secs, cancel_target) in timeout_candidates {
         if claim_timeout(&mut state.store, &msg_id) {
+            state.delegation_store.wait_epoch().bump();
             actions.push(ReminderAction::Timeout {
                 to,
                 from,
@@ -7687,6 +7976,7 @@ fn handle_delivery_ack(
     {
         Ok(answered_request) => {
             if let Some(request_id) = answered_request {
+                st.delegation_store.wait_epoch().bump();
                 st.pending_replies
                     .retain(|pending| pending.msg_id != request_id);
                 info!("demande {} répondue après accusé idempotent", request_id);
@@ -10327,7 +10617,7 @@ mod spec099_classic_delivery_tests {
         assert_eq!(controls.len(), 1);
         assert!(
             st.store
-                .mark_answered("request138", TARGET, SENDER)
+                .mark_answered("request138", TARGET, SENDER, None)
                 .unwrap()
         );
         controls.clear();
@@ -14110,10 +14400,20 @@ fn handle_human_thread_watch(
     None
 }
 
+#[cfg(test)]
 fn handle_wrapper_message(
     conn_id: &str,
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
+) -> Option<DaemonToWrapper> {
+    handle_wrapper_message_with_peer(conn_id, msg, state, None)
+}
+
+fn handle_wrapper_message_with_peer(
+    conn_id: &str,
+    msg: WrapperToDaemon,
+    state: &Arc<Mutex<DaemonState>>,
+    peer: Option<&UnixStream>,
 ) -> Option<DaemonToWrapper> {
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -14401,6 +14701,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::NativeDelegation { .. }
                 | WrapperToDaemon::NativeDelegationT3 { .. }
+                | WrapperToDaemon::RequestWait { .. }
                 | WrapperToDaemon::NativePermissionFact { .. }
                 | WrapperToDaemon::CommunicationProjectFact { .. }
                 | WrapperToDaemon::DirectoryScoped { .. }
@@ -14609,7 +14910,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::SpawnOrder {
                     posture: Some(_), ..
                 } => None, // Attribution humaine et capacité contrôlées au puits.
-                WrapperToDaemon::NativeDelegation { .. } | WrapperToDaemon::NativeDelegationT3 { .. } => None, // Identité et droits au puits natif.
+                WrapperToDaemon::NativeDelegation { .. } | WrapperToDaemon::NativeDelegationT3 { .. } | WrapperToDaemon::RequestWait { .. } => None, // Identité et droits au puits natif.
                 // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
                 //
                 // Le tiret bas précédent classait trois variantes et renvoyait
@@ -16104,6 +16405,7 @@ fn handle_wrapper_message(
                 Ok(result) => {
                     if matches!(&result, GuichetResult::Terminal { issue, newly_finalized: true, .. } if issue == "accepted")
                     {
+                        st.delegation_store.wait_epoch().bump();
                         match st.store.guichet_lifecycle_events() {
                             Ok(events) => {
                                 if let Some(event) = events.into_iter().find(|event| {
@@ -16435,34 +16737,83 @@ fn handle_wrapper_message(
                 }),
             }
         }
-        WrapperToDaemon::NativeDelegation { request } => {
-            Some(native_delegation::handle(conn_id, request, state))
-        }
-        WrapperToDaemon::NativeDelegationT3 { request, proof } => {
-            Some(native_delegation::handle_attested(conn_id,request,&proof,state))
-        }
-        WrapperToDaemon::NativePermissionFact { fact,request_id,observation_id,unavailable_code } => {
-            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
-            if st.auxiliary_connections.contains(conn_id)||live_connection_identity(&st,conn_id).is_none(){return None}
-            let allowed=fact.as_ref().is_some_and(|fact|
-                live_connection_identity(&st,conn_id).is_some_and(|(_,instance)|fact.provider_instance_id==instance
-                &&st.presences.get(&instance).is_some_and(|p|matches!(p.transport.as_str(),"codex_app_server"|"stdio"|"claude_pty"|"tmux")
-                    &&st.registry.get(&p.agent_type).is_ok_and(|definition|definition.protocol==fact.driver)))
-                &&request_id.as_ref().is_none_or(|id|!id.is_empty()&&id.len()<=128&&!id.chars().any(char::is_control))
-                &&st.native_permission_facts.get(conn_id).is_none_or(|(previous,_)|
-                    fact.provider_session_id!=previous.provider_session_id||fact.revision>=previous.revision)
-                &&bridget_transport::protocol::validate_permissions(fact,false).is_ok());
-            let accepted=allowed&&unavailable_code.is_none();
-            if accepted {
-                st.native_permission_facts.insert(conn_id.into(),(fact.unwrap(),request_id));
-                st.native_permission_refusals.remove(conn_id);
-            }else {
-                st.native_permission_facts.remove(conn_id);
-                let code=unavailable_code.filter(|code|matches!(code.as_str(),"permission_source_unavailable"|"settings_revision_changed"))
-                    .unwrap_or_else(||"permission_attestation_unavailable".into());
-                st.native_permission_refusals.insert(conn_id.into(),code);
+        WrapperToDaemon::RequestWait {
+            request_id,
+            wait_timeout,
+        } => Some(wait_request(
+            conn_id,
+            &request_id,
+            wait_timeout,
+            state,
+            peer,
+            Duration::from_secs(5),
+        )),
+        WrapperToDaemon::NativeDelegation { request } => Some(native_delegation::handle_with_peer(
+            conn_id, request, state, peer,
+        )),
+        WrapperToDaemon::NativeDelegationT3 { request, proof } => Some(
+            native_delegation::handle_attested(conn_id, request, &proof, state, peer),
+        ),
+        WrapperToDaemon::NativePermissionFact {
+            fact,
+            request_id,
+            observation_id,
+            unavailable_code,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.auxiliary_connections.contains(conn_id)
+                || live_connection_identity(&st, conn_id).is_none()
+            {
+                return None;
             }
-            observation_id.filter(|id|Uuid::parse_str(id).is_ok()).map(|observation_id|DaemonToWrapper::NativePermissionAcknowledged{observation_id,accepted})
+            let allowed = fact.as_ref().is_some_and(|fact| {
+                live_connection_identity(&st, conn_id).is_some_and(|(_, instance)| {
+                    fact.provider_instance_id == instance
+                        && st.presences.get(&instance).is_some_and(|p| {
+                            matches!(
+                                p.transport.as_str(),
+                                "codex_app_server" | "stdio" | "claude_pty" | "tmux"
+                            ) && st
+                                .registry
+                                .get(&p.agent_type)
+                                .is_ok_and(|definition| definition.protocol == fact.driver)
+                        })
+                }) && request_id.as_ref().is_none_or(|id| {
+                    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+                }) && st
+                    .native_permission_facts
+                    .get(conn_id)
+                    .is_none_or(|(previous, _)| {
+                        fact.provider_session_id != previous.provider_session_id
+                            || fact.revision >= previous.revision
+                    })
+                    && bridget_transport::protocol::validate_permissions(fact, false).is_ok()
+            });
+            let accepted = allowed && unavailable_code.is_none();
+            if accepted {
+                st.native_permission_facts
+                    .insert(conn_id.into(), (fact.unwrap(), request_id));
+                st.native_permission_refusals.remove(conn_id);
+            } else {
+                st.native_permission_facts.remove(conn_id);
+                let code = unavailable_code
+                    .filter(|code| {
+                        matches!(
+                            code.as_str(),
+                            "permission_source_unavailable" | "settings_revision_changed"
+                        )
+                    })
+                    .unwrap_or_else(|| "permission_attestation_unavailable".into());
+                st.native_permission_refusals.insert(conn_id.into(), code);
+            }
+            observation_id
+                .filter(|id| Uuid::parse_str(id).is_ok())
+                .map(
+                    |observation_id| DaemonToWrapper::NativePermissionAcknowledged {
+                        observation_id,
+                        accepted,
+                    },
+                )
         }
         WrapperToDaemon::SpawnOrder {
             posture,
@@ -17791,12 +18142,18 @@ fn handle_wrapper_message(
                 && let Some(request_id) = bridge_msg.in_reply_to.as_deref()
                 && st
                     .store
-                    .mark_answered(request_id, &bridge_msg.from, &bridge_msg.to)
+                    .mark_answered(
+                        request_id,
+                        &bridge_msg.from,
+                        &bridge_msg.to,
+                        Some(&crate::store::request_reply_summary(&bridge_msg)),
+                    )
                     .unwrap_or(false)
             {
                 st.pending_replies
                     .retain(|pending| pending.msg_id != request_id);
                 info!("demande {} répondue après livraison", request_id);
+                st.delegation_store.wait_epoch().bump();
             }
 
             if let Err(error) = delivery {
@@ -17861,6 +18218,7 @@ fn handle_wrapper_message(
                 host: st.host.clone(),
                 db_path: st.db_path.display().to_string(),
                 instance_id: st.instance_id.clone(),
+                features: vec!["wait_v1".to_string()],
             })
         }
 
@@ -18114,6 +18472,9 @@ fn handle_wrapper_message(
                 {
                     return None;
                 }
+                if reason.contains("échéance") || reason.contains("timeout ACP") {
+                    st.delegation_store.wait_epoch().bump();
+                }
                 let writer = st
                     .router
                     .get_agent(&request.sender)
@@ -18159,6 +18520,7 @@ fn handle_wrapper_message(
                     reason: "seul l'émetteur peut annuler cette demande".to_string(),
                 }),
                 Ok(Some(request)) if request.state == "cancelled" => {
+                    st.delegation_store.wait_epoch().bump();
                     st.pending_replies
                         .retain(|pending| pending.msg_id != request.id);
                     let notification = st.router.get_agent(&request.target)
@@ -18783,6 +19145,7 @@ mod matrice_roles_tests {
                     host,
                     db_path,
                     instance_id,
+                    ..
                 }) => {
                     // Les VALEURS, pas la presence : ce sont celles de l'etat.
                     let attendu = shared.lock().unwrap_or_else(|p| p.into_inner());
@@ -19066,6 +19429,7 @@ fn probe_daemon_identity(
             host,
             db_path,
             instance_id,
+            ..
         }) => Ok(Some((host, db_path, instance_id))),
         // Refus ou réponse connue mais différente : daemon présent, rapport
         // récent absent. Cette compatibilité est distincte d'une expiration.
@@ -19263,6 +19627,7 @@ mod inventory_provenance_tests {
                 host: host.to_string(),
                 db_path: db_path.to_string(),
                 instance_id: "fixture-instance".to_string(),
+                features: Vec::new(),
             })
             .expect("encoder le rapport")
         )
@@ -19434,6 +19799,7 @@ mod inventory_provenance_tests {
                     host: "fixture".into(),
                     db_path: "/fixture".into(),
                     instance_id: "fixture".into(),
+                    features: Vec::new(),
                 },
             ] {
                 let mut line = String::new();

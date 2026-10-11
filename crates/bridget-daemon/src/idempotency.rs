@@ -586,7 +586,8 @@ impl IdempotencyStore {
                 deadline_at INTEGER NOT NULL,
                 escalation_level INTEGER NOT NULL DEFAULT 0,
                 cancel_reason TEXT,
-                completed_at INTEGER
+                completed_at INTEGER,
+                reply_summary TEXT
             );
             -- Visibilité d'émission (fait distinct de l'accusé). Créée ici pour
             -- que le socle idempotent puisse graver le ledger sans dépendre du
@@ -652,6 +653,19 @@ impl IdempotencyStore {
                 ON delegated_runtime_events(parent_instance_id, acknowledged_at, cursor);",
         )?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // 151 : même colonne que Store ; l'ouvreur ne devine aucun ancien résumé.
+        let has_reply_summary = tx
+            .prepare("PRAGMA table_info(tracked_requests)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|column| column == "reply_summary");
+        if !has_reply_summary {
+            tx.execute(
+                "ALTER TABLE tracked_requests ADD COLUMN reply_summary TEXT",
+                [],
+            )?;
+        }
         let migration_applied = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 2)",
             [],

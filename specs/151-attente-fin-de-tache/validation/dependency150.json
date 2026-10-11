@@ -1,0 +1,25 @@
+{
+  "base": "1f2c661d39a9ce106723a93ac883f76ab9fe52c6",
+  "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation",
+  "sha256": {
+    "crates/bridget-daemon/src/daemon.rs": "9980e62eba124f2147a4ccd9b209469326db98d94de73f61edb34b6913ac26f2",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "2d98e7434f64017da0d3c40c74e6075b8445f7614bd7604c0a2989612df10af8",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "7643ab73d5dfdd2e8c802e3edda5a34167931ae3c42711b1ec8b261ea59a8cc3",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "487f7ab72147b91ffa8efda641ec89225aba4a3677c24e7044ff2942d3437e6c",
+    "crates/bridget-daemon/src/delegation.rs": "2e951fc860a48e9089f70a8cc5074eda992ce87710095ab44249769e517df6f1",
+    "crates/bridget-daemon/src/delegation_lineage.rs": "dc0b9f1c445b48f655020b334f081f42e47d049ed6f77e1515a8392252993e4b",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "fff0ca569903e9bf9ee78c679e232318aef48e13129afafd2cfef9ab53b01656",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "ba28f65e520364a007b51d18b960050c22947a818db28c8f2f18d65cb869bb8c",
+    "crates/bridget-daemon/src/desired_state.rs": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+    "crates/bridget-daemon/src/fleet.rs": "fc8f5d387abcdafff6893b093f8285194a08533d08f3f3e39d86a0e4311ffea2",
+    "crates/bridget-daemon/src/idempotency/send_delivery.rs": "2fe5e502c6e357adac0bb0a21e04cdaf00696521d743e82c4a2c17b3f29903ad",
+    "crates/bridget-daemon/src/idempotency/tests.rs": "70c9430fffaf3f6103423b0f7c64a46318bfb7f26c8ff48633374e437da060dc",
+    "crates/bridget-daemon/src/referent_control.rs": "98d1573a2a401fbbab7d6d6d44d99a96b1a66f386775a7fabca370bd01a5656b",
+    "crates/bridget-daemon/src/store/ledger_requests.rs": "448dd1e6b298ff3da52c0448d0fd83a46f8b09d6257b3b4f23196f33a1cf76c6",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "862fc1681b45de7bd59b8369057486e38fb508bc72d94e7b4b0830f08675d363",
+    "crates/bridget-transport/src/protocol.rs": "9b119d3292804e8c0e85156489b98e92e83d331bbda598acef7e96883e77be42",
+    "docs/delegation-native.md": "17a1eb1f7c2c3e1eb4dfda3b2f6eec9c14c6eec5e28e8a42f82940b8a2dd1d35",
+    "skills/bridget/SKILL.md": "68f6ab7ff81df5398d5d608b31697f00710211d534915ec72fd0b890dc94b224",
+    "skills/bridget/references/commandes.md": "2c6f07758419dcec7b288ce5376a581ee1684a931aafaed64e13806ffb1d6288"
+  }
+}

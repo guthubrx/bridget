@@ -18,19 +18,192 @@ use bridget_transport::protocol::{
 use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
-#[cfg(test)]
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 #[cfg(test)]
-use std::time::{Duration, Instant};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Instant;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
+const MAX_WAITING_TOOL_CALLS: usize = 4;
+
+struct ToolCallRecord {
+    waiting: bool,
+    cancelled: bool,
+    socket: Option<UnixStream>,
+}
+
+impl ToolCallRecord {
+    fn cancel(&mut self, close_socket: bool) {
+        self.cancelled = true;
+        if close_socket && let Some(socket) = &self.socket {
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+#[derive(Default)]
+struct ToolCallRegistry {
+    calls: HashMap<String, ToolCallRecord>,
+    closed: bool,
+    completed: Arc<Condvar>,
+}
+
+impl ToolCallRegistry {
+    /// O(n), n <= 8 : les appels restent la seule source des créneaux occupés.
+    fn reserve(&mut self, id: String, waiting: bool) -> Result<(), &'static str> {
+        if waiting
+            && self.calls.values().filter(|call| call.waiting).count() >= MAX_WAITING_TOOL_CALLS
+        {
+            return Err("wait_capacity");
+        }
+        if self.closed
+            || self.calls.len() >= MAX_IN_FLIGHT_TOOL_CALLS
+            || self.calls.contains_key(&id)
+        {
+            return Err("busy");
+        }
+        self.calls.insert(
+            id,
+            ToolCallRecord {
+                waiting,
+                cancelled: false,
+                socket: None,
+            },
+        );
+        Ok(())
+    }
+
+    fn cancel(&mut self, id: &str) {
+        if let Some(call) = self.calls.get_mut(id) {
+            call.cancel(call.waiting);
+        }
+    }
+
+    fn cancel_all(&mut self) {
+        self.closed = true;
+        for call in self.calls.values_mut() {
+            call.cancel(true);
+        }
+    }
+
+    fn checkpoint(&mut self, id: &str, socket: Option<&UnixStream>) -> Result<(), ToolError> {
+        let call = self.calls.get_mut(id);
+        if self.closed
+            || call
+                .as_ref()
+                .is_none_or(|call| call.waiting && call.cancelled)
+        {
+            if let Some(socket) = socket {
+                let _ = socket.shutdown(std::net::Shutdown::Both);
+            }
+            return Err(ToolError::Technical {
+                code: "wait_cancelled",
+                message: "appel MCP interrompu".into(),
+            });
+        }
+        if let Some(socket) = socket {
+            let socket = socket.try_clone().map_err(|error| ToolError::Technical {
+                code: "daemon_unreachable",
+                message: format!("socket MCP non enregistrable : {error}"),
+            })?;
+            // Remplace le socket de la sonde par celui de l'attente sous le même verrou.
+            call.expect("appel présent et non interrompu").socket = Some(socket);
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self, id: &str) -> bool {
+        let cancelled = self.calls.remove(id).is_some_and(|call| call.cancelled);
+        self.completed.notify_all();
+        cancelled
+    }
+}
+
+#[derive(Clone)]
+struct ToolCallContext {
+    id: String,
+    registry: Arc<Mutex<ToolCallRegistry>>,
+}
+
+thread_local! {
+    static TOOL_CALL_CONTEXT: RefCell<Option<ToolCallContext>> = const { RefCell::new(None) };
+}
+
+/// O(1) : l'appel, son drapeau et son socket sont vérifiés sous un verrou unique.
+pub(crate) fn check_tool_call(socket: Option<&UnixStream>) -> Result<bool, ToolError> {
+    let context = TOOL_CALL_CONTEXT.with(|context| context.borrow().clone());
+    if let Some(context) = context {
+        context
+            .registry
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .checkpoint(&context.id, socket)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+struct ToolCallGuard {
+    context: ToolCallContext,
+    finished: bool,
+}
+
+impl ToolCallGuard {
+    fn new(id: String, registry: Arc<Mutex<ToolCallRegistry>>) -> Self {
+        let context = ToolCallContext { id, registry };
+        TOOL_CALL_CONTEXT.with(|slot| *slot.borrow_mut() = Some(context.clone()));
+        Self {
+            context,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self) -> bool {
+        if self.finished {
+            return false;
+        }
+        TOOL_CALL_CONTEXT.with(|slot| *slot.borrow_mut() = None);
+        self.finished = true;
+        self.context
+            .registry
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .finish(&self.context.id)
+    }
+}
+
+impl Drop for ToolCallGuard {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+struct CancelCallsOnExit(Arc<Mutex<ToolCallRegistry>>);
+
+impl Drop for CancelCallsOnExit {
+    fn drop(&mut self) {
+        let mut registry = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        for call in registry.calls.values_mut().filter(|call| call.waiting) {
+            call.cancel(true);
+        }
+        // EOF laisse les appels ordinaires déjà reçus finir comme en 150.
+        // La grâce est vide sans appel ordinaire ; aucune nouvelle admission.
+        let completed = Arc::clone(&registry.completed);
+        let (mut registry, _) = completed
+            .wait_timeout_while(registry, Duration::from_millis(4500), |registry| {
+                registry.calls.values().any(|call| !call.waiting)
+            })
+            .unwrap_or_else(|error| error.into_inner());
+        registry.cancel_all();
+    }
+}
 
 /// Consigne de rejeu, point de vérité unique des sept ancrages.
 ///
@@ -124,11 +297,11 @@ where
     let output = Arc::new(Mutex::new(BufWriter::new(output)));
     let mut session = Session::default();
     let mut line = String::new();
-    let in_flight = Arc::new(Mutex::new(HashSet::new()));
-    let cancelled = Arc::new(Mutex::new(HashSet::new()));
-    let active = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(Mutex::new(ToolCallRegistry::default()));
 
     std::thread::scope(|scope| -> io::Result<()> {
+        // La garde tombe AVANT la jonction des threads, sur EOF comme sur erreur.
+        let _cancel_calls = CancelCallsOnExit(Arc::clone(&registry));
         loop {
             line.clear();
             if input.read_line(&mut line)? == 0 {
@@ -145,39 +318,46 @@ where
                 }
             };
             if let Some(cancelled_id) = cancellation_id(&request) {
-                let is_active = in_flight
+                registry
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
-                    .contains(&cancelled_id);
-                if is_active {
-                    cancelled
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .insert(cancelled_id);
-                }
+                    .cancel(&cancelled_id);
                 continue;
             }
             let call_id = asynchronous_tool_call_id(&request, &session);
             if let Some(call_id) = call_id {
-                if !try_reserve_tool_call(&active) {
+                let waiting = matches!(
+                    request
+                        .get("params")
+                        .and_then(|params| params.get("name"))
+                        .and_then(Value::as_str),
+                    Some("bridget_task_wait" | "bridget_request_wait")
+                );
+                let reservation = registry
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .reserve(call_id.clone(), waiting);
+                if let Err(code) = reservation {
                     write_shared_response(
                         &output,
                         &result(
                             request.get("id").cloned().unwrap_or(Value::Null),
-                            technical_result("busy", "serveur MCP saturé : réessaie plus tard"),
+                            technical_result(
+                                code,
+                                if code == "wait_capacity" {
+                                    "quatre attentes déjà ouvertes dans ce processus MCP"
+                                } else {
+                                    "serveur MCP saturé : réessaie plus tard"
+                                },
+                            ),
                         ),
                     )?;
                     continue;
                 }
-                in_flight
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .insert(call_id.clone());
                 let output = Arc::clone(&output);
-                let in_flight = Arc::clone(&in_flight);
-                let cancelled = Arc::clone(&cancelled);
-                let active = Arc::clone(&active);
+                let registry = Arc::clone(&registry);
                 scope.spawn(move || {
+                    let mut call = ToolCallGuard::new(call_id, registry);
                     let mut tool_session = Session {
                         initialize_seen: true,
                         initialized: true,
@@ -188,15 +368,7 @@ where
                         resolve_identity,
                         execute,
                     );
-                    let cancelled_call = cancelled
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .remove(&call_id);
-                    in_flight
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .remove(&call_id);
-                    active.fetch_sub(1, Ordering::AcqRel);
+                    let cancelled_call = call.finish();
                     if !cancelled_call && let Some(response) = response {
                         let _ = write_shared_response(&output, &response);
                     }
@@ -251,24 +423,6 @@ fn asynchronous_tool_call_id(request: &Value, session: &Session) -> Option<Strin
     (session.initialized && request.get("method").and_then(Value::as_str) == Some("tools/call"))
         .then(|| request.get("id").map(Value::to_string))
         .flatten()
-}
-
-fn try_reserve_tool_call(active: &AtomicUsize) -> bool {
-    let mut observed = active.load(Ordering::Acquire);
-    loop {
-        if observed >= MAX_IN_FLIGHT_TOOL_CALLS {
-            return false;
-        }
-        match active.compare_exchange_weak(
-            observed,
-            observed + 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return true,
-            Err(current) => observed = current,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -473,12 +627,15 @@ fn execute_tool_at_with_identity(
         "bridget_capabilities"
         | "bridget_delegate"
         | "bridget_task_status"
+        | "bridget_task_wait"
+        | "bridget_task_ack"
         | "bridget_task_cancel" => crate::delegation_mcp::execute(
             identity,
             name,
             &Value::Object(arguments.clone()),
             socket,
         ),
+        "bridget_request_wait" => execute_request_wait(identity, arguments, socket),
         "bridget_send" => execute_send(identity, arguments, socket),
         "bridget_events" => {
             let request = serde_json::from_value(Value::Object(arguments.clone()))
@@ -597,6 +754,63 @@ fn execute_tool_at_with_identity(
         }
         "guichet_request_status" => execute_guichet_request_status(instance_id, arguments, socket),
         _ => Err(ToolError::InvalidParams("outil inconnu".to_string())),
+    }
+}
+
+fn execute_request_wait(
+    identity: &crate::mcp_identity::ResolvedIdentity,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    if arguments
+        .keys()
+        .any(|key| !["request_id", "wait_timeout"].contains(&key.as_str()))
+    {
+        return Err(ToolError::InvalidParams("champ inconnu".into()));
+    }
+    let request_id = arguments
+        .get("request_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            ToolError::InvalidParams("request_id doit être une chaîne non vide".into())
+        })?;
+    let wait_timeout = crate::delegation_mcp::parse_wait_timeout(arguments)?;
+    if !crate::communication::client::daemon_supports_wait(socket) {
+        return Err(ToolError::Technical {
+            code: "native_delegation_refused",
+            message: "wait_unsupported".into(),
+        });
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait_timeout + 10);
+    // Connexion/authentification bornées ; le socket est enregistré avant le handshake.
+    let mut connection = crate::communication::client::registered_connection_until(
+        &identity.name,
+        &identity.instance_id,
+        socket,
+        std::time::Instant::now() + std::time::Duration::from_secs(3),
+    )?;
+    connection.set_deadline(deadline);
+    match connection.exchange(&WrapperToDaemon::RequestWait {
+        request_id: request_id.into(),
+        wait_timeout,
+    })? {
+        DaemonToWrapper::RequestWaitResult {
+            state,
+            timed_out_wait,
+            waited_secs,
+            reply,
+            reply_reason,
+        } => Ok(
+            json!({"version":1,"state":state,"timed_out_wait":timed_out_wait,"waited_secs":waited_secs,"reply":reply,"reply_reason":reply_reason}),
+        ),
+        DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
+            Err(ToolError::Technical {
+                code: "native_delegation_refused",
+                message: result["code"].as_str().unwrap_or("refused").into(),
+            })
+        }
+        other => unexpected_response(other),
     }
 }
 
@@ -1894,6 +2108,7 @@ fn initialize_result() -> Value {
 
 fn tools() -> Vec<Value> {
     let mut catalogue = vec![
+        json!({"name":"bridget_request_wait","description":"Attend la réponse de sa demande suivie sans la renvoyer ni modifier son état. Si l'hôte coupe l'appel, reprendre avec le même request_id. La réponse peut aussi arriver par le message normal.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1},"wait_timeout":{"type":"integer","minimum":1,"maximum":crate::delegation_mcp::WAIT_TIMEOUT_MAX_SECS,"default":crate::delegation_mcp::WAIT_TIMEOUT_DEFAULT_SECS}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({
             "name": "bridget_read_artifact",
             "description": "Lire par fragments bornés le manifeste exact ou un blob lié à une version publiée. Portée de l'agent connecté, sans rendu ni exécution. next_offset fournit le curseur suivant ; digest désigne le contenu complet.",
@@ -2251,6 +2466,1263 @@ mod tests {
 
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
+    #[test]
+    fn native151_ack_facade_schema_ferme_bornes_et_annotations() {
+        let catalogue = tools();
+        let ack = catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_task_ack")
+            .expect("outil ACK informatif publié");
+        assert_eq!(catalogue.len(), 27);
+        assert_eq!(crate::delegation_mcp::tools().len(), 6);
+        let schema = &ack["inputSchema"];
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"], json!(["task_ids"]));
+        assert_eq!(
+            schema["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["task_ids"]
+        );
+        assert_eq!(schema["properties"]["task_ids"]["type"], "array");
+        assert_eq!(schema["properties"]["task_ids"]["minItems"], 1);
+        assert_eq!(schema["properties"]["task_ids"]["maxItems"], 16);
+        assert_eq!(schema["properties"]["task_ids"]["uniqueItems"], true);
+        assert_eq!(
+            schema["properties"]["task_ids"]["items"],
+            json!({"type":"string","minLength":1})
+        );
+        assert_eq!(ack["annotations"]["readOnlyHint"], false);
+        assert_eq!(ack["annotations"]["destructiveHint"], false);
+        assert_eq!(ack["annotations"]["idempotentHint"], true);
+        let identity = crate::mcp_identity::ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for args in [
+            json!(null),
+            json!({}),
+            json!({"task_ids":null}),
+            json!({"task_ids":"task"}),
+            json!({"task_ids":[]}),
+            json!({"task_ids":["task","task"]}),
+            json!({"task_ids":(0..17).map(|index|format!("task-{index}")).collect::<Vec<_>>()}),
+            json!({"task_ids":[""]}),
+            json!({"task_ids":[1]}),
+            json!({"task_ids":[null]}),
+            json!({"task_ids":["task"],"parent":"forged"}),
+            json!({"task_ids":["task"],"wait_timeout":600}),
+        ] {
+            assert!(
+                matches!(
+                    crate::delegation_mcp::execute(
+                        &identity,
+                        "bridget_task_ack",
+                        &args,
+                        Path::new("/missing-ack151")
+                    ),
+                    Err(ToolError::InvalidParams(_))
+                ),
+                "arguments ACK refusés avant dial : {args}"
+            );
+        }
+        for count in [1, 16] {
+            let args = json!({"task_ids":(0..count).map(|index|format!("task-{index}")).collect::<Vec<_>>()});
+            assert!(
+                matches!(crate::delegation_mcp::execute(&identity,"bridget_task_ack",&args,Path::new("/missing-ack151")),
+                Err(ToolError::Technical {code:"native_delegation_refused",message}) if message=="wait_unsupported"),
+                "borne {count} valide, refus uniquement de compatibilité"
+            );
+        }
+    }
+
+    #[test]
+    fn native151_ack_facade_ancien_daemon_sans_trame_nouvelle() {
+        use std::os::fd::AsRawFd;
+        let socket = test_socket("ack-old");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let mut pollfd = libc::pollfd {
+                fd: listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let mut frames = Vec::<Value>::new();
+            if unsafe { libc::poll(&mut pollfd, 1, 2000) } <= 0 {
+                return frames;
+            }
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            frames.push(serde_json::from_str(&line).unwrap());
+            writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture"})).unwrap();
+            line.clear();
+            if reader.read_line(&mut line).unwrap() > 0 {
+                frames.push(serde_json::from_str(&line).unwrap());
+            }
+            if unsafe { libc::poll(&mut pollfd, 1, 100) } > 0 {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                line.clear();
+                BufReader::new(stream).read_line(&mut line).unwrap();
+                frames.push(serde_json::from_str(&line).unwrap());
+            }
+            frames
+        });
+        let start = Instant::now();
+        let result = execute_tool_at(
+            "owner",
+            "bridget_task_ack",
+            json!({"task_ids":["task"]}).as_object().unwrap(),
+            &socket,
+        );
+        let elapsed = start.elapsed();
+        let frames = server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+        eprintln!(
+            "ACK151 ancien : résultat={result:?}, durée={} ms, trames={frames:?}",
+            elapsed.as_millis()
+        );
+        assert!(
+            matches!(result,Err(ToolError::Technical {code:"native_delegation_refused",message}) if message=="wait_unsupported")
+        );
+        assert_eq!(
+            frames,
+            json!([{"type":"DaemonIdentityRequest"}])
+                .as_array()
+                .unwrap()
+                .clone()
+        );
+        assert!(elapsed < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn native151_ack_facade_trame_ordonne_refus_et_quota_nonwait() {
+        use std::os::fd::AsRawFd;
+        for (ids, result) in [
+            (
+                vec![
+                    "task-z".to_string(),
+                    "task-a".to_string(),
+                    "task-m".to_string(),
+                ],
+                json!({"version":1,"acknowledged":["task-z","task-m"],"already":["task-a"]}),
+            ),
+            (
+                vec!["active".to_string()],
+                json!({"status":"refused","code":"task_not_ready"}),
+            ),
+            (
+                (0..16)
+                    .map(|index| format!("task-{index}"))
+                    .collect::<Vec<_>>(),
+                json!({"version":1,"acknowledged":(0..16).map(|index|format!("task-{index}")).collect::<Vec<_>>(),"already":[]}),
+            ),
+        ] {
+            let socket = test_socket("ack-supported");
+            let listener = UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+            let returned = result.clone();
+            let backend = thread::spawn(move || {
+                let mut frames = Vec::<Value>::new();
+                for stage in 0..2 {
+                    let mut pollfd = libc::pollfd {
+                        fd: listener.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    if unsafe { libc::poll(&mut pollfd, 1, 2000) } <= 0 {
+                        return frames;
+                    }
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let first: Value = serde_json::from_str(&line).unwrap();
+                    // La preuve locale est synthétique ; ne conserver que le type de l'authentification.
+                    frames.push(if stage == 0 {
+                        first
+                    } else {
+                        json!({"type":first["type"]})
+                    });
+                    if stage == 0 {
+                        writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["wait_v1"]})).unwrap();
+                    } else {
+                        writeln!(
+                            stream,
+                            "{}",
+                            json!({"type":"Registered","agent_id":"owner","credential":null})
+                        )
+                        .unwrap();
+                        line.clear();
+                        reader.read_line(&mut line).unwrap();
+                        frames.push(serde_json::from_str(&line).unwrap());
+                        writeln!(
+                            stream,
+                            "{}",
+                            json!({"type":"NativeDelegationResult","result":returned})
+                        )
+                        .unwrap();
+                    }
+                }
+                frames
+            });
+            let input=[json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),json!({"jsonrpc":"2.0","method":"notifications/initialized"})]
+                    .into_iter().chain((2..=5).map(|id|json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["pending"]}}})))
+                    .chain([json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"bridget_task_ack","arguments":{"task_ids":ids}}})])
+                    .map(|frame|format!("{frame}\n")).collect::<String>();
+            let resolver = || {
+                Ok(crate::mcp_identity::ResolvedIdentity {
+                    name: "owner".into(),
+                    instance_id: "instance".into(),
+                    delegated_origin: None,
+                })
+            };
+            let completed = (Mutex::new(false), Condvar::new());
+            let execute =
+                |identity: &crate::mcp_identity::ResolvedIdentity, name: &str, args: &Value| {
+                    if name == "bridget_task_wait" {
+                        // Garder les quatre créneaux jusqu'à la réponse ACK, avec une borne en RED.
+                        drop(
+                            completed
+                                .1
+                                .wait_timeout_while(
+                                    completed.0.lock().unwrap(),
+                                    Duration::from_secs(3),
+                                    |finished| !*finished,
+                                )
+                                .unwrap(),
+                        );
+                        Ok(json!({"pending":["pending"]}))
+                    } else {
+                        TOOL_CALL_CONTEXT.with(|slot| {
+                            let context = slot.borrow().clone().unwrap();
+                            let registry = context.registry.lock().unwrap();
+                            assert_eq!(
+                                registry.calls.values().filter(|call| call.waiting).count(),
+                                4
+                            );
+                            assert!(
+                                !registry.calls[&context.id].waiting,
+                                "ACK doit rester ordinaire"
+                            );
+                        });
+                        let result = execute_tool_at_with_identity(
+                            identity,
+                            name,
+                            args.as_object().unwrap(),
+                            &socket,
+                        );
+                        *completed.0.lock().unwrap() = true;
+                        completed.1.notify_all();
+                        result
+                    }
+                };
+            let mut output = Vec::new();
+            serve_with(Cursor::new(input), &mut output, &resolver, &execute).unwrap();
+            let frames = backend.join().unwrap();
+            std::fs::remove_file(socket).unwrap();
+            let replies = String::from_utf8(output)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            let ack = replies
+                .iter()
+                .find(|reply| reply["id"] == 6)
+                .expect("réponse ACK ordinaire après EOF");
+            eprintln!("ACK151 quatre attentes en vol : trames={frames:?}, réponse={ack}");
+            assert_eq!(
+                frames,
+                vec![
+                    json!({"type":"DaemonIdentityRequest"}),
+                    json!({"type":"RegisterAuxiliary"}),
+                    json!({"type":"NativeDelegation","request":{"operation":"ack","task_ids":ids}})
+                ]
+            );
+            if result["status"] == "refused" {
+                assert_eq!(ack["result"]["code"], "native_delegation_refused");
+                assert!(
+                    ack["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("task_not_ready")
+                );
+            } else {
+                assert_eq!(ack["result"]["structuredContent"], result);
+            }
+        }
+    }
+
+    #[test]
+    fn native151_facade_request_wait_schema_et_bornes() {
+        let wait = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_request_wait")
+            .expect("outil d'attente de réponse présent");
+        assert_eq!(wait["inputSchema"]["required"], json!(["request_id"]));
+        assert_eq!(wait["inputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            wait["inputSchema"]["properties"]["wait_timeout"]["default"],
+            600
+        );
+        assert_eq!(wait["annotations"]["readOnlyHint"], true);
+        let identity = crate::mcp_identity::ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for value in [json!(-1), json!(0), json!(3601)] {
+            let args = json!({"request_id":"r","wait_timeout":value});
+            assert!(
+                matches!(execute_tool_at_with_identity(&identity, "bridget_request_wait", args.as_object().unwrap(), Path::new("/missing")), Err(ToolError::Technical { code: "native_delegation_refused", message }) if message == "wait_timeout_out_of_range")
+            );
+        }
+        for args in [
+            json!({"request_id":"r","sender":"other"}),
+            json!({"request_id":"r","wait_timeout":null}),
+            json!({"request_id":"r","wait_timeout":1.5}),
+            json!({"request_id":"r","wait_timeout":"1"}),
+            json!({"request_id":"r","wait_timeout":true}),
+            json!({"request_id":""}),
+        ] {
+            assert!(matches!(
+                execute_tool_at_with_identity(
+                    &identity,
+                    "bridget_request_wait",
+                    args.as_object().unwrap(),
+                    Path::new("/missing")
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn native151_facade_quatre_attentes_gardent_les_controles() {
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        ].into_iter().chain((2..=6).map(|id| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["t"],"wait_timeout":3600}}})))
+            .chain([json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"bridget_task_status","arguments":{"task_id":"t"}}}), json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"bridget_task_cancel","arguments":{"task_id":"t"}}})])
+            .map(|value| value.to_string()).collect::<Vec<_>>().join("\n");
+        let resolver = || {
+            Ok(crate::mcp_identity::ResolvedIdentity {
+                name: "owner".into(),
+                instance_id: "instance".into(),
+                delegated_origin: None,
+            })
+        };
+        let execute = |_: &crate::mcp_identity::ResolvedIdentity, name: &str, _: &Value| {
+            if name == "bridget_task_wait" {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(json!({"tool":name}))
+        };
+        let mut output = Vec::new();
+        serve_with(input.as_bytes(), &mut output, &resolver, &execute).unwrap();
+        let responses = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            responses.iter().any(
+                |response| response["id"] == 6 && response["result"]["code"] == "wait_capacity"
+            )
+        );
+        for id in [7, 8] {
+            assert!(responses.iter().any(|response| {
+                response["id"] == id
+                    && response["result"]["structuredContent"]["tool"]
+                        .as_str()
+                        .is_some()
+            }));
+        }
+    }
+
+    #[test]
+    fn native151_facade_annulation_avant_enregistrement() {
+        use std::io::Read;
+        let (input, mut writer) = UnixStream::pair().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (control_tx, control_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let (refused_tx, refused_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let resolver = || {
+                    Ok(crate::mcp_identity::ResolvedIdentity {
+                        name: "owner".into(),
+                        instance_id: "instance".into(),
+                        delegated_origin: None,
+                    })
+                };
+                let execute = |_: &crate::mcp_identity::ResolvedIdentity, name: &str, _: &Value| {
+                    if name != "bridget_task_wait" {
+                        control_tx.send(()).unwrap();
+                        return Ok(json!({"status":"ok"}));
+                    }
+                    started_tx.send(()).unwrap();
+                    release_rx.lock().unwrap().recv().unwrap();
+                    let (stream, mut peer) = UnixStream::pair().unwrap();
+                    peer.set_read_timeout(Some(Duration::from_millis(300)))
+                        .unwrap();
+                    let refused = check_tool_call(Some(&stream)).is_err();
+                    let mut byte = [0];
+                    let closed = matches!(peer.read(&mut byte), Ok(0));
+                    refused_tx.send((refused, closed)).unwrap();
+                    Ok(json!({"version":1}))
+                };
+                let mut output = Vec::new();
+                serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                output
+            });
+            for request in [
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["t"]}}}),
+            ] {
+                write_response(&mut writer, &request).unwrap();
+            }
+            started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            write_response(
+                &mut writer,
+                &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}),
+            )
+            .unwrap();
+            write_response(&mut writer, &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bridget_task_status","arguments":{"task_id":"t"}}})).unwrap();
+            control_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            release_tx.send(()).unwrap();
+            let observed = refused_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            drop(writer);
+            let output = String::from_utf8(server.join().unwrap()).unwrap();
+            assert_eq!(
+                observed,
+                (true, true),
+                "le socket tardif doit être refusé et fermé"
+            );
+            assert!(
+                !output
+                    .lines()
+                    .any(|line| serde_json::from_str::<Value>(line).unwrap()["id"] == 2)
+            );
+        });
+    }
+
+    #[test]
+    fn native151_facade_annulation_pendant() {
+        use std::io::Read;
+        let (input, mut writer) = UnixStream::pair().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let resolver = || {
+                    Ok(crate::mcp_identity::ResolvedIdentity {
+                        name: "owner".into(),
+                        instance_id: "instance".into(),
+                        delegated_origin: None,
+                    })
+                };
+                let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+                    let (mut stream, peer) = UnixStream::pair().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(300)))
+                        .unwrap();
+                    check_tool_call(Some(&stream))?;
+                    started_tx.send(peer).unwrap();
+                    let mut byte = [0];
+                    closed_tx
+                        .send(matches!(stream.read(&mut byte), Ok(0)))
+                        .unwrap();
+                    Ok(json!({"version":1}))
+                };
+                let mut output = Vec::new();
+                serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                output
+            });
+            for request in [
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["t"]}}}),
+            ] {
+                write_response(&mut writer, &request).unwrap();
+            }
+            let _peer = started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            write_response(
+                &mut writer,
+                &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}),
+            )
+            .unwrap();
+            let closed = closed_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            drop(writer);
+            let output = String::from_utf8(server.join().unwrap()).unwrap();
+            assert!(closed, "l'annulation doit interrompre l'échange bloquant");
+            assert!(
+                !output
+                    .lines()
+                    .any(|line| serde_json::from_str::<Value>(line).unwrap()["id"] == 2)
+            );
+        });
+    }
+
+    #[test]
+    fn native151_facade_eof_ferme_les_attentes() {
+        use std::io::Read;
+        let (input, mut writer) = UnixStream::pair().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let start = Instant::now();
+        thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let resolver = || {
+                    Ok(crate::mcp_identity::ResolvedIdentity {
+                        name: "owner".into(),
+                        instance_id: "instance".into(),
+                        delegated_origin: None,
+                    })
+                };
+                let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+                    let (mut stream, peer) = UnixStream::pair().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(300)))
+                        .unwrap();
+                    check_tool_call(Some(&stream))?;
+                    started_tx.send(peer).unwrap();
+                    let mut byte = [0];
+                    closed_tx
+                        .send(matches!(stream.read(&mut byte), Ok(0)))
+                        .unwrap();
+                    Ok(json!({"version":1}))
+                };
+                let mut output = Vec::new();
+                serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                output
+            });
+            for request in [
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            ] {
+                write_response(&mut writer, &request).unwrap();
+            }
+            for id in [2, 3] {
+                write_response(&mut writer, &json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["t"],"wait_timeout":3600}}})).unwrap();
+            }
+            let _peers = [
+                started_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+                started_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ];
+            drop(writer);
+            let output = String::from_utf8(server.join().unwrap()).unwrap();
+            assert!(start.elapsed() < Duration::from_secs(6));
+            assert!(closed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(closed_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+            assert!(!output.lines().any(|line| {
+                [json!(2), json!(3)].contains(&serde_json::from_str::<Value>(line).unwrap()["id"])
+            }));
+        });
+    }
+
+    #[test]
+    fn native151_facade_eof_attente_et_statut_bloque() {
+        let socket = test_socket("wait-status-eof");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let daemon = thread::spawn(move || {
+            {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(15)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::DaemonIdentityRequest
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::DaemonIdentityReport {
+                        host: "fixture".into(),
+                        db_path: "fixture".into(),
+                        instance_id: "fixture".into(),
+                        features: vec!["wait_v1".into()],
+                    },
+                );
+            }
+            let mut blocked = Vec::new();
+            for name in ["bridget_task_wait", "bridget_task_status"] {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(15)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(read_command(&mut reader),
+                    WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, .. }
+                        if agent_id == "owner" && instance_id == "instance"));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id: "owner".into(),
+                        credential: None,
+                    },
+                );
+                match (name, read_command(&mut reader)) {
+                    (
+                        "bridget_task_wait",
+                        WrapperToDaemon::NativeDelegation {
+                            request:
+                                bridget_transport::protocol::NativeDelegationRequest::Wait {
+                                    task_ids,
+                                    wait_timeout,
+                                },
+                        },
+                    ) => {
+                        assert_eq!(task_ids, ["task"]);
+                        assert_eq!(wait_timeout, Some(3600));
+                    }
+                    (
+                        "bridget_task_status",
+                        WrapperToDaemon::NativeDelegation {
+                            request:
+                                bridget_transport::protocol::NativeDelegationRequest::Status { task_id },
+                        },
+                    ) => assert_eq!(task_id, "task"),
+                    other => panic!("appel natif attendu avant EOF : {other:?}"),
+                }
+                blocked.push((name, reader));
+                ready_tx.send(name).unwrap();
+            }
+            blocked
+                .into_iter()
+                .map(|(name, mut reader)| {
+                    let mut line = String::new();
+                    (name, reader.read_line(&mut line).unwrap() == 0)
+                })
+                .collect::<Vec<_>>()
+        });
+        let (input, mut input_writer) = UnixStream::pair().unwrap();
+        let (elapsed, output) = thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let resolver = || {
+                    Ok(crate::mcp_identity::ResolvedIdentity {
+                        name: "owner".into(),
+                        instance_id: "instance".into(),
+                        delegated_origin: None,
+                    })
+                };
+                let execute = |identity: &crate::mcp_identity::ResolvedIdentity,
+                               name: &str,
+                               arguments: &Value| {
+                    execute_tool_at_with_identity(
+                        identity,
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket,
+                    )
+                };
+                let mut output = Vec::new();
+                serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                output
+            });
+            write_response(
+                &mut input_writer,
+                &json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+            )
+            .unwrap();
+            write_response(
+                &mut input_writer,
+                &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            )
+            .unwrap();
+            write_response(&mut input_writer, &json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"bridget_task_wait","arguments":{"task_ids":["task"],"wait_timeout":3600}}})).unwrap();
+            assert_eq!(
+                ready_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+                "bridget_task_wait"
+            );
+            write_response(
+                &mut input_writer,
+                &json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+                "params":{"name":"bridget_task_status","arguments":{"task_id":"task"}}}),
+            )
+            .unwrap();
+            assert_eq!(
+                ready_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+                "bridget_task_status"
+            );
+            let eof_at = Instant::now();
+            drop(input_writer);
+            let output = server.join().unwrap();
+            (eof_at.elapsed(), String::from_utf8(output).unwrap())
+        });
+        let closed = daemon.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+        eprintln!(
+            "MCP151 EOF mixte : Wait3600 et Status démarrés/authentifiés, budgets hérités ; façade terminée en {} ms ; fermetures backend={closed:?}",
+            elapsed.as_millis()
+        );
+        assert!(closed.iter().all(|(_, closed)| *closed));
+        assert!(
+            elapsed <= Duration::from_secs(6),
+            "FR038 : EOF mixte -> fin en {elapsed:?}, limite 6 s"
+        );
+        assert!(!output.lines().any(|line| {
+            [json!(2), json!(3)].contains(&serde_json::from_str::<Value>(line).unwrap()["id"])
+        }));
+    }
+
+    #[test]
+    fn native151_facade_eof_preserve_nonwait_rapide() {
+        let socket = test_socket("nonwait-fast-eof");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let backend = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, .. }
+                if agent_id == "owner" && instance_id == "instance")
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    agent_id: "owner".into(),
+                    credential: None,
+                },
+            );
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::NativeDelegation {
+                request: bridget_transport::protocol::NativeDelegationRequest::Status { task_id }
+            } if task_id == "task")
+            );
+            ready_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            // Latence synthétique du backend après EOF, loin du budget ordinaire de 10 s.
+            thread::sleep(Duration::from_millis(100));
+            let response = encode(&DaemonToWrapper::NativeDelegationResult {
+                result: json!({"task_id":"task","status":"working"}),
+            })
+            .unwrap();
+            writeln!(writer, "{response}")
+                .and_then(|_| writer.flush())
+                .is_ok()
+        });
+        let (input, mut input_writer) = UnixStream::pair().unwrap();
+        let (elapsed, output) = thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let resolver = || {
+                    Ok(crate::mcp_identity::ResolvedIdentity {
+                        name: "owner".into(),
+                        instance_id: "instance".into(),
+                        delegated_origin: None,
+                    })
+                };
+                let execute = |identity: &crate::mcp_identity::ResolvedIdentity,
+                               name: &str,
+                               arguments: &Value| {
+                    execute_tool_at_with_identity(
+                        identity,
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket,
+                    )
+                };
+                let mut output = Vec::new();
+                serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                output
+            });
+            for request in [
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_task_status","arguments":{"task_id":"task"}}}),
+            ] {
+                write_response(&mut input_writer, &request).unwrap();
+            }
+            ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let eof_at = Instant::now();
+            drop(input_writer);
+            release_tx.send(()).unwrap();
+            let output = server.join().unwrap();
+            (eof_at.elapsed(), String::from_utf8(output).unwrap())
+        });
+        let response_sent = backend.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+        eprintln!(
+            "FR034 EOF nonwait : Status authentifié/reçu avant EOF, latence backend100 ms, réponse transmise={response_sent}, sortie={} ms, stdout brut={output:?}",
+            elapsed.as_millis()
+        );
+        let responses = output
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let response = responses.iter().find(|response| response["id"] == 2);
+        assert!(
+            response_sent && response.is_some(),
+            "FR034 : réponse rapide perdue après EOF : {responses:?}"
+        );
+        assert_eq!(
+            response.unwrap()["result"]["structuredContent"]["status"],
+            "working"
+        );
+        assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn native151_facade_enregistrement_apres_eof_refuse() {
+        use std::io::Read;
+        for waiting in [true, false] {
+            let registry = Arc::new(Mutex::new(ToolCallRegistry::default()));
+            registry
+                .lock()
+                .unwrap()
+                .reserve("late".into(), waiting)
+                .unwrap();
+            let mut call = ToolCallGuard::new("late".into(), Arc::clone(&registry));
+            drop(CancelCallsOnExit(Arc::clone(&registry)));
+            let (stream, mut peer) = UnixStream::pair().unwrap();
+            peer.set_read_timeout(Some(Duration::from_millis(300)))
+                .unwrap();
+            assert!(check_tool_call(None).is_err());
+            assert!(check_tool_call(Some(&stream)).is_err());
+            assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+            assert!(call.finish());
+            assert!(TOOL_CALL_CONTEXT.with(|context| context.borrow().is_none()));
+            assert!(registry.lock().unwrap().calls.is_empty());
+        }
+    }
+
+    #[test]
+    fn native151_facade_notification_nonwait_preserve_connexion_auth_et_operation() {
+        for phase in ["connect", "auth", "operation"] {
+            let socket = test_socket("nonwait-cancel");
+            let listener = UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let release_rx = Arc::new(Mutex::new(release_rx));
+            let (control_tx, control_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let backend_ready = ready_tx.clone();
+            let backend_release = Arc::clone(&release_rx);
+            let backend = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::RegisterAuxiliary { .. }
+                ));
+                if phase == "auth" {
+                    backend_ready.send(()).unwrap();
+                    backend_release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                }
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id: "owner".into(),
+                        credential: None,
+                    },
+                );
+                assert!(
+                    matches!(read_command(&mut reader), WrapperToDaemon::NativeDelegation {
+                    request: bridget_transport::protocol::NativeDelegationRequest::Status { task_id }
+                } if task_id == "task")
+                );
+                if phase == "operation" {
+                    backend_ready.send(()).unwrap();
+                    backend_release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap();
+                }
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::NativeDelegationResult {
+                        result: json!({"status":"working"}),
+                    },
+                );
+            });
+            let (input, mut input_writer) = UnixStream::pair().unwrap();
+            let output = thread::scope(|scope| {
+                let server = scope.spawn(|| {
+                    let resolver = || {
+                        Ok(crate::mcp_identity::ResolvedIdentity {
+                            name: "owner".into(),
+                            instance_id: "instance".into(),
+                            delegated_origin: None,
+                        })
+                    };
+                    let execute = |identity: &crate::mcp_identity::ResolvedIdentity,
+                                   name: &str,
+                                   arguments: &Value| {
+                        if name == "bridget_who" {
+                            control_tx.send(()).unwrap();
+                            return Ok(json!({"control":true}));
+                        }
+                        if phase == "connect" {
+                            ready_tx.send(()).unwrap();
+                            release_rx
+                                .lock()
+                                .unwrap()
+                                .recv_timeout(Duration::from_secs(3))
+                                .unwrap();
+                        }
+                        let result = execute_tool_at_with_identity(
+                            identity,
+                            name,
+                            arguments.as_object().unwrap(),
+                            &socket,
+                        );
+                        done_tx.send(result.is_ok()).unwrap();
+                        result
+                    };
+                    let mut output = Vec::new();
+                    serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                    output
+                });
+                for request in [
+                    json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                    json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                    json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_task_status","arguments":{"task_id":"task"}}}),
+                ] {
+                    write_response(&mut input_writer, &request).unwrap();
+                }
+                ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                write_response(&mut input_writer, &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}})).unwrap();
+                write_response(&mut input_writer, &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"bridget_who","arguments":{}}})).unwrap();
+                control_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                release_tx.send(()).unwrap();
+                assert!(
+                    done_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+                    "notification nonwait doit préserver {phase}"
+                );
+                drop(input_writer);
+                server.join().unwrap()
+            });
+            backend.join().unwrap();
+            std::fs::remove_file(socket).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(
+                !output
+                    .lines()
+                    .any(|line| serde_json::from_str::<Value>(line).unwrap()["id"] == 2)
+            );
+            eprintln!(
+                "MCP151 notification nonwait pendant {phase}: opération réussie, réponse masquée"
+            );
+        }
+    }
+
+    #[test]
+    fn native151_facade_annulation_apres() {
+        use std::io::Read;
+        let (input, mut input_writer) = UnixStream::pair().unwrap();
+        let (output, output_reader) = UnixStream::pair().unwrap();
+        output_reader
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut output_reader = BufReader::new(output_reader);
+        let (peer_tx, peer_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let resolver = || {
+                    Ok(crate::mcp_identity::ResolvedIdentity {
+                        name: "owner".into(),
+                        instance_id: "instance".into(),
+                        delegated_origin: None,
+                    })
+                };
+                let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+                    let (stream, peer) = UnixStream::pair().unwrap();
+                    peer.set_read_timeout(Some(Duration::from_millis(300)))
+                        .unwrap();
+                    check_tool_call(Some(&stream))?;
+                    peer_tx.send(peer).unwrap();
+                    Ok(json!({"state":"result_available"}))
+                };
+                serve_with(BufReader::new(input), output, &resolver, &execute).unwrap();
+            });
+            for request in [
+                json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["t"]}}}),
+            ] {
+                write_response(&mut input_writer, &request).unwrap();
+            }
+            let mut line = String::new();
+            output_reader.read_line(&mut line).unwrap();
+            line.clear();
+            output_reader.read_line(&mut line).unwrap();
+            let completed: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(completed["id"], 2);
+            assert_eq!(
+                completed["result"]["structuredContent"]["state"],
+                "result_available"
+            );
+            let mut peer = peer_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(
+                peer.read(&mut [0]).unwrap(),
+                0,
+                "le socket d'un appel fini n'est plus retenu"
+            );
+            write_response(
+                &mut input_writer,
+                &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}),
+            )
+            .unwrap();
+            write_response(
+                &mut input_writer,
+                &json!({"jsonrpc":"2.0","id":3,"method":"ping"}),
+            )
+            .unwrap();
+            line.clear();
+            output_reader.read_line(&mut line).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], 3);
+            drop(input_writer);
+            server.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn native151_facade_attentes_transmettent_et_rendent_les_contrats() {
+        for name in ["bridget_task_wait", "bridget_request_wait"] {
+            let socket = test_socket("wait-contract");
+            let listener = UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+            let server = thread::spawn(move || {
+                {
+                    let (stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut writer = BufWriter::new(stream);
+                    assert!(matches!(
+                        read_command(&mut reader),
+                        WrapperToDaemon::DaemonIdentityRequest
+                    ));
+                    write_command(
+                        &mut writer,
+                        DaemonToWrapper::DaemonIdentityReport {
+                            host: "fixture".into(),
+                            db_path: "fixture".into(),
+                            instance_id: "fixture".into(),
+                            features: vec!["wait_v1".into()],
+                        },
+                    );
+                }
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(
+                    matches!(read_command(&mut reader), WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, .. } if agent_id == "owner" && instance_id == "instance")
+                );
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id: "owner".into(),
+                        credential: None,
+                    },
+                );
+                match (name, read_command(&mut reader)) {
+                    (
+                        "bridget_task_wait",
+                        WrapperToDaemon::NativeDelegation {
+                            request:
+                                bridget_transport::protocol::NativeDelegationRequest::Wait {
+                                    task_ids,
+                                    wait_timeout,
+                                },
+                        },
+                    ) => {
+                        assert_eq!(task_ids, ["task"]);
+                        assert_eq!(wait_timeout, Some(600));
+                        write_command(
+                            &mut writer,
+                            DaemonToWrapper::NativeDelegationResult {
+                                result: json!({"version":1,"timed_out":false,"waited_secs":0,"ready":[{"task_id":"task","work_state":"result_available","summary":"résultat"}],"pending":[]}),
+                            },
+                        );
+                    }
+                    (
+                        "bridget_request_wait",
+                        WrapperToDaemon::RequestWait {
+                            request_id,
+                            wait_timeout,
+                        },
+                    ) => {
+                        assert_eq!(request_id, "request");
+                        assert_eq!(wait_timeout, 600);
+                        write_command(
+                            &mut writer,
+                            DaemonToWrapper::RequestWaitResult {
+                                state: "answered".into(),
+                                timed_out_wait: false,
+                                waited_secs: 0,
+                                reply: Some(
+                                    json!({"id":"reply","from":"child","summary":"réponse","summary_truncated":false}),
+                                ),
+                                reply_reason: None,
+                            },
+                        );
+                    }
+                    other => panic!("trame d'attente attendue : {other:?}"),
+                }
+            });
+            let identity = crate::mcp_identity::ResolvedIdentity {
+                name: "owner".into(),
+                instance_id: "instance".into(),
+                delegated_origin: None,
+            };
+            let args = match name {
+                "bridget_task_wait" => json!({"task_ids":["task"]}),
+                _ => json!({"request_id":"request"}),
+            };
+            let result =
+                execute_tool_at_with_identity(&identity, name, args.as_object().unwrap(), &socket)
+                    .unwrap();
+            server.join().unwrap();
+            std::fs::remove_file(socket).unwrap();
+            assert_eq!(result["version"], 1);
+            match name {
+                "bridget_task_wait" => assert_eq!(result["ready"][0]["summary"], "résultat"),
+                _ => {
+                    assert_eq!(result["state"], "answered");
+                    assert_eq!(result["reply"]["summary"], "réponse");
+                    assert_eq!(result["reply_reason"], Value::Null);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native151_facade_annulation_sonde_et_authentification_reelles() {
+        for during_probe in [true, false] {
+            let socket = test_socket("wait-cancel-connection");
+            let listener = UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (closed_tx, closed_rx) = mpsc::channel();
+            let daemon = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::DaemonIdentityRequest
+                ));
+                let mut reader = if during_probe {
+                    reader
+                } else {
+                    let mut writer = BufWriter::new(stream);
+                    write_command(
+                        &mut writer,
+                        DaemonToWrapper::DaemonIdentityReport {
+                            host: "fixture".into(),
+                            db_path: "fixture".into(),
+                            instance_id: "fixture".into(),
+                            features: vec!["wait_v1".into()],
+                        },
+                    );
+                    let (stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream);
+                    assert!(matches!(
+                        read_command(&mut reader),
+                        WrapperToDaemon::RegisterAuxiliary { .. }
+                    ));
+                    reader
+                };
+                ready_tx.send(()).unwrap();
+                let mut line = String::new();
+                closed_tx
+                    .send(reader.read_line(&mut line).unwrap() == 0)
+                    .unwrap();
+            });
+            let (input, mut writer) = UnixStream::pair().unwrap();
+            thread::scope(|scope| {
+                let server = scope.spawn(|| {
+                    let resolver = || {
+                        Ok(crate::mcp_identity::ResolvedIdentity {
+                            name: "owner".into(),
+                            instance_id: "instance".into(),
+                            delegated_origin: None,
+                        })
+                    };
+                    let execute = |identity: &crate::mcp_identity::ResolvedIdentity,
+                                   name: &str,
+                                   arguments: &Value| {
+                        execute_tool_at_with_identity(
+                            identity,
+                            name,
+                            arguments.as_object().unwrap(),
+                            &socket,
+                        )
+                    };
+                    let mut output = Vec::new();
+                    serve_with(BufReader::new(input), &mut output, &resolver, &execute).unwrap();
+                    output
+                });
+                for request in [
+                    json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+                    json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                    json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_task_wait","arguments":{"task_ids":["t"],"wait_timeout":3600}}}),
+                ] {
+                    write_response(&mut writer, &request).unwrap();
+                }
+                ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                write_response(&mut writer, &json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}})).unwrap();
+                let closed = closed_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                drop(writer);
+                let output = String::from_utf8(server.join().unwrap()).unwrap();
+                assert!(closed);
+                assert!(
+                    !output
+                        .lines()
+                        .any(|line| serde_json::from_str::<Value>(line).unwrap()["id"] == 2)
+                );
+            });
+            daemon.join().unwrap();
+            std::fs::remove_file(socket).unwrap();
+        }
+    }
+
     struct EmptyProcessTree;
 
     impl crate::mcp_identity::ProcessTree for EmptyProcessTree {
@@ -2320,7 +3792,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    24
+                    27
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -2605,6 +4077,9 @@ mod tests {
             "bridget_capabilities",
             "bridget_delegate",
             "bridget_task_status",
+            "bridget_task_wait",
+            "bridget_task_ack",
+            "bridget_request_wait",
             "bridget_task_cancel",
             "bridget_cancel",
             "bridget_control_status",
@@ -4814,12 +6289,12 @@ mod tests {
 
     #[test]
     fn limite_d_appels_simultanes_refuse_avant_toute_connexion() {
-        let active = AtomicUsize::new(0);
-        for _ in 0..MAX_IN_FLIGHT_TOOL_CALLS {
-            assert!(try_reserve_tool_call(&active));
+        let mut registry = ToolCallRegistry::default();
+        for id in 0..MAX_IN_FLIGHT_TOOL_CALLS {
+            assert!(registry.reserve(id.to_string(), false).is_ok());
         }
-        assert!(!try_reserve_tool_call(&active));
-        assert_eq!(active.load(Ordering::Acquire), MAX_IN_FLIGHT_TOOL_CALLS);
+        assert_eq!(registry.reserve("overflow".into(), false), Err("busy"));
+        assert_eq!(registry.calls.len(), MAX_IN_FLIGHT_TOOL_CALLS);
     }
 
     #[test]

@@ -1,0 +1,10 @@
+{
+  "idle_seconds": 15.011,
+  "root": "/tmp/b.NZpd",
+  "response": {
+    "type": "DaemonIdentityReport",
+    "host": "idle151-isolated",
+    "db_path": "/tmp/b.NZpd/state/bridget.db",
+    "instance_id": "06ba0287-ada9-4c7a-b88a-6ce4f6e198a9"
+  }
+}
