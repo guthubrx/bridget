@@ -5,15 +5,23 @@
 mod support;
 
 use bridget_core::BridgetMessage;
-use bridget_transport::protocol::{NativeDelegationRequest, SpawnPosture};
+use bridget_daemon::desired_state::{DesiredStateStore, path_for_daemon_db};
+use bridget_daemon::fleet::{FleetConfig, FleetSupervisor, SpawnOrder, SpawnSubmission};
+use bridget_daemon::idempotency::IdempotencyStore;
+use bridget_daemon::managed_process::{
+    BootstrapReady, ManagedMarker, ManagedMarkerStore, group_exists, process_birth, signal_group,
+    wait_group_gone,
+};
+use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, SpawnPosture};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::fs;
 use std::os::fd::FromRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PARENT: &str = "14800000-0000-4000-8000-000000000001";
 const INSTANCE: &str = "native148-parent-instance";
@@ -23,6 +31,34 @@ const ANSWER: &str = "fixture-glm5.3-answer-148";
 // Ses watchdogs et nettoyages SIGKILL ne sont pas utilisés par cette recette.
 struct OwnedChild(Child);
 impl OwnedChild {
+    fn crash(&mut self) {
+        assert!(self.0.try_wait().unwrap().is_none());
+        let observed = Command::new("/bin/ps")
+            .args([
+                "-ww",
+                "-p",
+                &self.0.id().to_string(),
+                "-o",
+                "ppid=",
+                "-o",
+                "command=",
+            ])
+            .output()
+            .unwrap();
+        let command = String::from_utf8_lossy(&observed.stdout);
+        assert_eq!(
+            command
+                .split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u32>().ok()),
+            Some(std::process::id())
+        );
+        assert!(command.contains(env!("CARGO_BIN_EXE_bridget")));
+        assert!(!command.to_lowercase().contains("firefox"));
+        // SIGABRT interrompt le daemon sans son arrêt propre, sans SIGKILL.
+        assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGABRT) }, 0);
+        assert!(!self.wait(Duration::from_secs(10)).success());
+    }
     fn wait(&mut self, budget: Duration) -> ExitStatus {
         let deadline = Instant::now() + budget;
         loop {
@@ -91,12 +127,17 @@ struct Fixture {
     daemon: Option<OwnedChild>,
     starts: usize,
     replies: Vec<BridgetMessage>,
+    native_groups: Vec<ManagedMarker>,
+    native_recovery152: bool,
 }
 impl Fixture {
     fn new() -> Self {
         Self::new_with_notify_timeout(2)
     }
     fn new_with_notify_timeout(notify_timeout_secs: u64) -> Self {
+        Self::new_with_provider(notify_timeout_secs, false)
+    }
+    fn new_with_provider(notify_timeout_secs: u64, native_recovery152: bool) -> Self {
         let root = fs::canonicalize("/tmp").unwrap().join(format!(
             "n148-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..10]
@@ -104,18 +145,46 @@ impl Fixture {
         for relative in ["", "state", "provider", "tmp"] {
             support::private_dir(&root.join(relative)).unwrap();
         }
-        support::private_write(
-            &root.join("provider.py"),
-            include_bytes!("fixtures/native_delegation_148.py"),
-        )
-        .unwrap();
+        let provider = root.join("provider.py");
+        let (command, args) = if native_recovery152 {
+            let script = provider_recovery152();
+            support::private_write(&provider, &script).unwrap();
+            for relative in ["bin", ".git", "provider/.claude"] {
+                support::private_dir(&root.join(relative)).unwrap();
+            }
+            support::private_write(
+                &root.join("provider/.claude/settings.json"),
+                serde_json::to_vec(&json!({"permissions":{
+                    "defaultMode":"plan",
+                    "deny":["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"]
+                }}))
+                .unwrap(),
+            )
+            .unwrap();
+            let cli = compile_provider152(&root, &script);
+            (cli.to_string_lossy().into_owned(), json!([]))
+        } else {
+            support::private_write(
+                &provider,
+                include_bytes!("fixtures/native_delegation_148.py"),
+            )
+            .unwrap();
+            (
+                "/usr/bin/python3".to_string(),
+                json!([provider, root.join("evidence.jsonl")]),
+            )
+        };
         support::private_write(&root.join("evidence.jsonl"), []).unwrap();
-        let registry = json!({"agents":{"fake-glm":{
-            "command":"/usr/bin/python3", "args":[root.join("provider.py"),root.join("evidence.jsonl")],
+        let mut registry = json!({"agents":{"fake-glm":{
+            "command":command, "args":args,
             "protocol":"claude_stream_json", "permissions":"deny", "queue_capacity":4,"notify_timeout_secs":notify_timeout_secs,
             "forbidden_env":["ANTHROPIC_API_KEY","OPENAI_API_KEY","T3CODE_HOME","BRIDGET_T3_MCP_ENDPOINT","BRIDGET_T3_MCP_AUTHORIZATION"],"pass_env":[],
             "capabilities":{"execution_paths":["claude_stream_json"],"models":{"glm5.3":{"efforts":["high"]}}}
         }}});
+        if native_recovery152 {
+            registry["agents"]["fake-glm"]["claude_config_dir"] =
+                json!(root.join("provider/.claude"));
+        }
         support::private_write(
             &root.join("state/agents.json"),
             serde_json::to_vec(&registry).unwrap(),
@@ -126,6 +195,8 @@ impl Fixture {
             daemon: None,
             starts: 0,
             replies: Vec::new(),
+            native_groups: Vec::new(),
+            native_recovery152,
         };
         fixture.start();
         fixture
@@ -135,8 +206,18 @@ impl Fixture {
         self.starts += 1;
         let log = self.root.join(format!("daemon-{}.log", self.starts));
         support::private_write(&log, []).unwrap();
+        let mut command = support::isolated_command(&self.root);
+        if self.native_recovery152 {
+            command.env(
+                "PATH",
+                format!(
+                    "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+                    self.root.join("bin").display()
+                ),
+            );
+        }
         self.daemon = Some(OwnedChild(
-            support::isolated_command(&self.root)
+            command
                 .arg("daemon")
                 .env("TMPDIR", self.root.join("tmp"))
                 .env("RUST_LOG", "info")
@@ -168,6 +249,60 @@ impl Fixture {
     }
     fn stop(&mut self) {
         drop(self.daemon.take());
+    }
+    fn crash(&mut self) {
+        self.daemon.as_mut().unwrap().crash();
+        drop(self.daemon.take());
+    }
+    fn marker_store(&self) -> ManagedMarkerStore {
+        ManagedMarkerStore::at_directory(self.root.join("state/managed"))
+    }
+    fn remember_native_group(&mut self, name: &str) -> ManagedMarker {
+        let marker = self.marker_store().load(name).unwrap();
+        self.native_groups.push(marker.clone());
+        marker
+    }
+    fn await_native_group_gone(pgid: u32) {
+        let gone =
+            wait_group_gone(pgid, Duration::from_secs(6), Duration::from_millis(20)).unwrap();
+        if !thread::panicking() {
+            assert!(gone, "groupe natif isolé encore présent : {pgid}");
+        }
+    }
+    fn stop_native_groups(&mut self) {
+        for marker in &self.native_groups {
+            // Le marqueur était lu pendant que cette fixture possédait l'enfant.
+            // Une naissance différente interdit tout signal au PID réutilisé.
+            if !group_exists(marker.pgid).unwrap_or(false) {
+                continue;
+            }
+            let Some(birth) = process_birth(marker.pgid).ok() else {
+                // Le leader peut finir avant ses descendants. Ne pas leur
+                // envoyer de signal sans naissance attestée ; attendre leur EOF.
+                Self::await_native_group_gone(marker.pgid);
+                continue;
+            };
+            if birth != marker.birth {
+                continue;
+            }
+            let observed = Command::new("/bin/ps")
+                .args(["-ww", "-p", &marker.pgid.to_string(), "-o", "command="])
+                .output()
+                .unwrap();
+            let command = String::from_utf8_lossy(&observed.stdout);
+            match process_birth(marker.pgid).ok() {
+                Some(birth) if birth == marker.birth => {}
+                None => {
+                    Self::await_native_group_gone(marker.pgid);
+                    continue;
+                }
+                Some(_) => continue,
+            }
+            assert!(command.contains(env!("CARGO_BIN_EXE_bridget")));
+            assert!(!command.to_lowercase().contains("firefox"));
+            signal_group(marker.pgid, libc::SIGTERM).unwrap();
+            Self::await_native_group_gone(marker.pgid);
+        }
     }
     fn human_grant(&self) {
         let (mut master, mut slave) = (-1, -1);
@@ -279,6 +414,7 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.stop();
+        self.stop_native_groups();
         if !thread::panicking() {
             fs::remove_dir_all(&self.root).unwrap();
         }
@@ -295,6 +431,509 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
         posture: Some(SpawnPosture::Discovery),
         reply_timeout: None,
     }
+}
+
+// T004/T048 : adapter la fixture fermée sur disque, sans nouveau hook du daemon.
+// Le MCP est lancé par le fournisseur : il porte la vraie identité de l'enfant.
+fn compile_provider152(root: &Path, script: &str) -> PathBuf {
+    // Montage149 : CLI directe du PATH, profil privé et ancêtres bornés par .git.
+    // Le texte Python est incorporé : la SHA du CLI capturé couvre le programme.
+    let program = format!(
+        "__file__ = {}\n{script}",
+        serde_json::to_string(&root.join("provider.py")).unwrap()
+    );
+    let embedded = program
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("\\x{byte:02x}"))
+        .collect::<String>();
+    let source = root.join("provider.c");
+    support::private_write(
+        &source,
+        format!(
+            r#"#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+static const char program[] = "{embedded}";
+int main(int argc, char **argv) {{
+    char **args = calloc((size_t)argc + 3, sizeof(*args));
+    if (!args) {{ perror("calloc"); return 127; }}
+    args[0] = "/usr/bin/python3";
+    args[1] = "-c";
+    args[2] = (char *)program;
+    for (int index = 1; index < argc; ++index) args[index + 2] = argv[index];
+    execv(args[0], args);
+    perror("execv fixture152");
+    free(args);
+    return 127;
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let cli = root.join("bin/claude");
+    let compiled = Command::new("/usr/bin/cc")
+        .args(["-std=c99", "-Wall", "-Wextra", "-Werror", "-o"])
+        .arg(&cli)
+        .arg(&source)
+        .env_clear()
+        .env("HOME", root.join("provider"))
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("TMPDIR", root.join("tmp"))
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "CLI fermée152 non compilée : {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+    cli
+}
+
+fn provider_recovery152() -> String {
+    let started = r#"record("started", provider="closed_fixture", model=model, effort=effort, t3_present=False)"#;
+    let identity = r#"record("started", provider="closed_fixture", model=model, effort=effort, t3_present=False,
+       instance_id=os.environ.get("BRIDGET_AGENT_INSTANCE_ID"),
+       agent_id=os.environ.get("BRIDGET_AGENT_ID"),
+       argv=sys.argv[1:],
+       native_bootstrap=json.loads(os.environ.get("BRIDGET_NATIVE_MISSION_BOOTSTRAP", "null")))"#;
+    let resumed_init = r#"initialized = "--resume" in args
+if initialized:
+    emit({"type": "system", "subtype": "init", "model": model,
+          "session_id": args[args.index("--resume") + 1]})
+for line in sys.stdin:"#;
+    let permissions = r#"mode = args[args.index("--permission-mode") + 1]
+assert mode == "plan"
+denied = {"Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"}
+profile = os.environ["CLAUDE_CONFIG_DIR"]
+with open(os.path.join(profile, "settings.json"), encoding="utf-8") as settings_file:
+    permissions = json.load(settings_file)["permissions"]
+assert permissions["defaultMode"] == mode
+assert denied.issubset(set(permissions["deny"]))
+tools = ["Read", "Glob", "Grep"]
+if "--tools" in args:
+    tools = [tool for tool in args[args.index("--tools") + 1].split(",") if tool]
+assert set(tools).issubset({"Read", "Glob", "Grep"})
+if "--restricted" not in args:
+    assert args[args.index("--permission-prompts") + 1] == "none"
+    assert denied.issubset(set(args[args.index("--disallowedTools") + 1].split(",")))"#;
+    let observed_init = r#"def emit(frame):
+    if frame.get("type") == "system" and frame.get("subtype") == "init":
+        frame.update(permissionMode=mode, tools=tools, cwd=os.getcwd())
+        record("init152", instance_id=os.environ.get("BRIDGET_AGENT_INSTANCE_ID"),
+               frame=frame, config_dir=profile, argv=sys.argv[1:])
+    print(json.dumps(frame), flush=True)"#;
+    let nested = r#"    if "NESTED_152" in content and os.path.exists(os.path.join(os.path.dirname(evidence), "delegate-152")):
+        import subprocess
+        import select
+        mcp = subprocess.Popen([BRIDGET152, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, text=True)
+        def rpc152(frame):
+            mcp.stdin.write(json.dumps(frame) + "\n")
+            mcp.stdin.flush()
+            if not select.select([mcp.stdout], [], [], 8)[0]:
+                raise TimeoutError("MCP natif152 sans réponse")
+            return json.loads(mcp.stdout.readline())
+        initialized152 = rpc152({"jsonrpc":"2.0", "id":0, "method":"initialize", "params":{}})
+        assert "protocolVersion" in initialized152["result"]
+        mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n")
+        mcp.stdin.flush()
+        delegated152 = rpc152({"jsonrpc":"2.0", "id":1, "method":"tools/call",
+                              "params":{"name":"bridget_delegate", "arguments":{
+                                  "request_id":"native152-grandchild", "agent_type":"fake-glm",
+                                  "model":"glm5.3", "effort":"high", "task":"WAIT_CANCEL_148",
+                                  "cwd":os.path.dirname(evidence), "posture":"discovery",
+                                  "reply_timeout":60}}})
+        record("nested152", instance_id=os.environ.get("BRIDGET_AGENT_INSTANCE_ID"),
+               response=delegated152)
+        mcp.stdin.close()
+        mcp.wait(timeout=8)
+    if blocked:
+        record("blocked152", instance_id=os.environ.get("BRIDGET_AGENT_INSTANCE_ID"))
+        continue"#;
+    let provider = include_str!("fixtures/native_delegation_148.py")
+        .replacen("args = sys.argv[2:]", "args = sys.argv[1:]", 1)
+        .replacen(
+            "evidence = sys.argv[1]",
+            "evidence = os.path.join(os.path.dirname(os.path.abspath(__file__)), \"evidence.jsonl\")",
+            1,
+        )
+        .replacen(
+            "assert \"--restricted\" in args\nassert args[args.index(\"--permission-mode\") + 1] == \"plan\"",
+            permissions,
+            1,
+        )
+        .replacen(
+            "def emit(frame):\n    print(json.dumps(frame), flush=True)",
+            observed_init,
+            1,
+        )
+        .replacen(started, identity, 1)
+        .replacen("initialized = False\nfor line in sys.stdin:", resumed_init, 1)
+        .replacen("    if blocked:\n        continue", nested, 1);
+    assert!(provider.contains("native_bootstrap="));
+    assert!(provider.contains("delegated152 = rpc152"));
+    provider.replacen(
+        "#!/usr/bin/python3\n",
+        &format!(
+            "#!/usr/bin/python3\nBRIDGET152 = {}\n",
+            serde_json::to_string(env!("CARGO_BIN_EXE_bridget")).unwrap()
+        ),
+        1,
+    )
+}
+
+fn native_task152(f: &Fixture, id: &str) -> Value {
+    let db = rusqlite::Connection::open_with_flags(
+        f.root.join("state/bridget.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let payload: String = db
+        .query_row(
+            "SELECT payload FROM native_delegations WHERE task_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    serde_json::from_str(&payload).unwrap()
+}
+
+fn desired_store152(f: &Fixture) -> DesiredStateStore {
+    DesiredStateStore::at_path(path_for_daemon_db(&f.root.join("state/bridget.db")))
+}
+
+fn evidence152(f: &Fixture) -> Vec<Value> {
+    let bytes = fs::read(f.root.join("evidence.jsonl")).unwrap();
+    // Une écriture concurrente peut laisser uniquement la dernière ligne incomplète.
+    bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .filter(|line| line.last() == Some(&b'\n'))
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect()
+}
+
+fn wait_evidence152(f: &Fixture, event: &str, instance: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let observations = evidence152(f);
+        if let Some(found) = observations
+            .iter()
+            .find(|value| value["event"] == event && value["instance_id"] == instance)
+        {
+            return found.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{event} absent pour {instance} : {}",
+            f.root.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_native_ready152(f: &Fixture, id: &str, previous_instance: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        // working survit au crash. Relire jusqu'à la génération du fournisseur
+        // réellement lancé, plutôt que figer une instance encore ancienne ou synthétique.
+        let task = native_task152(f, id);
+        assert_ne!(task["state"], "failed", "reprise native refusée : {task}");
+        if task["state"] == "working"
+            && let Some(instance) = task["child_instance"].as_str()
+            && instance != previous_instance
+            && evidence152(f).iter().any(|event| {
+                event["event"] == "started"
+                    && event["instance_id"] == instance
+                    && event["agent_id"] == task["child"]
+            })
+        {
+            return task;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "nouvelle génération native non prête après {previous_instance} : {task} ; {}",
+            f.root.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn assert_native_identity152(f: &Fixture, id: &str, mission: &str) -> String {
+    let task = native_task152(f, id);
+    assert_eq!(task["mission"], mission);
+    let child = task["child"].as_str().unwrap();
+    let instance = task["child_instance"].as_str().unwrap();
+    let desired = desired_store152(f).load().unwrap();
+    let entry = desired.equipiers.get(child).unwrap();
+    let desired_link = entry.agent_link.as_ref().expect("lien natif conservé");
+    assert_eq!(desired_link.role, "native_delegate");
+    assert_eq!(desired_link.delegation_id.as_deref(), Some(id));
+    let store = IdempotencyStore::open(&f.root.join("state/bridget.db")).unwrap();
+    let link = store
+        .agent_link_by_id(&desired_link.link_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(link.child_instance_id, instance);
+    assert_eq!(link.role, "native_delegate");
+    assert_eq!(link.delegation_id.as_deref(), Some(id));
+    let started = wait_evidence152(f, "started", instance);
+    assert_eq!(started["native_bootstrap"]["instance_id"], instance);
+    assert_eq!(started["native_bootstrap"]["mission_id"], mission);
+    instance.to_string()
+}
+
+fn working_native152(nested: bool) -> (Fixture, support::Client, Value) {
+    let mut f = Fixture::new_with_provider(15, true);
+    let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
+    f.human_grant();
+    let task = if nested {
+        "WAIT_CANCEL_148 NESTED_152"
+    } else {
+        "WAIT_CANCEL_148"
+    };
+    let created = f.request(&mut parent, delegate(&f.root.clone(), "recovery-152", task));
+    let id = created["task_id"].as_str().expect("mission admise");
+    f.status_until(&mut parent, id, "working");
+    let saved = native_task152(&f, id);
+    f.remember_native_group(saved["child"].as_str().unwrap());
+    assert_native_identity152(&f, id, created["message_id"].as_str().unwrap());
+    // Le prompt initial a franchi le contrôle du fichier avant le crash.
+    wait_evidence152(&f, "blocked152", saved["child_instance"].as_str().unwrap());
+    (f, parent, created)
+}
+
+#[test]
+fn native152_rouge_panne_mission_working() {
+    let (mut f, mut parent, created) = working_native152(true);
+    let id = created["task_id"].as_str().unwrap();
+    let mission = created["message_id"].as_str().unwrap();
+    let original = native_task152(&f, id);
+    let mut previous_instance = original["child_instance"].as_str().unwrap().to_string();
+    let mut grandchild_before = None::<Value>;
+    support::private_write(&f.root.join("delegate-152"), []).unwrap();
+    for restart in 1..=2 {
+        drop(parent);
+        f.crash();
+        // Chaque démarrage relit les magasins réels du même daemon.
+        f.start();
+        parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
+        let resumed = f.status_until(&mut parent, id, "working");
+        assert_eq!(resumed["task_id"], id);
+        assert_eq!(resumed["message_id"], mission);
+        let task = wait_native_ready152(&f, id, &previous_instance);
+        f.remember_native_group(task["child"].as_str().unwrap());
+        assert_eq!(task["restart_resumes"], restart);
+        assert_eq!(task["root_owner_agent_id"], original["root_owner_agent_id"]);
+        assert_eq!(
+            task["origin_owner_instance"],
+            original["origin_owner_instance"]
+        );
+        assert_eq!(task["parent_task_id"], original["parent_task_id"]);
+        let instance = assert_native_identity152(&f, id, mission);
+        assert_ne!(
+            instance, previous_instance,
+            "nouvelle génération native requise"
+        );
+        let nested = wait_evidence152(&f, "nested152", &instance);
+        assert_ne!(nested["response"]["result"]["isError"], true, "{nested}");
+        let result = &nested["response"]["result"]["structuredContent"];
+        let child_id = result["task_id"]
+            .as_str()
+            .expect("descendant admis après reprise");
+        if let Some(previous) = &grandchild_before {
+            assert_eq!(child_id, previous["task_id"].as_str().unwrap());
+        }
+        let previous_child_instance = grandchild_before
+            .as_ref()
+            .and_then(|child| child["child_instance"].as_str())
+            .unwrap_or("");
+        let child = wait_native_ready152(&f, child_id, previous_child_instance);
+        assert_eq!(child["parent_task_id"], id);
+        assert_eq!(child["root_owner_agent_id"], PARENT);
+        assert_eq!(child["restart_resumes"], restart - 1);
+        if let Some(previous) = &grandchild_before {
+            assert_eq!(child["mission"], previous["mission"]);
+            assert_eq!(
+                child["origin_owner_instance"],
+                previous["origin_owner_instance"]
+            );
+        } else {
+            grandchild_before = Some(child.clone());
+        }
+        f.remember_native_group(child["child"].as_str().unwrap());
+        assert_native_identity152(&f, child_id, child["mission"].as_str().unwrap());
+        previous_instance = instance;
+    }
+}
+
+enum NativeBoundary152 {
+    FleetAhead,
+    LinkMissing,
+    MarkerMismatch,
+    MarkerReconciled,
+}
+
+fn native_identity_boundary152(boundary: NativeBoundary152) {
+    let (mut f, parent, created) = working_native152(false);
+    let id = created["task_id"].as_str().unwrap();
+    let mission = created["message_id"].as_str().unwrap();
+    let before = native_task152(&f, id);
+    let name = before["child"].as_str().unwrap();
+    let marker = f.marker_store().load(name).unwrap();
+    drop(parent);
+    f.crash();
+    let fails_task = matches!(
+        boundary,
+        NativeBoundary152::LinkMissing | NativeBoundary152::MarkerMismatch
+    );
+    match boundary {
+        NativeBoundary152::FleetAhead => {
+            let entry = desired_store152(&f)
+                .load()
+                .unwrap()
+                .equipiers
+                .remove(name)
+                .unwrap();
+            let link = entry.agent_link.as_ref().unwrap();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let supervisor = FleetSupervisor::open(
+                &f.root.join("state/bridget.db"),
+                desired_store152(&f),
+                FleetConfig::default(),
+            )
+            .unwrap();
+            let order = SpawnOrder {
+                posture: None,
+                agent_type: entry.agent_type.clone(),
+                project: entry.project.clone(),
+                requested_name: Some(name.to_string()),
+                cwd: entry.cwd.clone(),
+                persistent: true,
+                command_id: format!("boundary152-{}", uuid::Uuid::new_v4()),
+                issued_at: now,
+                deadline_at: now + 60,
+                ownership: Some(SpawnOwnership {
+                    parent_instance_id: link.parent_instance_id.clone(),
+                    parent_execution_id: link.parent_execution_id.clone(),
+                    objective_id: link.objective_id.clone(),
+                    delegation_id: link.delegation_id.clone(),
+                    project: link.project.clone(),
+                    role: link.role.clone(),
+                    max_children: Some(16),
+                    max_depth: Some(8),
+                }),
+            };
+            let SpawnSubmission::Start(lease) = supervisor.request_recovery(&order, now).unwrap()
+            else {
+                panic!("réservation de frontière native refusée");
+            };
+            supervisor
+                .mark_starting(&lease, now, entry.resolved_definition.as_ref().unwrap())
+                .unwrap();
+            supervisor
+                .register_connected(&lease, &lease.instance_id, now)
+                .unwrap();
+            f.marker_store()
+                .persist(
+                    name,
+                    &BootstrapReady {
+                        pid: marker.pgid,
+                        pgid: marker.pgid,
+                        birth: marker.birth,
+                        instance_id: lease.instance_id.clone(),
+                        command_id: lease.command_id.clone(),
+                        generation: lease.generation,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                native_task152(&f, id)["child_instance"],
+                before["child_instance"]
+            );
+            assert_ne!(
+                lease.instance_id,
+                before["child_instance"].as_str().unwrap()
+            );
+        }
+        NativeBoundary152::LinkMissing => {
+            let store = desired_store152(&f);
+            let mut entry = store.load().unwrap().equipiers.remove(name).unwrap();
+            entry.agent_link = None;
+            store.upsert(name.to_string(), entry).unwrap();
+            assert!(store.load().unwrap().equipiers[name].agent_link.is_none());
+        }
+        NativeBoundary152::MarkerMismatch => {
+            f.marker_store()
+                .persist(
+                    name,
+                    &BootstrapReady {
+                        pid: marker.pgid,
+                        pgid: marker.pgid,
+                        birth: marker.birth,
+                        instance_id: uuid::Uuid::new_v4().to_string(),
+                        command_id: marker.command_id.clone(),
+                        generation: marker.generation,
+                    },
+                )
+                .unwrap();
+            assert_ne!(
+                f.marker_store().load(name).unwrap().instance_id,
+                marker.instance_id
+            );
+        }
+        NativeBoundary152::MarkerReconciled => {
+            // La disparition du groupe précède le retrait du marqueur.
+            f.stop_native_groups();
+            assert!(!group_exists(marker.pgid).unwrap());
+            f.marker_store().remove(name).unwrap();
+            assert!(!f.root.join(format!("state/managed/{name}.json")).exists());
+        }
+    }
+    f.start();
+    let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
+    if fails_task {
+        let failed = f.request(
+            &mut parent,
+            NativeDelegationRequest::Status { task_id: id.into() },
+        );
+        assert_eq!(failed["status"], "failed", "{failed}");
+        assert_eq!(
+            native_task152(&f, id)["error"],
+            "native_restart_identity_mismatch"
+        );
+    } else {
+        f.status_until(&mut parent, id, "working");
+        wait_native_ready152(&f, id, before["child_instance"].as_str().unwrap());
+        f.remember_native_group(name);
+        assert_native_identity152(&f, id, mission);
+    }
+}
+
+#[test]
+fn native152_rouge_identite_frontieres_flotte_neuve_tache_ancienne() {
+    native_identity_boundary152(NativeBoundary152::FleetAhead);
+}
+
+#[test]
+fn native152_rouge_identite_frontieres_lien_absent() {
+    native_identity_boundary152(NativeBoundary152::LinkMissing);
+}
+
+#[test]
+fn native152_rouge_identite_frontieres_marqueur_lisible_different() {
+    native_identity_boundary152(NativeBoundary152::MarkerMismatch);
+}
+
+#[test]
+fn native152_rouge_identite_frontieres_marqueur_deja_reconcilie() {
+    native_identity_boundary152(NativeBoundary152::MarkerReconciled);
 }
 
 #[test]

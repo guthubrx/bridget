@@ -1017,6 +1017,39 @@ impl ExecutionStore {
             .optional()
     }
 
+    /// Dernière feuille de la chaîne, choisie par génération et jamais par date.
+    /// O(c (log n + log c)) pour c lignes visitées sur n exécutions et liens :
+    /// recherches indexées par parent et identifiant, déduplication UNION.
+    /// Espace O(c) ; ORDER BY/LIMIT 1 garde une seule feuille, coût O(c).
+    pub fn latest_in_chain(
+        &self,
+        root_execution_id: &str,
+    ) -> rusqlite::Result<Option<ExecutionSnapshot>> {
+        let latest: Option<String> = self
+            .conn
+            .query_row(
+                "WITH RECURSIVE chain(id) AS (
+                     SELECT ?1 UNION
+                     SELECT child.execution_id FROM execution_continuations child
+                     JOIN chain parent ON child.parent_execution_id = parent.id
+                 )
+                 SELECT execution.execution_id FROM executions execution
+                 JOIN chain ON execution.execution_id = chain.id
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM execution_continuations child
+                     WHERE child.parent_execution_id = execution.execution_id
+                 )
+                 ORDER BY execution.generation DESC LIMIT 1",
+                [root_execution_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match latest {
+            Some(execution_id) => self.execution_snapshot(&execution_id),
+            None => Ok(None),
+        }
+    }
+
     /// Retrouve l'enveloppe d'une exécution pour la reprise et la
     /// réconciliation, sans jamais en déduire une transition métier.
     pub fn execution_message(
@@ -1503,6 +1536,23 @@ impl ExecutionStore {
             .collect()
     }
 
+    /// Consomme une pause annulée, sans inventer d'exécution de reprise.
+    /// O(log p), p pauses : clé primaire et retrait de l'index des pauses ouvertes.
+    /// Le premier abandon est conservé au rejeu.
+    pub fn abandon_pause_interruption(
+        &self,
+        execution_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        self.conn
+            .execute(
+                "UPDATE control_pause_interruptions SET resumed_at = ?2, resume_execution_id = NULL
+                 WHERE execution_id = ?1 AND resumed_at IS NULL",
+                params![execution_id, now],
+            )
+            .map(|changed| changed != 0)
+    }
+
     pub fn schema_version(&self) -> rusqlite::Result<u32> {
         self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM execution_schema_migrations",
@@ -1680,6 +1730,116 @@ fn work_submission_column(tx: &Transaction<'_>, column: &str) -> rusqlite::Resul
 #[cfg(test)]
 mod focus_priority_tests {
     use super::*;
+
+    #[test]
+    fn native152_chaine_generation_et_reprises_de_pause() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        let message = bridget_core::BridgetMessage::new("parent", "child", "mission");
+        let root = "z-root";
+        store.admit_starting_message(&message, root, 100).unwrap();
+        assert_eq!(
+            store.latest_in_chain(root).unwrap(),
+            store.execution_snapshot(root).unwrap()
+        );
+        for (index, child) in ["y-recovery", "x-recovery", "w-recovery", "v-recovery"]
+            .into_iter()
+            .enumerate()
+        {
+            let previous = store.latest_in_chain(root).unwrap().unwrap();
+            let paused = index % 2 == 0;
+            if paused {
+                store
+                    .record_pause_interruption(&previous.execution_id, "child", 1, 100)
+                    .unwrap();
+                assert!(matches!(
+                    store
+                        .transition_if_current(
+                            &previous.execution_id,
+                            &previous.state,
+                            previous.revision,
+                            previous.generation,
+                            "interrupted",
+                            "control_pause",
+                            100,
+                        )
+                        .unwrap(),
+                    ConditionalTransition::Applied(_)
+                ));
+            }
+            let ExecutionRecoveryOutcome::Reconstructed(recovery) = store
+                .reconstruct_active_for_agent("child", "instance", child, 100)
+                .unwrap()
+            else {
+                panic!("la continuation doit être reconstruite");
+            };
+            assert_eq!(recovery.message, message);
+            assert_eq!(recovery.parent_execution_id, previous.execution_id);
+            assert_eq!(recovery.snapshot.generation, index as u64 + 2);
+            assert_eq!(recovery.snapshot.created_at, 100);
+            assert_eq!(
+                store.latest_in_chain(root).unwrap(),
+                Some(recovery.snapshot.clone())
+            );
+            let continuation = store.continuation_for(child).unwrap().unwrap();
+            assert_eq!(continuation.parent_execution_id, previous.execution_id);
+            if paused {
+                let resumed: (i64, String) = store
+                    .conn
+                    .query_row(
+                        "SELECT resumed_at,resume_execution_id FROM control_pause_interruptions WHERE execution_id=?1",
+                        [&previous.execution_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(resumed, (100, child.to_string()));
+                assert_eq!(continuation.execution_id, resumed.1);
+            }
+        }
+    }
+
+    #[test]
+    fn native152_chaine_annulation_consomme_la_pause_sans_reprise() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        let message = bridget_core::BridgetMessage::new("parent", "child", "mission");
+        store.admit_starting_message(&message, "root", 100).unwrap();
+        store
+            .record_pause_interruption("root", "child", 1, 110)
+            .unwrap();
+        store
+            .transition_if_current(
+                "root",
+                "starting",
+                0,
+                1,
+                "interrupted",
+                "control_pause",
+                110,
+            )
+            .unwrap();
+        assert!(store.abandon_pause_interruption("root", 120).unwrap());
+        assert!(!store.abandon_pause_interruption("root", 130).unwrap());
+        let saved: (i64, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT resumed_at,resume_execution_id FROM control_pause_interruptions WHERE execution_id='root'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(saved, (120, None));
+        assert!(store.pending_pause_interruptions().unwrap().is_empty());
+        assert!(
+            store
+                .recoverable_execution_ids_for_agent("child")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.continuation_for("root").unwrap().is_none());
+        assert_eq!(
+            store.execution_snapshot("root").unwrap().unwrap().state,
+            "interrupted"
+        );
+    }
 
     #[test]
     fn spec_087_une_remise_de_focus_passe_devant_le_travail_ordinaire() {

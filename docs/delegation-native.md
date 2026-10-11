@@ -47,15 +47,21 @@ Le catalogue annonce `mission_reply_limit_secs` (3600 secondes, le défaut),
 `mission_reply_min_secs` (60) et `mission_reply_max_secs` (86 400).
 `reply_timeout` est facultatif : il fixe le délai de réponse de cette mission,
 en secondes entières. Sans lui, le délai reste 3600 secondes.
-Le reçu donne `mission_deadline_at` après admission de la remise. Cette échéance
-reste identique après rejeu ou reprise. Son expiration produit
-`mission_reply_timeout`, puis le nettoyage de la mission. Un délai de réponse
-HTTP ou une attente du parent ne change pas cette échéance et n'annule rien.
+Le reçu donne `mission_deadline_at` après admission de la remise. Cette date brute
+reste identique après rejeu ou reprise. Le temps de pause est exclu du délai métier.
+L'expiration de ce délai produit `mission_reply_timeout`, puis le nettoyage.
+Un délai de transport ou une attente du parent n'annule rien.
 
-Si le daemon s'arrête pendant une mission engagée sans réponse capturée, la tâche
-passe en `failed` avec `unreachable`. Un résultat déjà capturé reste durable et
-attend la fin des descendants avant sa remise. Bridget ne relance aucune mission
-engagée. Un rejeu renvoie cette même tâche.
+Après une panne du daemon, Bridget peut reprendre une mission `starting`,
+`mission_pending` ou `working`. Il vérifie l'identité de flotte, les droits encore
+valables et le temps restant. La tâche et la mission gardent leurs identifiants.
+Deux reprises après redémarrage sont possibles ; la troisième échoue avec
+`native_resume_exhausted`. Un résultat déjà capturé reste durable et attend la fin
+des descendants avant sa remise. Rejouer la demande retrouve la même tâche.
+
+La vue courante donne `resume_attempts`, le nombre de décisions de reprise après panne.
+Ce compteur est sauvegardé avant la reprise. Un crash peut donc consommer une
+tentative avant son effet ; il ne permet jamais de dépasser la borne.
 
 ## Attendre un résultat ou une réponse - contrat 151
 
@@ -302,13 +308,23 @@ Une installation de fichiers seule ne recharge pas une session déjà ouverte.
 Les comportements 149 exigent le daemon et le binaire 149 chargés. Ce guide ne
 prouve pas leur activation.
 
-Au redémarrage, une identité durable contradictoire bloque le démarrage du daemon
-avant la reprise des missions. Les erreurs `native_restart_identity_mismatch`,
-`parent_task_unavailable`, `native_owner_identity_mismatch`,
-`native_execution_changed` et `native_execution_mismatch` exigent un diagnostic
-des données conservées. Ne supprimez pas leurs marqueurs pour forcer la reprise.
+Au redémarrage, Bridget réconcilie la commande, l'instance et le lien natifs depuis
+les faits attestés. Une incohérence native non réconciliable fait échouer la tâche
+avec `native_restart_identity_mismatch` ; le daemon poursuit son démarrage.
+Cette garantie couvre un marqueur lisible. Un marqueur corrompu ou illisible garde
+le refus sûr de la flotte ; sa réparation générale ne fait pas partie du contrat152.
+Une incohérence de cible d'exécution ou une erreur de stockage peut encore
+bloquer le démarrage. Bridget conserve ses contrôles de propriété et de clôture.
+Les erreurs `parent_task_unavailable`, `native_owner_identity_mismatch`,
+`native_execution_changed` et `native_execution_mismatch` exigent aussi un diagnostic
+des données conservées. Ne supprimez pas les marqueurs pour forcer une reprise.
 Si un wrapper natif reste vivant après le délai commun de 8 secondes, le daemon
 refuse aussi de démarrer. Il conserve le marqueur et ne force pas cet arrêt.
+
+Si le suivi durable d'une mission admise manque, Bridget ferme son exécution
+avec les contrôles existants avant de rendre `request_unavailable`. Une erreur
+de lecture ou de clôture reporte le traitement. Elle ne crée pas de date supposée.
+Cette fermeture termine aussi la pause liée. Elle ne crée aucune reprise.
 
 ## Suivi humain et panneau Lineage
 
@@ -339,17 +355,23 @@ enveloppes différentes.
 
 Une valeur hors de 60 à 86 400 est refusée. Bridget ne la corrige pas.
 
-Un enfant qui fixe un `reply_timeout` ne peut pas dépasser le temps restant de sa tâche
-parente. Sans `reply_timeout`, rien n'est contrôlé : le comportement reste celui de la
-session 149. La même valeur règle l'échéance de la mission et le suivi de la demande.
-Avec un délai explicite, le suivi de la demande compte depuis l'admission de la mission,
-même si le lancement de l'enfant a pris du retard.
-Les tâches déjà actives gardent leur délai de 3600 secondes.
+Un enfant qui fixe un `reply_timeout` ne peut pas dépasser le temps restant effectif
+de sa tâche parente. Ce temps exclut les pauses. Sans délai explicite, ce contrôle
+reste celui du contrat149. Le suivi de la demande compte depuis l'envoi de la mission,
+avec un délai explicite ou omis. Il ne compte pas le retard du lancement.
+Les tâches déjà actives sans délai choisi gardent leur délai de 3600 secondes.
+
+La date brute `mission_deadline_at` reste la date durable. Elle ne donne pas à elle
+seule le temps restant après une pause. `bridget_request_wait` utilise le délai métier
+effectif d'une demande native, sans changer sa date ni son état.
+Le budget `wait_timeout` de l'appelant continue pendant la pause. Une demande ordinaire
+garde le comportement151.
 
 ## Refus
 
-Le refus revient dans `native_delegation_refused`, avec le code ci-dessous.
-Aucun de ces refus ne crée de tâche. Aucun ne consomme la clé de rejeu.
+Le refus revient dans `native_delegation_refused`, avec son code. Aucun refus ne crée
+de tâche. Les cinq refus définitifs ci-dessous engagent la clé de rejeu pendant
+30 jours. Tout autre refus reste sans reçu enregistré par le contrat152.
 
 | Code | Cause |
 |---|---|
@@ -368,13 +390,80 @@ Ordre des contrôles : identité, forme de la demande, bornes du délai, rejeu
 `task_limit` reste pour 128 tâches actives, ou 16 enfants actifs par instance.
 L'historique cumulé ne le provoque plus.
 
-## Pause du référent
+### Reçus des refus définitifs
+
+| Code conservé | Cause |
+|---|---|
+| `cwd_outside_parent_project` | Le dossier demandé sort du projet autorisé du parent. |
+| `cwd_unavailable` | Le dossier demandé ne peut pas être résolu. |
+| `model_unavailable` | Le modèle demandé est absent du catalogue autorisé. |
+| `effort_unavailable` | L'effort demandé est absent du catalogue autorisé. |
+| `agent_type_unknown` | Le type demandé est inconnu du registre. |
+
+Le rejeu de la même clé avec les mêmes arguments rend le premier refus, même si
+le dossier ou le catalogue a changé. Une autre enveloppe rend `envelope_mismatch`.
+Une tâche déjà admise prime sur un reçu de refus. L'entretien retire les reçus
+âgés de plus de 30 jours ; un reçu reste présent à 30 jours exactement.
+
+La pause, la saturation, un défaut d'identité ou de droits ne sont pas enregistrés
+comme refus définitifs. Le registre conserve seulement `agent_type_unknown`,
+jamais son texte dynamique. Ne pas changer automatiquement de clé après une panne
+de transport ou une issue inconnue.
+
+## Pause du référent - contrat152
 
 Pendant la pause, une nouvelle clé reçoit `referent_paused`. Rejouer une clé déjà
-admise rend la tâche existante. La lecture du catalogue, la lecture de statut et
-l'annulation restent possibles. Après la levée de la pause, la même clé réussit.
+admise rend la tâche existante. Un reçu de refus définitif garde sa réponse.
+La lecture du catalogue, la lecture de statut et les attentes restent disponibles.
+Une admission refusée seulement pour la pause peut être rejouée après sa levée.
 
-Une pause n'arrête pas encore les missions en cours. La session 152 traite ce point.
+Une tâche `queued`, `starting`, `mission_pending` ou `working` garde son état
+et rend `suspended: true` dans sa vue courante. Lineage garde ses statuts existants.
+Bridget ne lance pas un enfant retenu en file et ne remet pas une nouvelle mission.
+Une interruption due à la pause ne fait pas échouer la tâche.
+
+Le délai métier de mission et le suivi de sa demande excluent les pauses depuis
+leur admission durable. Une pause avant l'envoi ne retire pas du temps au suivi.
+Ce calcul survit à un redémarrage, même avant le premier passage du moteur.
+
+À la levée, une exécution encore `interrupting` attend de devenir `interrupted`.
+La reprise garde le message et la mission d'origine, puis suit leur dernière
+exécution. La seule levée de pause ne consomme pas le compteur de reprises après panne.
+
+Un lancement déjà soumis continue pendant la pause. Son délai de 300 secondes
+continue aussi ; il peut donc expirer. Son enveloppe reste identique sur rejeu.
+Un lancement retenu avant sa première soumission reçoit sa date d'émission à la levée.
+
+Les résultats et avis d'échec déjà acquis peuvent encore être remis. Le nettoyage
+et l'annulation restent possibles. Annuler pendant la pause empêche la mission
+de reprendre à la levée.
+
+Ces comportements demandent un daemon chargé en version152. Une installation de
+fichiers seule ne prouve pas l'activation. Un agent ne redémarre pas le daemon
+ou le fournisseur pour obtenir ce comportement.
+
+## Annulation vérifiée avant les arrêts
+
+`bridget_task_cancel` demande l'annulation de la tâche et de ses descendants.
+Bridget vérifie d'abord que tous les membres sont gérés et arrêtables.
+Si un membre ne l'est pas, aucun arrêt n'est exécuté et aucun descendant n'est
+marqué pour annulation. La racine reste `cancelling` avec
+`native_cancel_unverifiable:<enfant>`. Le contrôle sera refait depuis cette racine.
+
+Après un contrôle complet, les descendants sont arrêtés avant le parent.
+Chaque arrêt confirmé est conservé. Un nouvel essai ou une reprise après panne
+ne rejoue que les arrêts sans confirmation durable.
+Un arrêt peut échouer après le contrôle initial ; les confirmations déjà acquises
+restent conservées et la racine reste `cancelling`.
+Une erreur ou un résultat terminal déjà acquis reste conservé pendant le nettoyage.
+
+| Erreur de reprise ou d'annulation | Lecture |
+|---|---|
+| `native_resume_exhausted` | Deux reprises après panne ont déjà été décidées. |
+| `mission_reply_timeout` | Le délai métier hors pause est dépassé. |
+| `unreachable` | Les conditions de reprise ne sont pas réunies. |
+| `native_restart_identity_mismatch` | L'identité native ne peut pas être réconciliée depuis les faits attestés. |
+| `native_cancel_unverifiable:<enfant>` | Annulation bloquée ; racine `cancelling`. Au précontrôle refusé, aucun arrêt. Après un échec d'arrêt, les confirmations précédentes restent conservées. |
 
 ## Rétention des tâches
 

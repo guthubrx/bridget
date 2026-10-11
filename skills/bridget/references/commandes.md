@@ -133,8 +133,8 @@ Le catalogue conserve les limites de posture. L'héritage 149 ne demande aucun
 grant. Les droits humains explicites restent prioritaires. L'exception133 ci-dessus reste limitée aux deux outils
 `bridget_who` et `bridget_send` pour les enfants internes T3. Le catalogue indique
 `mission_reply_limit_secs` ; le reçu indique `mission_deadline_at` après remise.
-Ce délai durable ne se renouvelle pas sur retry. Son expiration produit
-`mission_reply_timeout`, distinct d'une attente de transport du parent.
+Cette date brute reste identique sur rejeu. Le délai métier exclut les pauses152.
+Son expiration produit `mission_reply_timeout`, distinct d'une attente de transport.
 Le catalogue annonce aussi `mission_reply_min_secs` (60) et `mission_reply_max_secs`
 (86 400). Refus de la session 150 : `referent_paused`, `request_expired`,
 `retention_saturated`, `reply_timeout_out_of_range`, `reply_timeout_exceeds_parent`,
@@ -150,6 +150,79 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Pause et reprise des missions natives (152)
+
+Les appels de délégation et leurs paramètres restent identiques. Le statut et
+les attentes rendent une vue courante avec deux champs additifs :
+
+| Champ | Sens |
+|---|---|
+| `suspended` | Vrai si la pause retient une tâche `queued`, `starting`, `mission_pending` ou `working`. Son état ne change pas. |
+| `resume_attempts` | Décisions de reprise après panne, sauvegardées avant la reprise ; borne 2. La levée de pause seule n'en ajoute pas. |
+
+Lineage conserve sa forme et ses états. Une tâche suspendue `working` y reste
+`working`. Les champs existants de la boîte151 restent inchangés.
+
+| Opération | Pendant la pause |
+|---|---|
+| Nouvelle délégation | `referent_paused` pour une nouvelle clé ; rejeu admis et reçu de refus gardent leur réponse. |
+| Lancement retenu en file ou remise de mission | Différé jusqu'à la levée. |
+| Lancement déjà soumis | Continue avec son délai de 300 secondes, qui peut expirer. Son enveloppe reste fixe. |
+| Délai métier et suivi de demande native | Pauses exclues depuis leur admission durable. |
+| Lecture, attente et annulation | Disponibles ; `wait_timeout` continue. |
+| Résultat ou avis déjà acquis et nettoyage | Restent autorisés. |
+
+La reprise après pause attend l'état `interrupted` et conserve la mission et le
+message d'origine. Une mission annulée pendant la pause ne reprend pas à la levée.
+La date brute `mission_deadline_at` reste inchangée. Un enfant qui fixe un délai
+doit respecter le temps restant effectif du parent, hors pauses.
+Le suivi de la demande part de l'envoi de la mission, avec délai explicite ou omis.
+`bridget_request_wait` calcule ce délai métier pour la demande native sans écriture ;
+les demandes ordinaires et le budget d'attente gardent le contrat151.
+
+Après une panne du daemon, une mission `starting`, `mission_pending` ou `working`
+peut reprendre avec les mêmes identifiants. La flotte et la filiation doivent
+être attestées. Les droits, les sources de permission et le dossier sont revérifiés.
+Le délai métier doit rester valide et la borne de deux reprises doit être respectée.
+Un résultat déjà capturé reste conservé.
+
+L'annulation vérifie tout l'arbre avant de marquer un descendant ou d'arrêter un
+membre. Après ce contrôle, les descendants passent avant le parent. Les arrêts
+confirmés sont conservés et ne sont pas rejoués après panne.
+Un arrêt peut échouer après le contrôle initial ; les confirmations acquises
+restent conservées et la racine reste `cancelling`.
+
+| Erreur | Effet |
+|---|---|
+| `native_resume_exhausted` | Échec : deux reprises après panne ont déjà été décidées. |
+| `mission_reply_timeout` | Échec : délai métier hors pause dépassé. |
+| `unreachable` | Échec : conditions de reprise absentes. |
+| `native_restart_identity_mismatch` | La seule tâche native non réconciliable échoue ; le daemon continue. Cela suppose un marqueur lisible. |
+| `native_cancel_unverifiable:<enfant>` | Racine `cancelling` ; aucun arrêt ni marquage des descendants au précontrôle refusé. Après un échec d'arrêt, les confirmations précédentes restent conservées. |
+
+Un marqueur corrompu ou illisible garde les protections de la flotte. Ne pas
+supprimer un marqueur pour forcer une reprise. L'annulation et le nettoyage
+conservent toute erreur ou tout résultat terminal déjà acquis.
+
+### Reçus des refus définitifs
+
+La liste est fermée à `cwd_outside_parent_project`, `cwd_unavailable`,
+`model_unavailable`, `effort_unavailable` et `agent_type_unknown`.
+Ces refus ne créent aucune tâche mais engagent la clé pendant 30 jours.
+Même enveloppe : même refus ; enveloppe différente : `envelope_mismatch`.
+Une tâche déjà admise prime sur le reçu. L'entretien retire les reçus âgés
+de plus de 30 jours ; ceux âgés exactement de 30 jours restent conservés.
+Le texte dynamique du registre n'est jamais enregistré.
+
+Tous les autres refus restent sans reçu152, notamment pause, saturation,
+identité indisponible, délai d'enfant excessif et défaut de droits ou de sources.
+Leur nouvelle admission peut être réévaluée. Une clé de tâche purgée garde
+cependant le contrat150 `request_expired`.
+
+Ces comportements exigent un daemon152 chargé. Le catalogue conserve les mêmes
+outils et les mêmes protections. Installer les fichiers ne prouve pas leur
+activation ; ne pas relancer un service ou un fournisseur à partir de cette skill.
 
 ## Attente et boîte de fin de tâche (151)
 

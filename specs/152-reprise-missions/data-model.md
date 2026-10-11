@@ -43,7 +43,11 @@ Aucun nouvel état.
 secondes de pause entre `from` et `to`. Sources : `control_events` (`pause_on`,
 `pause_off`, colonne `at`) et `control_state` (`paused`, `paused_since`) pour
 l'intervalle encore ouvert. L'état au début de la fenêtre vient du dernier
-événement avant `from`. Complexité : O(P), P = événements dans la fenêtre.
+événement avant `from`. Un index temporel `(at, id)` sur les événements
+`pause_on`/`pause_off` est ajouté au schéma existant, après ses migrations.
+Il sert à la lecture du prédécesseur et de la fenêtre ; `id` départage les
+événements de la même seconde. Complexité : O(log N + P), N événements durables,
+P événements dans la fenêtre.
 Appelée seulement quand le résultat sert : décision d'expiration, suivi d'une
 demande native, décision de reprise.
 
@@ -96,7 +100,13 @@ requested_at, resumed_at, resume_execution_id)`. Ajout d'une fonction
 tick et dans `restore_pending_for_agent` : `pause_overlap(created_at_durable, now)`.
 Temps écoulé : `now - created_at - frozen_secs`. Une demande de mission native
 est ignorée par `collect_reminder_actions` tant que la pause est active.
-`tracked_requests` ne change pas.
+Le schéma de `tracked_requests` ne change pas pour le gel. L'alignement durable
+de son échéance explicite, déjà livré en 150 par `align_request_deadline`, est
+conservé. La pause n'ajoute aucune réécriture relative de la date brute.
+`RequestWait` calcule l'échéance métier effective des seules demandes natives,
+sans fermer la ligne. Son budget `wait_timeout` reste inchangé. L'admission
+d'un descendant utilise le temps restant effectif du parent ; la date brute
+exposée reste la valeur durable.
 
 ## Reçu de refus (nouvelle table)
 

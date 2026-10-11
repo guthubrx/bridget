@@ -1,5 +1,11 @@
 # Rapport d'analyse - Session152
 
+Rapport historique des deux rondes de conception. Le gate frais post-150/151
+du 2026-10-11 fait autorité dans
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/analyze152.md`.
+Les corrections ci-dessous décrivent les étapes successives ; R22 à R28
+remplacent les hypothèses retirées, pas des travaux de code déjà validés.
+
 Date : 2026-10-11. Analyse croisée de `spec.md`, `plan.md`, `research.md`,
 `data-model.md`, `contracts/reprise152.md`, `tasks.md`, `reuse-audit.md`.
 Lecture seule du code : aucune exécution de test.
@@ -30,7 +36,7 @@ Lecture seule du code : aucune exécution de test.
 | FR-025 | T008 | relecture d'un payload 151 |
 | FR-026 | T033 | revue de documentation |
 
-Les 28 FR sont couverts par au moins une tâche ; FR-027 et FR-028 par T043, T041, T042. Les 9 SC ont chacun un test : SC-001 (T015), SC-002
+Les 29 FR sont couverts par au moins une tâche ; FR-027 et FR-028 par T043, T041, T042, FR-029 par T043 et T048. Les 9 SC ont chacun un test prévu : SC-001 (T015), SC-002
 (T019), SC-003 (T017), SC-004 (T020), SC-005 (T025), SC-006 (T027), SC-007 (T030),
 SC-008 (T032), SC-009 (T041, T042).
 
@@ -55,7 +61,7 @@ n° 3 (T014), n° 4 (T012, T017, T018), n° 7 (T020).
 | R1 | H4 : l'instance du bail de reprise garde-t-elle le même `instance_id` que le bootstrap natif ? La flotte accepte-t-elle un lien dont le parent est une instance disparue (mission imbriquée) ? Non prouvé par lecture | test rouge T004 (a à d) ; `native_child_env` et `ownership_from_desired` s'adaptent (T024) |
 | R2 | Les codes de refus de registre ne sont pas tous inventoriés | T029 avant l'écriture des reçus |
 | R3 | Une saga de lancement en cours au début d'une pause de plus de 300 s peut expirer | limite documentée (FR-012) ; test T006 |
-| R4 | La spec 151 n'a pas été lue (elle n'existe pas encore). Les points de contact supposés : envoi du résultat, minuterie d'attente | hypothèse H1 ; à revérifier quand 151 est écrite |
+| R4 | Historique clos : la spec et le code 151 sont désormais livrés et relus | H1 réattestée ; RequestWait pris en compte dans T018, budget de l'appelant inchangé |
 | R5 | Mission imbriquée : le propriétaire (un enfant) peut être relancé avec une autre instance. `recover_owner` existe (`N:172-190`) mais le cas n'est pas testé avec reprise | ajouter un cas imbriqué à T025 si T004 le révèle |
 | R6 | La vue Lineage T3 montre `working` pendant la pause | question utilisateur 3, défaut non |
 | R7 | Plusieurs sessions modifient `native_delegation.rs` (151, 153) | exécution séquentielle |
@@ -90,7 +96,6 @@ T007, et T004 tranche R1 avant T024.
 | 19 | `working` ne prouve pas le début du suivi | haute | R23 : début lu dans la ligne durable de la demande (T018, rouge T049) |
 
 Hypothèses retirées : `suspended_at`, `request_frozen_secs`, `fleet_command_id`,
-`crash_resume_count`. Restants : API de lecture du lien de flotte par identifiant
-(R24), noms exacts des `kind` de `control_events` (`pause_on`, `pause_off` vus
-dans les tests de `referent_control.rs`), coût de `pause_overlap` (journal court,
-à mesurer en T050).
+`crash_resume_count`. Audit frais R27 : l'API `agent_link_by_id` existe déjà,
+les événements `pause_on`/`pause_off` sont présents. T050 prévoit l'index temporel
+et documente O(log N + P), au lieu de supposer le journal toujours court.

@@ -356,6 +356,10 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
         reply_timeout: None,
         delivery_acked: false,
         acknowledged_at: None,
+        launch_issued_at: None,
+        mission_issued_at: None,
+        restart_resumes: 0,
+        cancel_stopped: Vec::new(),
     }
 }
 
@@ -548,19 +552,45 @@ fn native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_a
     redemarrer_flotte(&mut st, &config);
     let reprises = super::super::reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
 
-    // Seul l'agent ordinaire est repris : aucun fournisseur natif relancé.
-    let noms: Vec<&str> = reprises.iter().map(|reprise| reprise.0.lease.name.as_str()).collect();
-    assert_eq!(noms, vec![ordinaire.as_str()]);
-    assert_eq!(st.recovery_commands.len(), 1);
-    assert!(st.managed_spawns.values().all(|record| record.lease.name == ordinaire));
+    // FR013/014 : les deux identités natives attestées rejoignent l'ordinaire.
+    let mut noms: Vec<&str> = reprises
+        .iter()
+        .map(|reprise| reprise.0.lease.name.as_str())
+        .collect();
+    let mut attendus = vec![
+        ordinaire.as_str(),
+        pending.child.as_str(),
+        working.child.as_str(),
+    ];
+    noms.sort_unstable();
+    attendus.sort_unstable();
+    assert_eq!(noms, attendus);
+    assert_eq!(st.recovery_commands.len(), 3);
+    assert_eq!(st.managed_spawns.len(), 3);
+    assert!(
+        st.managed_spawns
+            .values()
+            .all(|record| attendus.contains(&record.lease.name.as_str()))
+    );
     assert!(rx.try_recv().is_err(), "aucun Start pendant la réservation");
     assert_eq!(cycle_de_vie(&st, &ordinaire), Some(Running), "l'ordinaire reste actif");
 
-    // Missions engagées : échec explicite avant toute reprise.
-    for tache in [&starting, &pending, &working] {
+    // FR029 : ce Starting n'a aucun checkpoint durable d'identité de flotte.
+    assert!(st.fleet.desired_entry(&starting.child).unwrap().is_none());
+    let relue = st.delegation_store.get(&starting.task_id).unwrap().unwrap();
+    assert_eq!(
+        (relue.state.as_str(), relue.error.as_deref()),
+        ("failed", Some("native_restart_identity_mismatch"))
+    );
+    assert_eq!(relue.restart_resumes, 0);
+    // FR013/015 : garder mission, état et instance jusqu'à la reconnexion.
+    for tache in [&pending, &working] {
         let relue = st.delegation_store.get(&tache.task_id).unwrap().unwrap();
-        assert_eq!(relue.state, "failed", "mission engagée {} échoue", tache.state);
-        assert_eq!(relue.error.as_deref(), Some("unreachable"));
+        assert_eq!(relue.state, tache.state);
+        assert_eq!(relue.error, None);
+        assert_eq!(relue.restart_resumes, 1);
+        assert_eq!(relue.mission, tache.mission);
+        assert_eq!(relue.child_instance, tache.child_instance);
     }
     // Non engagée, résultat et attente des descendants : inchangés, durables.
     let relue = st.delegation_store.get(&queued.task_id).unwrap().unwrap();
@@ -571,8 +601,16 @@ fn native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_a
     assert_eq!(relue.error, None);
     let relue = st.delegation_store.get(&attente.task_id).unwrap().unwrap();
     assert_eq!((relue.state.as_str(), relue.error.as_deref()), ("waiting_for_children", None));
-    // Les enfants Running de la flotte passent Stopped : plus aucune reprise au boot.
-    for tache in [&pending, &working, &resultat, &attente] {
+    for tache in [&pending, &working] {
+        assert_eq!(
+            cycle_de_vie(&st, &tache.child),
+            Some(Running),
+            "{} reprenable",
+            tache.state
+        );
+    }
+    // FR017 : aucun nouveau fournisseur pour le résultat ou l'attente durables.
+    for tache in [&resultat, &attente] {
         assert_eq!(cycle_de_vie(&st, &tache.child), Some(Stopped), "{} arrêté", tache.state);
     }
     drop(st);
@@ -580,11 +618,12 @@ fn native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_a
 }
 
 /// Dans le même processus, les baux actifs sont des candidats de reprise
-/// (`recovery_candidates`) : celui d'un enfant natif ne doit jamais être repris.
+/// (`recovery_candidates`). FR029 refuse celui sans entrée de flotte attestée.
 #[test]
 fn native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise() {
     let (mut st, config, rx, _reader) = fixture_with_reader("bail-actif");
     let natif = mission_native(&mut st, &rx, "b-starting", "starting");
+    assert!(st.fleet.desired_entry(&natif.child).unwrap().is_none());
     let ordinaire = equipier_ordinaire(&st);
     let candidats: Vec<String> = st.fleet.recovery_candidates().iter().map(|c| c.lease.name.clone()).collect();
     assert!(candidats.contains(&natif.child), "précondition : le bail natif est candidat ({candidats:?})");
@@ -594,7 +633,11 @@ fn native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise() {
     let noms: Vec<&str> = reprises.iter().map(|reprise| reprise.0.lease.name.as_str()).collect();
     assert_eq!(noms, vec![ordinaire.as_str()], "contrôle positif : l'ordinaire est repris, jamais le natif");
     let relue = st.delegation_store.get(&natif.task_id).unwrap().unwrap();
-    assert_eq!((relue.state.as_str(), relue.error.as_deref()), ("failed", Some("unreachable")));
+    assert_eq!(
+        (relue.state.as_str(), relue.error.as_deref()),
+        ("failed", Some("native_restart_identity_mismatch"))
+    );
+    assert_eq!(relue.restart_resumes, 0);
     let _ = fs::remove_file(&config.db_path);
 }
 
@@ -606,11 +649,83 @@ fn native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_missi
         mission_native(&mut st, &rx, "t-pending", "mission_pending"),
         mission_native(&mut st, &rx, "t-working", "working"),
     ];
+    // Fixture Working : sa mission a déjà une admission suivie durable.
+    st.store
+        .create_request(
+            &engagees[2].mission,
+            &engagees[2].owner,
+            &engagees[2].child,
+            u64::try_from(
+                engagees[2]
+                    .reply_timeout
+                    .unwrap_or(MISSION_REPLY_LIMIT_SECS),
+            )
+            .unwrap(),
+        )
+        .unwrap();
     let queued = mission_native(&mut st, &rx, "t-queued", "queued");
     redemarrer_flotte(&mut st, &config);
     let reprises = super::super::reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
-    assert!(reprises.is_empty(), "aucun agent ordinaire : rien à reprendre");
-    assert!(!st.recovering, "pas de reprise en cours : l'admission reste normale");
+    // FR013/014 : reprendre seulement les deux enfants à identité attestée.
+    let mut noms: Vec<&str> = reprises
+        .iter()
+        .map(|reprise| reprise.0.lease.name.as_str())
+        .collect();
+    let mut attendus = vec![engagees[1].child.as_str(), engagees[2].child.as_str()];
+    noms.sort_unstable();
+    attendus.sort_unstable();
+    assert_eq!(noms, attendus);
+    assert!(st.recovering);
+    assert_eq!(
+        st.delegation_store
+            .get(&queued.task_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        "queued"
+    );
+    assert!(rx.try_recv().is_err(), "aucun Start pendant la réservation");
+    // Fin des reprises préparées : utiliser les mêmes baux et le garde existant.
+    let mut lecteurs_repris = Vec::new();
+    for reprise in &reprises {
+        let lease = &reprise.0.lease;
+        let conn = format!("reprise-{}", lease.instance_id);
+        let (writer, reader) = super::super::presence_tests::control_socket("r149repr");
+        assert!(matches!(
+            handle_register_with_channel(
+                &conn,
+                2,
+                "native-test".into(),
+                lease.name.clone(),
+                Some(st.host.clone()),
+                Some("codex_app_server".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".into()),
+                Some(lease.instance_id.clone()),
+                None,
+                false,
+                Some(true),
+                &mut st,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        st.connections.insert(conn.clone(), writer);
+        st.fleet
+            .register_connected(lease, &lease.instance_id, unix_timestamp())
+            .unwrap();
+        st.managed_spawns
+            .get_mut(&lease.command_id)
+            .unwrap()
+            .wrapper_conn = Some(conn);
+        super::super::finish_recovery_command(&mut st, &lease.command_id);
+        lecteurs_repris.push((lease.name.clone(), reader));
+    }
+    assert!(
+        !st.recovering,
+        "l'admission reprend après les deux connexions"
+    );
 
     let shared = Arc::new(Mutex::new(st));
     tick(&shared);
@@ -621,13 +736,72 @@ fn native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_missi
             lancements.push(prepared.lease.command_id.clone());
         }
     }
-    assert_eq!(lancements, vec![queued.task_id.clone()], "seul le queue non engagé est admis");
+    assert_eq!(
+        lancements,
+        vec![queued.task_id.clone()],
+        "seul le queue non engagé est admis"
+    );
     let relue = st.delegation_store.get(&queued.task_id).unwrap().unwrap();
     assert_eq!(relue.state, "starting");
-    for tache in &engagees {
+    let relue = st
+        .delegation_store
+        .get(&engagees[0].task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (relue.state.as_str(), relue.error.as_deref()),
+        ("failed", Some("native_restart_identity_mismatch"))
+    );
+    assert_eq!(relue.restart_resumes, 0);
+    assert_eq!(relue.child_instance, engagees[0].child_instance);
+    for tache in &engagees[1..] {
         let relue = st.delegation_store.get(&tache.task_id).unwrap().unwrap();
-        assert_eq!((relue.state.as_str(), relue.error.as_deref()), ("failed", Some("unreachable")));
-        assert_eq!(relue.child_instance, tache.child_instance, "aucune nouvelle instance");
+        assert_eq!(
+            (relue.state.as_str(), relue.error.as_deref()),
+            ("working", None)
+        );
+        assert_eq!(relue.restart_resumes, 1);
+        assert_eq!(relue.mission, tache.mission);
+        let reprise = reprises
+            .iter()
+            .find(|reprise| reprise.0.lease.name == tache.child)
+            .unwrap();
+        assert_eq!(
+            relue.child_instance.as_deref(),
+            Some(reprise.0.lease.instance_id.as_str()),
+            "le checkpoint suit l'instance reprise et attestée"
+        );
+    }
+    // FR014/015/027 : la mission en attente est remise au bon wrapper, une fois.
+    for (enfant, reader) in &mut lecteurs_repris {
+        let trames = trames_recues(reader);
+        let remises: Vec<_> = trames
+            .iter()
+            .filter_map(|trame| match trame {
+                DaemonToWrapper::DeliverIdempotent { message, .. } => Some(message),
+                _ => None,
+            })
+            .collect();
+        if enfant.as_str() == engagees[1].child.as_str() {
+            assert_eq!(
+                remises.len(),
+                1,
+                "une remise de la mission en attente : {trames:?}"
+            );
+            let NativeDelegationRequest::Delegate { task: body, .. } = &engagees[1].request else {
+                panic!("demande de délégation attendue")
+            };
+            assert_eq!(remises[0].id, engagees[1].mission);
+            assert_eq!(remises[0].body, *body);
+            assert!(remises[0].reply);
+        } else {
+            assert_eq!(enfant.as_str(), engagees[2].child.as_str());
+            assert!(
+                remises.is_empty(),
+                "pas de remise brute de la mission déjà working : {trames:?}"
+            );
+        }
+        eprintln!("T032149 réel : enfant={enfant}, remises={}", remises.len());
     }
     drop(st);
     drop(shared);
@@ -1745,18 +1919,23 @@ fn native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_res
     );
     avancer_execution(&st, execution_ordinaire, "running");
     let ordinaire_avant = etat_execution(&st, execution_ordinaire);
+    let native_avant = etat_execution(&st, &execution);
 
     prepare_restart(&st).unwrap();
 
+    // FR013/015/027 : une mission attestée reprend sans changer son exécution.
     let relue = st.delegation_store.get(&engagee.task_id).unwrap().unwrap();
     assert_eq!(
         (relue.state.as_str(), relue.error.as_deref()),
-        ("failed", Some("unreachable"))
+        ("working", None)
     );
+    assert_eq!(relue.restart_resumes, 1);
+    assert_eq!(relue.child_instance, engagee.child_instance);
+    assert_eq!(relue.mission, engagee.mission);
     assert_eq!(
-        etat_execution(&st, &execution).0,
-        "unreachable",
-        "mission et exécution échouent ensemble"
+        etat_execution(&st, &execution),
+        native_avant,
+        "état, révision et génération de la mission reprenable sont conservés"
     );
     assert_eq!(
         etat_execution(&st, execution_ordinaire),
@@ -1771,8 +1950,8 @@ fn native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_res
         "l'ordinaire reste récupérable par sa reprise normale"
     );
     assert!(
-        !descendants_busy(&st, &racine).unwrap(),
-        "le descendant natif fermé ne bloque plus"
+        descendants_busy(&st, &racine).unwrap(),
+        "la racine attend le descendant natif encore actif"
     );
     // Contrôle négatif : un descendant lié qui n'est pas une mission native perdue
     // (exécution ordinaire `running`) bloque toujours la racine après redémarrage.
@@ -2888,11 +3067,20 @@ fn native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur
         let mut modifiee = sain.clone();
         mutation(&mut modifiee);
         st.delegation_store.save(&modifiee).unwrap();
+        // FR029 : l'échec d'identité reste local, sans bloquer le daemon.
+        let identites = restart_identities(&st).unwrap();
+        assert!(
+            identites.is_empty(),
+            "{nom} : aucune identité étrangère annoncée"
+        );
+        let relue = st.delegation_store.get(&natif.task_id).unwrap().unwrap();
         assert_eq!(
-            restart_identities(&st).unwrap_err(),
-            "native_restart_identity_mismatch",
+            (relue.state.as_str(), relue.error.as_deref()),
+            ("failed", Some("native_restart_identity_mismatch")),
             "{nom}"
         );
+        assert_eq!(relue.child_instance, modifiee.child_instance, "{nom}");
+        assert_eq!(relue.restart_resumes, sain.restart_resumes, "{nom}");
         st.delegation_store.save(&sain).unwrap();
     }
     assert_eq!(

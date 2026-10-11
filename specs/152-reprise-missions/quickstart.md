@@ -1,7 +1,7 @@
 # Vérification rapide - Session152
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions`.
 
 ## Environnement de test (obligatoire)
 
@@ -31,10 +31,19 @@ Suite complète avant clôture : même environnement,
 9. Non-régression : filtres `native148`, `native149`, `native150`,
    `delegation149`, `spec_087`.
 
-## Contrôle manuel (sans relancer les services)
+## Contrôle réel après activation coordonnée
 
-Aucune relance de service n'est faite par cette session. Le contrôle réel se fait
-après activation par l'utilisateur : déléguer une mission longue, mettre le
-référent en pause (`bridget` contrôle d'état), attendre plus que le
-`reply_timeout`, lever la pause, lire `bridget_task_status` (`suspended` puis
-résultat).
+En phase 8, le principal observe les processus, le namespace et la quiescence
+des travaux. Il coordonne l’activation de production prévue par H6 sans
+interrompre les autres fils T3 et sans redémarrer T3. Aucune relance n’est
+effectuée à l’étape actuelle de développement.
+
+Le contrôle réel s’exécute après cette activation : déléguer une mission longue,
+mettre le référent en pause (`bridget` contrôle d’état), attendre plus que le
+`reply_timeout`, puis lire `bridget_task_status` (`working` avec
+`suspended: true`). Lever la pause, lire `working` avec `suspended: false`,
+puis vérifier le résultat.
+
+Le reçu de livraison distingue les sources Git, les fichiers installés et le
+code réellement actif dans les processus. L’état actif doit être prouvé par
+les faits observés lors de la livraison.

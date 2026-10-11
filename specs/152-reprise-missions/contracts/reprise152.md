@@ -1,29 +1,37 @@
 # Contrat - Reprise des missions natives 152
 
-Compatible avec les contrats 148, 149 (Lineage) et 150. Un appel sans nouveau
-champ produit les mêmes octets canoniques et le même comportement qu'en 150.
+Compatible avec les formes d'appel 148, 149, 150 et 151. Lineage reste inchangé.
+Les octets canoniques des appels restent identiques. Les comportements de pause,
+reprise, annulation et refus changent comme décrit ci-dessous.
 Cette session n'ajoute aucun paramètre d'appel.
 
 ## Lecture de statut (`bridget_task_status`, CLI équivalente)
 
-Champs ajoutés à la vue de tâche (`task_view`). Ils sont additifs.
+Champs ajoutés à la vue courante de statut (`current_task_view`). Ils sont additifs.
 
 | Champ | Type | Sens |
 |---|---|---|
 | `suspended` | booléen | vrai si la pause retient la tâche |
-| `resume_attempts` | entier | reconstructions faites après panne (redémarrages survécus, borne 2) |
+| `resume_attempts` | entier | redémarrages survécus, compteur sauvegardé avant la reprise, borne 2 |
 
 L'état reste `working` (ou `queued`, `starting`, `mission_pending`). Un lecteur
 qui ignore ces champs reste correct.
 
-## Erreurs de tâche nouvelles (champ `error` d'une tâche `failed`)
+## Erreurs de tâche (champ `error`)
 
 | Code | Quand |
 |---|---|
 | `native_resume_exhausted` | borne de 2 reprises après panne atteinte |
 | `mission_reply_timeout` | existant ; aussi rendu quand l'échéance est dépassée au redémarrage |
+| `request_unavailable` | suivi durable absent après admission, ou tâche `working` sans échéance ; clôture contrôlée et interruption de pause consommée avant l'échec, sans date fabriquée ni nouvelle continuation |
 | `unreachable` | existant ; identité de flotte non vérifiée au redémarrage |
+| `native_restart_identity_mismatch` | tâche dont l'identité ne peut pas être réconciliée ; le daemon continue son démarrage |
 | `native_cancel_unverifiable:<enfant>` | annulation bloquée, la tâche reste `cancelling` (pas `failed`) |
+
+La garantie de démarrage FR-029 porte sur la commande, l'instance et le lien
+natifs dans un marqueur lisible. Une cible d'exécution étrangère, un échec de
+clôture conditionnelle (CAS) ou une erreur de stockage conserve le refus sûr
+bloquant. Aucun contrôle149 n'est assoupli pour permettre le démarrage.
 
 ## Refus définitifs rejoués (liste fermée)
 
@@ -57,11 +65,19 @@ Pour ces refus, la clé reste libre.
 |---|---|
 | Lancement d'une tâche `queued` | différé |
 | Remise de la mission à l'enfant | différée |
-| Échéance de mission | gelée, repoussée de la durée de la pause à la levée |
+| Échéance de mission | gelée ; échéance effective calculée depuis le journal des pauses, date brute inchangée |
 | Suivi de demande de mission (relances, expiration) | gelé |
 | Annulation (agent ou humain) | exécutée |
 | Lecture de statut, catalogue | disponible |
 | Envoi du résultat ou de l'avis d'échec déjà acquis | admis (ADR 027) |
+
+`RequestWait` 151 lit l'échéance métier effective d'une demande native, sans
+écrire son état ni sa date brute. Son budget `wait_timeout` reste celui de
+l'appelant et continue pendant la pause. Une demande ordinaire garde son
+comportement 151. L'admission d'un descendant compare également le délai
+demandé au temps restant effectif du parent. La date brute exposée dans le
+statut reste la date durable ; elle ne doit pas être prise pour le temps restant
+pendant une pause.
 
 ## Lineage T3
 

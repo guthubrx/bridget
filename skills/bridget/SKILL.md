@@ -16,7 +16,7 @@ envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
 ## Trouver puis envoyer
 
-### Déléguer une nouvelle mission - contrat 149
+### Déléguer une nouvelle mission
 
 Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts
 et postures accessibles. Puis appeler `bridget_delegate` avec `request_id`,
@@ -37,13 +37,14 @@ encore ses enfants. Une fin de tour seule ne produit pas de résultat.
 `bridget_task_cancel` annule la tâche et sa descendance active. Ces opérations
 refusent les tâches d'un autre parent. Les résultats publiés restent stables.
 Le catalogue annonce le délai maximal de réponse à la mission. Le reçu donne
-son échéance après remise ; un rejeu ne la prolonge pas. Son expiration produit
-`mission_reply_timeout`. Un timeout de transport ou d'attente n'annule rien.
+`mission_deadline_at`, la date brute après remise. Un rejeu garde cette date.
+Le délai métier exclut les pauses ; son expiration produit `mission_reply_timeout`.
+Un timeout de transport ou d'attente n'annule rien.
 
 `reply_timeout` est facultatif (60 à 86 400 secondes, défaut 3600). Il fait partie
 de l'enveloppe : le rejeu garde la même valeur. Le catalogue annonce le défaut, le
-minimum et le maximum. Un enfant ne peut pas dépasser le temps restant de sa tâche
-parente. Refus propres à la délégation, sans tâche créée ni clé consommée :
+minimum et le maximum. Un enfant qui fixe ce délai ne peut pas dépasser le temps
+restant effectif de sa tâche parente. Refus sans nouvelle tâche ni reçu152 :
 `referent_paused` (pause du référent, nouvelle clé), `request_expired` (clé d'une
 tâche purgée depuis moins de 30 jours), `retention_saturated` (4096 tâches
 conservées, aucune purgeable), `reply_timeout_out_of_range`,
@@ -71,6 +72,45 @@ Les comportements 149 (héritage, posture facultative) exigent le binaire et les
 processus chargés en version 149. Leur présence dans les sources ne prouve pas leur
 activation dans la session. Le suivi humain passe par `bridget lineage` dans un
 terminal, avec `--t3-thread` et `--project-root` ; ce n'est pas un outil MCP.
+
+### Pause, panne et annulation - contrat152
+
+Pendant la pause, une tâche `queued`, `starting`, `mission_pending` ou `working`
+garde son état et rend `suspended: true`. Aucun lancement retenu en file ni nouvelle
+remise de mission. Le délai métier et le suivi de demande excluent les pauses.
+Le budget `wait_timeout` continue ; les demandes ordinaires gardent le contrat151.
+Un lancement déjà soumis garde son délai de 300 secondes, qui peut expirer.
+
+À la levée, la reprise attend l'exécution `interrupted`, conserve la mission
+et suit sa dernière exécution. Les résultats déjà acquis et l'annulation restent
+possibles pendant la pause. Une mission annulée ne reprend pas à la levée.
+
+Après une panne du daemon, la reprise garde la tâche, la mission et la filiation.
+Elle exige une identité attestée, des droits encore valables et un délai métier
+non dépassé. `resume_attempts` compte les décisions durables de reprise après panne,
+avec une borne de 2. La troisième échoue avec `native_resume_exhausted`.
+La seule levée de pause ne consomme pas ce compteur.
+
+Avant l'annulation en cascade, tous les membres sont vérifiés. Un membre non
+arrêtable bloque l'ensemble : racine `cancelling`,
+`native_cancel_unverifiable:<enfant>`, aucun arrêt ni marquage des descendants.
+Les arrêts déjà confirmés ne sont pas rejoués. Un résultat ou une erreur terminale
+déjà acquis reste conservé.
+Si un arrêt échoue après le contrôle initial, les confirmations acquises restent
+conservées et la racine reste `cancelling`.
+
+Seuls cinq refus sont conservés 30 jours : `cwd_outside_parent_project`,
+`cwd_unavailable`, `model_unavailable`, `effort_unavailable`,
+`agent_type_unknown`. Même clé et mêmes arguments : même refus. Autres arguments :
+`envelope_mismatch`. Une tâche déjà admise prime. Tout autre refus reste sans reçu152.
+Ne pas changer automatiquement de clé après une issue inconnue.
+
+`native_restart_identity_mismatch` fait échouer la seule tâche dont l'identité
+native lisible ne se réconcilie pas. Un marqueur illisible garde le refus sûr de
+la flotte. `mission_reply_timeout` et `unreachable` gardent leur sens.
+Le statut et les attentes restent des lectures pures. Aucun outil ni paramètre
+d'appel nouveau. Ces comportements exigent un daemon152 chargé ; ne pas relancer
+un service ou un fournisseur de sa propre initiative.
 
 Si l'outil MCP Bridget requis est présent (éventuellement différé), l'employer.
 Chercher aussi dans la découverte d'outils du harnais : `ToolSearch` si Claude

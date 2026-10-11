@@ -77,6 +77,10 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         reply_timeout: None,
         delivery_acked: false,
         acknowledged_at: None,
+        launch_issued_at: None,
+        mission_issued_at: None,
+        restart_resumes: 0,
+        cancel_stopped: Vec::new(),
     }
 }
 

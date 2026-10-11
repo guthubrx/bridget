@@ -40,13 +40,83 @@ fn failure(code: &str) -> Value {
     json!({"status":"refused","code":code})
 }
 
+/// Lecture indexée de la pause exacte, ou de sa continuation déjà reconstruite.
+fn pause_covers(st: &DaemonState, execution: &str, resumed: bool) -> Result<bool, String> {
+    st.store.connection().query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM control_pause_interruptions
+             WHERE execution_id=?1 AND resumed_at IS NULL
+             UNION ALL
+             SELECT 1 FROM execution_continuations child
+             JOIN control_pause_interruptions pause ON pause.execution_id=child.parent_execution_id
+             WHERE child.execution_id=?1 AND pause.resume_execution_id=?1 AND ?2
+         )",
+        rusqlite::params![execution, resumed], |row| row.get(0),
+    ).map_err(|error| error.to_string())
+}
+
+/// O(B + F log(F + 1) + log L + c * (log C + log E + log(c + 1)) + log P),
+/// hors latences système : B octets JSON de flotte relus/décodés, F entrées
+/// validées, L liens indexés, c maillons visités, C continuations, E exécutions
+/// et P interruptions de pause. Une génération décalée ajoute la lecture et
+/// le tri SQL des S sagas : O(Bs + S log(S + 1)), Bs octets de leurs payloads.
+/// Seule la feuille de la mission peut être reprise.
+/// Une interruption de pause doit être terminale avant la reconstruction.
+pub(super) fn may_resume(st: &DaemonState, task: &Task, execution: &str, instance: &str) -> Result<bool, String> {
+    if task.state != "working" {
+        return Ok(false);
+    }
+    let identity = restart_identity(st, task)?;
+    // Le lien peut déjà attester une génération plus récente que le checkpoint
+    // de tâche. Seul son wrapper géré courant peut reconstruire cette mission.
+    if identity.instance_id != instance
+        || st.managed_by_instance.get(instance) != Some(&identity.command_id)
+    {
+        return Ok(false);
+    }
+    let Some(snapshot) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|error| error.to_string())? else { return Ok(false) };
+    if snapshot.execution_id != execution {
+        return Ok(false);
+    }
+    if pause_covers(st, execution, false)? {
+        return Ok(snapshot.state == "interrupted");
+    }
+    Ok(matches!(snapshot.state.as_str(), "queued" | "starting" | "running"
+        | "waiting_approval" | "waiting_user_input"))
+}
+
+/// O(log N + P) via le journal des pauses ; la date métier brute reste intacte.
+fn effective_deadline(st: &DaemonState, task: &Task, now: i64) -> Result<Option<i64>, String> {
+    task.mission_deadline_at.map(|deadline| {
+        let from = deadline.saturating_sub(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
+        crate::referent_control::pause_overlap(st.store.connection(), from, now)
+            .map(|frozen| deadline.saturating_add(frozen))
+            .map_err(|error| error.to_string())
+    }).transpose()
+}
+
+/// O(log t + log r + log N + P), lectures seules. L'origine est l'admission
+/// durable de la demande, même si le checkpoint working n'a jamais été sauvé.
+pub(super) fn request_frozen_secs(st: &DaemonState, id: &str, now: i64) -> Result<Option<u64>, String> {
+    if st.delegation_store.for_mission(id)?.is_none() {
+        return Ok(None);
+    }
+    let request = st.store.get_request(id).map_err(|error| error.to_string())?
+        .ok_or("request_unavailable")?;
+    crate::referent_control::pause_overlap(st.store.connection(), request.created_at, now)
+        .map(|frozen| Some(frozen.max(0) as u64))
+        .map_err(|error| error.to_string())
+}
+
 fn parent_fact(st:&DaemonState,owner:&str,instance:&str,request_id:Option<&str>,attested:Option<&bridget_transport::protocol::ProviderPermissions>)->Result<Option<bridget_transport::protocol::ProviderPermissions>,String>{
     // Une révocation directe conserve le refus148, avant toute attestation.
     if st.delegation_store.revoked_agent(owner)?||st.delegation_store.revoked(instance)?{return Err("delegation_grant_required".into())}
     if let Some(parent)=st.delegation_store.for_child(owner)? {
         if st.delegation_store.revoked_agent(&parent.root_owner_agent_id)?{return Err("permission_not_inherited".into())}
-        if st.managed_by_instance.get(instance)!=Some(&parent.task_id)
-            || st.fleet.resolved_definition_for_command(&parent.task_id).is_none_or(|d|d.digest!=parent.definition.digest)
+        let command = current_command(st, &parent)?;
+        if st.managed_by_instance.get(instance)!=Some(&command)
+            || st.fleet.resolved_definition_for_command(&command).is_none_or(|d|d.digest!=parent.definition.digest)
             || st.fleet.agent_link_for_child(instance).map_err(|e|e.to_string())?.is_none_or(|link|link.delegation_id.as_deref()!=Some(parent.task_id.as_str())) {return Err("parent_task_unavailable".into())}
         if let Some(snapshot)=parent.permission_snapshot{
             return Ok(Some(bridget_transport::protocol::ProviderPermissions{
@@ -143,7 +213,12 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
         } else {
             None
         };
-    Ok(task_view(task, phase.as_deref(), full))
+    let control = crate::referent_control::read(st.store.connection())
+        .map_err(|_| "control_state_unavailable")?;
+    let mut view = task_view(task, phase.as_deref(), full);
+    view["suspended"] = json!(control.paused && matches!(task.state.as_str(), "queued" | "starting" | "mission_pending" | "working"));
+    view["resume_attempts"] = json!(task.restart_resumes);
+    Ok(view)
 }
 
 fn root_permission(
@@ -250,7 +325,7 @@ fn recover_owner(
 }
 
 fn recover_child(st: &DaemonState, task: &mut Task, instance: &str) -> Result<bool, String> {
-    if task.child_instance.as_deref() == Some(instance) {
+    if task.child_instance.as_deref() == Some(instance) && task.owner_instance == task.origin_owner_instance {
         return Ok(true);
     }
     let Some(command) = st.managed_by_instance.get(instance) else {
@@ -269,7 +344,7 @@ fn recover_child(st: &DaemonState, task: &mut Task, instance: &str) -> Result<bo
     else {
         return Ok(false);
     };
-    if link.delegation_id.as_deref() != Some(task.task_id.as_str())
+    if link.delegation_id.as_deref() != Some(task.task_id.as_str()) || link.role != "native_delegate"
         || (link.parent_instance_id != task.owner_instance
             && link.parent_instance_id != task.origin_owner_instance)
     {
@@ -280,8 +355,10 @@ fn recover_child(st: &DaemonState, task: &mut Task, instance: &str) -> Result<bo
             .transfer_agent_link(&link.link_id, &task.owner_instance, unix_timestamp())
             .map_err(|error| error.to_string())?;
     }
-    task.child_instance = Some(instance.into());
-    st.delegation_store.save(task)?;
+    if task.child_instance.as_deref() != Some(instance) {
+        task.child_instance = Some(instance.into());
+        st.delegation_store.save(task)?;
+    }
     Ok(true)
 }
 
@@ -646,7 +723,9 @@ fn handle_locked_with_project(
             {
                 return Err("invalid_request".into());
             }
-            if reply_timeout.is_some_and(|secs| !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs)) {
+            if reply_timeout.is_some_and(|secs| {
+                !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs)
+            }) {
                 return Err("reply_timeout_out_of_range".into());
             }
             let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
@@ -657,117 +736,207 @@ fn handle_locked_with_project(
                 recover_owner(st, &mut saved, &owner, &instance)?;
                 return current_task_view(st, &saved, true);
             }
-            // ADR 027 : garde unique des puits autonomes. Après le rejeu (une clé admise ou
-            // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
-            let control = crate::referent_control::read(st.store.connection())
-                .map_err(|_| "control_state_unavailable")?;
-            if matches!(
-                crate::referent_control::admit_autonomous_effect(crate::referent_control::AutonomousEffect::NativeDelegation, &control),
-                crate::referent_control::Admission::Deferred { .. }
-            ) {
-                return Err("referent_paused".into());
-            }
-            let fact=parent_fact(st,&owner,&instance,Some(request_id),attested)?;
-            let frozen_cwd=if let Some(fact)=&fact{
-                let path=std::fs::canonicalize(cwd).map_err(|_|"cwd_unavailable")?;
-                let root=std::fs::canonicalize(&fact.cwd).map_err(|_|"cwd_unavailable")?;
-                if !path.is_dir()||!path.starts_with(&root){return Err("cwd_outside_parent_project".into())}
-                path
-            }else if *posture==Some(SpawnPosture::Discovery){
-                authorize_cwd(st,&owner,&instance,cwd,SpawnPosture::Discovery,candidate_project)?
-            }else{return Err("permission_attestation_unavailable".into())};
-            crate::communication::project_scope(
-                agent_communication_project(st, &owner).as_ref(),
-                candidate_project,
-                "native-child",
-                None,
-            )?;
-            let (scoped,permission_snapshot,effective_posture)=if let Some(fact)=fact{
-                let target=st.registry.get(agent_type)?;
-                let (policy,effective)=crate::native_permissions::child_policy(&fact,target,&frozen_cwd,&st.source_env,*posture)?;
-                let scoped=st.registry.for_inherited_delegation(agent_type,model,effort.as_deref(),&policy)?;
-                (scoped,Some(crate::native_permissions::snapshot(&owner,&instance,fact,policy,&frozen_cwd)),Some(effective))
-            }else{(st.registry.for_delegation(agent_type,model,effort.as_deref(),SpawnPosture::Discovery)?,None,Some(SpawnPosture::Discovery))};
-            // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
-            let (active, instance_active, mut retained) = st.delegation_store.admission_counts(&instance)?;
-            if active >= 128 || instance_active >= 16 {
-                return Err("task_limit".into());
-            }
-            if retained >= crate::delegation::MAX_RETAINED_TASKS {
-                // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
-                // arbres soldés du plus ancien au plus récent), puis seulement refus.
-                if let Err(error) = copy_delivery_acks(st) {
-                    warn!("rétention native: accusés non recopiés avant la purge de borne : {error}");
+            // Le magasin garde seul la liste fermée. Capturer uniquement les
+            // refus d'une nouvelle admission, jamais un rejeu ou un parse invalide.
+            let receipt_owner = owner.clone();
+            let result = (|| {
+                // ADR 027 : garde unique des puits autonomes. Après le rejeu (une clé admise ou
+                // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
+                let control = crate::referent_control::read(st.store.connection())
+                    .map_err(|_| "control_state_unavailable")?;
+                if matches!(
+                    crate::referent_control::admit_autonomous_effect(
+                        crate::referent_control::AutonomousEffect::NativeDelegation,
+                        &control
+                    ),
+                    crate::referent_control::Admission::Deferred { .. }
+                ) {
+                    return Err("referent_paused".into());
                 }
-                purge_retained(st, unix_timestamp(), Some(crate::delegation::MAX_RETAINED_TASKS), usize::MAX);
-                retained = st.delegation_store.admission_counts(&instance)?.2;
+                let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
+                let frozen_cwd = if let Some(fact) = &fact {
+                    let path = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable")?;
+                    let root = std::fs::canonicalize(&fact.cwd).map_err(|_| "cwd_unavailable")?;
+                    if !path.is_dir() || !path.starts_with(&root) {
+                        return Err("cwd_outside_parent_project".into());
+                    }
+                    path
+                } else if *posture == Some(SpawnPosture::Discovery) {
+                    authorize_cwd(
+                        st,
+                        &owner,
+                        &instance,
+                        cwd,
+                        SpawnPosture::Discovery,
+                        candidate_project,
+                    )?
+                } else {
+                    return Err("permission_attestation_unavailable".into());
+                };
+                crate::communication::project_scope(
+                    agent_communication_project(st, &owner).as_ref(),
+                    candidate_project,
+                    "native-child",
+                    None,
+                )?;
+                let target = st
+                    .registry
+                    .get(agent_type)
+                    .map_err(|_| "agent_type_unknown")?;
+                let (scoped, permission_snapshot, effective_posture) = if let Some(fact) = fact {
+                    let (policy, effective) = crate::native_permissions::child_policy(
+                        &fact,
+                        target,
+                        &frozen_cwd,
+                        &st.source_env,
+                        *posture,
+                    )?;
+                    let scoped = st.registry.for_inherited_delegation(
+                        agent_type,
+                        model,
+                        effort.as_deref(),
+                        &policy,
+                    )?;
+                    (
+                        scoped,
+                        Some(crate::native_permissions::snapshot(
+                            &owner,
+                            &instance,
+                            fact,
+                            policy,
+                            &frozen_cwd,
+                        )),
+                        Some(effective),
+                    )
+                } else {
+                    (
+                        st.registry.for_delegation(
+                            agent_type,
+                            model,
+                            effort.as_deref(),
+                            SpawnPosture::Discovery,
+                        )?,
+                        None,
+                        Some(SpawnPosture::Discovery),
+                    )
+                };
+                // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
+                let (active, instance_active, mut retained) =
+                    st.delegation_store.admission_counts(&instance)?;
+                if active >= 128 || instance_active >= 16 {
+                    return Err("task_limit".into());
+                }
                 if retained >= crate::delegation::MAX_RETAINED_TASKS {
-                    return Err("retention_saturated".into());
+                    // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
+                    // arbres soldés du plus ancien au plus récent), puis seulement refus.
+                    if let Err(error) = copy_delivery_acks(st) {
+                        warn!(
+                            "rétention native: accusés non recopiés avant la purge de borne : {error}"
+                        );
+                    }
+                    purge_retained(
+                        st,
+                        unix_timestamp(),
+                        Some(crate::delegation::MAX_RETAINED_TASKS),
+                        usize::MAX,
+                    );
+                    retained = st.delegation_store.admission_counts(&instance)?.2;
+                    if retained >= crate::delegation::MAX_RETAINED_TASKS {
+                        return Err("retention_saturated".into());
+                    }
                 }
+                let task_id = Uuid::new_v4().to_string();
+                let executions = st
+                    .execution_store
+                    .recoverable_execution_ids_for_agent(&owner)
+                    .map_err(|error| error.to_string())?;
+                if executions.len() > 1 {
+                    return Err("parent_execution_ambiguous".into());
+                }
+                let (root_owner_agent_id, parent_task_id) =
+                    match st.delegation_store.for_child(&owner)? {
+                        Some(mut parent) => {
+                            let command = current_command(st, &parent)?;
+                            if st.managed_by_instance.get(&instance) != Some(&command)
+                                || st
+                                    .fleet
+                                    .resolved_definition_for_command(&command)
+                                    .is_none_or(|d| d.digest != parent.definition.digest)
+                                || !recover_child(st, &mut parent, &instance)?
+                            {
+                                return Err("parent_task_unavailable".into());
+                            }
+                            let link = st
+                                .fleet
+                                .agent_link_for_child(&instance)
+                                .map_err(|e| e.to_string())?
+                                .ok_or("parent_task_unavailable")?;
+                            if link.delegation_id.as_deref() != Some(parent.task_id.as_str()) {
+                                return Err("parent_task_unavailable".into());
+                            }
+                            // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
+                            // Sans délai explicite, comportement 149 : aucun contrôle.
+                            if let (Some(secs), Some(deadline)) = (
+                                reply_timeout,
+                                effective_deadline(st, &parent, unix_timestamp())?,
+                            ) && i64::try_from(*secs).map_or(true, |secs| {
+                                secs > deadline.saturating_sub(unix_timestamp())
+                            }) {
+                                return Err("reply_timeout_exceeds_parent".into());
+                            }
+                            st.delegation_store.parent_lineage(&parent)?
+                        }
+                        None => (owner.clone(), None),
+                    };
+                let record = Task {
+                    task_id: task_id.clone(),
+                    root_owner_agent_id,
+                    parent_task_id,
+                    updated_at: unix_timestamp(),
+                    started_at: None,
+                    completed_at: None,
+                    owner,
+                    owner_instance: instance.clone(),
+                    origin_owner_instance: instance,
+                    parent_execution_id: executions.into_iter().next(),
+                    request: request.clone(),
+                    permission_snapshot,
+                    effective_posture,
+                    definition: scoped.resolved_definition(agent_type)?,
+                    cwd: frozen_cwd.to_string_lossy().into_owned(),
+                    child: Uuid::new_v4().to_string(),
+                    child_instance: None,
+                    mission: Uuid::new_v4().to_string(),
+                    mission_deadline_at: None,
+                    launch_issued_at: None,
+                    mission_issued_at: None,
+                    restart_resumes: 0,
+                    cancel_stopped: Vec::new(),
+                    created_at: unix_timestamp(),
+                    state: "queued".into(),
+                    result: None,
+                    error: None,
+                    result_sent: false,
+                    cleanup_done: false,
+                    failure_sent: false,
+                    reply_timeout: reply_timeout.and_then(|secs| i64::try_from(secs).ok()),
+                    delivery_acked: false,
+                    acknowledged_at: None,
+                };
+                st.delegation_store
+                    .insert(&record, request_id, &canonical)?;
+                current_task_view(st, &record, true)
+            })();
+            if let Err(code) = &result {
+                st.delegation_store.record_refusal(
+                    &receipt_owner,
+                    request_id,
+                    &canonical,
+                    code,
+                    unix_timestamp(),
+                )?;
             }
-            let task_id = Uuid::new_v4().to_string();
-            let executions = st
-                .execution_store
-                .recoverable_execution_ids_for_agent(&owner)
-                .map_err(|error| error.to_string())?;
-            if executions.len() > 1 {
-                return Err("parent_execution_ambiguous".into());
-            }
-            let (root_owner_agent_id,parent_task_id)=match st.delegation_store.for_child(&owner)? {
-                Some(mut parent)=>{
-                    if st.managed_by_instance.get(&instance)!=Some(&parent.task_id)
-                        || st.fleet.resolved_definition_for_command(&parent.task_id)
-                            .is_none_or(|d|d.digest!=parent.definition.digest)
-                        || !recover_child(st,&mut parent,&instance)? {
-                        return Err("parent_task_unavailable".into());
-                    }
-                    let link=st.fleet.agent_link_for_child(&instance).map_err(|e|e.to_string())?.ok_or("parent_task_unavailable")?;
-                    if link.delegation_id.as_deref()!=Some(parent.task_id.as_str()) {return Err("parent_task_unavailable".into())}
-                    // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
-                    // Sans délai explicite, comportement 149 : aucun contrôle.
-                    if let (Some(secs), Some(deadline)) = (reply_timeout, parent.mission_deadline_at)
-                        && i64::try_from(*secs).map_or(true, |secs| secs > deadline.saturating_sub(unix_timestamp()))
-                    {
-                        return Err("reply_timeout_exceeds_parent".into());
-                    }
-                    st.delegation_store.parent_lineage(&parent)?
-                },
-                None=>(owner.clone(),None),
-            };
-            let record = Task {
-                task_id: task_id.clone(),
-                root_owner_agent_id,
-                parent_task_id,
-                updated_at: unix_timestamp(),
-                started_at: None,
-                completed_at: None,
-                owner,
-                owner_instance: instance.clone(),
-                origin_owner_instance: instance,
-                parent_execution_id: executions.into_iter().next(),
-                request: request.clone(),
-                permission_snapshot,
-                effective_posture,
-                definition: scoped.resolved_definition(agent_type)?,
-                cwd: frozen_cwd.to_string_lossy().into_owned(),
-                child: Uuid::new_v4().to_string(),
-                child_instance: None,
-                mission: Uuid::new_v4().to_string(),
-                mission_deadline_at: None,
-                created_at: unix_timestamp(),
-                state: "queued".into(),
-                result: None,
-                error: None,
-                result_sent: false,
-                cleanup_done: false,
-                failure_sent: false,
-                reply_timeout: reply_timeout.and_then(|secs| i64::try_from(secs).ok()),
-                delivery_acked: false,
-                acknowledged_at: None,
-            };
-            st.delegation_store
-                .insert(&record, request_id, &canonical)?;
-            current_task_view(st, &record, true)
+            result
         }
         NativeDelegationRequest::Status { task_id } => {
             let task = st
@@ -820,13 +989,12 @@ fn handle_locked_with_project(
     }
 }
 
-fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
+/// Relecture des droits et des sources avant tout lancement ou reprise.
+/// O(v + b + log r), hors latences système : v octets de définition, contexte
+/// et environnement inspectés, b octets relus/hachés, r révocations durables.
+pub(super) fn native_launch_registry(st: &DaemonState, task: &Task) -> Result<AgentRegistry, String> {
     if st.delegation_store.revoked_agent(&task.owner)?||st.delegation_store.revoked_agent(&task.root_owner_agent_id)?||st.delegation_store.revoked(&task.owner_instance)?{return Err("permission_not_inherited".into())}
-    let NativeDelegationRequest::Delegate {
-        agent_type,
-        posture,
-        ..
-    } = &task.request
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request
     else {
         return Err("invalid_record".into());
     };
@@ -842,6 +1010,36 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
             crate::native_permissions::recheck_context(context,registry.get(agent_type)?,Path::new(&task.cwd),&st.source_env)?;
         }
     }
+    Ok(registry)
+}
+
+/// Politique figée et mission d'origine, avec l'instance du bail effectivement relancé.
+/// O(b) temps et mémoire, b octets des politiques, sources et identifiants sérialisés.
+pub(super) fn native_child_env(task: &Task, prepared: &mut PreparedSpawn) -> Result<(), String> {
+    if let Some(snapshot) = &task.permission_snapshot {
+        prepared.env.insert(crate::native_permissions::CHILD_POLICY_ENV.into(),
+            serde_json::to_string(&snapshot.child_policy).map_err(|error| error.to_string())?.into());
+        prepared.env.insert(crate::native_permissions::CHILD_SOURCES_ENV.into(),
+            serde_json::to_string(&crate::native_permissions::snapshot_contexts(snapshot))
+                .map_err(|error| error.to_string())?.into());
+    }
+    prepared.env.insert(crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV.into(),
+        serde_json::to_string(&crate::wrapper::NativeMissionBootstrap {
+            instance_id: prepared.lease.instance_id.clone(), mission_id: task.mission.clone(),
+        }).map_err(|error| error.to_string())?.into());
+    Ok(())
+}
+
+fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
+    let registry = native_launch_registry(st, task)?;
+    let NativeDelegationRequest::Delegate { agent_type, posture, .. } = &task.request else {
+        return Err("invalid_record".into());
+    };
+    if task.launch_issued_at.is_none() && !st.fleet.knows_command(&task.task_id) {
+        task.launch_issued_at = Some(unix_timestamp());
+        st.delegation_store.save(task)?;
+    }
+    let issued_at = task.launch_issued_at.unwrap_or(task.created_at);
     let order = FleetSpawnOrder {
         // La définition héritée est déjà figée. Une nouvelle conversion de
         // posture réduirait silencieusement sa politique fournisseur.
@@ -852,8 +1050,8 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
         cwd: PathBuf::from(&task.cwd),
         persistent: true,
         command_id: task.task_id.clone(),
-        issued_at: task.created_at,
-        deadline_at: task.created_at.saturating_add(300),
+        issued_at,
+        deadline_at: issued_at.saturating_add(300),
         ownership: Some(SpawnOwnership {
             parent_instance_id: task.origin_owner_instance.clone(),
             parent_execution_id: task.parent_execution_id.clone(),
@@ -881,19 +1079,7 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     .map_err(|error| error.to_string())?
     {
         SpawnDecision::Ready(mut prepared) => {
-            if let Some(snapshot)=&task.permission_snapshot {
-                prepared.env.insert(crate::native_permissions::CHILD_POLICY_ENV.into(),serde_json::to_string(&snapshot.child_policy).map_err(|e|e.to_string())?.into());
-                prepared.env.insert(crate::native_permissions::CHILD_SOURCES_ENV.into(),serde_json::to_string(&crate::native_permissions::snapshot_contexts(snapshot)).map_err(|e|e.to_string())?.into());
-            }
-            prepared.env.insert(
-                crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV.into(),
-                serde_json::to_string(&crate::wrapper::NativeMissionBootstrap {
-                    instance_id: prepared.lease.instance_id.clone(),
-                    mission_id: task.mission.clone(),
-                })
-                .map_err(|error| error.to_string())?
-                .into(),
-            );
+            native_child_env(task, &mut prepared)?;
             task.child_instance = Some(prepared.lease.instance_id.clone());
             task.state = "starting".into();
             st.delegation_store.save(task)?;
@@ -1096,73 +1282,141 @@ pub(super) fn capture_reply(
     Ok(true)
 }
 
-pub(super) fn rejected(st: &DaemonState, conn: &str, mission: &str, reason: &str) {
-    let Ok(Some(mut task)) = st.delegation_store.for_mission(mission) else {
-        return;
+/// Complexité : O(b + log T + L(c) + log P), L(c) coût de latest_in_chain sur c maillons.
+/// b octets du payload de tâche, T tâches et P pauses ; hors latences système.
+pub(super) fn rejected(
+    st: &DaemonState,
+    conn: &str,
+    mission: &str,
+    reason: &str,
+) -> Result<bool, String> {
+    let Some(mut task) = st.delegation_store.for_mission(mission)? else {
+        return Ok(false);
     };
     if task.terminal()
         || task.state == "cancelling"
         || task.child_instance.as_deref() != st.conn_instances.get(conn).map(String::as_str)
     {
-        return;
+        return Ok(false);
+    }
+    if reason == "tour annulé par le pilote"
+        && let Some(snapshot) = st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .map_err(|error| error.to_string())?
+        && pause_covers(st, &snapshot.execution_id, true)?
+    {
+        return Ok(true);
     }
     task.state = "failed".into();
     task.error = Some(reason.chars().take(1024).collect());
-    if let Err(error) = st.delegation_store.save(&task) {
-        error!("délégation native refus non persisté: {error}");
+    st.delegation_store.save(&task)?;
+    Ok(false)
+}
+
+/// Identité issue de la flotte et de son lien attesté. Une tâche ancienne peut
+/// rejoindre une génération plus récente ; une instance inconnue est refusée.
+/// O(B + F log(F + 1) + log L), hors latences système : B octets de flotte, F entrées, L liens.
+/// Génération décalée : ajouter O(Bs + S log(S + 1)), Bs octets de payloads et S sagas.
+fn restart_identity(st: &DaemonState, task: &Task) -> Result<ManagedIdentity, String> {
+    let mismatch = "native_restart_identity_mismatch";
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+        return Err(mismatch.into());
+    };
+    let entry = st.fleet.desired_entry(&task.child).map_err(|error| error.to_string())?
+        .ok_or(mismatch)?;
+    let fact = entry.agent_link.as_ref().ok_or(mismatch)?;
+    let link = st.idempotency.agent_link_by_id(&fact.link_id)
+        .map_err(|error| error.to_string())?.ok_or(mismatch)?;
+    if &entry.agent_type != agent_type || entry.cwd != Path::new(&task.cwd)
+        || entry.resolved_definition.as_ref() != Some(&task.definition)
+        || !entry.persistent
+        || link.delegation_id.as_deref() != Some(task.task_id.as_str())
+        || link.role != "native_delegate"
+        || (link.parent_instance_id != task.origin_owner_instance && link.parent_instance_id != task.owner_instance)
+        || fact.parent_instance_id != link.parent_instance_id
+        || fact.parent_execution_id != link.parent_execution_id
+        || fact.delegation_id != link.delegation_id || fact.role != link.role
+    {
+        return Err(mismatch.into());
+    }
+    let previous = task.child_instance.as_deref().ok_or(mismatch)?;
+    if previous != link.child_instance_id {
+        let old = st.fleet.agent_link_for_child(previous).map_err(|error| error.to_string())?
+            .ok_or(mismatch)?;
+        if old.delegation_id != link.delegation_id || old.role != link.role
+            || (old.parent_instance_id != task.origin_owner_instance && old.parent_instance_id != task.owner_instance)
+        {
+            return Err(mismatch.into());
+        }
+        let commands = st.idempotency.spawn_commands(&st.fleet.supervisor_scope())
+            .map_err(|error| error.to_string())?;
+        let old_generation = commands.iter().find(|command|
+            command.name == task.child && command.instance_id.as_deref() == Some(previous))
+            .map(|command| command.generation).ok_or(mismatch)?;
+        if old_generation >= entry.generation
+            || !commands.iter().any(|command| command.command_id == entry.command_id
+                && command.name == task.child && command.generation == entry.generation
+                && command.instance_id.as_deref() == Some(link.child_instance_id.as_str()))
+        {
+            return Err(mismatch.into());
+        }
+    }
+    Ok(ManagedIdentity { instance_id: link.child_instance_id,
+        command_id: entry.command_id, generation: entry.generation })
+}
+
+fn current_command(st: &DaemonState, task: &Task) -> Result<String, String> {
+    match restart_identity(st, task) {
+        Ok(identity) => Ok(identity.command_id),
+        Err(code) if code == "native_restart_identity_mismatch" => Ok(task.task_id.clone()),
+        Err(error) => Err(error),
     }
 }
 
-/// Autorités de bootstrap natif issues de l'admission propriétaire. Le
-/// marqueur fournit la naissance PID ; la saga et les deux liens de flotte
-/// prouvent qu'il s'agit du wrapper natif de CETTE mission, pas d'un nom RPC.
+/// Le marqueur atteste la naissance du processus. Les incohérences natives
+/// lisibles restent locales à la tâche ; une erreur de stockage reste bloquante.
 pub(super) fn restart_identities(
     st: &DaemonState,
 ) -> Result<std::collections::BTreeMap<String, ManagedIdentity>, String> {
-    let desired = st.fleet.desired_fleet().map_err(|error| error.to_string())?;
     let mut identities = std::collections::BTreeMap::new();
-    for task in st.delegation_store.tasks()? {
-        match st.marker_store.load(&task.child) {
-            Ok(_) => {}
+    for mut task in st.delegation_store.tasks()? {
+        let marker = match st.marker_store.load(&task.child) {
+            Ok(marker) => Some(marker),
             Err(crate::managed_process::ManagedProcessError::Io(error))
-                if error.kind() == std::io::ErrorKind::NotFound => continue,
+                if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(error.to_string()),
-        }
-        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
-            return Err("native_restart_identity_mismatch".into());
         };
-        let instance = task.child_instance.as_deref().ok_or("native_restart_identity_mismatch")?;
-        let entry = desired.equipiers.get(&task.child).ok_or("native_restart_identity_mismatch")?;
-        let persisted_link = entry.agent_link.as_ref().ok_or("native_restart_identity_mismatch")?;
-        let link = st.fleet.agent_link_for_child(instance).map_err(|error| error.to_string())?
-            .ok_or("native_restart_identity_mismatch")?;
-        if entry.command_id != task.task_id
-            || &entry.agent_type != agent_type
-            || entry.cwd != Path::new(&task.cwd)
-            || entry.resolved_definition.as_ref() != Some(&task.definition)
-            || link.child_instance_id != instance
-            || (link.parent_instance_id != task.origin_owner_instance
-                && link.parent_instance_id != task.owner_instance)
-            || link.delegation_id.as_deref() != Some(task.task_id.as_str())
-            || link.role != "native_delegate"
-            || persisted_link.link_id != link.link_id
-            || (persisted_link.parent_instance_id != task.origin_owner_instance
-                && persisted_link.parent_instance_id != task.owner_instance)
-            || persisted_link.delegation_id != link.delegation_id
-            || persisted_link.role != link.role
-        {
-            return Err("native_restart_identity_mismatch".into());
+        if !matches!(task.state.as_str(), "starting" | "mission_pending" | "working") {
+            if let (Some(marker), Ok(identity)) = (marker, restart_identity(st, &task))
+                && marker.instance_id == identity.instance_id
+                && marker.command_id == identity.command_id && marker.generation == identity.generation
+            {
+                identities.insert(task.child, identity);
+            }
+            continue;
         }
-        identities.insert(task.child, ManagedIdentity {
-            instance_id: instance.into(), command_id: task.task_id, generation: entry.generation,
-        });
+        let identity = match restart_identity(st, &task) {
+            Ok(identity) if marker.as_ref().is_none_or(|marker|
+                marker.instance_id == identity.instance_id && marker.command_id == identity.command_id
+                    && marker.generation == identity.generation) => identity,
+            Ok(_) => { fail_restart(st, &mut task, "native_restart_identity_mismatch")?; continue; }
+            Err(code) if code == "native_restart_identity_mismatch" => {
+                fail_restart(st, &mut task, &code)?; continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if task.child_instance.as_deref() != Some(identity.instance_id.as_str()) {
+            task.child_instance = Some(identity.instance_id.clone());
+            st.delegation_store.save(&task)?;
+        }
+        if marker.is_some() { identities.insert(task.child, identity); }
     }
     Ok(identities)
 }
 
-/// Une tâche imbriquée queued n'a pas encore de fournisseur. Son propriétaire
-/// est pourtant perdu définitivement si la filiation désigne une instance
-/// native déjà lancée : cette instance est exclue de toute reprise.
+/// Une tâche queued reste admise si son propriétaire natif va être repris.
+/// Un propriétaire terminal ou dont la filiation n'est plus attestée est perdu.
 fn queued_owner_lost(st: &DaemonState, task: &Task) -> Result<bool, String> {
     let Some(parent_id) = task.parent_task_id.as_deref() else { return Ok(false) };
     let parent = st.delegation_store.get(parent_id)?.ok_or("parent_task_unavailable")?;
@@ -1181,13 +1435,19 @@ fn queued_owner_lost(st: &DaemonState, task: &Task) -> Result<bool, String> {
     {
         return Err("native_owner_identity_mismatch".into());
     }
-    Ok(true)
+    let command = current_command(st, &parent)?;
+    let entry = st.fleet.desired_entry(&parent.child).map_err(|error| error.to_string())?;
+    Ok(!matches!(parent.state.as_str(), "starting" | "mission_pending" | "working")
+        || entry.is_none_or(|entry| entry.command_id != command
+            || entry.lifecycle_state != DesiredLifecycleState::Running))
 }
 
 /// Fermer seulement la ligne de mission exacte, par comparaison atomique.
 /// Une exécution déjà terminale (notamment completed) n'est jamais rouverte.
 fn close_lost_execution(st: &DaemonState, task: &Task, reason: &str) -> Result<(), String> {
-    let execution_id = format!("execution-{}", task.mission);
+    let Some(snapshot) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|error| error.to_string())? else { return Ok(()) };
+    let execution_id = snapshot.execution_id;
     let Some(target) = st.execution_store.execution_control_target(&execution_id)
         .map_err(|error| error.to_string())? else { return Ok(()) };
     if target.target_agent != task.child {
@@ -1203,29 +1463,96 @@ fn close_lost_execution(st: &DaemonState, task: &Task, reason: &str) -> Result<(
             _ => return Err("native_execution_changed".into()),
         }
     }
+    if reason.starts_with("native_cancelled")
+        || reason == "daemon_restart"
+        || reason == "request_unavailable"
+    {
+        st.execution_store.abandon_pause_interruption(&execution_id, unix_timestamp())
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
-/// La flotte ordinaire peut reprendre ses agents persistants. Un enfant natif
-/// appartient à sa saga : rejouer un tour engagé après une coupure est interdit.
+/// O(b + log t + L(c) + log e + log p) : payload de b octets, t tâches,
+/// e exécutions, p interruptions ; L(c) est le coût SQL de latest_in_chain.
+/// La tâche est persistée avant la fermeture conditionnelle de sa feuille.
+pub(super) fn fail_restart(st: &DaemonState, task: &mut Task, reason: &str) -> Result<(), String> {
+    task.state = "failed".into();
+    task.error = Some(reason.into());
+    st.delegation_store.save(task)?;
+    close_lost_execution(st, task, "daemon_restart")
+}
+
+/// Une seule décision durable, avant toute reprise. Le crash ne peut que
+/// sur-compter. La fermeture des groupes précède cette décision au démarrage.
 pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, String> {
     let mut children = HashSet::new();
-    let running: HashSet<String> = st.fleet.desired_fleet()
-        .map_err(|error| error.to_string())?.equipiers.into_iter()
-        .filter(|(_, entry)| entry.lifecycle_state == DesiredLifecycleState::Running)
-        .map(|(name, _)| name).collect();
-    for mut task in st.delegation_store.tasks()? {
-        children.insert(task.child.clone());
-        if matches!(task.state.as_str(), "starting" | "mission_pending" | "working")
-            || (task.state == "queued" && queued_owner_lost(st, &task)?)
-        {
-            task.state = "failed".into();
-            task.error = Some("unreachable".into());
-        }
-        if task.state == "failed" && task.error.as_deref() == Some("unreachable") {
+    let now = unix_timestamp();
+    let mut tasks = st.delegation_store.tasks()?;
+    tasks.sort_by_key(|task| task.state == "queued");
+    for mut task in tasks {
+        if task.state == "failed" {
+            // Une feuille encore active d'une mission déjà échouée ne doit
+            // pas retenir le résultat acquis de sa racine après la panne.
             close_lost_execution(st, &task, "daemon_restart")?;
-            st.delegation_store.save(&task)?;
+        } else if matches!(task.state.as_str(), "starting" | "mission_pending" | "working") {
+            let decision: Result<ManagedIdentity, String> = (|| {
+                let identity = restart_identity(st, &task)?;
+                if st.fleet.desired_entry(&task.child).map_err(|error| error.to_string())?
+                    .is_none_or(|entry| entry.lifecycle_state != DesiredLifecycleState::Running)
+                { return Err("unreachable".into()); }
+                native_launch_registry(st, &task)?;
+                if effective_deadline(st, &task, now)?.is_some_and(|deadline| now >= deadline) {
+                    return Err("mission_reply_timeout".into());
+                }
+                if task.restart_resumes >= 2 { return Err("native_resume_exhausted".into()); }
+                Ok(identity)
+            })();
+            match decision {
+                Ok(identity) => {
+                    task.child_instance = Some(identity.instance_id);
+                    task.restart_resumes += 1;
+                    st.delegation_store.save(&task)?;
+                    if let Some(snapshot) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
+                        .map_err(|error| error.to_string())?
+                        && snapshot.state == "interrupting" && pause_covers(st, &snapshot.execution_id, false)?
+                    {
+                        match st.execution_store.transition_if_current(&snapshot.execution_id,
+                            &snapshot.state, snapshot.revision, snapshot.generation, "interrupted",
+                            "pause_restart_reconciled", now).map_err(|error| error.to_string())?
+                        {
+                            ConditionalTransition::Applied(_) => {}
+                            _ => return Err("native_execution_changed".into()),
+                        }
+                    }
+                    continue;
+                }
+                Err(reason)
+                    if matches!(
+                        reason.as_str(),
+                        "native_restart_identity_mismatch"
+                            | "unreachable"
+                            | "mission_reply_timeout"
+                            | "native_resume_exhausted"
+                            | "permission_not_inherited"
+                            | "invalid_record"
+                            | "cwd_unavailable"
+                            | "cwd_changed"
+                            | "settings_revision_changed"
+                    ) =>
+                {
+                    fail_restart(st, &mut task, &reason)?;
+                }
+                Err(error) => return Err(error),
+            }
+        } else if task.state == "queued" {
+            match queued_owner_lost(st, &task) {
+                Ok(false) => continue,
+                Ok(true) => fail_restart(st, &mut task, "unreachable")?,
+                Err(error) => return Err(error),
+            }
         }
+        children.insert(task.child.clone());
         if matches!(task.state.as_str(), "cancelled" | "cancelling") {
             // La réconciliation des groupes est achevée avant cette fonction.
             // Cette instance native ne peut donc plus reprendre sa mission.
@@ -1233,7 +1560,9 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
         }
         // Les résultats déjà capturés et l'attente des descendants restent
         // durables. Aucun nouveau fournisseur ne doit porter la même mission.
-        if running.contains(&task.child) {
+        if st.fleet.desired_entry(&task.child).map_err(|error| error.to_string())?
+            .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Running)
+        {
             st.fleet.mark_stopped(&task.child).map_err(|error| error.to_string())?;
         }
     }
@@ -1246,6 +1575,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     let mut cleanups = Vec::new();
     {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let control = match crate::referent_control::read(st.store.connection()) {
+            Ok(control) => control,
+            Err(error) => { warn!("contrôle natif illisible: {error}"); return; }
+        };
         let Ok(mut tasks) = st.delegation_store.pending() else {
             return;
         };
@@ -1261,6 +1594,17 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
         }
         for mut task in tasks.iter().cloned() {
+            if control.paused && matches!(task.state.as_str(), "queued" | "starting" | "mission_pending" | "working") {
+                continue;
+            }
+            if task.state == "cancelling" {
+                match cancellation_root(&st, &task) {
+                    Ok(true) => cancellations.push(task),
+                    Ok(false) => {}
+                    Err(error) => warn!("racine d'annulation illisible: {error}"),
+                }
+                continue;
+            }
             let owner = task.owner.clone();
             let owner_proved = if let Some(instance) = st
                 .router
@@ -1280,18 +1624,28 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             {
                 let _ = recover_child(&st, &mut task, &instance);
             }
-            if task.state == "cancelling" {
-                cancellations.push(task);
-                continue;
-            }
             if task.state == "working" && task.mission_deadline_at.is_none() {
-                let admitted_at = st
-                    .execution_store
-                    .execution_snapshot(&format!("execution-{}", task.mission))
-                    .ok()
-                    .flatten()
-                    .map(|snapshot| snapshot.created_at)
-                    .unwrap_or(task.created_at);
+                let admitted_at = match st.store.get_request(&task.mission) {
+                    Ok(Some(request)) => request.created_at,
+                    Ok(None) => {
+                        warn!("admission de mission native absente: {}", task.mission);
+                        if let Err(error) = close_lost_execution(&st, &task, "request_unavailable")
+                        {
+                            error!("mission native sans suivi: clôture refusée: {error}");
+                            continue;
+                        }
+                        task.state = "failed".into();
+                        task.error = Some("request_unavailable".into());
+                        if let Err(error) = st.delegation_store.save(&task) {
+                            error!("mission native sans suivi non persistée: {error}");
+                        }
+                        continue;
+                    }
+                    Err(error) => {
+                        warn!("admission de mission native illisible: {error}");
+                        continue;
+                    }
+                };
                 task.mission_deadline_at =
                     Some(admitted_at.saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)));
                 if let Err(error) = st.delegation_store.save(&task) {
@@ -1299,11 +1653,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     continue;
                 }
             }
-            if task.state == "working"
-                && task
-                    .mission_deadline_at
-                    .is_some_and(|deadline| unix_timestamp() >= deadline)
-            {
+            let expired = if task.state == "working" {
+                match effective_deadline(&st, &task, unix_timestamp()) {
+                    Ok(deadline) => deadline.is_some_and(|deadline| unix_timestamp() >= deadline),
+                    Err(error) => { warn!("échéance native illisible: {error}"); continue; }
+                }
+            } else { false };
+            if expired {
                 task.state = "failed".into();
                 task.error = Some("mission_reply_timeout".into());
                 if let Err(error) = st.delegation_store.save(&task) {
@@ -1413,6 +1769,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             }
             if matches!(task.state.as_str(), "queued" | "starting")
+                && matches!(crate::referent_control::admit_autonomous_effect(
+                    crate::referent_control::AutonomousEffect::NativeMissionDispatch, &control,
+                ), crate::referent_control::Admission::Admitted)
                 && let Err(error) = spawn_task(&mut st, &mut task)
             {
                 task.state = "failed".into();
@@ -1420,6 +1779,21 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = st.delegation_store.save(&task);
             }
             if task.state == "mission_pending" {
+                if !matches!(crate::referent_control::admit_autonomous_effect(
+                    crate::referent_control::AutonomousEffect::NativeMissionDispatch, &control,
+                ), crate::referent_control::Admission::Admitted) { continue; }
+                if task.mission_issued_at.is_none() {
+                    match st.store.get_request(&task.mission) {
+                        Ok(None) => {
+                            task.mission_issued_at = Some(unix_timestamp());
+                            if let Err(error) = st.delegation_store.save(&task) {
+                                error!("date d'émission native non persistée: {error}"); continue;
+                            }
+                        }
+                        Ok(Some(_)) => {} // Enveloppe 150 déjà admise : garder created_at.
+                        Err(error) => { warn!("admission native illisible: {error}"); continue; }
+                    }
+                }
                 let NativeDelegationRequest::Delegate { task: body, .. } = &task.request else {
                     continue;
                 };
@@ -1437,7 +1811,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     &task.owner_instance,
                     &task.task_id,
                     message,
-                    task.created_at,
+                    task.mission_issued_at.unwrap_or(task.created_at),
                     &mut controls,
                 );
                 match response {
@@ -1446,17 +1820,37 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             IdempotencyIssue::Accepted { .. } | IdempotencyIssue::OutcomeUnknown { .. },
                         ..
                     } => {
+                        if task.mission_deadline_at.is_none() {
+                            // Figer depuis l'admission durable, sans renouveler au rejeu.
+                            let admitted_at = match st.store.get_request(&task.mission) {
+                                Ok(Some(request)) => request.created_at,
+                                Ok(None) => {
+                                    warn!("admission de mission native absente: {}", task.mission);
+                                    if let Err(error) =
+                                        close_lost_execution(&st, &task, "request_unavailable")
+                                    {
+                                        error!(
+                                            "mission native sans suivi: clôture refusée: {error}"
+                                        );
+                                        continue;
+                                    }
+                                    task.state = "failed".into();
+                                    task.error = Some("request_unavailable".into());
+                                    if let Err(error) = st.delegation_store.save(&task) {
+                                        error!("mission native sans suivi non persistée: {error}");
+                                    }
+                                    continue;
+                                }
+                                Err(error) => {
+                                    warn!("admission de mission native illisible: {error}");
+                                    continue;
+                                }
+                            };
+                            task.mission_deadline_at = Some(admitted_at.saturating_add(
+                                task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS),
+                            ));
+                        }
                         task.state = "working".into();
-                        // Figer après admission de la remise, sans renouveler au rejeu.
-                        let admitted_at = st
-                            .execution_store
-                            .execution_snapshot(&format!("execution-{}", task.mission))
-                            .ok()
-                            .flatten()
-                            .map(|snapshot| snapshot.created_at)
-                            .unwrap_or(task.created_at);
-                        task.mission_deadline_at
-                            .get_or_insert(admitted_at.saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)));
                     }
                     DaemonToWrapper::IdempotencyResult {
                         issue:
@@ -1479,19 +1873,41 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             if task.state == "working" {
                 align_request_deadline(&st, &task);
             }
-            let execution_id = format!("execution-{}", task.mission);
             // completed seul ne prouve pas la réponse corrélée. On attend
             // la capture, sans inventer un succès vide.
             if task.state == "working"
-                && let Ok(Some(snapshot)) = st.execution_store.execution_snapshot(&execution_id)
+                && let Ok(Some(snapshot)) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
                 && matches!(
                     snapshot.state.as_str(),
                     "failed" | "unreachable" | "interrupted"
                 )
             {
-                task.state = "failed".into();
-                task.error = Some(snapshot.state);
-                let _ = st.delegation_store.save(&task);
+                let paused = if snapshot.state == "interrupted" {
+                    match pause_covers(&st, &snapshot.execution_id, false) {
+                        Ok(paused) => paused,
+                        Err(error) => {
+                            warn!("qualification de pause native illisible: {error}");
+                            continue;
+                        }
+                    }
+                } else {
+                    false
+                };
+                if paused {
+                    if let Some(conn) = st.router.get_agent(&task.child).map(|route| route.connection_id.clone())
+                        && let Some(instance) = st.conn_instances.get(&conn).cloned()
+                        && st.presences.get(&instance).is_some_and(|presence| presence.busy_since.is_none())
+                    {
+                        schedule_execution_recovery(&mut st, &conn, &instance, &task.child, false);
+                        if let Some(mut ready) = st.pending_post_response_controls.remove(&conn) {
+                            controls.append(&mut ready);
+                        }
+                    }
+                } else {
+                    task.state = "failed".into();
+                    task.error = Some(snapshot.state);
+                    let _ = st.delegation_store.save(&task);
+                }
             }
             if task.state == "result_available" && !task.result_sent {
                 let Some(child_instance) = task.child_instance.as_deref() else {
@@ -1644,7 +2060,7 @@ fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
                                 && (child.state == "cancelled"
                                     || (child.state == "failed"
                                         && child.error.as_deref() == Some("unreachable"))))
-                            && st.execution_store.execution_snapshot(&execution_id)
+                            && st.execution_store.latest_in_chain(&execution_id)
                                 .map_err(|error| error.to_string())?
                                 .is_some_and(|snapshot| matches!(snapshot.state.as_str(),
                                     "failed" | "unreachable" | "interrupted"))
@@ -1669,20 +2085,58 @@ fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
     Ok(false)
 }
 
+/// O(d) lectures par identifiant, d <= 8 : un seul coordinateur par annulation.
+fn cancellation_root(st: &DaemonState, task: &Task) -> Result<bool, String> {
+    let mut parent = task.parent_task_id.clone();
+    for _ in 0..8 {
+        let Some(id) = parent else { return Ok(true) };
+        let ancestor = st
+            .delegation_store
+            .get(&id)?
+            .ok_or("parent_task_unavailable")?;
+        if ancestor.state == "cancelling" {
+            return Ok(false);
+        }
+        parent = ancestor.parent_task_id;
+    }
+    if parent.is_none() {
+        Ok(true)
+    } else {
+        Err("descendant_limit".into())
+    }
+}
+
+/// Précontrôle et index locaux O(m + f + p + n log n), hors lectures existantes
+/// des descendants/liens et des marqueurs. Flotte et records sont lus une fois.
+/// La sauvegarde après chaque arrêt sérialise la liste croissante : O(n²)
+/// octets cumulés, requis par la reprise durable. n <= 4096 membres,
+/// m lancements, f flotte, p présences.
 fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
-    let mut names = vec![task.child.clone()];
-    {
+    let (root_id, members, task_ids) = {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
-        let Ok(tasks) = st.delegation_store.descendants(&task.task_id) else {
+        let Ok(Some(mut root)) = st.delegation_store.get(&task.task_id) else {
             return;
         };
-        let mut instances = vec![task.child_instance.clone()];
-        for mut child in tasks {
-            names.push(child.child.clone());
-            instances.push(child.child_instance.clone());
-            if !child.terminal() {
-                child.state="cancelling".into();
-                let _=st.delegation_store.save(&child);
+        if root.terminal() && root.cleanup_done {
+            return;
+        }
+        let Ok(mut tasks) = st.delegation_store.descendants(&root.task_id) else {
+            return;
+        };
+        tasks.insert(0, root.clone());
+        let mut depths: HashMap<String, usize> = HashMap::new();
+        let mut names: HashMap<String, usize> = HashMap::new();
+        let mut queue = VecDeque::new();
+        for entry in &tasks {
+            let depth = entry
+                .parent_task_id
+                .as_ref()
+                .and_then(|id| depths.get(id))
+                .map_or(0, |depth| depth + 1);
+            depths.insert(entry.task_id.clone(), depth);
+            names.insert(entry.child.clone(), depth);
+            if let Some(instance) = &entry.child_instance {
+                queue.push_back((instance.clone(), depth));
             }
         }
         // Les liens flotte couvrent aussi les descendants créés par la CLI
@@ -1691,9 +2145,23 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
             Ok(fleet) => fleet,
             Err(_) => return,
         };
-        let mut queue: Vec<String> = instances.iter().flatten().cloned().collect();
+        let fleet_names: HashMap<_, _> = fleet
+            .equipiers
+            .iter()
+            .filter_map(|(name, entry)| {
+                entry
+                    .agent_link
+                    .as_ref()
+                    .map(|link| (link.link_id.as_str(), name.as_str()))
+            })
+            .collect();
+        let present_names: HashMap<_, _> = st
+            .presences
+            .iter()
+            .map(|(instance, presence)| (instance.as_str(), presence.name.as_str()))
+            .collect();
         let mut visited = HashSet::new();
-        while let Some(parent) = queue.pop() {
+        while let Some((parent, depth)) = queue.pop_front() {
             if !visited.insert(parent.clone()) {
                 continue;
             }
@@ -1705,34 +2173,86 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                 Err(_) => return,
             };
             for link in links {
-                queue.push(link.child_instance_id.clone());
-                let name = st
-                    .presences
-                    .get(&link.child_instance_id)
-                    .map(|presence| presence.name.clone())
-                    .or_else(|| {
-                        fleet
-                            .equipiers
-                            .iter()
-                            .find(|(_, entry)| {
-                                entry
-                                    .agent_link
-                                    .as_ref()
-                                    .is_some_and(|fact| fact.link_id == link.link_id)
-                            })
-                            .map(|(name, _)| name.clone())
-                    });
-                if let Some(name) = name
-                    && !names.contains(&name)
-                {
-                    names.push(name);
+                queue.push_back((link.child_instance_id.clone(), depth + 1));
+                let name = present_names
+                    .get(link.child_instance_id.as_str())
+                    .or_else(|| fleet_names.get(link.link_id.as_str()));
+                if let Some(name) = name {
+                    names
+                        .entry((*name).to_string())
+                        .and_modify(|known| *known = (*known).max(depth + 1))
+                        .or_insert(depth + 1);
                 }
             }
         }
-    }
+        if names.len() > 4096 {
+            return;
+        }
+        let records: HashMap<_, _> = st
+            .managed_spawns
+            .values()
+            .map(|record| (record.lease.name.as_str(), record))
+            .collect();
+        let stopped: HashSet<_> = root.cancel_stopped.iter().map(String::as_str).collect();
+        let mut ordered: Vec<_> = names.into_iter().collect();
+        ordered.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let members: Vec<_> = ordered
+            .into_iter()
+            .map(|(name, _)| {
+                let kind = if stopped.contains(name.as_str()) {
+                    StopKind::Immediate(StopOutcome::Stopped)
+                } else {
+                    classify_stop(
+                        &st,
+                        &name,
+                        records.get(name.as_str()).copied(),
+                        fleet.equipiers.get(&name),
+                    )
+                };
+                (name, kind)
+            })
+            .collect();
+        if let Some((name, _)) = members.iter().find(|(_, kind)| {
+            matches!(
+                kind,
+                StopKind::Immediate(StopOutcome::NotManaged | StopOutcome::Timeout { .. })
+            )
+        }) {
+            if root.state == "cancelling" {
+                root.error = Some(format!("native_cancel_unverifiable:{name}"));
+                let _ = st.delegation_store.save(&root);
+            }
+            return;
+        }
+        // Tous les membres sont classés. Aucun résultat/échec terminal n'est marqué.
+        for entry in &mut tasks {
+            if !entry.terminal() && entry.state != "cancelling" {
+                entry.state = "cancelling".into();
+                if st.delegation_store.save(entry).is_err() {
+                    return;
+                }
+            }
+        }
+        (
+            root.task_id,
+            members,
+            tasks
+                .into_iter()
+                .map(|entry| entry.task_id)
+                .collect::<Vec<_>>(),
+        )
+    };
     let mut success = true;
-    for name in names.iter().rev() {
-        let outcome = await_managed_stop(prepare_managed_stop(state, name), name);
+    for (name, kind) in members {
+        let target = {
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            prepare_classified_stop(&mut st, &name, kind)
+        };
+        let outcome = await_managed_stop(target, &name);
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let Ok(Some(mut root)) = st.delegation_store.get(&root_id) else {
+            return;
+        };
         if !matches!(
             outcome,
             bridget_transport::protocol::StopOutcome::Stopped
@@ -1740,15 +2260,26 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                 | bridget_transport::protocol::StopOutcome::NotFound
         ) {
             success = false;
+            if root.state == "cancelling" {
+                root.error = Some(format!("native_cancel_unverifiable:{name}"));
+                if st.delegation_store.save(&root).is_err() {
+                    return;
+                }
+            }
+        } else if !root.cancel_stopped.contains(&name) {
+            // Recharger avant l'écriture conserve un résultat ou une erreur
+            // acquis pendant l'attente. Persister AVANT l'arrêt suivant.
+            root.cancel_stopped.push(name);
+            if st.delegation_store.save(&root).is_err() {
+                return;
+            }
         }
     }
     if success {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
-        if let Ok(tasks) = st.delegation_store.tasks() {
-            for mut entry in tasks {
-                if names.contains(&entry.child)
-                    && matches!(entry.state.as_str(), "cancelling" | "cancelled")
-                {
+        for id in task_ids {
+            if let Ok(Some(mut entry)) = st.delegation_store.get(&id) {
+                if matches!(entry.state.as_str(), "cancelling" | "cancelled") {
                     // Tous les arrêts ci-dessus sont confirmés. Ne publier la
                     // fin de l'annulation qu'après la clôture CAS de sa mission.
                     if let Err(error) = close_lost_execution(&st, &entry, "native_cancelled") {
@@ -1757,13 +2288,20 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                     }
                     if entry.state == "cancelling" {
                         entry.state = "cancelled".into();
+                        if entry
+                            .error
+                            .as_deref()
+                            .is_some_and(|error| error.starts_with("native_cancel_unverifiable:"))
+                        {
+                            entry.error = None;
+                        }
                         if let Err(error) = st.delegation_store.save(&entry) {
                             error!("annulation native non persistée: {error}");
                             continue;
                         }
                     }
                 }
-                if names.contains(&entry.child) && entry.terminal() {
+                if entry.terminal() {
                     entry.cleanup_done = true;
                     let _ = st.delegation_store.save(&entry);
                 }
@@ -1923,6 +2461,9 @@ pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
     if let Err(error) = st.delegation_store.purge_expired_tombstones(now) {
         warn!("entretien: pierres tombales de délégation : {error}");
     }
+    if let Err(error) = st.delegation_store.purge_expired_refusals(now) {
+        warn!("entretien: reçus de refus de délégation : {error}");
+    }
 }
 
 #[cfg(test)]
@@ -1931,6 +2472,1582 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
+
+    // T002 : réutiliser la vraie admission et remise de mission de la fixture150.
+    // Les sockets restent ouverts pour observer les avis et les reprises.
+    fn mission_152(paused: bool) -> (
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        Task,
+        BufReader<UnixStream>,
+        BufReader<UnixStream>,
+    ) {
+        let (shared, config, id, _, _) = parent_en_cours_150(Some(120), 0);
+        let (parent_writer, parent_reader) =
+            super::super::presence_tests::control_socket("n152-parent");
+        let (child_writer, child_reader) =
+            super::super::presence_tests::control_socket("n152-child");
+        for reader in [&parent_reader, &child_reader] {
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+        }
+        let (task, delivery) = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&id).unwrap().unwrap();
+            assert_eq!(task.state, "working");
+            assert!(st.presences.contains_key(task.child_instance.as_ref().unwrap()));
+            assert!(st.store.get_request(&task.mission).unwrap().is_some());
+            assert!(st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+            let delivery = st.idempotency.dispatching_delivery_for_execution(
+                &format!("execution-{}", task.mission), task.child_instance.as_ref().unwrap(), unix_timestamp(),
+            ).unwrap().expect("la mission a été lue par la fixture150");
+            let key = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &task.mission).unwrap();
+            eprintln!("T002 diagnostic réception : task={}, phase={:?}, delivery={:?}, execution={:?}",
+                task.state, st.idempotency.send_delivery_phase(&key).unwrap(),
+                (&delivery.delivery_id, delivery.delivery_generation),
+                st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap());
+            (task, delivery)
+        };
+        assert!(handle_wrapper_message("child-conn", WrapperToDaemon::DeliverAcked {
+            delivery_id: delivery.delivery_id, delivery_generation: delivery.delivery_generation,
+        }, &shared).is_none());
+        {
+            let st = shared.lock().unwrap();
+            let key = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &task.mission).unwrap();
+            let phase = st.idempotency.send_delivery_phase(&key).unwrap();
+            eprintln!("T002 après accusé réel : phase={phase:?}, suivi={}", st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+            assert_eq!(phase.as_deref(), Some("acked"));
+            assert!(st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+        }
+        transition_wrapper_152(&shared, &task, "running");
+        if paused {
+            let st = shared.lock().unwrap();
+            pauser_150(&st, true);
+            let generation = crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .generation;
+            st.execution_store
+                .record_pause_interruption(
+                    &format!("execution-{}", task.mission),
+                    &task.child,
+                    generation,
+                    unix_timestamp(),
+                )
+                .unwrap();
+        }
+        if paused {
+            transition_wrapper_152(&shared, &task, "interrupting");
+        }
+        (shared, config, task, parent_reader, child_reader)
+    }
+
+    fn transition_wrapper_152(state: &Arc<Mutex<DaemonState>>, task: &Task, next: &str) {
+        let snapshot = state
+            .lock()
+            .unwrap()
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .unwrap()
+            .unwrap();
+        let execution = snapshot.execution_id.clone();
+        let response = handle_wrapper_message(
+            "child-conn",
+            WrapperToDaemon::ExecutionStateChanged {
+                transition: bridget_transport::protocol::ExecutionStateTransition {
+                    execution_id: execution.clone(),
+                    generation: snapshot.generation,
+                    expected_state: snapshot.state,
+                    expected_revision: snapshot.revision,
+                    next_state: next.into(),
+                    reason: "control_pause".into(),
+                    observed_at: unix_timestamp(),
+                },
+            },
+            state,
+        );
+        assert!(response.is_none(), "transition réelle refusée : {response:?}");
+        assert_eq!(
+            state.lock().unwrap().execution_store.execution_snapshot(&execution)
+                .unwrap().unwrap().state,
+            next
+        );
+    }
+
+    #[test]
+    fn native152_rouge_pause_chemin_a_suivi_conserve_sans_avis() {
+        let (shared, config, task, mut parent_reader, _child_reader) = mission_152(true);
+        transition_wrapper_152(&shared, &task, "interrupted");
+        assert!(handle_wrapper_message(
+            "child-conn",
+            WrapperToDaemon::DeliveryRejected {
+                id: task.mission.clone(),
+                reason: "tour annulé par le pilote".into(),
+            },
+            &shared,
+        ).is_none());
+        let (saved, pending) = {
+            let st = shared.lock().unwrap();
+            (
+                st.delegation_store.get(&task.task_id).unwrap().unwrap(),
+                st.pending_replies.iter().any(|pending| pending.msg_id == task.mission),
+            )
+        };
+        let mut wire = String::new();
+        let read = parent_reader.read_line(&mut wire);
+        eprintln!("T003/A réel : tâche={}, erreur={:?}, suivi={}, lecture={read:?}, parent={wire:?}",
+            saved.state, saved.error, pending);
+        cleanup(&config);
+        assert_eq!(saved.state, "working", "une interruption de pause conserve la mission");
+        assert!(pending, "le vrai handler doit conserver le suivi de demande");
+        assert!(wire.is_empty(), "aucun avis d'échec au parent pendant la pause");
+    }
+
+    #[test]
+    fn native152_rouge_pause_chemin_b_interrupted_ne_fait_pas_echouer() {
+        let (shared, config, task, _parent_reader, _child_reader) = mission_152(true);
+        transition_wrapper_152(&shared, &task, "interrupted");
+        tick(&shared);
+        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        eprintln!("T003/B réel : tâche={}, erreur={:?}", saved.state, saved.error);
+        cleanup(&config);
+        assert_eq!(saved.state, "working", "interrupted sous pause est une suspension");
+    }
+
+    #[test]
+    fn native152_rouge_pause_reprise_attend_interrupted() {
+        let (shared, config, task, _parent_reader, mut child_reader) = mission_152(true);
+        assert!(handle_wrapper_message(
+            "child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared,
+        ).is_none());
+        {
+            let st = shared.lock().unwrap();
+            pauser_150(&st, false);
+        }
+        assert!(handle_wrapper_message(
+            "child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared,
+        ).is_none());
+        tick(&shared);
+        let mut early = String::new();
+        assert!(child_reader.read_line(&mut early).is_err(), "aucune reprise avant interrupted");
+        assert_eq!(shared.lock().unwrap().execution_store
+            .execution_snapshot(&format!("execution-{}", task.mission)).unwrap().unwrap().state,
+            "interrupting");
+        transition_wrapper_152(&shared, &task, "interrupted");
+        tick(&shared);
+        let mut wire = String::new();
+        let read = child_reader.read_line(&mut wire);
+        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        eprintln!("T003/inverse réel : tâche={}, erreur={:?}, lecture={read:?}, reprise={wire:?}",
+            saved.state, saved.error);
+        cleanup(&config);
+        assert_eq!(saved.state, "working", "la reprise attend le terminal puis conserve la mission");
+        let frame: DaemonToWrapper = decode(wire.trim()).expect("reprise native réelle attendue");
+        assert!(matches!(frame, DaemonToWrapper::DeliverIdempotent { message, .. }
+            if message.id == task.mission), "même identifiant de mission à la reprise");
+    }
+
+    // Horloges152 : même mutation de contrôle, à une date explicite de fixture.
+    fn control_pause_a_152(st: &DaemonState, paused: bool, at: i64) {
+        let generation = crate::referent_control::read(st.store.connection()).unwrap().generation;
+        crate::referent_control::set(
+            st.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: &format!("horloge-152-{generation}"),
+                expected_generation: generation,
+                paused: Some(paused),
+                auto_objectives_cap: None,
+                reason: Some("horloge privée 152"),
+                actor: "humain",
+                now: at,
+                agent_posture: None,
+                auto_reassignment: None,
+            },
+        ).unwrap().unwrap();
+    }
+
+    #[test]
+    fn native152_rouge_horloges_mission_suivi_et_request_wait() {
+        let (shared, config, mut task, _parent, _child) = mission_152(false);
+        let now = unix_timestamp();
+        {
+            let mut st = shared.lock().unwrap();
+            task.created_at = now - 240;
+            task.mission_deadline_at = Some(now - 120);
+            st.delegation_store.save(&task).unwrap();
+            st.store.connection().execute(
+                "UPDATE tracked_requests SET created_at=?1, deadline_at=?2 WHERE id=?3",
+                rusqlite::params![now - 240, now - 120, task.mission],
+            ).unwrap();
+            for pending in &mut st.pending_replies {
+                if pending.msg_id == task.mission {
+                    pending.created_at = Instant::now() - Duration::from_secs(240);
+                }
+            }
+            control_pause_a_152(&st, true, now - 220);
+            st.store.create_request("ordinaire-152", OWNER, &task.child, 120).unwrap();
+            st.store.set_request_deadline("ordinaire-152", now - 120).unwrap();
+        }
+        let start = Instant::now();
+        let native = wait_request("conn-1", &task.mission, 1, &shared, None, Duration::from_millis(100));
+        let waited = start.elapsed();
+        let ordinary = wait_request("conn-1", "ordinaire-152", 1, &shared, None, Duration::from_millis(100));
+        let (timeout_count, pending_level, request_state) = {
+            let mut st = shared.lock().unwrap();
+            assert_eq!(st.store.get_request(&task.mission).unwrap().unwrap().state, "open",
+                "RequestWait reste une lecture sans fermeture durable");
+            let actions = collect_reminder_actions(&mut st, Instant::now());
+            let timeouts = actions.iter().filter(|action|
+                matches!(action, ReminderAction::Timeout { msg_id, .. } if msg_id == &task.mission)
+            ).count();
+            let level = st.pending_replies.iter().find(|pending| pending.msg_id == task.mission)
+                .map(|pending| pending.escalation_level);
+            // Aucun processus fournisseur dans cette fixture : isoler l'horloge de son cleanup.
+            st.managed_spawns.clear();
+            (timeouts, level, st.store.get_request(&task.mission).unwrap().unwrap().state)
+        };
+        tick(&shared);
+        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        eprintln!("T005 réel : wait_native={native:?}, durée={waited:?}, ordinaire={ordinary:?}, palier={pending_level:?}, timeouts={timeout_count}, demande={request_state}, tâche={}, erreur={:?}", saved.state, saved.error);
+        cleanup(&config);
+        assert!(matches!(ordinary, DaemonToWrapper::RequestWaitResult { state, timed_out_wait: false, .. } if state == "timed_out"),
+            "le délai métier d'une demande ordinaire reste inchangé");
+        assert!(matches!(native, DaemonToWrapper::RequestWaitResult { state, timed_out_wait: true, .. } if state == "open"),
+            "la pause gèle le métier natif, pas le budget d'attente d'une seconde");
+        assert_eq!(timeout_count, 0, "aucun palier3 natif pendant la pause");
+        assert_eq!(pending_level, Some(0));
+        assert_eq!(request_state, "open");
+        assert_eq!(saved.state, "working");
+        assert_eq!(saved.mission_deadline_at, task.mission_deadline_at, "échéance brute inchangée");
+    }
+
+    #[test]
+    fn native152_rouge_gel_mixte_reconnexion_et_rejeu_enveloppe() {
+        let (shared, config, mut task, _parent, _child) = mission_152(false);
+        let now = unix_timestamp();
+        let (created, timeouts) = {
+            let mut st = shared.lock().unwrap();
+            // L'attente queued précède la vraie admission de la demande faite par la fixture.
+            task.created_at = now - 650;
+            task.state = "mission_pending".into();
+            st.delegation_store.save(&task).unwrap();
+            control_pause_a_152(&st, true, now - 620);
+            control_pause_a_152(&st, false, now - 20);
+            let created = st.store.get_request(&task.mission).unwrap().unwrap().created_at;
+            st.pending_replies.clear();
+            st.restore_pending_for_agent(&task.child, "child-conn");
+            let actions = collect_reminder_actions(&mut st, Instant::now());
+            let timeouts = actions.iter().filter(|action|
+                matches!(action, ReminderAction::Timeout { msg_id, .. } if msg_id == &task.mission)
+            ).count();
+            (created, timeouts)
+        };
+        tick(&shared);
+        let (saved, request) = {
+            let st = shared.lock().unwrap();
+            (st.delegation_store.get(&task.task_id).unwrap().unwrap(), st.store.get_request(&task.mission).unwrap().unwrap())
+        };
+        eprintln!("T039 réel : création_tâche={}, admission_demande={created}, now={now}, timeouts={timeouts}, demande={}, tâche={}, erreur={:?}", task.created_at, request.state, saved.state, saved.error);
+        cleanup(&config);
+        assert!(created >= now - 2, "la demande démarre à l'admission, après les 600s queued");
+        assert_eq!(timeouts, 0);
+        assert_eq!(request.state, "open");
+        assert_eq!(saved.state, "working", "le rejeu conserve la date et l'enveloppe du premier envoi");
+    }
+
+    #[test]
+    fn native152_rouge_pause_sans_tick_echeance_retrouvee() {
+        let (shared, config, mut task, _parent, _child) = mission_152(false);
+        let now = unix_timestamp();
+        let paused_at = now - 320;
+        let resumed_at = paused_at + 300;
+        let (remaining_before, remaining_during, remaining_after) = {
+            let mut st = shared.lock().unwrap();
+            assert_eq!(task.reply_timeout, Some(120));
+            task.created_at = now - 340;
+            task.mission_deadline_at = Some(task.created_at + 120);
+            st.delegation_store.save(&task).unwrap();
+            let before = effective_deadline(&st, &task, paused_at).unwrap().unwrap() - paused_at;
+            control_pause_a_152(&st, true, paused_at);
+            let during = effective_deadline(&st, &task, resumed_at).unwrap().unwrap() - resumed_at;
+            assert!(during > 0, "la mission n'expire pas pendant la pause");
+            // Panne avant tout tick ; la levée a lieu pendant l'arrêt.
+            control_pause_a_152(&st, false, resumed_at);
+            let after = effective_deadline(&st, &task, resumed_at).unwrap().unwrap() - resumed_at;
+            assert_eq!(crate::referent_control::pause_overlap(
+                st.store.connection(), paused_at, resumed_at,
+            ).unwrap(), 300);
+            st.managed_spawns.clear();
+            (before, during, after)
+        };
+        let fresh = rusqlite::Connection::open(&config.db_path).unwrap();
+        let events: i64 = fresh.query_row(
+            "SELECT COUNT(*) FROM control_events WHERE kind IN ('pause_on','pause_off')", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(events, 2, "journal durable relu depuis une autre connexion");
+        let paused_secs: i64 = fresh.query_row(
+            "SELECT MAX(at)-MIN(at) FROM control_events WHERE kind IN ('pause_on','pause_off')", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(paused_secs, 300, "pause fermée durable de300s");
+        assert_eq!((remaining_before, remaining_during, remaining_after), (100, 100, 100));
+        assert!((remaining_after - remaining_before).abs() <= 2, "temps restant conservé à2s près");
+        tick(&shared);
+        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        eprintln!("SC003/T049 réel : timeout=120s, pause={paused_secs}s, restant avant/durant/après={remaining_before}/{remaining_during}/{remaining_after}s, événements={events}, échéance={:?}, tâche={}, erreur={:?}", saved.mission_deadline_at, saved.state, saved.error);
+        cleanup(&config);
+        assert_eq!(saved.state, "working", "300s de pause retrouvées sans checkpoint de tick");
+        assert_eq!(saved.mission_deadline_at, task.mission_deadline_at);
+    }
+
+    #[test]
+    fn native152_rouge_pause_sans_tick_admission_crash_reconnexion() {
+        let (shared, config, mut task, _parent, _child) = mission_152(false);
+        let now = unix_timestamp();
+        let (timeouts, state, stage) = {
+            let mut st = shared.lock().unwrap();
+            // La ligne suivie existe ; le checkpoint working n'a pas survécu.
+            task.state = "mission_pending".into();
+            st.delegation_store.save(&task).unwrap();
+            st.store.connection().execute(
+                "UPDATE tracked_requests SET created_at=?1, deadline_at=?2 WHERE id=?3",
+                rusqlite::params![now - 240, now - 120, task.mission],
+            ).unwrap();
+            control_pause_a_152(&st, true, now - 220);
+            control_pause_a_152(&st, false, now - 20);
+            st.pending_replies.clear();
+            st.restore_pending_for_agent(&task.child, "child-conn");
+            let actions = collect_reminder_actions(&mut st, Instant::now());
+            let timeouts = actions.iter().filter(|action|
+                matches!(action, ReminderAction::Timeout { msg_id, .. } if msg_id == &task.mission)
+            ).count();
+            (timeouts, st.store.get_request(&task.mission).unwrap().unwrap().state,
+                st.delegation_store.get(&task.task_id).unwrap().unwrap().state)
+        };
+        eprintln!("T049/b réel : checkpoint={stage}, timeouts={timeouts}, demande={state}");
+        cleanup(&config);
+        assert_eq!(stage, "mission_pending");
+        assert_eq!(timeouts, 0, "le journal couvre la pause depuis l'admission, même sans working");
+        assert_eq!(state, "open");
+    }
+
+    #[test]
+    fn native152_rouge_lancement_apres_pause() {
+        let (mut st, config, rx, _reader) = fixture("launch152");
+        // T006 : une saga déjà soumise garde exactement ses octets après une pause.
+        let mut submitted = tache_151(&mut st, "saga152");
+        spawn_task(&mut st, &mut submitted).unwrap();
+        let ManagedSupervisorCommand::Start { .. } = rx.try_recv().unwrap() else {
+            panic!("lancement initial attendu")
+        };
+        let conn = rusqlite::Connection::open(&config.db_path).unwrap();
+        let canonical = |id: &str| -> Vec<u8> {
+            conn.query_row(
+                "SELECT canonical_bytes FROM idempotency_records WHERE operation_kind='spawn' AND idempotency_key=?1",
+                [id], |row| row.get(0),
+            ).unwrap()
+        };
+        let before = canonical(&submitted.task_id);
+        pauser_150(&st, true);
+        pauser_150(&st, false);
+        spawn_task(&mut st, &mut submitted).unwrap();
+        assert_eq!(canonical(&submitted.task_id), before);
+        assert!(rx.try_recv().is_err(), "pas de deuxième processus pour la saga");
+
+        let now = unix_timestamp();
+        let mut queued = tache_151(&mut st, "queued600152");
+        queued.created_at = now - 600;
+        st.delegation_store.save(&queued).unwrap();
+        control_pause_a_152(&st, true, now - 599);
+        control_pause_a_152(&st, false, now);
+        let shared = Arc::new(Mutex::new(st));
+        tick(&shared);
+        let st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&queued.task_id).unwrap().unwrap();
+        let launch = rx.try_recv();
+        eprintln!("T006 réel : state={}, error={:?}, launch_issued_at={:?}, lancement={}",
+            saved.state, saved.error, saved.launch_issued_at, launch.is_ok());
+        assert_eq!(saved.state, "starting", "une première émission garde son budget de lancement");
+        let ManagedSupervisorCommand::Start { prepared, .. } = launch.unwrap() else {
+            panic!("Start natif attendu")
+        };
+        assert_eq!(prepared.lease.command_id, queued.task_id);
+        assert!(prepared.lease.deadline_at >= now + 299);
+        assert!(saved.launch_issued_at.is_some_and(|issued| issued >= now));
+        drop(st);
+        drop(shared);
+        cleanup(&config);
+    }
+
+    // T007/T040 : réutiliser l'arbre et les contrôles du test148, sans processus OS.
+    fn arbre_annulation_152() -> (
+        Arc<Mutex<DaemonState>>, DaemonConfig, Vec<Task>, Vec<Arc<ManagedStopControl>>,
+    ) {
+        let (mut st, config, rx, _reader) = fixture("cancel152");
+        let mut root = tache_151(&mut st, "cancel-root152");
+        spawn_task(&mut st, &mut root).unwrap();
+        let ManagedSupervisorCommand::Start { stop: root_stop, .. } = rx.try_recv().unwrap() else {
+            panic!("Start racine attendu")
+        };
+        let mut child = root.clone();
+        child.task_id = Uuid::new_v4().to_string();
+        child.parent_task_id = Some(root.task_id.clone());
+        child.owner = root.child.clone();
+        child.owner_instance = root.child_instance.clone().unwrap();
+        child.origin_owner_instance = child.owner_instance.clone();
+        child.child = Uuid::new_v4().to_string();
+        child.child_instance = None;
+        child.mission = Uuid::new_v4().to_string();
+        child.state = "queued".into();
+        child.request = request("cancel-managed152");
+        child.launch_issued_at = None;
+        st.delegation_store.insert(&child, "cancel-managed152", &serde_json::to_vec(&child.request).unwrap()).unwrap();
+        spawn_task(&mut st, &mut child).unwrap();
+        let ManagedSupervisorCommand::Start { stop: child_stop, .. } = rx.try_recv().unwrap() else {
+            panic!("Start descendant attendu")
+        };
+        let mut unmanaged = child.clone();
+        unmanaged.task_id = Uuid::new_v4().to_string();
+        unmanaged.child = Uuid::new_v4().to_string();
+        unmanaged.child_instance = Some(Uuid::new_v4().to_string());
+        unmanaged.mission = Uuid::new_v4().to_string();
+        unmanaged.state = "working".into();
+        unmanaged.request = request("cancel-unmanaged152");
+        st.store
+            .create_request(
+                &unmanaged.mission,
+                &unmanaged.owner,
+                &unmanaged.child,
+                u64::try_from(unmanaged.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).unwrap(),
+            )
+            .unwrap();
+        st.delegation_store.insert(&unmanaged, "cancel-unmanaged152", &serde_json::to_vec(&unmanaged.request).unwrap()).unwrap();
+        st.router.register(&unmanaged.child, &bridget_core::AgentType::Codex, "unmanaged152").unwrap();
+        handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id: root.task_id.clone() }, &mut st).unwrap();
+        (Arc::new(Mutex::new(st)), config, vec![root, child, unmanaged], vec![root_stop, child_stop])
+    }
+
+    // Deux usages : le backend observe les demandes réelles et répond aux attentes.
+    // La déconnexion du canal le termine aussi si le test panique.
+    fn observer_arrets_152(stops: Vec<Arc<ManagedStopControl>>) -> (mpsc::Sender<()>, thread::JoinHandle<Vec<bool>>) {
+        let (done, end) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut requested = vec![false; stops.len()];
+            loop {
+                match end.try_recv() {
+                    Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                for (index, stop) in stops.iter().enumerate() {
+                    if stop.is_requested() {
+                        requested[index] = true;
+                        stop.complete(StopOutcome::Stopped);
+                    }
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            requested
+        });
+        (done, worker)
+    }
+
+    #[test]
+    fn native152_rouge_annulation_partielle() {
+        let (shared, config, tasks, stops) = arbre_annulation_152();
+        let (done, observer) = observer_arrets_152(stops);
+        tick(&shared);
+        done.send(()).unwrap();
+        let requested = observer.join().unwrap();
+        let st = shared.lock().unwrap();
+        let saved = tasks.iter().map(|task| st.delegation_store.get(&task.task_id).unwrap().unwrap()).collect::<Vec<_>>();
+        eprintln!("T007 réel : arrêts={requested:?}, états={:?}, erreur={:?}", saved.iter().map(|task| &task.state).collect::<Vec<_>>(), saved[0].error);
+        assert_eq!(requested, vec![false, false], "la validation précède tout arrêt");
+        assert_eq!(saved[0].state, "cancelling");
+        assert_eq!(saved[0].error, Some(format!("native_cancel_unverifiable:{}", tasks[2].child)));
+        assert_eq!(saved[1].state, tasks[1].state);
+        assert_eq!(saved[2].state, tasks[2].state);
+        assert!(saved.iter().all(|task| task.cancel_stopped.is_empty()));
+        drop(st);
+        drop(shared);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_rouge_annulation_multi_ticks() {
+        let (shared, config, tasks, stops) = arbre_annulation_152();
+        let (done, observer) = observer_arrets_152(stops);
+        let mut states = Vec::new();
+        for _ in 0..3 {
+            tick(&shared);
+            let st = shared.lock().unwrap();
+            states.push(tasks.iter().map(|task| st.delegation_store.get(&task.task_id).unwrap().unwrap().state).collect::<Vec<_>>());
+        }
+        done.send(()).unwrap();
+        let requested = observer.join().unwrap();
+        eprintln!("T040 réel : arrêts={requested:?}, états par tick={states:?}");
+        assert_eq!(requested, vec![false, false], "aucun descendant ne contourne le refus global");
+        for tick_states in states {
+            assert_eq!(tick_states, vec!["cancelling", tasks[1].state.as_str(), tasks[2].state.as_str()]);
+        }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_annulation_reessai_apres_correction_et_reprise_coordonnee_depuis_la_racine() {
+        for terminal in ["failed", "result_available"] {
+            let (shared, config, tasks, stops) = arbre_annulation_152();
+            {
+                let st = shared.lock().unwrap();
+                let mut child = st.delegation_store.get(&tasks[1].task_id).unwrap().unwrap();
+                child.state = "cancelling".into();
+                st.delegation_store.save(&child).unwrap();
+            }
+            tick(&shared);
+            assert!(
+                stops.iter().all(|stop| !stop.is_requested()),
+                "le descendant déjà marqué attend sa racine bloquée"
+            );
+            {
+                let mut st = shared.lock().unwrap();
+                st.delegation_store =
+                    crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+                st.router.unregister_by_conn("unmanaged152");
+            }
+            let worker_state = Arc::clone(&shared);
+            let child_id = tasks[1].task_id.clone();
+            let root_stop = Arc::clone(&stops[0]);
+            let child_stop = Arc::clone(&stops[1]);
+            let completion = thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !child_stop.is_requested() {
+                    assert!(!root_stop.is_requested());
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                {
+                    let st = worker_state.lock().unwrap();
+                    let mut child = st.delegation_store.get(&child_id).unwrap().unwrap();
+                    child.state = terminal.into();
+                    child.error = Some("erreur acquise pendant l'arrêt".into());
+                    child.result = Some("résultat acquis pendant l'arrêt".into());
+                    st.delegation_store.save(&child).unwrap();
+                }
+                child_stop.complete(StopOutcome::Stopped);
+                while !root_stop.is_requested() {
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                root_stop.complete(StopOutcome::Stopped);
+            });
+            tick(&shared);
+            completion.join().unwrap();
+            let st = shared.lock().unwrap();
+            let root = st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap();
+            let child = st.delegation_store.get(&tasks[1].task_id).unwrap().unwrap();
+            assert_eq!(root.state, "cancelled");
+            assert_eq!(root.error, None);
+            assert_eq!(root.cancel_stopped.len(), 3);
+            assert_eq!(root.cancel_stopped.last(), Some(&tasks[0].child));
+            assert_eq!(child.state, terminal);
+            assert_eq!(
+                child.error.as_deref(),
+                Some("erreur acquise pendant l'arrêt")
+            );
+            assert_eq!(
+                child.result.as_deref(),
+                Some("résultat acquis pendant l'arrêt")
+            );
+            assert!(root.cleanup_done && child.cleanup_done);
+            eprintln!(
+                "T027/T046 reprise : ordre={:?}, terminal={terminal}, erreur/résultat conservés",
+                root.cancel_stopped
+            );
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native152_annulation_reessai_ne_rejoue_que_les_echecs_et_ordre_profond_d_abord() {
+        let (shared, config, tasks, stops) = arbre_annulation_152();
+        shared
+            .lock()
+            .unwrap()
+            .router
+            .unregister_by_conn("unmanaged152");
+        let worker_stops = stops.clone();
+        let (done, end) = mpsc::channel();
+        let completion = thread::spawn(move || {
+            let mut counts = [0; 2];
+            let mut order = Vec::new();
+            loop {
+                match end.try_recv() {
+                    Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                for (index, stop) in worker_stops.iter().enumerate() {
+                    if !stop.waiters.lock().unwrap().is_empty() {
+                        counts[index] += 1;
+                        order.push(index);
+                        stop.complete(if index == 1 && counts[index] == 1 {
+                            StopOutcome::Timeout {
+                                state: "arrêt descendant non confirmé".into(),
+                            }
+                        } else {
+                            StopOutcome::Stopped
+                        });
+                    }
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            (counts, order)
+        });
+        tick(&shared);
+        {
+            let st = shared.lock().unwrap();
+            let root = st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap();
+            assert_eq!(root.state, "cancelling");
+            assert!(root.cancel_stopped.contains(&tasks[0].child));
+            assert!(!root.cancel_stopped.contains(&tasks[1].child));
+        }
+        tick(&shared);
+        done.send(()).unwrap();
+        let (counts, order) = completion.join().unwrap();
+        assert_eq!(counts, [1, 2], "seul l'arrêt non confirmé est redemandé");
+        assert_eq!(
+            order,
+            [1, 0, 1],
+            "descendant avant parent, puis le seul échec"
+        );
+        let st = shared.lock().unwrap();
+        let root = st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap();
+        assert_eq!(root.state, "cancelled");
+        assert_eq!(root.error, None);
+        assert_eq!(root.cancel_stopped.len(), 3);
+        eprintln!(
+            "T028 retry : demandes={counts:?}, ordre={order:?}, confirmations={:?}",
+            root.cancel_stopped
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_annulation_crash_entre_deux_arrets_confirmes() {
+        let (shared, config, tasks, stops) = arbre_annulation_152();
+        shared
+            .lock()
+            .unwrap()
+            .router
+            .unregister_by_conn("unmanaged152");
+        let external = rusqlite::Connection::open(&config.db_path).unwrap();
+        // La panne coupe l'écriture du deuxième arrêt, après celle du descendant.
+        external.execute_batch(&format!("CREATE TRIGGER n152_crash_receipt BEFORE UPDATE OF payload ON native_delegations
+            WHEN NEW.task_id='{}' AND EXISTS(SELECT 1 FROM json_each(NEW.payload,'$.cancel_stopped') WHERE value='{}')
+            BEGIN SELECT RAISE(FAIL,'interruption de la persistance du coordinateur'); END;",
+            tasks[0].task_id, tasks[0].child)).unwrap();
+        let (done, observer) = observer_arrets_152(stops.clone());
+        tick(&shared);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true, true]);
+        {
+            let mut st = shared.lock().unwrap();
+            let root = st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap();
+            assert_eq!(root.state, "cancelling");
+            assert!(root.cancel_stopped.contains(&tasks[1].child));
+            assert!(!root.cancel_stopped.contains(&tasks[0].child));
+            external
+                .execute_batch("DROP TRIGGER n152_crash_receipt;")
+                .unwrap();
+            st.delegation_store =
+                crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+            // Le parent confirmé a perdu sa table superviseur ; Desired Stopped
+            // conserve le comportement existant. Le descendant reste observable.
+            st.managed_spawns.remove(&tasks[0].task_id);
+            st.managed_by_instance
+                .remove(tasks[0].child_instance.as_ref().unwrap());
+        }
+        tick(&shared);
+        assert!(
+            stops
+                .iter()
+                .all(|stop| stop.waiters.lock().unwrap().is_empty()),
+            "aucune seconde demande après réouverture"
+        );
+        let st = shared.lock().unwrap();
+        let root = st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap();
+        assert_eq!(root.state, "cancelled");
+        assert_eq!(root.cancel_stopped.len(), 3);
+        assert!(root.cleanup_done);
+        eprintln!(
+            "T028 interruption : confirmations durables après réouverture={:?}",
+            root.cancel_stopped
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_annulation_descendant_non_racine_independante() {
+        let (shared, config, tasks, stops) = arbre_annulation_152();
+        {
+            let st = shared.lock().unwrap();
+            let mut root = st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap();
+            root.state = "working".into();
+            st.store
+                .create_request(
+                    &root.mission,
+                    &root.owner,
+                    &root.child,
+                    u64::try_from(root.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).unwrap(),
+                )
+                .unwrap();
+            st.delegation_store.save(&root).unwrap();
+            let mut child = st.delegation_store.get(&tasks[1].task_id).unwrap().unwrap();
+            child.state = "cancelling".into();
+            st.delegation_store.save(&child).unwrap();
+        }
+        let (done, observer) = observer_arrets_152(stops);
+        tick(&shared);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![false, true]);
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            st.delegation_store
+                .get(&tasks[0].task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "working"
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&tasks[1].task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        cleanup(&config);
+    }
+
+    // T004/T038/T047 : rouvrir les magasins durables et oublier les processus perdus.
+    // Les API existantes de flotte, délégation et exécution suffisent.
+    fn reouvrir_flotte_152(st: &mut DaemonState, config: &DaemonConfig) {
+        for task in st.delegation_store.tasks().unwrap() {
+            if let Some(route) = st.router.get_agent(&task.child) {
+                let conn = route.connection_id.clone();
+                st.router.unregister_by_conn(&conn);
+                st.connections.remove(&conn);
+                st.conn_names.remove(&conn);
+                if let Some(instance) = st.conn_instances.remove(&conn) {
+                    st.presences.remove(&instance);
+                }
+            }
+        }
+        st.managed_spawns.clear();
+        st.managed_by_instance.clear();
+        st.recovery_commands.clear();
+        st.pending_replies.clear();
+        st.recovering = false;
+        st.delegation_store = crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+        st.execution_store = crate::execution_store::ExecutionStore::open(&config.db_path).unwrap();
+        st.fleet = Arc::new(FleetSupervisor::open(
+            &config.db_path,
+            DesiredStateStore::at_path(st.fixture_root.as_ref().unwrap().0.join("fleet.json")),
+            FleetConfig::from_env(),
+        ).unwrap());
+    }
+
+    #[test]
+    fn native152_rouge_panne_pendant_pause() {
+        let mut observed = Vec::new();
+        for lifted_while_down in [false, true] {
+            let (shared, config, mut task, _parent_reader, _child_reader) = mission_152(false);
+            let now = unix_timestamp();
+            {
+                let st = shared.lock().unwrap();
+                task.created_at = now - 620;
+                task.mission_deadline_at = Some(now - 500);
+                st.delegation_store.save(&task).unwrap();
+                control_pause_a_152(&st, true, now - 600);
+                let generation = crate::referent_control::read(st.store.connection()).unwrap().generation;
+                st.execution_store.record_pause_interruption(
+                    &format!("execution-{}", task.mission), &task.child, generation, now - 600,
+                ).unwrap();
+            }
+            transition_wrapper_152(&shared, &task, "interrupting");
+            let (saved, snapshot) = {
+                let mut st = shared.lock().unwrap();
+                reouvrir_flotte_152(&mut st, &config);
+                if lifted_while_down {
+                    control_pause_a_152(&st, false, now - 20);
+                }
+                let recovered = reserve_managed_recoveries(&mut st, now).unwrap();
+                let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                let snapshot = st.execution_store.execution_snapshot(&format!("execution-{}", task.mission)).unwrap().unwrap();
+                eprintln!("T038 réel : pause_levée={lifted_while_down}, task={}, error={:?}, execution={}, reprises={}",
+                    saved.state, saved.error, snapshot.state, recovered.len());
+                (saved, snapshot)
+            };
+            cleanup(&config);
+            observed.push((saved, snapshot, task.mission_deadline_at));
+        }
+        for (saved, snapshot, deadline) in observed {
+            assert_eq!(saved.state, "working", "la pause protège l'échéance effective au redémarrage");
+            assert_eq!(saved.error, None);
+            assert_eq!(saved.mission_deadline_at, deadline);
+            assert_eq!(snapshot.state, "interrupted", "le processus disparu ne laisse pas interrupting");
+        }
+    }
+
+    #[test]
+    fn native152_rouge_trois_crashes_avant_envoi() {
+        let mut observed = Vec::new();
+        for checkpoint in ["starting", "mission_pending"] {
+            let (mut st, config, rx, _reader) = fixture("crashes152");
+            let mut task = tache_151(&mut st, &format!("crash-{checkpoint}"));
+            spawn_task(&mut st, &mut task).unwrap();
+            let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+                panic!("lancement natif attendu")
+            };
+            if checkpoint == "mission_pending" {
+                assert!(matches!(st.fleet.register_connected(
+                    &prepared.lease, &prepared.lease.instance_id, unix_timestamp(),
+                ).unwrap(), crate::idempotency::SpawnCommandIssue::Connected { .. }));
+                task.state = checkpoint.into();
+                st.delegation_store.save(&task).unwrap();
+            } else {
+                assert!(st.fleet.register_connected_observed(&prepared.lease,
+                    &prepared.lease.instance_id, unix_timestamp(), || {
+                        Err(std::io::Error::other("T047 crash après fleet.json, avant issue SQLite"))
+                    }).is_err());
+            }
+            eprintln!("T047 avant réouverture : checkpoint={checkpoint}, desired={:?}, phases={:?}, lease={:?}, link={:?}",
+                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)),
+                st.idempotency.spawn_commands(&st.fleet.supervisor_scope()).unwrap().iter().map(|command|
+                    (&command.command_id, &command.state, command.generation, &command.instance_id)).collect::<Vec<_>>(),
+                prepared.lease, st.fleet.agent_link_for_child(&prepared.lease.instance_id).unwrap());
+            let mut series = Vec::new();
+            for crash in 1..=3 {
+                reouvrir_flotte_152(&mut st, &config);
+                eprintln!("T047 après réouverture : checkpoint={checkpoint}, crash={crash}, candidats={:?}, desired={:?}",
+                    st.fleet.recovery_candidates().iter().map(|candidate| &candidate.lease).collect::<Vec<_>>(),
+                    st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)));
+                let recovered = reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
+                let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                assert!(st.execution_store.execution_snapshot(&format!("execution-{}", task.mission)).unwrap().is_none(), "aucun envoi ni continuation de mission");
+                eprintln!("T047 réel : checkpoint={checkpoint}, crash={crash}, state={}, error={:?}, compteur={}, reprises={}",
+                    saved.state, saved.error, saved.restart_resumes, recovered.len());
+                series.push(saved);
+            }
+            cleanup(&config);
+            observed.push(series);
+        }
+        for series in observed {
+            for (index, task) in series[..2].iter().enumerate() {
+                assert!(matches!(task.state.as_str(), "starting" | "mission_pending"));
+                assert_eq!(task.restart_resumes, (index + 1) as u8);
+            }
+            assert_eq!(series[2].state, "failed");
+            assert_eq!(series[2].error.as_deref(), Some("native_resume_exhausted"));
+            assert_eq!(series[2].restart_resumes, 2);
+        }
+    }
+
+    #[test]
+    fn native152_rouge_panne_starting_bootstrap_et_gardes() {
+        let mut observed = Vec::new();
+        for (checkpoint, guard) in [
+            ("starting", "valide"), ("starting", "revocation"),
+            ("starting", "source_modifiee"), ("starting", "bail_expire"),
+            ("connected", "valide"), ("connected", "revocation"),
+            ("connected", "source_modifiee"),
+        ] {
+            let (mut st, config, rx, _reader) = fixture("bootstrap152");
+            let mut task = tache_151(&mut st, &format!("{checkpoint}-{guard}"));
+            let source = st.fixture_root.as_ref().unwrap().0.join("settings152.json");
+            if guard == "source_modifiee" {
+                std::fs::write(&source, br#"{"permissions":{"deny":["Bash"]}}"#).unwrap();
+                let cli = Path::new("/bin/sh").canonicalize().unwrap();
+                let cli_revision = crate::native_permissions::source_revision(&cli).unwrap();
+                let context = json!({
+                    "cli_path": cli, "cli_revision": cli_revision,
+                    "resolved_cli_path": cli, "resolved_cli_revision": cli_revision,
+                    "config_dir": st.fixture_root.as_ref().unwrap().0,
+                    "settings_sources":"provider_default",
+                    "permission_sources":[{"kind":"user","path":source,
+                        "revision":crate::native_permissions::source_revision(&source).unwrap()}]
+                });
+                task.permission_snapshot = Some(serde_json::from_value(json!({
+                    "version":1,"source":"native_wrapper","owner_agent_id":task.owner,
+                    "owner_instance_id":task.owner_instance,"project_cwd":task.cwd,
+                    "parent":{"version":1,"source":"native_wrapper","run_id":"run152",
+                        "provider_session_id":"session152","provider_instance_id":"instance-1",
+                        "revision":1,"driver":"claude_stream_json","cwd":task.cwd,
+                        "runtime_mode":"full-access","interaction_mode":"default",
+                        "provider_policy":{"kind":"claude","permission_mode":"bypassPermissions",
+                            "tools":{"type":"preset","preset":"claude_code"},
+                            "permission_callback":{"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"},
+                            "settings_sources":"provider_default","launch_context":context}},
+                    "child_policy":{"kind":"codex","approval_policy":"never",
+                        "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}
+                })).unwrap());
+                st.delegation_store.save(&task).unwrap();
+            }
+            spawn_task(&mut st, &mut task).unwrap();
+            let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+                panic!("premier lancement attendu")
+            };
+            assert_eq!(task.state, "starting");
+            assert!(st.execution_store.execution_snapshot(&format!("execution-{}", task.mission)).unwrap().is_none());
+            if checkpoint == "connected" {
+                assert!(matches!(st.fleet.register_connected(
+                    &prepared.lease, &prepared.lease.instance_id, unix_timestamp(),
+                ).unwrap(), crate::idempotency::SpawnCommandIssue::Connected { .. }));
+                task.state = "mission_pending".into();
+                st.delegation_store.save(&task).unwrap();
+            } else {
+                assert!(st.fleet.register_connected_observed(&prepared.lease,
+                    &prepared.lease.instance_id, unix_timestamp(), || {
+                        Err(std::io::Error::other("T004 crash après fleet.json, avant issue SQLite"))
+                    }).is_err());
+            }
+            eprintln!("T004/{checkpoint} avant réouverture : garde={guard}, desired={:?}, phases={:?}, lease={:?}, link={:?}",
+                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)),
+                st.idempotency.spawn_commands(&st.fleet.supervisor_scope()).unwrap().iter().map(|command|
+                    (&command.command_id, &command.state, command.generation, &command.instance_id)).collect::<Vec<_>>(),
+                prepared.lease, st.fleet.agent_link_for_child(&prepared.lease.instance_id).unwrap());
+            if guard == "revocation" {
+                st.delegation_store.grant_agent(OWNER, "instance-1", Path::new(&task.cwd), SpawnPosture::Development, true).unwrap();
+            }
+            if guard == "source_modifiee" {
+                std::fs::write(&source, br#"{"permissions":{"deny":["Read"]}}"#).unwrap();
+            }
+            let now = if guard == "bail_expire" { prepared.lease.deadline_at + 1 } else { unix_timestamp() };
+            reouvrir_flotte_152(&mut st, &config);
+            eprintln!("T004/{checkpoint} après réouverture : garde={guard}, candidats={:?}, desired={:?}, link={:?}",
+                st.fleet.recovery_candidates().iter().map(|candidate| &candidate.lease).collect::<Vec<_>>(),
+                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)),
+                st.fleet.agent_link_for_child(&prepared.lease.instance_id).unwrap());
+            let recovered = reserve_managed_recoveries(&mut st, now).unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            let env = recovered.first().map(|(next, _)| {
+                let bootstrap = next.env.get(crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV)
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw.to_string_lossy()).ok());
+                (next.lease.clone(), bootstrap)
+            });
+            eprintln!("T004/{checkpoint} réel : garde={guard}, state={}, error={:?}, compteur={}, reprises={}, bootstrap={:?}",
+                saved.state, saved.error, saved.restart_resumes, recovered.len(), env.as_ref().map(|(_, bootstrap)| bootstrap));
+            observed.push((checkpoint, guard, task.mission, saved, recovered.len(), env));
+            cleanup(&config);
+        }
+        for (checkpoint, guard, mission, saved, count, env) in observed {
+            if guard == "valide" {
+                assert_eq!(count, 1, "la reprise autorisée doit être préparée : {checkpoint}");
+                assert_eq!(saved.restart_resumes, 1);
+                let (lease, bootstrap) = env.unwrap();
+                let bootstrap = bootstrap.expect("bootstrap natif requis dans les deux chemins");
+                assert_eq!(bootstrap["instance_id"], lease.instance_id);
+                assert_eq!(bootstrap["mission_id"], mission);
+                if checkpoint == "connected" {
+                    assert_ne!(saved.child_instance.as_deref(), Some(lease.instance_id.as_str()));
+                    assert_eq!(lease.generation, 2);
+                }
+                let ownership = lease.ownership.unwrap();
+                assert_eq!(ownership.role, "native_delegate");
+                assert_eq!(ownership.delegation_id, Some(saved.task_id));
+            } else {
+                assert_eq!(count, 0, "aucun lancement après refus : {checkpoint}/{guard}");
+                assert_eq!(saved.state, "failed");
+                if guard == "revocation" {
+                    assert_eq!(saved.error.as_deref(), Some("permission_not_inherited"));
+                    assert_eq!(saved.restart_resumes, 0);
+                } else if guard == "source_modifiee" {
+                    assert_eq!(saved.error.as_deref(), Some("settings_revision_changed"));
+                    assert_eq!(saved.restart_resumes, 0);
+                } else {
+                    assert_eq!(saved.error.as_deref(), Some("spawn_timeout"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native152_rouge_identite_frontiere_instance_neuve_flotte_ancienne() {
+        let (shared, config, mut task, _parent_reader, _child_reader) = mission_152(false);
+        let st = &mut *shared.lock().unwrap();
+        st.marker_store = crate::managed_process::ManagedMarkerStore::at_directory(
+            st.fixture_root.as_ref().unwrap().0.join("markers152"),
+        );
+        let entry = st.fleet.desired_fleet().unwrap().equipiers.remove(&task.child).unwrap();
+        let _marker = st.marker_store.persist(&task.child, &crate::managed_process::BootstrapReady {
+            pid: 999999, pgid: 999999, birth: 1,
+            instance_id: task.child_instance.clone().unwrap(),
+            command_id: entry.command_id, generation: entry.generation,
+        }).unwrap();
+        task.child_instance = Some(Uuid::new_v4().to_string());
+        st.delegation_store.save(&task).unwrap();
+        reouvrir_flotte_152(st, &config);
+        let identities = restart_identities(st);
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        eprintln!("T048 réel : identities={identities:?}, state={}, error={:?}", saved.state, saved.error);
+        let identities = identities.expect("une frontière native incohérente ne bloque pas tout le daemon");
+        assert!(!identities.contains_key(&task.child));
+        assert_eq!(saved.state, "failed");
+        assert_eq!(saved.error.as_deref(), Some("native_restart_identity_mismatch"));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_panne_echeance_et_identite_refusees() {
+        for (case, expected) in [("echeance", "mission_reply_timeout"), ("flotte_arretee", "unreachable")] {
+            let (shared, config, mut task, _parent, _child) = mission_152(false);
+            let st = &mut *shared.lock().unwrap();
+            if case == "echeance" {
+                task.mission_deadline_at = Some(unix_timestamp() - 1);
+                st.delegation_store.save(&task).unwrap();
+            } else {
+                st.fleet.mark_stopped(&task.child).unwrap();
+            }
+            reouvrir_flotte_152(st, &config);
+            assert!(prepare_restart(st).unwrap().contains(&task.child));
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, "failed");
+            assert_eq!(saved.error.as_deref(), Some(expected));
+            assert_eq!(saved.restart_resumes, 0, "aucune reprise autorisée : {case}");
+            assert_eq!(saved.mission_deadline_at, task.mission_deadline_at);
+            assert_eq!(st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap().state, "unreachable");
+            eprintln!("T023 refus réel : {case}, error={:?}, compteur={}", saved.error, saved.restart_resumes);
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native152_panne_conserve_waiting_resultat_et_etats_terminaux() {
+        for state in ["waiting_for_children", "result_available", "failed", "cancelled"] {
+            let (shared, config, mut task, _parent, _child) = mission_152(false);
+            let st = &mut *shared.lock().unwrap();
+            task.state = state.into();
+            task.result = Some("résultat durable déjà acquis".into());
+            task.error = (state == "failed").then(|| "échec déjà acquis".into());
+            st.delegation_store.save(&task).unwrap();
+            let before = serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+            reouvrir_flotte_152(st, &config);
+            let recoveries = reserve_managed_recoveries(st, unix_timestamp()).unwrap();
+            let after = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert!(recoveries.is_empty(), "aucun fournisseur pour {state}");
+            assert_eq!(serde_json::to_vec(&after).unwrap(), before, "tâche protégée inchangée : {state}");
+            assert_eq!(after.restart_resumes, 0);
+            eprintln!("T023 conservation réelle : {state}, octets identiques, reprises=0");
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native152_panne_queued_proprietaire_perdu_inchange() {
+        let (shared, config, mut parent, _parent_reader, _child_reader) = mission_152(false);
+        let st = &mut *shared.lock().unwrap();
+        let admitted = handle_locked("child-conn", request("queued-owner-lost152"), st).unwrap();
+        let id = admitted["task_id"].as_str().unwrap().to_owned();
+        let queued = st.delegation_store.get(&id).unwrap().unwrap();
+        assert_eq!(queued.state, "queued");
+        assert_eq!(queued.parent_task_id.as_deref(), Some(parent.task_id.as_str()));
+        parent.state = "failed".into();
+        parent.error = Some("unreachable".into());
+        st.delegation_store.save(&parent).unwrap();
+        reouvrir_flotte_152(st, &config);
+        assert!(reserve_managed_recoveries(st, unix_timestamp()).unwrap().is_empty());
+        let failed = st.delegation_store.get(&id).unwrap().unwrap();
+        assert_eq!(failed.state, "failed");
+        assert_eq!(failed.error.as_deref(), Some("unreachable"));
+        assert_eq!(failed.restart_resumes, 0);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_panne_crash_entre_increment_et_reprise_sur_compte_seulement() {
+        let (shared, config, task, _parent, _child) = mission_152(false);
+        let st = &mut *shared.lock().unwrap();
+        for expected in [1, 2] {
+            reouvrir_flotte_152(st, &config);
+            assert!(!prepare_restart(st).unwrap().contains(&task.child));
+            assert!(st.managed_spawns.is_empty(), "crash avant toute préparation/lancement");
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.restart_resumes, expected);
+            assert_eq!(saved.state, "working");
+            assert_eq!(saved.mission, task.mission);
+            assert_eq!(st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap().generation, 1);
+        }
+        reouvrir_flotte_152(st, &config);
+        assert!(prepare_restart(st).unwrap().contains(&task.child));
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.restart_resumes, 2);
+        assert_eq!(saved.error.as_deref(), Some("native_resume_exhausted"));
+        assert_eq!(saved.state, "failed");
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_panne_resultat_rendu_une_fois() {
+        let (shared, config, task, mut parent, _old_child) = mission_152(false);
+        let (child_writer, mut child) =
+            super::super::presence_tests::control_socket("n152-resultat-repris");
+        child
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let (lease, stop, controls) = {
+            let mut st = shared.lock().unwrap();
+            reouvrir_flotte_152(&mut st, &config);
+            let mut recovered = reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
+            assert_eq!(recovered.len(), 1, "un seul enfant repris après la panne");
+            let (prepared, stop) = recovered.pop().unwrap();
+            assert_ne!(Some(prepared.lease.instance_id.as_str()), task.child_instance.as_deref());
+            eprintln!("T025 avant connexion : lease={:?}, phases={:?}", prepared.lease,
+                st.idempotency.spawn_commands(&st.fleet.supervisor_scope()).unwrap().iter()
+                    .map(|command| (&command.command_id, &command.state, command.generation, &command.instance_id))
+                    .collect::<Vec<_>>());
+            st.connections.insert("child-conn".into(), child_writer);
+            assert!(matches!(st.fleet.register_connected(
+                &prepared.lease, &prepared.lease.instance_id, unix_timestamp(),
+            ).unwrap(), crate::idempotency::SpawnCommandIssue::Connected { .. }));
+            let host = st.host.clone();
+            assert!(matches!(handle_register_with_channel(
+                "child-conn", 2, prepared.agent_type.clone(), prepared.lease.name.clone(),
+                Some(host), Some(prepared.resolved_definition.protocol.clone()),
+                ChannelReport::Known("unix".into()), Some(PresenceMode::Cli), None,
+                Some("macOS".into()), Some(prepared.lease.instance_id.clone()), None,
+                false, Some(true), &mut st,
+            ), DaemonToWrapper::Registered { .. }));
+            st.managed_spawns.get_mut(&prepared.lease.command_id).unwrap().wrapper_conn =
+                Some("child-conn".into());
+            let controls = st.pending_post_response_controls.remove("child-conn")
+                .expect("remise différée après Registered comme dans le serveur");
+            assert_eq!(controls.len(), 1);
+            (prepared.lease, stop, controls)
+        };
+        assert!(execute_controls(controls).is_empty());
+        tick(&shared);
+        let mut raw = String::new();
+        child.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent {
+            message, delivery_id, delivery_generation, ..
+        } = decode(raw.trim()).unwrap() else {
+            panic!("mission reprise idempotente réelle attendue : {raw}")
+        };
+        assert_eq!(message.id, task.mission);
+        assert!(handle_wrapper_message("child-conn", WrapperToDaemon::DeliverAcked {
+            delivery_id, delivery_generation,
+        }, &shared).is_none());
+        {
+            let st = shared.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            let leaf = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
+                .unwrap().unwrap();
+            assert_eq!(saved.state, "working");
+            assert_eq!(saved.restart_resumes, 1);
+            assert_eq!(saved.child_instance.as_deref(), Some(lease.instance_id.as_str()));
+            assert_ne!(leaf.execution_id, format!("execution-{}", task.mission));
+            assert_eq!(leaf.generation, 2);
+            eprintln!("T025 reprise avant résultat : task={}, compteur={}, instance={}, feuille={}",
+                saved.state, saved.restart_resumes, lease.instance_id, leaf.execution_id);
+        }
+        transition_wrapper_152(&shared, &task, "running");
+        transition_wrapper_152(&shared, &task, "completed");
+        {
+            let mut st = shared.lock().unwrap();
+            let mut result = bridget_core::BridgetMessage::new(
+                &task.child, &task.owner, "résultat après la panne",
+            );
+            result.in_reply_to = Some(task.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
+        }
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        tick(&shared);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        raw.clear();
+        parent.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent {
+            message, delivery_id, delivery_generation, ..
+        } = decode(raw.trim()).unwrap() else {
+            panic!("résultat repris idempotent réel attendu : {raw}")
+        };
+        assert_eq!(message.id, format!("native-result-{}", task.task_id));
+        assert_eq!(message.in_reply_to.as_deref(), Some(task.mission.as_str()));
+        assert_eq!(message.body, "résultat après la panne");
+        assert!(handle_wrapper_message("conn-1", WrapperToDaemon::DeliverAcked {
+            delivery_id, delivery_generation,
+        }, &shared).is_none());
+        {
+            let st = shared.lock().unwrap();
+            super::super::maintain_stores(&st, unix_timestamp());
+        }
+        for _ in 0..3 {
+            tick(&shared);
+        }
+        raw.clear();
+        assert!(parent.read_line(&mut raw).is_err(), "aucune deuxième remise après ACK");
+        let st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "result_available");
+        assert_eq!(saved.result.as_deref(), Some("résultat après la panne"));
+        assert!(saved.result_sent && saved.delivery_acked && saved.cleanup_done);
+        assert_eq!(saved.restart_resumes, 1);
+        eprintln!("T025 résultat après panne : remise_unique={}, ack={}, cleanup={}, compteur={}",
+            message.id, saved.delivery_acked, saved.cleanup_done, saved.restart_resumes);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_pause_refus_hors_pause_notifie_toujours() {
+        let (shared, config, task, mut parent, _child) = mission_152(false);
+        assert!(handle_wrapper_message("child-conn", WrapperToDaemon::DeliveryRejected {
+            id: task.mission.clone(), reason: "tour annulé par le pilote".into(),
+        }, &shared).is_none());
+        let st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "failed");
+        assert_eq!(saved.error.as_deref(), Some("tour annulé par le pilote"));
+        assert!(!st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+        let mut raw = String::new();
+        parent.read_line(&mut raw).unwrap();
+        assert!(raw.contains("Échec de livraison de la demande"));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_pause_chaine_suivie_apres_reprise() {
+        let (shared, config, task, _parent, mut child) = mission_152(true);
+        transition_wrapper_152(&shared, &task, "interrupted");
+        handle_wrapper_message("child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared);
+        pauser_150(&shared.lock().unwrap(), false);
+        tick(&shared);
+        let mut raw = String::new();
+        child.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(raw.trim()).unwrap() else {
+            panic!("reprise idempotente réelle attendue")
+        };
+        assert_eq!(message.id, task.mission);
+        let leaf = shared.lock().unwrap().execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap();
+        assert_ne!(leaf.execution_id, format!("execution-{}", task.mission));
+        assert_eq!(shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap().restart_resumes, 0, "une pause ne compte pas comme panne");
+        transition_wrapper_152(&shared, &task, "running");
+        transition_wrapper_152(&shared, &task, "failed");
+        tick(&shared);
+        let st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "failed", "la feuille, pas l'ancienne interruption, porte la fin");
+        assert_eq!(saved.error.as_deref(), Some("failed"));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_pause_annulee_pendant_la_pause_n_est_pas_ressuscitee() {
+        let (shared, config, task, _parent, _child) = mission_152(true);
+        transition_wrapper_152(&shared, &task, "interrupted");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id: task.task_id.clone() }, &mut st).unwrap();
+            st.managed_spawns.values().next().unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        {
+            let st = shared.lock().unwrap();
+            assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().state, "cancelled");
+            assert!(st.execution_store.pending_pause_interruptions().unwrap().is_empty());
+            pauser_150(&st, false);
+        }
+        handle_wrapper_message("child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared);
+        tick(&shared);
+        let st = shared.lock().unwrap();
+        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().state, "cancelled");
+        assert_eq!(st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap().generation, 1);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_pause_resultat_rendu_une_fois() {
+        let (shared, config, task, mut parent, mut child) = mission_152(true);
+        transition_wrapper_152(&shared, &task, "interrupted");
+        handle_wrapper_message("child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared);
+        pauser_150(&shared.lock().unwrap(), false);
+        tick(&shared);
+        let mut raw = String::new();
+        child.read_line(&mut raw).unwrap();
+        transition_wrapper_152(&shared, &task, "running");
+        transition_wrapper_152(&shared, &task, "completed");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            let mut result = bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat après la pause");
+            result.in_reply_to = Some(task.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
+            st.managed_spawns.values().next().unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        tick(&shared);
+        done.send(()).unwrap();
+        observer.join().unwrap();
+        raw.clear();
+        parent.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(raw.trim()).unwrap() else {
+            panic!("résultat idempotent réel attendu")
+        };
+        assert_eq!(message.id, format!("native-result-{}", task.task_id));
+        assert_eq!(message.body, "résultat après la pause");
+        raw.clear();
+        assert!(parent.read_line(&mut raw).is_err(), "aucune deuxième remise");
+        let st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert!(saved.result_sent && saved.cleanup_done);
+        assert_eq!(saved.restart_resumes, 0);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_horloges_plusieurs_pauses_cumulees() {
+        let (mut st, config, _rx, _reader) = fixture("clock152");
+        let mut task = tache_151(&mut st, "multi-pause152");
+        let now = unix_timestamp();
+        task.reply_timeout = Some(120);
+        task.mission_deadline_at = Some(now - 580);
+        st.delegation_store.save(&task).unwrap();
+        for (paused, at) in [(true, now - 690), (false, now - 390), (true, now - 350), (false, now - 50)] {
+            control_pause_a_152(&st, paused, at);
+        }
+        assert_eq!(effective_deadline(&st, &task, now).unwrap(), Some(now + 20));
+        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().mission_deadline_at, Some(now - 580));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_horloges_delegation_imbriquee_bornee_par_echeance_effective() {
+        let (shared, config, mut task, _parent, _child) = mission_152(false);
+        let st = &mut *shared.lock().unwrap();
+        let now = unix_timestamp();
+        task.mission_deadline_at = Some(now - 30);
+        st.delegation_store.save(&task).unwrap();
+        control_pause_a_152(st, true, now - 140);
+        control_pause_a_152(st, false, now - 20);
+        assert_eq!(effective_deadline(st, &task, now).unwrap(), Some(now + 90));
+        assert_eq!(handle_locked("child-conn", request_delai_150("sous-long152", Some(120)), st).unwrap_err(), "reply_timeout_exceeds_parent");
+        let admitted = handle_locked("child-conn", request_delai_150("sous-court152", Some(60)), st).unwrap();
+        let child = st.delegation_store.get(admitted["task_id"].as_str().unwrap()).unwrap().unwrap();
+        assert_eq!(child.parent_task_id.as_deref(), Some(task.task_id.as_str()));
+        assert_eq!(child.reply_timeout, Some(60));
+        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().mission_deadline_at, Some(now - 30));
+        eprintln!("T017 imbriqué réel : brut={}, effectif={}, enfant=60s admis, 120s refusé", now - 30, now + 90);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_pause_resultat_acquis_reste_remis() {
+        let (shared, config, task, mut parent, _child) = mission_152(true);
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            let mut result = bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat déjà acquis pendant la pause");
+            result.in_reply_to = Some(task.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
+            let retained = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(retained.state, "waiting_for_children");
+            assert_eq!(retained.result.as_deref(), Some(result.body.as_str()));
+            eprintln!("T019 après capture réelle : {}, résultat retenu={}", retained.state, retained.result.is_some());
+            st.managed_spawns.values().next().unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        done.send(()).unwrap();
+        observer.join().unwrap();
+        let mut raw = String::new();
+        parent.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(raw.trim()).unwrap() else {
+            panic!("résultat retenu idempotent attendu pendant la pause")
+        };
+        assert_eq!(message.id, format!("native-result-{}", task.task_id));
+        assert_eq!(message.body, "résultat déjà acquis pendant la pause");
+        let st = shared.lock().unwrap();
+        assert!(crate::referent_control::read(st.store.connection()).unwrap().paused);
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert!(saved.result_sent && saved.cleanup_done);
+        assert_eq!(saved.state, "result_available");
+        eprintln!("T019 résultat réel remis sous pause : {}, cleanup={}", message.id, saved.cleanup_done);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_vue_suspended_additive_et_lineage_identique() {
+        let (mut st, config, _rx, _reader) = fixture("view152");
+        let task = tache_151(&mut st, "vue152");
+        let projection = serde_json::to_vec(&st.delegation_store.lineage_page(OWNER, 100, None, |_| false).unwrap()).unwrap();
+        let first = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(first["suspended"], false);
+        assert_eq!(first["resume_attempts"], 0);
+        pauser_150(&st, true);
+        let paused = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(paused["suspended"], true);
+        assert_eq!(paused["status"], "queued");
+        assert_eq!(serde_json::to_vec(&st.delegation_store.lineage_page(OWNER, 100, None, |_| false).unwrap()).unwrap(), projection);
+        assert_eq!(task_view(&task, None, true).get("suspended"), None, "la projection pure ne lit pas le contrôle");
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_pause_aucun_lancement_ni_remise() {
+        let (mut st, config, rx, _reader) = fixture("dispatch152");
+        let queued = tache_151(&mut st, "queued-pause152");
+        let mut pending = tache_151(&mut st, "pending-pause152");
+        spawn_task(&mut st, &mut pending).unwrap();
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else { panic!("Start attendu") };
+        let (writer, mut reader) = super::super::presence_tests::control_socket("pending152");
+        reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        assert!(matches!(handle_register_with_channel(
+            "pending152", 2, "native-test".into(), prepared.lease.name.clone(),
+            Some(st.host.clone()), Some("codex_app_server".into()), ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Acp), None, Some("macOS".into()), Some(prepared.lease.instance_id.clone()),
+            None, false, Some(true), &mut st,
+        ), DaemonToWrapper::Registered { .. }));
+        st.connections.insert("pending152".into(), writer);
+        st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+        pending.state = "mission_pending".into();
+        st.delegation_store.save(&pending).unwrap();
+        let paused_at = unix_timestamp() - 300;
+        control_pause_a_152(&st, true, paused_at);
+        let shared = Arc::new(Mutex::new(st));
+        for _ in 0..300 { tick(&shared); }
+        assert!(rx.try_recv().is_err(), "zéro lancement pendant les300ticks");
+        let mut raw = String::new();
+        assert!(reader.read_line(&mut raw).is_err(), "zéro remise pendant les300ticks");
+        let st = shared.lock().unwrap();
+        let observed_at = unix_timestamp();
+        let paused_secs = crate::referent_control::pause_overlap(
+            st.store.connection(), paused_at, observed_at,
+        ).unwrap();
+        assert_eq!(paused_secs, observed_at - paused_at, "pause ouverte durable continue");
+        assert!(paused_secs >= 300, "au moins300s de pause simulée");
+        assert!(crate::referent_control::read(st.store.connection()).unwrap().paused);
+        assert_eq!(st.delegation_store.get(&queued.task_id).unwrap().unwrap().state, "queued");
+        assert_eq!(st.delegation_store.get(&pending.task_id).unwrap().unwrap().state, "mission_pending");
+        assert!(st.store.get_request(&pending.mission).unwrap().is_none());
+        eprintln!("SC002 réel : pause={paused_secs}s, ticks=300, lancements=0, remises=0, queued et mission_pending conservés");
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_refus_rejeu_change_de_reponse() {
+        let (mut st, config, _rx, _reader) = fixture("refus152");
+        let root = st.fixture_root.as_ref().unwrap().0.canonicalize().unwrap();
+        let cwd = root.join("cwd152");
+        std::fs::create_dir(&cwd).unwrap();
+        st.delegation_store
+            .grant("instance-1", &root, SpawnPosture::Discovery, false)
+            .unwrap();
+        let mut refused = request("refus-rejeu152");
+        if let NativeDelegationRequest::Delegate {
+            cwd: path, model, ..
+        } = &mut refused
+        {
+            *path = cwd.to_string_lossy().into_owned();
+            *model = "modele-absent152".into();
+        }
+        let first = handle_locked("conn-1", refused.clone(), &mut st).unwrap_err();
+        std::fs::remove_dir(&cwd).unwrap();
+        pauser_150(&st, true);
+        let replay = handle_locked("conn-1", refused.clone(), &mut st).unwrap_err();
+        if let NativeDelegationRequest::Delegate { task, .. } = &mut refused {
+            *task = "autre enveloppe".into();
+        }
+        let mismatch = handle_locked("conn-1", refused, &mut st).unwrap_err();
+        eprintln!("T029 réel : premier={first:?}, rejeu={replay:?}, autre={mismatch:?}");
+        assert_eq!(first, "model_unavailable");
+        assert_eq!(
+            replay, first,
+            "un refus définitif ne change pas avec le cwd"
+        );
+        assert_eq!(mismatch, "envelope_mismatch");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_refus_texte_dynamique_jamais_stocke() {
+        let (mut st, config, _rx, _reader) = fixture("unknown152");
+        let mut unknown = request("unknown-type152");
+        if let NativeDelegationRequest::Delegate { agent_type, .. } = &mut unknown {
+            *agent_type = "type-inconnu152".into();
+        }
+        let error = handle_locked("conn-1", unknown, &mut st).unwrap_err();
+        eprintln!("T029 registre réel après normalisation : {error:?}");
+        assert_eq!(
+            error, "agent_type_unknown",
+            "ne pas conserver le chemin ni la liste dynamiques du registre"
+        );
+        let conn = rusqlite::Connection::open(&config.db_path).unwrap();
+        let codes: Vec<String> = conn
+            .prepare("SELECT code FROM native_delegation_refusals")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            codes,
+            vec!["agent_type_unknown"],
+            "seul le code fermé est stocké"
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native152_refus_purge_30_jours() {
+        let (mut st, config, _rx, _reader) = fixture("purge-refus152");
+        let epoch = st.delegation_store.wait_epoch();
+        let seen = epoch.get();
+        let projection = st.delegation_store.projection_meta().unwrap();
+        let mut unknown = request("refus-expire152");
+        if let NativeDelegationRequest::Delegate { agent_type, .. } = &mut unknown {
+            *agent_type = "type-inconnu152".into();
+        }
+        assert_eq!(
+            handle_locked("conn-1", unknown, &mut st).unwrap_err(),
+            "agent_type_unknown"
+        );
+        let conn = rusqlite::Connection::open(&config.db_path).unwrap();
+        let refused_at: i64 = conn
+            .query_row(
+                "SELECT refused_at FROM native_delegation_refusals",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let count = || {
+            conn.query_row::<i64, _, _>(
+                "SELECT count(*) FROM native_delegation_refusals",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        super::super::maintain_stores(&st, refused_at + 30 * 24 * 3600);
+        assert_eq!(count(), 1, "le reçu reste à exactement 30 jours");
+        super::super::maintain_stores(&st, refused_at + 30 * 24 * 3600 + 1);
+        assert_eq!(count(), 0, "le passage serveur purge à plus de 30 jours");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert_eq!(
+            epoch.get(),
+            seen,
+            "refus et purge sans notification d'attente"
+        );
+        let after_projection = st.delegation_store.projection_meta().unwrap();
+        assert_eq!(after_projection.generation, projection.generation);
+        assert_eq!(after_projection.seq, projection.seq);
+        eprintln!("T031 entretien réel : âge30jours=1 reçu, âge30jours+1s=0, epoch inchangé");
+        cleanup(&config);
+    }
 
     fn tache_151(st: &mut DaemonState, key: &str) -> Task {
         let created = handle_locked("conn-1", request(key), st).unwrap();
@@ -4267,7 +6384,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(task_view(&restored, None, true), first);
+        assert_eq!(current_task_view(&st, &restored, true).unwrap(), first);
         assert_eq!(
             crate::registry::runtime_model_and_effort(&restored.definition.args),
             Some(("custom/model".into(), Some("high".into())))
@@ -4398,6 +6515,14 @@ mod tests {
         handle_locked("conn-1", request("completion"), &mut st).unwrap();
         let mut task = st.delegation_store.tasks().unwrap().pop().unwrap();
         task.state = "working".into();
+        st.store
+            .create_request(
+                &task.mission,
+                &task.owner,
+                &task.child,
+                u64::try_from(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).unwrap(),
+            )
+            .unwrap();
         st.delegation_store.save(&task).unwrap();
         let message = bridget_core::BridgetMessage::new(OWNER, &task.child, "mission");
         let mut message = message;
@@ -5077,8 +7202,10 @@ mod tests {
     #[test]
     fn native150_pause_rejeu_cle_admise_rend_la_tache() {
         let (mut st, config, _rx, _reader) = fixture("n150-pause-rejeu");
-        let first = handle_locked("conn-1", request("admise"), &mut st).unwrap();
+        let mut first = handle_locked("conn-1", request("admise"), &mut st).unwrap();
+        assert_eq!(first["suspended"], false);
         pauser_150(&st, true);
+        first["suspended"] = json!(true);
         assert_eq!(handle_locked("conn-1", request("admise"), &mut st).unwrap(), first);
         // Un rejeu d'une clé purgée garde son refus propre, avant la pause.
         solder_150(&st, first["task_id"].as_str().unwrap());
@@ -5166,11 +7293,6 @@ mod tests {
 
     /// Une mission parente en cours (`working`, échéance posée) dont l'enfant délègue à son tour.
     fn parent_en_cours_150(delai: Option<u64>, retard: i64) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
-        parent_en_cours_bloque_150(delai, retard, false)
-    }
-
-    /// `bloquer_suivi` : toute mise à jour d'échéance du suivi échoue pendant l'envoi de la mission.
-    fn parent_en_cours_bloque_150(delai: Option<u64>, retard: i64, bloquer_suivi: bool) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
         use std::io::BufRead;
         let (mut st, config, rx, _parent_reader) = fixture("n150-delai-parent");
         let first = handle_locked("conn-1", request_delai_150("parent", delai), &mut st).unwrap();
@@ -5204,12 +7326,6 @@ mod tests {
             st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
             st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
             st.managed_spawns.get_mut(&task_id).unwrap().wrapper_conn = Some("child-conn".into());
-        }
-        if bloquer_suivi {
-            rusqlite::Connection::open(&config.db_path)
-                .unwrap()
-                .execute_batch("CREATE TRIGGER s150_suivi_bloque BEFORE UPDATE OF deadline_at ON tracked_requests BEGIN SELECT RAISE(ABORT,'bloque'); END;")
-                .unwrap();
         }
         tick(&shared);
         let mut line = String::new();
@@ -5390,11 +7506,20 @@ mod tests {
         assert!(rx.try_recv().is_err(), "un refus ne lance aucun tick");
         let task = shared.lock().unwrap().delegation_store.get(attente["task_id"].as_str().unwrap()).unwrap().unwrap();
         assert_eq!(task.state, "queued");
-        // Contrôle positif : une délégation admise (clé déjà admise) fait avancer le tick.
+        // FR-008 : même un rejeu admis ne lance aucun travail pendant la pause.
         let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("attente"), &shared) else {
             panic!("résultat attendu")
         };
         assert_eq!(result["status"], "queued");
+        assert_eq!(result["suspended"], true);
+        assert!(rx.try_recv().is_err(), "aucun lancement pendant la pause");
+        pauser_150(&shared.lock().unwrap(), false);
+        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("attente"), &shared) else {
+            panic!("résultat attendu")
+        };
+        assert_eq!(result["task_id"], attente["task_id"]);
+        assert_eq!(result["status"], "queued");
+        assert_eq!(result["suspended"], false);
         assert!(matches!(rx.try_recv(), Ok(ManagedSupervisorCommand::Start { .. })));
         drop(shared);
         cleanup(&config);
@@ -5448,12 +7573,22 @@ mod tests {
 
     #[test]
     fn native150_delai_suivi_realigne_apres_echec_d_ecriture() {
-        // Écriture du suivi impossible au moment de l'envoi : il garde l'échéance datée de la création.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_bloque_150(Some(120), 30, true);
+        // Ancien suivi150 divergent : la date d'émission152 ne nécessite plus
+        // d'alignement au premier envoi. Conserver le cas réel d'UPDATE en échec.
+        let (shared, config, task_id, deadline, message) = parent_en_cours_150(Some(120), 30);
+        {
+            let st = shared.lock().unwrap();
+            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            st.store.set_request_deadline(&message.id, task.created_at + 120).unwrap();
+        }
+        rusqlite::Connection::open(&config.db_path).unwrap()
+            .execute_batch("CREATE TRIGGER s150_suivi_bloque BEFORE UPDATE OF deadline_at ON tracked_requests BEGIN SELECT RAISE(ABORT,'bloque'); END;")
+            .unwrap();
+        assert!(shared.lock().unwrap().store.set_request_deadline(&message.id, deadline).is_err(), "vrai échec UPDATE");
         let suivi_deadline = |shared: &Arc<Mutex<DaemonState>>| {
             shared.lock().unwrap().store.get_request(&message.id).unwrap().expect("demande suivie").deadline_at
         };
-        assert_ne!(suivi_deadline(&shared), deadline, "premier alignement échoué");
+        assert_ne!(suivi_deadline(&shared), deadline, "ancien suivi divergent");
         // Tant que l'écriture échoue, le tick réessaie sans casser la tâche.
         tick(&shared);
         assert_ne!(suivi_deadline(&shared), deadline);
@@ -5475,21 +7610,28 @@ mod tests {
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
             let suivi = st.store.get_request(&message.id).unwrap().expect("demande suivie");
             assert_eq!(suivi.deadline_at, deadline, "suivi aligné sur mission_deadline_at");
+            assert_eq!(suivi.created_at, task.mission_issued_at.unwrap());
+            assert_eq!(suivi.deadline_at, task.mission_issued_at.unwrap() + 120);
+            assert_eq!(message.id, task.mission);
             assert!(deadline - task.created_at >= 150, "l'échéance compte depuis l'admission, pas la création");
         }
         // L'enveloppe de l'envoi de mission n'a pas changé : le délai reste celui du parent.
         assert_eq!(message.reply_timeout, Some(120));
         drop(shared);
         cleanup(&config);
-        // Sans délai explicite : comportement 149 inchangé (suivi daté de la création).
+        // FR-010 : le défaut3600 part aussi de la première émission de mission.
         let (shared, config, task_id, deadline, message) = parent_en_cours_150(None, 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
             let suivi = st.store.get_request(&message.id).unwrap().expect("demande suivie");
-            assert_eq!(suivi.deadline_at, task.created_at + 3600);
-            assert!(deadline > suivi.deadline_at);
+            assert_eq!(suivi.created_at, task.mission_issued_at.unwrap());
+            assert_eq!(suivi.deadline_at, task.mission_issued_at.unwrap() + 3600);
+            assert_eq!(suivi.deadline_at, deadline);
+            assert!(deadline - task.created_at >= 3630);
+            assert_eq!(message.id, task.mission);
         }
+        assert_eq!(message.reply_timeout, Some(3600));
         drop(shared);
         cleanup(&config);
     }

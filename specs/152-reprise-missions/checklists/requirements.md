@@ -14,8 +14,8 @@
 ## Requirement Completeness
 
 - [x] Aucun marqueur [NEEDS CLARIFICATION] : 3 questions avec valeur par défaut
-- [x] Exigences testables et sans ambiguïté (FR-001 à FR-026)
-- [x] Critères de succès mesurables (SC-001 à SC-008)
+- [x] Exigences testables et sans ambiguïté (FR-001 à FR-029)
+- [x] Critères de succès mesurables (SC-001 à SC-009)
 - [x] Scénarios d'acceptation définis (US1 à US6)
 - [x] Cas limites identifiés (ordre des événements, annulation pendant la pause, lancement en cours, borne de reprises)
 - [x] Périmètre borné (hors périmètre explicite)
@@ -31,3 +31,5 @@
 ## Notes
 
 - Le chemin de reprise de la flotte pour un enfant natif (H4) est une hypothèse à prouver par un test rouge avant le code.
+
+- Relecture fraîche du 2026-10-11 : 29 FR, 9 SC, 6 US et 50 tâches ; gates dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/analyze152.md.

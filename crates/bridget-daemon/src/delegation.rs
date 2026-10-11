@@ -93,6 +93,18 @@ pub(crate) struct Task {
     /// Lecture explicite du parent ; distincte de la preuve de livraison.
     #[serde(default)]
     pub acknowledged_at: Option<i64>,
+    /// Enveloppe du premier lancement ; absente dans les payloads antérieurs.
+    #[serde(default)]
+    pub launch_issued_at: Option<i64>,
+    /// Enveloppe du premier envoi de mission, conservée pour ses rejeux.
+    #[serde(default)]
+    pub mission_issued_at: Option<i64>,
+    /// Reprises après redémarrage, distinctes des reprises de pause.
+    #[serde(default)]
+    pub restart_resumes: u8,
+    /// Arrêts déjà confirmés pour l'annulation de cet arbre.
+    #[serde(default)]
+    pub cancel_stopped: Vec<String>,
 }
 
 impl Task {
@@ -118,7 +130,10 @@ impl DelegationStore {
             CREATE INDEX IF NOT EXISTS native_delegations_failed_agent ON native_delegations(json_extract(payload,'$.owner'),json_extract(payload,'$.state'));
             CREATE TABLE IF NOT EXISTS native_delegation_grants (
             owner_instance TEXT PRIMARY KEY, cwd TEXT NOT NULL, posture TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS native_delegation_revocations (agent_id TEXT PRIMARY KEY);")?;
+            CREATE TABLE IF NOT EXISTS native_delegation_revocations (agent_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS native_delegation_refusals (
+            owner TEXT NOT NULL, request_id TEXT NOT NULL, canonical BLOB NOT NULL,
+            code TEXT NOT NULL, refused_at INTEGER NOT NULL, PRIMARY KEY(owner, request_id));")?;
         let (notify, receiver) = std::sync::mpsc::sync_channel(1);
         let store = Self {
             conn,
@@ -173,8 +188,67 @@ impl DelegationStore {
                 .map_err(|error| error.to_string()),
             Some(_) => Err("envelope_mismatch".into()),
             None if self.tombstoned(owner, request_id)? => Err("request_expired".into()),
-            None => Ok(None),
+            None => {
+                let receipt: Option<(Vec<u8>, String)> = self
+                    .conn
+                    .query_row(
+                        "SELECT canonical,code FROM native_delegation_refusals WHERE owner=?1 AND request_id=?2",
+                        params![owner, request_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()
+                    .map_err(|error| error.to_string())?;
+                match receipt {
+                    Some((saved, code)) if saved == canonical => Err(code),
+                    Some(_) => Err("envelope_mismatch".into()),
+                    None => Ok(None),
+                }
+            }
         }
+    }
+
+    /// O(log T + log R), T tâches et R refus : deux clés indexées.
+    /// Le premier reçu est immuable ; une tâche admise prime sur le refus.
+    /// Aucun texte dynamique, refus transitoire ou signal de projection.
+    pub fn record_refusal(
+        &self,
+        owner: &str,
+        request_id: &str,
+        canonical: &[u8],
+        code: &str,
+        now: i64,
+    ) -> Result<bool, String> {
+        if !matches!(
+            code,
+            "cwd_outside_parent_project"
+                | "cwd_unavailable"
+                | "model_unavailable"
+                | "effort_unavailable"
+                | "agent_type_unknown"
+        ) {
+            return Ok(false);
+        }
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO native_delegation_refusals(owner,request_id,canonical,code,refused_at)
+                 SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS (
+                     SELECT 1 FROM native_delegations WHERE json_extract(payload,'$.owner')=?1 AND request_id=?2
+                 )",
+                params![owner, request_id, canonical, code, now],
+            )
+            .map(|changed| changed != 0)
+            .map_err(|error| error.to_string())
+    }
+
+    /// O(R) balayage des R reçus ; appelé par l'entretien déjà existant.
+    /// Supprime seulement les refus âgés de plus de 30 jours, sans signal.
+    pub fn purge_expired_refusals(&self, now: i64) -> Result<usize, String> {
+        self.conn
+            .execute(
+                "DELETE FROM native_delegation_refusals WHERE refused_at < ?1",
+                [now.saturating_sub(30 * 24 * 3600)],
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub fn insert(&self, task: &Task, request_id: &str, canonical: &[u8]) -> Result<(), String> {
@@ -387,6 +461,252 @@ impl DelegationStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_task151() -> Task {
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let payload = serde_json::json!({
+            "task_id": task_id, "owner": "parent", "owner_instance": "instance-parent",
+            "origin_owner_instance": "instance-parent",
+            "request": {"operation": "delegate", "request_id": "request-152",
+                "agent_type": "fixture", "model": "fixture", "task": "mission", "cwd": "/tmp"},
+            "definition": {"command": "fixture", "args": [], "protocol": "acp",
+                "forbidden_env": [], "pass_env": [], "permissions": "allow",
+                "queue_capacity": 32, "notify_timeout_secs": 600,
+                "mcp": {"interactive": "none", "acp_session": false}, "digest": "fixture"},
+            "cwd": "/tmp", "child": "child", "child_instance": null, "mission": "mission-152",
+            "created_at": 100, "state": "queued", "result": null, "error": null,
+            "result_sent": false, "cleanup_done": false, "failure_sent": false,
+            "delivery_acked": false, "acknowledged_at": null
+        });
+        serde_json::from_value(payload).unwrap()
+    }
+
+    #[test]
+    fn native152_task_payload151_defauts_et_champs_invisibles_lineage() {
+        let task = legacy_task151();
+        let task_id = task.task_id.clone();
+        let decoded = serde_json::to_value(&task).unwrap();
+        for (field, default) in [
+            ("launch_issued_at", serde_json::json!(null)),
+            ("mission_issued_at", serde_json::json!(null)),
+            ("restart_resumes", serde_json::json!(0)),
+            ("cancel_stopped", serde_json::json!([])),
+        ] {
+            assert_eq!(decoded.get(field), Some(&default));
+        }
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        store.insert(&task, "request-152", b"canonical").unwrap();
+        let before = store.lineage_page("parent", 100, None, |_| false).unwrap();
+        store.take_changes();
+        let receiver = store.change_receiver().unwrap();
+        receiver.try_recv().unwrap();
+        let mut updated = serde_json::to_value(store.get(&task_id).unwrap().unwrap()).unwrap();
+        let new_values = [
+            ("launch_issued_at", serde_json::json!(110)),
+            ("mission_issued_at", serde_json::json!(120)),
+            ("restart_resumes", serde_json::json!(2)),
+            ("cancel_stopped", serde_json::json!(["child"])),
+        ];
+        for (field, value) in &new_values {
+            updated[*field] = value.clone();
+        }
+        store
+            .save(&serde_json::from_value(updated).unwrap())
+            .unwrap();
+        let saved = serde_json::to_value(store.get(&task_id).unwrap().unwrap()).unwrap();
+        for (field, value) in new_values {
+            assert_eq!(saved.get(field), Some(&value));
+        }
+        assert_eq!(
+            store.lineage_page("parent", 100, None, |_| false).unwrap(),
+            before
+        );
+        assert!(store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn native152_refus_rejeu_identique() {
+        let dir = std::env::temp_dir().join(format!("native152-refus-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("native.sqlite");
+        let store = DelegationStore::open(&path).unwrap();
+        let epoch = store.wait_epoch().get();
+        let before = store.lineage_page("parent", 100, None, |_| false).unwrap();
+        let receiver = store.change_receiver().unwrap();
+        let codes = [
+            "cwd_outside_parent_project",
+            "cwd_unavailable",
+            "model_unavailable",
+            "effort_unavailable",
+            "agent_type_unknown",
+        ];
+        for (index, code) in codes.into_iter().enumerate() {
+            let request = format!("request-{index}");
+            assert!(
+                store
+                    .record_refusal("parent", &request, b"canonical", code, 100)
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .record_refusal("parent", &request, b"different", "cwd_unavailable", 200)
+                    .unwrap()
+            );
+            assert_eq!(
+                store
+                    .by_agent_request("parent", &request, b"canonical")
+                    .unwrap_err(),
+                code
+            );
+            let saved: (Vec<u8>, String, i64) = store.conn.query_row(
+                "SELECT canonical,code,refused_at FROM native_delegation_refusals WHERE owner=?1 AND request_id=?2",
+                params!["parent", request], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            assert_eq!(saved, (b"canonical".to_vec(), code.to_string(), 100));
+        }
+        assert_eq!(store.wait_epoch().get(), epoch);
+        assert!(store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            store.lineage_page("parent", 100, None, |_| false).unwrap(),
+            before
+        );
+        drop(store);
+        let store = DelegationStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .by_agent_request("parent", "request-0", b"canonical")
+                .unwrap_err(),
+            codes[0]
+        );
+        assert!(
+            store
+                .by_agent_request("other", "request-0", b"canonical")
+                .unwrap()
+                .is_none()
+        );
+        let mut task = legacy_task151();
+        if let NativeDelegationRequest::Delegate { request_id, .. } = &mut task.request {
+            *request_id = "request-0".into();
+        }
+        store.insert(&task, "request-0", b"canonical").unwrap();
+        assert_eq!(
+            store
+                .by_agent_request("parent", "request-0", b"canonical")
+                .unwrap()
+                .unwrap()
+                .task_id,
+            task.task_id
+        );
+        store
+            .conn
+            .execute(
+                "DELETE FROM native_delegation_refusals WHERE request_id='request-0'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            !store
+                .record_refusal("parent", "request-0", b"canonical", codes[0], 300)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM native_delegation_refusals WHERE request_id='request-0'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native152_refus_autre_enveloppe_mismatch() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        store
+            .record_refusal("parent", "request", b"canonical", "model_unavailable", 100)
+            .unwrap();
+        assert_eq!(
+            store
+                .by_agent_request("parent", "request", b"other")
+                .unwrap_err(),
+            "envelope_mismatch"
+        );
+    }
+
+    fn assert_refusal_not_retained(code: &str) {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        assert!(
+            !store
+                .record_refusal("parent", "request", b"canonical", code, 100)
+                .unwrap()
+        );
+        assert!(
+            store
+                .by_agent_request("parent", "request", b"other")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM native_delegation_refusals",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_referent_paused() {
+        assert_refusal_not_retained("referent_paused");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_task_limit() {
+        assert_refusal_not_retained("task_limit");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_retention_saturated() {
+        assert_refusal_not_retained("retention_saturated");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_identity_unavailable() {
+        assert_refusal_not_retained("identity_unavailable");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_reply_timeout_exceeds_parent() {
+        assert_refusal_not_retained("reply_timeout_exceeds_parent");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_parent_task_unavailable() {
+        assert_refusal_not_retained("parent_task_unavailable");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_parent_execution_ambiguous() {
+        assert_refusal_not_retained("parent_execution_ambiguous");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_delegation_grant_required() {
+        assert_refusal_not_retained("delegation_grant_required");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_permission_not_inherited() {
+        assert_refusal_not_retained("permission_not_inherited");
+    }
+    #[test]
+    fn native152_refus_transitoire_jamais_garde_permission_attestation_unavailable() {
+        assert_refusal_not_retained("permission_attestation_unavailable");
+    }
+
     #[test]
     fn native151_attente_compteur_reveil_et_lecture_non_bloquante() {
         let epoch = WaitEpoch::default();

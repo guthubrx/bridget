@@ -5,10 +5,10 @@
 
 Spec: 152-reprise-missions
 Titre: Reprise des missions natives après panne et après pause
-Statut: Spécifiée
+Statut: Implemented
 Priorité: P1
-Tâches: à générer (voir tasks.md)
-Tests: définis en planification (filtre `native152_*`)
+Tâches: 50/50 (100%)
+Tests: 0/0 (0%)
 
 Résumé:
 - Contexte: Un redémarrage du daemon fait passer toute mission native engagée à `failed/unreachable`. Une pause du référent la fait échouer aussi, par deux chemins. Les horloges de la mission continuent pendant la pause. L'annulation en cascade n'est pas vérifiée avant d'agir.
@@ -21,11 +21,17 @@ Fichiers:
 - tasks.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-150-socle-delegation` (exécution séquentielle 150 à 158 dans un seul worktree, sans commit automatique)
+**Feature Branch**: `session-152-reprise-missions`
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implemented
 **Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-150, SPEC-151
+
+Worktree de cette session :
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions`.
+Le pipeline autorisé livre, committe et nettoie chaque session avant d'enchaîner
+la suivante, de 152 à 160. Les tests 152 sont en cours. Les passes exécutées
+et leurs limites sont consignées dans le journal d’implémentation.
 
 Critères de la feuille de route visés : Résilience 2 vers 4 (la 157 complète à 5),
 Suivi et annulation vers 5. Voir
@@ -202,11 +208,16 @@ Les tâches créées avant la mise à jour se relisent sans migration.
   `restart_identities`) restent vrais après un, puis deux redémarrages, y compris
   pour une mission imbriquée. La commande courante est dérivée du lien de flotte
   attesté, pas stockée dans la tâche.
-- **FR-029** : Aucun état incohérent d'identité ne peut empêcher le daemon de
+- **FR-029** : Aucun état incohérent d'identité native ne peut empêcher le daemon de
   démarrer. Si la commande, l'instance ou le lien d'une tâche ne se réconcilient
   pas depuis le lien attesté, cette tâche échoue avec
   `native_restart_identity_mismatch` et le démarrage continue. Choix assumé
   (Art. XIX) : échec nommé d'une tâche plutôt qu'une réparation complexe.
+  Cette garantie porte sur commande/instance/lien natifs et leur marqueur
+  lisible. Un fichier de marqueur corrompu ou illisible reste une erreur de
+  stockage traitée par le refus sûr de la flotte ; sa réparation générale est
+  hors périmètre 152. Aucun marqueur n’est supprimé sans les garanties
+  existantes de disparition ou de naissance du processus.
 - **FR-028** : Une panne pendant une pause ne crée ni `mission_reply_timeout`
   ni attente infinie. Le gel est appliqué dès la décision de reprise au
   démarrage. Une exécution `interrupting` dont le processus d'origine a disparu
@@ -250,8 +261,10 @@ Les tâches créées avant la mise à jour se relisent sans migration.
 
 **Visibilité et compatibilité**
 
-- **FR-024** : `task_view` ajoute `suspended` (booléen) et `resume_attempts`. Il
-  garde l'état `working`. La vue Lineage T3 ne change pas.
+- **FR-024** : La vue courante ajoute `suspended` (booléen) et `resume_attempts`.
+  `current_task_view` calcule la suspension depuis le contrôle du daemon ;
+  `task_view` reste une projection pure. L'état reste `working`. La vue Lineage
+  T3 ne change pas.
 - **FR-025** : Les tâches enregistrées avant la mise à jour se relisent avec les
   valeurs par défaut des champs nouveaux.
 - **FR-026** : Les refus et erreurs nouveaux sont documentés dans
@@ -310,6 +323,9 @@ Les tâches créées avant la mise à jour se relisent sans migration.
   terminal. La minuterie d'une attente synchrone appartient à l'appelant : elle
   n'est pas gelée par la pause. Une attente sur une tâche suspendue rend
   `suspended: true` (FR-024).
+  L'échéance métier d'une demande native lue par `RequestWait` est en revanche
+  gelée selon FR-010 ; la lecture reste sans mutation. La date brute stockée et
+  exposée reste inchangée, et le temps restant utilise l'échéance effective.
 - **H2** : La session 150 est livrée : `reply_timeout` par tâche, `delivery_acked`,
   pierres tombales, entretien à 120 s, refus `referent_paused`.
 - **H3** : L'envoi du résultat et de l'avis d'échec reste admis pendant la pause,
@@ -321,8 +337,34 @@ Les tâches créées avant la mise à jour se relisent sans migration.
   le prouve avant le code.
 - **H5** : Les tests suivent la règle du projet : `umask 077`, environnement
   privé, racine temporaire courte.
-- **H6** : La livraison suit les sessions 147 à 151 : fichiers sur disque, sans
-  relance automatique des services.
+- **H6** : Le pipeline autorisé committe, livre et nettoie la session 152 avant
+  d'enchaîner 153 à 160. L'installation des fichiers sans relance, appliquée en
+  147 à 151, reste la référence historique. Une activation de production ne doit
+  pas interrompre les autres fils T3 ; son exécution est coordonnée par le
+  principal dans le contrat de livraison.
+
+## Limites
+
+FR-029 couvre les incohérences de commande, d'instance et de lien natifs
+dans un marqueur lisible. Elle ne couvre pas une cible d'exécution étrangère,
+un échec de clôture conditionnelle (CAS) ou une erreur de stockage. Ces cas
+gardent le refus sûr existant et peuvent empêcher le démarrage. Les contrôles
+d'autorité et de CAS149 restent stricts. Aucune réparation générale de données
+n'est promise.
+
+Après des arrêts confirmés, les clôtures métier peuvent rester partielles si
+une clôture conditionnelle échoue. Le `continue` de cette phase ne commande
+aucun arrêt : la boucle d'arrêts est déjà terminée. FR-020 conserve les
+confirmations et ne rejoue que les arrêts non confirmés.
+
+La revue R2 a confirmé une attente sans fin possible sur demande durable
+absente après admission, ou pour une tâche `working` sans échéance. Le
+correctif maintenant posé réutilise la clôture contrôlée avant de sauvegarder
+l'échec nommé `request_unavailable`. Il consomme aussi l'interruption de pause
+liée après les contrôles existants, sans créer de continuation. Une erreur de lecture SQL, de cible
+étrangère ou de CAS reporte le traitement sans mutation de tâche dans ces
+branches. Le chemin avant admission reste inchangé. La capture R5 et la
+suite complète R1 précèdent ce patch ; sa validation finale reste ouverte.
 
 ## Questions pour l'utilisateur
 

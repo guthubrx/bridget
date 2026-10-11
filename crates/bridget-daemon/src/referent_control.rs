@@ -113,6 +113,8 @@ pub enum AutonomousEffect {
     Continuation,
     /// Admission d'une nouvelle délégation native (session 150).
     NativeDelegation,
+    /// Lancement ou remise d'une mission native déjà admise (session 152).
+    NativeMissionDispatch,
 }
 
 /// Verdict de la garde unique.
@@ -132,7 +134,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
         AutonomousEffect::ProjectRound
         | AutonomousEffect::ReminderNudge
         | AutonomousEffect::Continuation
-        | AutonomousEffect::NativeDelegation => Admission::Admitted,
+        | AutonomousEffect::NativeDelegation
+        | AutonomousEffect::NativeMissionDispatch => Admission::Admitted,
     }
 }
 
@@ -186,6 +189,10 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
         cap = DEFAULT_AUTO_OBJECTIVES_CAP,
     ))?;
     migrate_rights_columns(conn, pre_existing_row)?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS control_events_pause_at ON control_events(at, id)
+         WHERE kind IN ('pause_on', 'pause_off');",
+    )?;
     tx.commit()
 }
 
@@ -315,6 +322,53 @@ pub fn read(conn: &Connection) -> rusqlite::Result<ControlStateFrame> {
             })
         },
     )
+}
+
+/// Secondes de pause dans [from, to), sans modifier le journal ni l'échéance.
+/// O(log N + P) : l'index temporel sert au prédécesseur et aux P événements
+/// de la fenêtre, parmi N événements durables. `id` départage une même seconde.
+pub fn pause_overlap(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<i64> {
+    if to <= from {
+        return Ok(0);
+    }
+    let state = read(conn)?;
+    let previous: Option<bool> = conn
+        .query_row(
+            "SELECT kind = 'pause_on' FROM control_events
+             WHERE kind IN ('pause_on', 'pause_off') AND at < ?1
+             ORDER BY at DESC, id DESC LIMIT 1",
+            [from],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let mut paused_since = previous
+        .unwrap_or(state.paused && state.paused_since.is_some_and(|at| at <= from))
+        .then_some(from);
+    let mut statement = conn.prepare(
+        "SELECT at, kind = 'pause_on' FROM control_events
+         WHERE kind IN ('pause_on', 'pause_off') AND at >= ?1 AND at < ?2
+         ORDER BY at, id",
+    )?;
+    let events = statement.query_map(params![from, to], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
+    })?;
+    let mut total: i64 = 0;
+    for event in events {
+        let (at, paused) = event?;
+        if paused {
+            paused_since.get_or_insert(at);
+        } else if let Some(since) = paused_since.take() {
+            total = total.saturating_add(at.saturating_sub(since).max(0));
+        }
+    }
+    let journal_tail = paused_since.map_or(0, |since| to.saturating_sub(since).max(0));
+    let state_tail = if state.paused {
+        to.saturating_sub(state.paused_since.unwrap_or(to).max(from))
+            .max(0)
+    } else {
+        0
+    };
+    Ok(total.saturating_add(journal_tail.max(state_tail)))
 }
 
 /// Applique une mutation. Un rejeu du même `command_id` rend l'état courant
@@ -811,6 +865,7 @@ mod tests {
             AutonomousEffect::ReminderNudge,
             AutonomousEffect::Continuation,
             AutonomousEffect::NativeDelegation,
+            AutonomousEffect::NativeMissionDispatch,
         ] {
             assert_eq!(
                 admit_autonomous_effect(effect, &active),
@@ -823,6 +878,7 @@ mod tests {
             AutonomousEffect::ReminderNudge,
             AutonomousEffect::Continuation,
             AutonomousEffect::NativeDelegation,
+            AutonomousEffect::NativeMissionDispatch,
         ] {
             assert_eq!(
                 admit_autonomous_effect(effect, &active),
@@ -846,6 +902,44 @@ mod tests {
             None
         );
         assert_eq!(human_principal_actor("n-importe-quoi"), None);
+    }
+
+    #[test]
+    fn native152_horloges_pause_overlap_durable() {
+        for (events, from, to, expected) in [
+            (vec![], 0, 50, 0),
+            (vec![(10, true), (30, false)], 0, 50, 20),
+            (vec![(10, true)], 0, 30, 20),
+            (
+                vec![(10, true), (20, false), (25, true), (35, false), (40, true)],
+                0,
+                50,
+                30,
+            ),
+            (vec![(10, true), (30, false)], 20, 40, 10),
+            (
+                vec![(10, true), (10, false), (10, true), (20, false)],
+                10,
+                30,
+                10,
+            ),
+        ] {
+            let conn = conn();
+            for (index, (at, paused)) in events.into_iter().enumerate() {
+                let command_id = format!("pause-{index}");
+                set(
+                    &conn,
+                    ControlMutation {
+                        paused: Some(paused),
+                        now: at,
+                        ..mutation(&command_id, index as u64)
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            }
+            assert_eq!(pause_overlap(&conn, from, to).unwrap(), expected);
+        }
     }
 
     #[test]

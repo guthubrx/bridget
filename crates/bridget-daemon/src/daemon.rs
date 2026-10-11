@@ -275,15 +275,18 @@ fn wait_request(
                 if live_connection_identity(&st, conn).as_ref() != Some(&identity) {
                     return Err("request_unavailable".into());
                 }
-                let snapshot = st
+                let (current, reply_deadline, summary) = st
                     .store
                     .request_wait_snapshot(id, &identity.0)
                     .map_err(|_| "store_unavailable")?
                     .ok_or("request_unavailable")?;
+                let frozen = if current == "open" {
+                    native_delegation::request_frozen_secs(&st, id, unix_timestamp())?.unwrap_or(0)
+                } else { 0 };
                 if permit.is_none() {
                     permit = Some(WaitPermit::acquire(&active)?);
                 }
-                snapshot
+                (current, reply_deadline.saturating_add(frozen as i64), summary)
             };
             // L'échéance métier est calculée : cette lecture ne ferme jamais la ligne.
             let now = unix_timestamp();
@@ -1253,6 +1256,21 @@ enum ManagedStopTarget {
     Immediate(StopOutcome),
 }
 
+// Snapshot sans demande d'arrêt : le lot entier est vérifié avant ses effets.
+enum StopKind {
+    Supervised {
+        lease: SpawnLease,
+        completion: Arc<ManagedStopControl>,
+        wrapper: Option<Arc<Mutex<BufWriter<UnixStream>>>>,
+    },
+    Marker {
+        store: ManagedMarkerStore,
+        fallback: StopOutcome,
+        stop_desired: bool,
+    },
+    Immediate(StopOutcome),
+}
+
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ManagedSupervisorCommand {
     /// Arrêt explicite du superviseur, indépendant des clones du canal encore vivants.
@@ -1630,6 +1648,7 @@ struct PendingReply {
     /// Timeout total en secondes (configurable par l'émetteur)
     timeout_secs: u64,
     created_at: std::time::Instant,
+    frozen_secs: u64,
     /// Palier d'escalade atteint : 0 = rien, 1 = rappel discret,
     /// 2 = rappel ferme, 3 = notification échec à l'émetteur
     escalation_level: u8,
@@ -3045,7 +3064,7 @@ fn drain_managed_events(
                         .remove(&lease.command_id)
                         .unwrap_or_default();
                     if let Some(record) = st.managed_spawns.get_mut(&lease.command_id) {
-                        record.wrapper_conn = Some(conn_id);
+                        record.wrapper_conn = Some(conn_id.clone());
                         let requesters = std::mem::take(&mut record.requester_conns);
                         for requester in requesters {
                             defer_control(
@@ -3073,6 +3092,45 @@ fn drain_managed_events(
                             },
                             &mut controls,
                         );
+                    }
+                    // Register peut précéder l'identité Fleet. Connected retente
+                    // les mêmes gardes, sans modifier restart_resumes ni ses bornes.
+                    if st.conn_instances.get(&conn_id) == Some(&lease.instance_id)
+                        && st.managed_by_instance.get(&lease.instance_id) == Some(&lease.command_id)
+                        && !st.auxiliary_connections.contains(&conn_id)
+                        && st
+                            .router
+                            .get_agent(&lease.name)
+                            .is_some_and(|route| route.connection_id == conn_id)
+                        && st
+                            .presences
+                            .get(&lease.instance_id)
+                            .is_some_and(|presence| {
+                                presence.name == lease.name
+                                    && presence.state == "connected"
+                                    && presence.busy_since.is_none()
+                            })
+                    {
+                        match st.delegation_store.for_child(&lease.name) {
+                            Ok(Some(task)) if task.state == "working" => {
+                                schedule_execution_recovery(
+                                    &mut st,
+                                    &conn_id,
+                                    &lease.instance_id,
+                                    &lease.name,
+                                    false,
+                                );
+                                if let Some(mut ready) =
+                                    st.pending_post_response_controls.remove(&conn_id)
+                                {
+                                    controls.append(&mut ready);
+                                }
+                            }
+                            Err(error) => {
+                                error!("mission native après connexion illisible: {error}")
+                            }
+                            _ => {}
+                        }
                     }
                     finish_recovery_command(&mut st, &lease.command_id);
                 }
@@ -4109,7 +4167,13 @@ impl DaemonState {
         // routage doit suivre la nouvelle connexion. Sans ce rattachement,
         // l'état `busy` est restauré alors que les relances continuent de
         // viser l'ancien identifiant et ne sont jamais différées.
+        let frozen: HashMap<_, _> = self.pending_replies.iter().map(|pending| {
+            (pending.msg_id.clone(), native_delegation::request_frozen_secs(self, &pending.msg_id, unix_timestamp()))
+        }).collect();
         for pending in &mut self.pending_replies {
+            if let Some(Ok(Some(secs))) = frozen.get(&pending.msg_id) {
+                pending.frozen_secs = *secs;
+            }
             if pending.to == name {
                 pending.target_conn = conn_id.to_string();
             }
@@ -4152,6 +4216,10 @@ impl DaemonState {
             let created_at = std::time::Instant::now()
                 .checked_sub(Duration::from_secs(elapsed))
                 .unwrap_or_else(std::time::Instant::now);
+            let frozen_secs = match native_delegation::request_frozen_secs(self, &request.id, now) {
+                Ok(secs) => secs.unwrap_or(0),
+                Err(error) => { warn!("gel de suivi illisible à la reconnexion: {error}"); continue; }
+            };
             self.pending_replies.push(PendingReply {
                 msg_id: request.id,
                 from: request.sender,
@@ -4160,6 +4228,7 @@ impl DaemonState {
                 target_conn,
                 timeout_secs,
                 created_at,
+                frozen_secs,
                 escalation_level: request.escalation_level,
                 deferred_level: None,
             });
@@ -4202,6 +4271,9 @@ fn reserve_managed_recoveries(
             continue;
         }
         if candidate.lease.deadline_at <= now {
+            if let Some(mut task) = state.delegation_store.for_child(&candidate.lease.name)? {
+                native_delegation::fail_restart(state, &mut task, "spawn_timeout")?;
+            }
             let _ =
                 state
                     .fleet
@@ -4225,6 +4297,9 @@ fn reserve_managed_recoveries(
                     detail: Some(detail.clone()),
                 });
                 let _ = state.fleet.fail(&lease, "recovery_failed", detail);
+                if let Some(mut task) = state.delegation_store.for_child(&lease.name)? {
+                    native_delegation::fail_restart(state, &mut task, "unreachable")?;
+                }
             }
         }
     }
@@ -4263,6 +4338,9 @@ fn reserve_managed_recoveries(
             state.fleet.mark_stopped(&name)?;
             continue;
         }
+        let ownership = if state.delegation_store.for_child(&name)?.is_some() {
+            crate::fleet::ownership_from_desired(&equipier)
+        } else { None };
         let Some(resolved_definition) = equipier.resolved_definition else {
             warn!("reprise de {name} refusée: définition figée absente");
             absents.push(RecoveryLossEntry {
@@ -4282,7 +4360,7 @@ fn reserve_managed_recoveries(
             command_id: format!("recovery-{}", Uuid::new_v4()),
             issued_at: now,
             deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
-            ownership: None,
+            ownership,
             project: equipier.project,
         };
         match submit_spawn_from_resolved(
@@ -4357,6 +4435,22 @@ fn reserve_managed_recoveries(
         warn!("trace de reprise non écrite: {error}");
     }
 
+    let mut verified = Vec::with_capacity(prepared.len());
+    for mut recovery in prepared {
+        if let Some(mut task) = state.delegation_store.for_child(&recovery.lease.name)? {
+            // Refaire les contrôles juste avant le lancement. L'environnement
+            // natif porte le bail de ce chemin, jamais celui de la génération perdue.
+            let authorized = native_delegation::native_launch_registry(state, &task)
+                .and_then(|_| native_delegation::native_child_env(&task, &mut recovery));
+            if let Err(reason) = authorized {
+                native_delegation::fail_restart(state, &mut task, &reason)?;
+                let _ = state.fleet.fail(&recovery.lease, "recovery_failed", &reason);
+                continue;
+            }
+        }
+        verified.push(recovery);
+    }
+    let mut prepared = verified;
     prepared.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
     for (recovery, stop) in prepared
         .iter()
@@ -4536,18 +4630,18 @@ fn schedule_execution_recovery(
     let Some(parent_execution_id) = candidates.first() else {
         return;
     };
-    match state.delegation_store.for_child(agent_name) {
-        Ok(Some(task)) if *parent_execution_id == format!("execution-{}", task.mission) => {
-            // La saga native publie l'échec ou son résultat durable. La reprise
-            // ordinaire ne crée ni continuation ni remise de cette mission.
-            return;
-        }
+    let native_resume = match state.delegation_store.for_child(agent_name) {
+        Ok(Some(task)) => match native_delegation::may_resume(state, &task, parent_execution_id, instance_id) {
+            Ok(true) => true,
+            Ok(false) => return,
+            Err(error) => { error!("garde de reprise native refusée: {error}"); return; }
+        },
         Err(error) => {
             error!("identité de mission native avant reprise illisible: {error}");
             return;
         }
-        _ => {}
-    }
+        _ => false,
+    };
     if candidates.len() > 1 {
         warn!(
             "reprise refusée pour {agent_name}: exécutions actives concurrentes {:?}",
@@ -4583,13 +4677,35 @@ fn schedule_execution_recovery(
             instance_id,
             now,
         ) {
-            Ok(_) => schedule_idempotent_delivery_recovery(state, conn_id, instance_id),
-            Err(error) => error!(
-                "réaffectation de la remise {} vers {}: {error}",
-                delivery.delivery_id, instance_id
-            ),
+            Ok(migrated) => {
+                schedule_idempotent_delivery_recovery(state, conn_id, instance_id);
+                if !native_resume || migrated == 0 {
+                    return;
+                }
+            }
+            Err(error) => {
+                error!(
+                    "réaffectation de la remise {} vers {}: {error}",
+                    delivery.delivery_id, instance_id
+                );
+                return;
+            }
         }
-        return;
+        // La remise native incertaine reste absorbante. La garde ci-dessus
+        // autorise une continuation, jamais le rejeu brut de cette remise.
+        // Sous ce verrou, seule sa quarantaine peut retirer le dispatching
+        // non expiré observé avant la réaffectation.
+        match state.idempotency.dispatching_delivery_for_execution_any_instance(
+            parent_execution_id,
+            now,
+        ) {
+            Ok(None) => {}
+            Ok(Some(_)) => return,
+            Err(error) => {
+                error!("quarantaine native non confirmée pour {parent_execution_id}: {error}");
+                return;
+            }
+        }
     }
 
     let parent = match state
@@ -7181,8 +7297,21 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         humains.insert(UI_HUMAN_SENDER.to_string());
     }
 
+    // O(R * (log t + log r + log N + P)). Les demandes ordinaires restent
+    // inchangées ; une pause native couvre aussi le palier d'expiration.
+    let frozen: HashMap<_, _> = state.pending_replies.iter().map(|pending| {
+        (pending.msg_id.clone(), native_delegation::request_frozen_secs(state, &pending.msg_id, unix_timestamp()))
+    }).collect();
     for pending in state.pending_replies.iter_mut() {
-        let elapsed = now.duration_since(pending.created_at).as_secs();
+        match frozen.get(&pending.msg_id) {
+            Some(Ok(Some(secs))) => {
+                pending.frozen_secs = *secs;
+                if paused { continue; }
+            }
+            Some(Err(error)) => { warn!("gel de suivi natif illisible: {error}"); continue; }
+            _ => {}
+        }
+        let elapsed = now.duration_since(pending.created_at).as_secs().saturating_sub(pending.frozen_secs);
         // Les deux extrémités comptent : `humain → agent` expirait aussi vite
         // que `agent → humain`, et les deux sens ont été mesurés le 28/08.
         let implique_humain = humains.contains(&pending.to) || humains.contains(&pending.from);
@@ -8876,6 +9005,7 @@ fn remember_reply_cycle(
         target_conn,
         timeout_secs: timeout,
         created_at: std::time::Instant::now(),
+        frozen_secs: 0,
         escalation_level: 0,
         deferred_level: None,
     });
@@ -9564,15 +9694,96 @@ fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedS
         .managed_spawns
         .values()
         .find(|spawn| spawn.lease.name == name);
+    let desired = if record.is_none() {
+        match st.fleet.desired_entry(name) {
+            Ok(desired) => desired,
+            Err(error) => {
+                return ManagedStopTarget::Immediate(StopOutcome::Timeout {
+                    state: error.to_string(),
+                });
+            }
+        }
+    } else {
+        None
+    };
+    let kind = classify_stop(&st, name, record, desired.as_ref());
+    prepare_classified_stop(&mut st, name, kind)
+}
+
+/// Classe sans mutation ni signal. Record et Desired viennent de la même
+/// lecture sous verrou ; un arbre construit ces index une seule fois.
+/// O(b) pour lire un marqueur de b octets ; O(1) pour un membre supervisé.
+fn classify_stop(
+    st: &DaemonState,
+    name: &str,
+    record: Option<&ManagedSpawnRecord>,
+    desired: Option<&crate::desired_state::DesiredEquipier>,
+) -> StopKind {
     match record {
-        Some(record) => {
-            let lease = record.lease.clone();
-            let completion = Arc::clone(&record.stop);
-            let wrapper = record
+        Some(record) => StopKind::Supervised {
+            lease: record.lease.clone(),
+            completion: Arc::clone(&record.stop),
+            wrapper: record
                 .wrapper_conn
                 .as_ref()
                 .and_then(|conn_id| st.connections.get(conn_id))
-                .cloned();
+                .cloned(),
+        },
+        None => {
+            if desired
+                .as_ref()
+                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Stopped)
+            {
+                return StopKind::Immediate(StopOutcome::Stopped);
+            }
+            if desired
+                .as_ref()
+                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Decommissioned)
+            {
+                return StopKind::Immediate(StopOutcome::NotFound);
+            }
+            let fallback = if st.router.get_agent(name).is_some() {
+                StopOutcome::NotManaged
+            } else if desired.is_some() {
+                StopOutcome::Stopped
+            } else {
+                StopOutcome::NotFound
+            };
+            match st.marker_store.load(name) {
+                Ok(_) => StopKind::Marker {
+                    store: st.marker_store.clone(),
+                    fallback,
+                    stop_desired: desired.is_some(),
+                },
+                Err(crate::managed_process::ManagedProcessError::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    if matches!(fallback, StopOutcome::NotManaged) {
+                        StopKind::Immediate(fallback)
+                    } else {
+                        StopKind::Marker {
+                            store: st.marker_store.clone(),
+                            fallback,
+                            stop_desired: desired.is_some(),
+                        }
+                    }
+                }
+                Err(error) => StopKind::Immediate(StopOutcome::Timeout {
+                    state: error.to_string(),
+                }),
+            }
+        }
+    }
+}
+
+/// Consomme la classification déjà vérifiée ; aucune seconde recherche de record.
+fn prepare_classified_stop(st: &mut DaemonState, name: &str, kind: StopKind) -> ManagedStopTarget {
+    match kind {
+        StopKind::Supervised {
+            lease,
+            completion,
+            wrapper,
+        } => {
             if !completion.is_requested()
                 && let Err(error) = st.fleet.invalidate_for_stop(&lease)
             {
@@ -9592,34 +9803,19 @@ fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedS
                 }
             }
         }
-        None => {
-            let desired = st.fleet.desired_entry(name).ok().flatten();
-            if desired
-                .as_ref()
-                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Stopped)
-            {
-                return ManagedStopTarget::Immediate(StopOutcome::Stopped);
+        StopKind::Marker {
+            store,
+            fallback,
+            stop_desired,
+        } => {
+            if stop_desired && let Err(error) = st.fleet.mark_stopped(name) {
+                return ManagedStopTarget::Immediate(StopOutcome::Timeout {
+                    state: error.to_string(),
+                });
             }
-            if desired
-                .as_ref()
-                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Decommissioned)
-            {
-                return ManagedStopTarget::Immediate(StopOutcome::NotFound);
-            }
-            if desired.is_some() {
-                let _ = st.fleet.mark_stopped(name);
-            }
-            ManagedStopTarget::Marker {
-                store: st.marker_store.clone(),
-                fallback: if st.router.get_agent(name).is_some() {
-                    StopOutcome::NotManaged
-                } else if desired.is_some() {
-                    StopOutcome::Stopped
-                } else {
-                    StopOutcome::NotFound
-                },
-            }
+            ManagedStopTarget::Marker { store, fallback }
         }
+        StopKind::Immediate(outcome) => ManagedStopTarget::Immediate(outcome),
     }
 }
 
@@ -16772,7 +16968,11 @@ fn handle_wrapper_message_with_peer(
                         && st.presences.get(&instance).is_some_and(|p| {
                             matches!(
                                 p.transport.as_str(),
-                                "codex_app_server" | "stdio" | "claude_pty" | "tmux"
+                                "codex_app_server"
+                                    | "claude_stream_json"
+                                    | "stdio"
+                                    | "claude_pty"
+                                    | "tmux"
                             ) && st
                                 .registry
                                 .get(&p.agent_type)
@@ -18451,7 +18651,14 @@ fn handle_wrapper_message_with_peer(
 
         WrapperToDaemon::DeliveryRejected { id, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            native_delegation::rejected(&st, conn_id, &id, &reason);
+            match native_delegation::rejected(&st, conn_id, &id, &reason) {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(error) => {
+                    error!("refus de mission native non qualifié ou non persisté: {error}");
+                    return None;
+                }
+            }
             purge_expired_attach_sends(&mut st);
             if let Some(pending) = st.pending_attach_sends.remove(&id) {
                 let writer = st.connections.get(&pending.conn_id).cloned();
@@ -23949,6 +24156,7 @@ mod presence_tests {
             target_conn: "client-reply".to_string(),
             timeout_secs: 60,
             created_at: Instant::now(),
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -27238,6 +27446,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -27284,6 +27493,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -27372,6 +27582,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -27424,6 +27635,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -27518,6 +27730,7 @@ mod presence_tests {
             target_conn: "conn-1".into(),
             timeout_secs: 60,
             created_at: started,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -29620,6 +29833,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: Instant::now(),
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -30702,6 +30916,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: Instant::now(),
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -30942,6 +31157,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: il_y_a_61s,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });
@@ -30953,6 +31169,7 @@ mod presence_tests {
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: il_y_a_61s,
+            frozen_secs: 0,
             escalation_level: 0,
             deferred_level: None,
         });

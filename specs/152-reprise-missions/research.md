@@ -1,11 +1,14 @@
 # Recherche - Session152 reprise des missions natives
 
-Date : 2026-10-11. Source : lecture du checkout principal
+Date : 2026-10-11. R1 à R26 conservent la recherche historique du checkout principal
 `/Users/moi/Nextcloud/10.Scripts/64.bridget` (base `1f2c661d`), de la contre-revue
 Codex de la 150 (`specs/150-socle-delegation/adversarial-review-codex.md`,
 objections 1 à 4 et 7 de la ronde 1) et de T3 (`RestartContinuation.ts`,
 `EffectWorker.ts`, via `research-t3-bridget.md` A3 et A4). Les lignes citées sont
-celles de cette base. `N` = `crates/bridget-daemon/src/daemon/native_delegation.rs`,
+celles de cette base. L'audit frais du worktree 152 est en R27 ; il prime pour
+les références au code livré par 150 et 151. Les décisions R22 à R26 priment
+sur les propositions remplacées des rondes précédentes.
+`N` = `crates/bridget-daemon/src/daemon/native_delegation.rs`,
 `D` = `crates/bridget-daemon/src/daemon.rs`, `E` = `execution_store.rs`.
 
 ## R1 - Reproduire d'abord : deux chemins d'échec sous pause
@@ -87,7 +90,8 @@ celles de cette base. `N` = `crates/bridget-daemon/src/daemon/native_delegation.
      affecté (jamais incrémenté) depuis `request_frozen_secs` à chaque tick et à
      la reconstruction. Le temps écoulé vaut `now - created_at - frozen_secs`. Les
      demandes d'une tâche suspendue sont ignorées par `collect_reminder_actions`.
-  4. La table `tracked_requests` n'est pas modifiée. Son index sur
+  4. Hypothèse historique corrigée en R27 après livraison de 150 : la table
+     `tracked_requests` n'est pas modifiée par ce premier projet de gel. Son index sur
      `deadline_at` n'est lu par aucun balayage (`store.rs:177`, seule
      occurrence). Ce point est prouvé par T005.
 - **Raison** : l'affectation absolue est idempotente. Un décalage relatif ne
@@ -472,3 +476,604 @@ Avec le journal des pauses, la date de lancement n'a plus besoin d'être ajusté
 `submit_spawn` (tâche `queued` sans saga). Une tâche retenue par la pause est
 lancée après la levée avec une date récente. Une saga existante garde son
 enveloppe.
+
+## R27 - Audit frais après livraison de 150 et 151
+
+Source : lecture du worktree
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions`, base
+`cd2bb015755fde7af26cf87fdb8f4e658172e237`, le 2026-10-11. Aucun test ni service
+lancé par cet audit. La comparaison complète figure dans `reuse-audit.md`.
+
+- **Dépendances présentes** : identités 148, filiation et permissions 149,
+  délai/rétention/garde 150, attente/accusé 151. Les repères ci-dessous sont ceux
+  de cette base, avant tout code 152.
+- **Horloge de mission déjà corrigée par 150** : l'échéance brute part désormais
+  de l'admission de l'exécution, avec repli sur `created_at`.
+  Preuve : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon/native_delegation.rs:1287`.
+  Le gel 152 ajoute `pause_overlap` à cette échéance. Les lectures de l'exécution
+  d'origine qui prouvent l'admission restent distinctes de `latest_in_chain`, qui
+  désigne l'exécution courante.
+- **R4 n'est plus une preuve d'immuabilité de la table suivie** :
+  `align_request_deadline(st: &DaemonState, task: &Task)` réécrit déjà l'échéance
+  durable des missions avec un `reply_timeout` explicite. Il réessaie au tick
+  suivant si l'écriture échoue. Le gel 152 conserve cet alignement ; il n'ajoute
+  pas de décalage relatif de la ligne à chaque levée.
+  Preuves : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon/native_delegation.rs:1780`
+  et `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/store/ledger_requests.rs:319`.
+- **T024 réutilise la fonction de propriété existante** :
+  `ownership_from_desired(equipier: &DesiredEquipier) -> Option<SpawnOwnership>`
+  est privée au module `fleet`. Le plan prévoit sa visibilité dans le crate,
+  sans copier la fonction.
+  Preuve : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/fleet.rs:1666`.
+- **L'API recherchée par R24 existe** :
+  `IdempotencyStore::agent_link_by_id(&self, link_id: &str)` lit le lien durable.
+  T043 doit réutiliser cette lecture. Une façade `FleetSupervisor` sans règle
+  supplémentaire n'est pas nécessaire.
+  Preuve : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/idempotency/agent_links.rs:96`.
+- **Arrêt réel à préserver** : `ManagedStopTarget` porte le classement et les
+  effets actuels. Aucun `ResumeStrategy`, `StoppedDesired`, `StopKind` ni
+  `classify_stop` n'est livré. Une entrée désirée `Stopped` sans superviseur rend
+  déjà immédiatement `Stopped` ; l'extraction T026 garde ce comportement.
+  Preuves : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon.rs:1243`
+  et `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon.rs:9561`.
+- **Invariants 151** : les mutations de tâches conservent `acknowledged_at` et
+  passent par `save_projected`, qui signale le guichet d'attente après commit.
+  T008 ne crée aucun champ de suspension dérivé.
+  Preuve : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/delegation_lineage.rs:269`.
+
+H4 reste à prouver par T004 sur les deux chemins de reprise. La lecture ne vaut
+pas validation d'un enfant relancé ni d'un modèle actif.
+
+## R28 - Ajustements de la contre-revue Claude et de l’analyse fraîche
+
+La contre-revue du plan, coordonnée par le principal, rend
+APPROVE_WITH_CHANGES. La trace détaillée est dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/adversarial-review-claude.md.
+
+- Le bloc d’environnement de `spawn_task` est après ses contrôles de révocation,
+  de sources et de cwd. L’extraction ne les remplace pas : T022/T023/T024 les
+  réutilisent avant la reprise, avec les cas T004 déjà prévus.
+- La réconciliation appelle `self.load` pour tous les noms de marqueurs, puis
+  vérifie l’identité native. Une simple exclusion de la table d’identités ne
+  ferme donc pas le démarrage non fatal. T043/T048 vérifient le marqueur natif lisible avant
+  publication et prouvent le traitement de son incohérence ; un marqueur
+  illisible n’est jamais une identité attestée. Les fichiers corrompus/illisibles
+  restent hors FR-029 et gardent le refus sûr existant. `load` existe à la
+  ligne1171 et `remove` à1385 ; cette suppression ne répare pas une identité et
+  n’est sûre qu’après disparition prouvée du groupe ou PID recyclé.
+- `RequestWait` 151 observe `deadline_at` brut et calcule l’expiration sans
+  modifier la ligne. T018 applique l’échéance métier native effective, en
+  gardant le budget de l’appelant inchangé. T017 applique le temps restant
+  effectif à l’admission d’un descendant. La date brute exposée reste durable.
+- `current_task_view`, qui reçoit le daemon, calcule `suspended`. `task_view`
+  reste pur ; aucune nouvelle lecture globale ni écriture de suspension.
+- L’annulation conserve les erreurs et résultats déjà terminaux ; un bail de
+  lancement expiré garde un échec nommé. Les cas sont intégrés à T027/T024.
+- `NativeMissionDispatch` partage la logique de garde existante, tout en nommant
+  un effet distinct de l’admission. `pause_overlap` utilise l’index temporel
+  du schéma existant : O(log N + P), au lieu d’ignorer le coût de sélection.
+
+Preuves actuelles :
+
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon/native_delegation.rs:824.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/managed_process.rs:1233.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon.rs:289.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/daemon/native_delegation.rs:126.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/crates/bridget-daemon/src/referent_control.rs:165.
+
+## Preuve d’exécution T003 — premier RED, 2026-10-11
+
+Le principal a compilé les trois tests de pause puis observé 0 PASS/3 FAIL,
+RC101, 33,45 s. La production native/daemon est confirmée inchangée par lui.
+Chemin A : tâche failed, suivi supprimé et avis d’échec réel au parent.
+Chemin B : interrupted provoque failed. Ordre inverse : absence de reprise
+avant interrupted, puis failed et aucune reprise après son arrivée.
+Les trois assertions d’état échouent avec failed au lieu de working.
+T002/T003 restent non cochées jusqu’au GREEN. Les autres assertions ne sont
+pas toutes atteintes ; le reçu distingue logs empiriques et assertions.
+
+Journal : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+Preuves brutes : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/red-pause152.log et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/red-pause152.json.
+Racine privée réelle : /var/folders/82/29vmttnx4pz9mc73kzzfvw1r0000gn/T/b.aczqbxyd (mode 0700 observé).
+Écart : /var/folders au lieu de la recette courte /tmp/b.XXXX. Le principal
+corrigera les prochains runs ; cette preuve initiale n’est pas réécrite.
+
+## Preuve d’exécution — fondations et RED étendu, 2026-10-11
+
+La nouvelle passe du principal est documentée dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+Source brute :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/red-fondations152-results.json.
+
+Fondations : 5 PASS/0 FAIL, tous RC0, répartis entre la chaîne (2),
+le payload 151 (1), pause_overlap (1) et la table de garde existante (1).
+T008/T009/T010/T050 sont cochées avec l’autorisation du principal ;
+les autres cases sont conservées. La progression est 5/50.
+
+RED étendu : compilation réussie, puis 0 PASS/7 FAIL, RC101.
+Six FAIL sont des RED valides, dont les trois T003 déjà observés.
+T005 s’arrête sur un témoin incorrect : expired attendu contre timed_out
+du contrat réel. L’oracle du témoin doit être corrigé et le comportement
+ancien rejoué ; T005 ne constitue pas encore un RED définitif.
+Le reçu conserve les sept résultats bruts et les assertions réellement
+atteintes, sans annoncer de succès global. La racine de ce run est
+/tmp/b.2ykydeej, mode 0700 observé ; l’écart du premier run reste historique.
+
+Rien n’est livré ni activé. La contradiction H6/quickstart sur la relance
+est conservée comme limite documentaire, à traiter par le principal lors
+de la livraison, après observation des travaux et processus actifs.
+
+## Reproduction complète — compilation R1 et exécution R2
+
+R1 n’est pas un RED comportemental : erreur de compilation E0061/E0600
+dans la fixture register_connected, RC101 en 3,92 s, aucun test exécuté.
+Preuve :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/red-complet152-results.json.
+
+R2 a compilé puis exécuté 14 RED natifs et 5 RED E2E, tous en échec attendu.
+T005 atteint maintenant l’assertion native après le témoin timed_out corrigé ;
+sa réserve d’oracle antérieure reste historique. Les deux témoins ordinaires
+passent, chaque run RC0, et permettent de cocher T011 sur autorisation du
+principal. La progression est 6/50 ; les tâches RED restent décochées avant
+leur GREEN. Ces résultats ne sont pas additionnés aux précédents runs
+pour produire un total global.
+
+Preuves :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/red-complet152-r2-results.json.
+Le JSON atteste la stabilité des six empreintes sources pendant cette passe,
+pas le gel du code lors du GO d’implémentation suivant. Le journal détaille
+les quatre commandes, les SHA des preuves, les diagnostics et leurs limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+T032 impose une correspondance test149 → FR pour l’adaptation du contrat
+de reprise FR-013/FR-014/FR-015/FR-027. Les échecs hérités ne servent pas à
+masquer ces écarts volontaires. Les refus de droits ou d’identité invalides
+et les états protégés de FR-016/FR-017/FR-029 gardent leurs oracles.
+T033/T035 ne sont pas publiées ; rien n’est livré ni activé.
+
+## US1/US2 R1 et preuves complémentaires
+
+US1/US2 : 13 PASS/3 FAIL ; T029 : 2 RED attendus séparés.
+Les horloges, le lancement retenu 600 s, le suivi après reconnexion, la vue
+additive et la projection Lineage passent. Les douze clôtures prouvées sont
+T005/T006/T039/T049/T012/T013/T016/T018/T020/T021/T044/T045 : progression 18/50.
+T002/T003/T014/T015 restent ouvertes pour les reprises ; T019 pour le résultat ;
+T017 pour l’admission d’un descendant. Aucun cas ni ID nouveau n’est ajouté.
+Source :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/us1-us2-152-r1-results.json.
+
+Le diagnostic de réception reproduit 0 PASS/1 FAIL, RC101. Sa donnée réelle
+montre phase150 dispatching, exécution starting et ACK absent dans la fixture.
+La façade corrige celle-ci avec le vrai DeliverAcked ; aucun GREEN de reprise
+n’est déduit avant le rejeu. Source :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/diagnostic-reception-152-r1-results.json.
+
+Le magasin de refus compte 12 PASS/0 FAIL, trois RC0, cinq empreintes stables
+pendant ces runs. T030 reste ouverte jusqu’au branchement API et au GREEN
+des refus ; T029 normalisation/record_refusal et T031 purge restent à brancher.
+Source :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/store-refus-152-r1-results.json.
+
+Les commandes, SHA, données réelles, modes privés et limites sont conservés dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+Les preuves antérieures restent historiques ; aucun total global n’est inventé.
+
+Sur décision du principal, le quickstart est aligné sur H6 et le contrat de
+livraison de production : contrôle réel après activation coordonnée sans
+interrompre les autres fils T3. L’observation de phase 8 reste à faire.
+Aucune relance actuelle, aucune nouvelle approbation, aucun redémarrage T3.
+Git/disque/runtime devront être prouvés séparément. T032 conserve les refus
+de droits/identités invalides. T033/T035 restent en mémoire sans publication.
+
+## US1/US2 R2 puis R3 T019 — 18 PASS ciblés, reprise validée
+
+R2 : 17 PASS/1 FAIL sur sept filtres ; les trois reprises deviennent GREEN
+après le vrai DeliverAcked initial de la fixture. Le descendant est borné
+par l’échéance effective : 60 s admis, 120 s refusé. T002/T003/T014/T015/T017
+sont cochées avec ces preuves. Source :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/us1-us2-152-r2-results.json.
+
+Le FAIL R2 T019 porte sur l’état immédiatement après capture_reply :
+waiting_for_children, et non result_available. R3 corrige seulement cet
+oracle de fixture et conserve corps durable, remise exacte au parent,
+pause active, état final result_available et cleanup. Résultat 1 PASS/0 FAIL,
+RC0 ; auto-relecture du test effectuée sans nouvelle exécution. Source :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/us1-us2-152-r3-t019-results.json.
+
+T019 est cochée ; progression 24/50. Les preuves actuelles US1/US2 combinent
+17 PASS R2 et 1 PASS R3, sans prétendre à un run unique ou à une suite globale.
+Les 19 RED historiques natifs/E2E, l’échec de compilation R1 et les premières
+traces de fixture restent distincts et conservés. SHA et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+T030 reste ouverte jusqu’à son intégration API et au GREEN des refus ;
+T029/T031 ne sont pas clôturées. T033/T035 restent préparées en mémoire,
+sans publication avant US3/US4/US5 GREEN et les finitions.
+Rien n’est livré ni activé.
+
+## US3 — limite des fixtures T004a/T047 avant leur GREEN
+
+Le principal a identifié une limite du montage initial. fleet.recover_commands
+ferme le Starting initial lorsque desiredfleet.json n’a pas encore été écrit.
+Les anciennes fixtures T004a/T047 rouvraient le magasin avant cette persistance.
+Leurs RED compilés reproduisent bien l’échec natif unreachable ; ils ne prouvent
+pas qu’un enfant Launching était récupérable à cette frontière.
+
+La nouvelle fixture représente une frontière réelle avec la primitive existante
+register_connected_observed : sauvegarde de desired, puis retour Err avant
+l’écriture de l’issue SQLite, tandis que la tâche reste Starting.
+Le principal annonce les observations desired, phase, lease et lien dans les
+prochains GREEN. Aucun résultat de cette nouvelle frontière n’est encore
+attribué à ce reçu ; aucun hook de production ou mécanisme de flotte nouveau
+n’est déduit de ce changement de fixture.
+
+Cette précision complète les hypothèses de R6/R13 et les cas déjà prévus
+T004a/T047. Les anciennes traces brutes ne sont pas remplacées ni reclassées en
+échec de compilation. Leur portée est limitée à l’échec effectivement observé.
+T004/T047 restent décochées tant que leurs cas complets et la récupérabilité
+réelle ne sont pas prouvés. Source de cette limite : constat empirique transmis
+par le principal le 2026-10-11 ; aucune exécution par le propriétaire documentaire.
+
+## US3 R1 — récupérabilité attestée, E2E encore partiels
+
+Sources :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/us3-152-r1-results.json
+et
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/t022-regression-152-r1-results.json.
+
+US3 : 8 PASS lib, 2 PASS E2E et 3 FAIL E2E. T004a/T047 montrent maintenant
+la vraie frontière : desired=Running, phase Starting, bail et lien attestés,
+puis candidat retrouvé à la réouverture. Bootstrap natif présent dans le cas
+valide ; révocation, source modifiée et bail expiré refusent toute reprise.
+Pour starting et mission_pending, les deux premiers crashes portent le compteur
+à 1 puis 2 ; le troisième ferme avec native_resume_exhausted, sans reprise.
+Cette preuve complète R6/R13 sans réinterpréter la fixture RED initiale.
+
+Les trois FAIL E2E arrêtent trop tôt leurs oracles de nouvelle génération,
+started ou disparition du groupe. Le principal observe ensuite les nouveaux
+started et le groupe final gone, sans PID orphelin. Les racines sont
+/private/tmp/n148-8c139604cf,
+/private/tmp/n148-4af8c04beb et
+/private/tmp/n148-40107f7ecc.
+Ces observations sont attribuées au principal, pas à une exécution documentaire.
+Le propriétaire qualité adapte les E2E sans changement de production pour ces
+courses. Le GREEN complet n’est pas encore déduit de ces observations.
+
+Régression T022 native148 --lib : 22 PASS/1 FAIL, RC101. Le test
+native148_cut_after_admission_retains_exact_ids_and_frozen_model compare
+task_view pur à l’API enrichie par suspended/resume_attempts.
+T032 couvre désormais ce changement volontaire FR-024/T021 : égalité stricte
+de current_task_view aux trois étapes, avec IDs, modèle et droits conservés.
+Aucun échec hérité, nouveau test, ID ou périmètre n’est invoqué pour ce cas.
+
+Progression conservée à 24/50 ; T022/T023/T024 et les autres cas US3 attendent
+leur correspondance complète aux GREEN. SHA, diagnostics, compteurs et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+T033/T035 restent en mémoire ; rien n’est livré ni activé.
+
+## US3 R2 — frontières d’identité GREEN, mission imbriquée et gardes connectées ouvertes
+
+Les deux journaux R2 donnent native148 --lib : 23 PASS/0 FAIL, RC0 ; E2E
+native152_rouge : 4 PASS/1 FAIL, RC101. Aucun test n’est ignoré. Le JSON atteste
+sept empreintes source stables. Les quatre frontières d’identité passent,
+ainsi que native148_cut_after_admission_retains_exact_ids_and_frozen_model.
+Le FAIL de comparaison R1 reste conservé ; T022/T032 ne sont pas clôturées
+par cette seule tranche.
+
+Le cas native152_rouge_panne_mission_working échoue sur nested152 absent pour
+3bc90d3a-56d5-4af4-949d-de015e47e530 dans
+/private/tmp/n148-d5b7866569. Le principal rapporte un fournisseur Python de
+fixture qui refuse --resume et prépare son adaptation. Aucun défaut de
+production n’est établi par ce diagnostic ; le GREEN imbriqué manque encore.
+
+Les refus révocation/source modifiée/bail expiré sont prouvés sur le vrai
+candidat Starting par native152_rouge_panne_starting_bootstrap_et_gardes.
+Les refus révocation/source sur le chemin déjà connecté restent à exécuter
+dans le même cas T004/T024, selon l’autorisation du principal. Le bail expiré
+ne concerne que Starting. La frontière Starting avec desired/lien attestés
+ne réinterprète pas le RED initial sans desired comme récupérable.
+
+Ces preuves distinguent tests lib, daemon isolé avec fixtures, états et
+observations runtime transmis par le principal. Elles ne valident aucun
+runtime de production ou modèle réel. Aucune nouvelle case US3 n’est cochée :
+24/50 reste inchangé. T033/T035 restent en mémoire. Les preuves brutes R1/R2,
+les commandes, les durées et les SHA sont consignés dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## US3 R3 gardes — refus Starting et Connected prouvés en lib
+
+Le filtre native152_rouge_panne --lib donne 2 PASS/0 FAIL/0 ignoré, RC0,
+avec six empreintes source stables. Le test T004 existant contient sept
+sous-cas : Starting valide/révocation/source/bail expiré, Connected
+valide/révocation/source. T038 pause active/levée passe aussi.
+
+Les deux branches refusent la révocation par permission_not_inherited et
+la source modifiée par settings_revision_changed : failed, compteur zéro,
+aucune reprise préparée. Starting avec bail expiré rend spawn_timeout,
+compteur 1 observé et aucune reprise préparée. Le cas valide prépare une
+reprise, compteur 1, avec bootstrap et filiation corrélés. Connected prépare
+la génération 2. Les assertions de codes et les observations de compteurs
+restent distinguées dans le journal d’implémentation.
+
+Les gardes Connected ouvertes au moment de R2 sont maintenant GREEN en lib.
+La source relue conserve la vraie frontière Starting : desired sauvegardé
+avant l’erreur de l’issue SQLite. Elle ne transforme pas le RED initial sans
+desired en candidat récupérable. Cette preuve lib ne lance pas de fournisseur
+et ne ferme pas le FAIL E2E nested152 de R2. Aucun nouveau cochage US3 :
+24/50 reste inchangé. T033/T035 restent en mémoire.
+
+Les lignes de code/journal, les états, les compteurs, les SHA et la portée
+exacte sont consignés dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## US3 R3 E2E — sortie après quarantaine, sans reconstruction de mission
+
+Le filtre E2E native152_rouge donne 4 PASS/1 FAIL/0 ignoré, RC101,
+avec sept empreintes source stables. Les quatre frontières d’identité passent.
+native152_rouge_panne_mission_working échoue encore sur nested152 absent
+pour d0f0af8f-29da-40dc-93d2-b87b7aae8688, dans
+/private/tmp/n148-6b23b800e8. Cette preuve R3 est distincte du FAIL R2.
+
+Le diagnostic réel confirmé par le principal, la qualité et la façade
+montre --resume correct, initialisation reçue, session enregistrée,
+stderr vide et aucun prompt pour la génération 2. La tâche Working et
+l’exécution Starting/génération 1/révision 0/instance NULL sont distinctes.
+La remise est réaffectée à la génération 2 puis indeterminate ; aucune
+continuation n’est créée. schedule_execution_recovery sort après cette
+quarantaine au lieu de reconstruire la mission. Le refus d’argument Python
+précédemment rapporté pour R2 n’explique donc pas ce FAIL R3.
+
+Le principal autorise une correction minimale de production dans ce chemin
+du daemon, avec l’E2E inchangé. L’hypothèse est en cours ; aucun GREEN ni
+cochage US3 n’est déduit. Les 2 PASS lib R3 gardes restent une preuve séparée.
+Les RED/R1/R2 et la limite du Starting initial sans desired sont conservés.
+Progression : 24/50 ; T033/T035 restent en mémoire. Aucun runtime de production
+ou modèle réel n’est validé par cette fixture.
+
+Résultat, commande, durées, SHA, portée et diagnostic attribué :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## US3 R4 — reconstruction effective, source de permissions privée à attester
+
+R4 : E2E 4 PASS/1 FAIL, RC101 ; pause lib 6 PASS puis 5 PASS, tous RC0,
+aucun ignoré. Sept empreintes source sont stables pendant les trois runs.
+Les quatre frontières d’identité passent. Le principal et les propriétaires
+constatent l’exécution génération 2/running/provider_accepted : le correctif
+du daemon remet réellement la mission. Le nouveau FAIL contient une demande
+MCP nested152 refusée par permission_source_unavailable.
+
+Ce refus est correct pour la fixture héritée : permission_snapshot=null,
+PATH sans CLI claude et provider.py avec shebang. Il ne justifie aucun
+affaiblissement de garde. Le prochain montage réutilise le pattern149 :
+.git privé, profil privé, bin/claude dans le PATH et capture réelle du contexte.
+La qualité complète seulement le fournisseur privé par un binaire compilé
+qui incorpore le Python existant ; le CLI, sa SHA, les settings et l’init
+doivent être observés. Aucun snapshot injecté, outil produit, dépendance
+nouvelle ou installation n’est prévu. Le compilateur C est déjà requis par
+rusqlite bundled. Aucun succès du nouveau montage n’est encore constaté.
+
+Les références149 exactes, la décision T004 et les limites de preuve sont
+ajoutées à
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/reuse-audit.md.
+Les compteurs, SHA et diagnostics attribués sont consignés dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+US3 reste ouverte à 24/50, sans nouveau cochage. Les RED/R1/R2/R3 sont
+conservés. T033/T035 restent en mémoire. Aucun modèle réel ou runtime de
+production n’est validé par cette fixture.
+
+## US3 R5/R6 — montage attestable puis transport réel accepté
+
+R5 donne 4 PASS/1 FAIL E2E, RC101. Le CLI privé compilé et les settings
+sont observés sur disque ; init152 rapporte plan, Read/Glob/Grep, cwd et
+--resume natif. Les SHA de ces fichiers ne sont pas celles d’un fact mémoire
+publiquement accepté. Le nouveau refus est permission_attestation_unavailable.
+La façade identifie definition_presence_fields qui restitue claude_stream_json
+et la garde de transports qui l’excluait.
+
+R6 admet ce transport dans la garde existante, avec les autres contrôles
+d’identité, driver, révision et structure conservés. Résultat : 5 PASS/0 FAIL,
+RC0. Sept sources sont stables pendant chaque run ; seul daemon.rs change
+entre R5/R6, l’E2E est byte-identique. Deux redémarrages du magasin réussissent.
+Le cas exige les IDs de tâche/mission, nouvelle instance, compteurs 1 puis 2,
+bootstrap et filiation ; le MCP admet le petit-enfant après chaque reprise,
+avec sa mission et sa filiation conservées. Le fournisseur reste une fixture,
+pas un modèle réel ou une validation de production.
+
+Les onze tâches US3 sont reliées aux preuves R1/R2/R3/R4/R6 dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+T025 dispose déjà des bornes Starting/mission_pending/Working, du sur-compte
+avant effet et de la reprise de pause sans incrément. Seul le résultat
+rendu une fois après panne attend le GREEN du principal. Le complément est
+posé dans le test déjà prévu ; sa lecture ne vaut pas exécution.
+
+Aucun cochage global US3 ni 35/50 n’est encore déclaré : 24/50 reste inchangé.
+T032 reste une régression finale distincte. T033/T035 restent en mémoire.
+Les RED et chaque diagnostic R1 à R5 gardent leur trace historique.
+
+## Clôture US3 après GREEN T025 R4 — 35/50
+
+T025 passe : native152_panne_resultat_rendu_une_fois, 1 PASS/0 FAIL/0 ignoré,
+RC0, sept empreintes source stables pendant le run. Les trois passes
+antérieures restent conservées : R1 mauvaise instance/StaleGeneration ;
+R2 contrôle post-Registered non exécuté/WouldBlock ; R3 remise SQLite acked
+constatée par le principal, mais entretien maintain_stores omis par la fixture.
+R4 exécute ces étapes réelles et passe. Les corrections portent seulement
+sur la fixture ; le préfixe de production garde son empreinte antérieure.
+
+Le cas final impose une seule reprise, mission/instance corrélées, feuille
+d’exécution génération2, vrais ACK de mission et de résultat, puis entretien
+du magasin. Trois ticks ne produisent aucune deuxième remise. Le résultat
+et les flags result_sent/delivery_acked/cleanup_done sont durables, compteur1.
+La borne deux, le sur-compte avant effet et le compteur de pause zéro étaient
+déjà prouvés. Le dernier manque T025 est maintenant fermé.
+
+Après le GO explicite du principal, onze tâches US3 sont cochées :
+T004/T038/T047/T048 et T022/T023/T024/T025/T041/T042/T043.
+Progression actuelle : **35/50 (70 %)**. La matrice R6 et les réserves
+antérieures restent historiques ; aucune ancienne preuve n’est remplacée.
+T032 reste une régression finale distincte. T033/T035 restent en mémoire
+avant US4/US5 GREEN et les finitions. Aucun modèle réel ou runtime de
+production n’est déduit des fixtures.
+
+Commandes, compteurs, diagnostics, lignes de code et SHA des huit captures :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## Clôture US4 — 41/50, crash SQL et arrêts simulés distingués
+
+US4 R1 : native152_annulation 4 PASS, native152_rouge_annulation 2 PASS,
+témoin148 des arrêts profonds 1 PASS ; tous RC0, aucun FAIL/ignoré.
+Sept empreintes source sont stables pendant ces trois runs distincts.
+Le refus d’un membre non arrêtable conserve les descendants sur plusieurs
+ticks. Les réessais partent de la racine, suivent l’ordre profond d’abord,
+sautent les confirmations durables et conservent erreur/résultat terminal.
+
+Le crash de fixture est un vrai échec SQL après confirmation, avant le reçu,
+puis réouverture du magasin. Desired Stopped permet la reprise sans
+superviseur et sans nouvelle demande d’arrêt. Aucun PID/SIG réel n’est testé
+par ces unitaires. Le témoin148 reste une non-régression distincte.
+
+Le coût de précontrôle/index locaux est O(m + f + p + n log n), hors
+descendants/liens/marqueurs. Les sauvegardes de la liste croissante coûtent
+O(n²) octets cumulés. Ces bornes sont commentées dans les sources ; elles
+ne constituent pas une mesure de performance.
+
+Après GO du principal, six cases sont cochées : T007/T040/T026/T027/T028/T046.
+Progression actuelle : **41/50 (82 %)**. L’histoire et le texte des tâches
+sont conservés. US5 et les finitions restent ouverts ; T033/T035 restent
+en mémoire. Aucun modèle réel ou runtime de production n’est déduit.
+
+Oracles, lignes de code, commandes, durées et SHA des quatre captures :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## Clôture US5 — preuve API et entretien, 44/50
+
+US5 R1 : **15 PASS, 0 FAIL, 0 ignored, RC0**. La preuve magasin
+antérieure de 12 PASS reste historique. Les trois tests natifs
+supplémentaires exercent l’admission, la normalisation du registre et
+le passage réel `maintain_stores`. Le rejeu garde le refus initial
+malgré la disparition du cwd et une pause. Une autre enveloppe rend
+`envelope_mismatch`. Le reçu est conservé à 30 jours et purgé au-delà.
+
+Le magasin n’admet que cinq codes fixes. Les dix cas transitoires
+séparés restent sans reçu. Le texte dynamique du registre n’est pas
+enregistré. Les refus et leur purge ne changent ni tâche, ni Lineage,
+ni epoch d’attente. La complexité O(R) de la purge est lue dans le code,
+sans mesure de performance.
+
+Après GO et vérification, T029/T030/T031 sont cochées :
+**44/50 (88 %)**. Les six finitions restent ouvertes à ce stade.
+T033/T035 sont autorisées et seront publiées après relecture du code.
+Aucun succès de modèle réel, livraison ou runtime de production n’est
+revendiqué. Les journaux anciens sont conservés.
+
+Commande, oracles, limites et SHA des deux captures :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## Finitions documentaires — 46/50, T032/T034 encore ouvertes
+
+Après GO, les trois documents utilisateur et l’ADR152 sont publiés et relus.
+T033/T035 sont cochées ; **46/50 (92 %)**. D1 à D22 sont présentes exactement
+une fois. Les formes d’appel et les canoniques restent inchangés.
+Le contrat existant ne prétend plus que le comportement152 est celui150.
+
+La documentation distingue le précontrôle d’annulation refusé d’un échec
+d’arrêt ultérieur. Elle conserve la limite de lancement300s, la borne2,
+la date brute, le budget d’attente et les protections des marqueurs illisibles.
+La complexité du plan est alignée sur les commentaires présents ; aucun banc
+ni succès de performance n’est revendiqué.
+
+T032 R1 : 217 PASS/16 FAIL/1 ignored, tous FAIL nouveaux.
+R2 : 149 65 PASS/7 FAIL, cinq F2 stricts corrigés ;150 51 PASS/0 FAIL.
+Les sept restants sont cinq adaptations de contrat et deux vrais défauts de
+garde corrigés sans changer leurs oracles. Les six filtres finaux R3 sont en
+cours ; T032 reste ouverte. T034 attend également R3 vert et la relecture
+finale. T036/T037 restent ouvertes.
+
+Preuves séparées, mappings, six réponses XX, limites et SHA :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## T032 R3/R4 et dernières décisions encore ouvertes
+
+R3 termine les six filtres de référence à 232 PASS/1 FAIL/1 ignored.
+Les six intégrations149 ne sont pas exécutées après l’échec du lib.
+Le complément152 donne 51 unitaires PASS puis 4 E2E PASS/1 FAIL.
+
+R4 corrige les seules routes de la fixture tick149 : 78 PASS/0 FAIL,
+soit 72 unitaires et six intégrations réellement exécutées.
+L’agrégation compatible de R3, avec149 remplacé par R4, donne
+239 PASS/0 FAIL/1 ignored ; ce n’est pas un seul run.
+
+R4 valide aussi les 51 unitaires152 renforcés. Les mêmes tests prévus
+mesurent maintenant les 300 s de SC-002, puis le restant et les deux
+événements exacts de SC-003. Leur ancien oracle à 300 ticks reste dans
+l’historique ; aucune preuve de durée n’en est déduite.
+
+L’E2E152 initialise g2 sans prompt et reste en diagnostic. T032 attend
+la source finale Connected et sa vérification. Le principal rejette H1
+de la revue hostile pour sa lecture trop large de FR-029 ; les contrôles
+d’autorité149 stricts restent PASS. Les quatre autres objections sont
+en contre-analyse, sans défaut reproduit par le reviewer.
+
+46/50 reste inchangé. T032/T034/T036/T037 restent ouvertes.
+Preuves, SHA, contre-revue et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## Correctif terminal avant R5 — décisions et prototypes alignés
+
+Les sources N/D gelées sont relues après GO du principal. Connected
+retente le chemin de reprise existant après identité Fleet attestée et
+gardes de connexion/instance/liberté. M2 propage la lecture de pause
+illisible ; M3 réserve la conversion en échec à neuf refus nommés ;
+M4 fige l’échéance depuis la seule demande durable, ou diffère.
+
+Le booléen de R16 est désormais un `Result<bool, String>` interne.
+T013/T044 gardent leurs scénarios prévus. Le prototype T015 a quatre
+arguments ; l’enveloppe legacy T045 et l’origine d’échéance sont distinctes.
+Plan, ADR et reuse-audit reflètent ces corrections au même contrat.
+
+H1 est rejetée par le principal ; les contrôles stricts d’autorité149
+sont conservés. M5 reste une réserve LOW, sans patch ni nouveau scénario.
+R5 est en cours. Les anciennes captures ne sont ni remplacées ni requalifiées.
+46/50 reste inchangé ; les quatre finitions restent ouvertes.
+
+Preuves de lecture, SHA et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## R5 comparé, T034 relue, revue R2 et patch de demande absente
+
+R5 donne295 PASS/0 FAIL/1 ignored sur sept filtres. Les six filtres de
+compatibilité donnent239/0/1 comme la référence ; native152 donne51 unitaires
+et5 E2E PASS. Les quatre adaptations149 effectives sont distinguées du
+cinquième témoin byte-identique. Les sept défauts production149 corrigés
+restent prouvés par leurs oracles stricts. T032/T034 sont clôturées :48/50.
+
+Suite complète R1 :94 cibles,2103 PASS/8 FAIL/72 ignored, RC101 ; mêmes cinq
+cibles et huit noms que W004151. Elle précède le patch None. Pas de succès
+global ni d'addition à R5. T036/T037 restent ouvertes.
+
+R2 conserve REQUEST_CHANGES. H1 est documentée : cible étrangère/CAS/stockage
+peuvent bloquer le démarrage hors FR-029, sans assouplir149. La causalité L5
+est réfutée par l'ordre du code : clôtures métier après tous arrêts confirmés.
+Leur refus CAS peut laisser une clôture partielle, limite réelle conservée.
+
+Le patch None posé réutilise close_lost_execution puis failed/request_unavailable
+pour les deux branches après admission/working sans échéance. SQL Err ou
+clôture refusée diffèrent sans mutation de tâche dans ces branches ; le cas
+avant admission reste inchangé. R6 :48 PASS/3 FAIL, RC101, aucun E2E exécuté.
+Les trois annulations attendent working et observent failed ; diagnostic
+fixture/produit en cours, aucune adaptation d'oracle acquise.
+
+Preuves, mappings, six réponsesXX et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/tests-152.md
+et
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/implementation.md.
+
+## Rectification et correctif de pause avant R8
+
+Cinq adaptations149 effectives incluent l'oracle global O4 de FR-029 ; le
+comptage antérieur de quatre était incomplet. Le témoin supplémentaire reste
+byte-identique. R3 résout H1/M2/M3/M4/L5 et révèle la pause ouverte après
+request_unavailable. Une condition réutilise sa consommation après gardes.
+R7 montre deux fixtures Working sans Request ; vrais IDs/délai désormais
+admis par create_request, oracles inchangés. R8/098 attendus ;48/50 inchangé.

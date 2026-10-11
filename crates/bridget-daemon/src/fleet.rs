@@ -1663,7 +1663,7 @@ fn agent_path_contains(path: &str, instance_id: &str) -> bool {
     path.split('/').any(|segment| segment == instance_id)
 }
 
-fn ownership_from_desired(equipier: &DesiredEquipier) -> Option<SpawnOwnership> {
+pub(crate) fn ownership_from_desired(equipier: &DesiredEquipier) -> Option<SpawnOwnership> {
     let link = equipier.agent_link.as_ref()?;
     Some(SpawnOwnership {
         parent_instance_id: link.parent_instance_id.clone(),
