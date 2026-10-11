@@ -1,0 +1,130 @@
+# Tâches - Session160 reprise après une limite d'usage
+
+**Entrées** : `spec.md`, `plan.md`, `research.md` (R1-R14), `data-model.md`,
+`contracts/reprise160.md`, `reuse-audit.md`, `analyze-report.md`, et
+`specs/157-catalogue-quotas/adversarial-review-codex.md` (ronde 2, les six
+défauts).
+**Racine** : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+**Recette de test** : `quickstart.md` (`umask 077`, racine `/tmp/b.XXXX`,
+`BRIDGET_HOME` privé, `--features test-support`).
+**Fichiers** : `N` = `crates/bridget-daemon/src/daemon/native_delegation.rs`,
+`D` = `crates/bridget-daemon/src/daemon.rs`,
+`E` = `crates/bridget-daemon/src/execution_store.rs`,
+`T` = `crates/bridget-daemon/src/delegation.rs`,
+`C` = `crates/bridget-daemon/src/referent_control.rs`.
+**Prérequis** : sessions 150, 152 et 157 livrées. La porte T001 le prouve.
+
+Règle : une tâche n'est cochée qu'après son test vert. Les tests « rouge
+d'abord » sont écrits et vus en échec sur le code livré par 150, 152 et 157 avant
+le code. Les lignes citées viennent de la base `1f2c661d` : chercher par nom de
+fonction.
+
+## Phase 1 - Porte et préparation
+
+- [ ] T001 Porte : (1) lire le code livré de 152 et 157 et vérifier, une à une, les primitives de `contracts/reprise160.md` (`latest_in_chain`, `NativeMissionDispatch`, `rejected()` qui qualifie la pause et sortie du gestionnaire `DeliveryRejected`, `pause_overlap`, `effective_deadline`, `frozen_secs`, `restart_resumes`, décision de reprise de `prepare_restart`, `native_child_env`, `current_command`, `provider_limits` et `Quota`) en citant le fichier et la fonction livrés ; (2) lancer les filtres `native148`, `native149`, `native150`, `native152`, `native157`, `delegation149`, `spec_087` avec la recette ; consigner dans `specs/160-reprise-quota/validation/porte.md` et `baseline.md` ; si une primitive manque ou diffère, STOP et mettre à jour `contracts/reprise160.md` avant de continuer
+- [ ] T002 Forensic en lecture seule (Art. VIII) : (1) chercher dans le journal du daemon et le ledger un exemple réel de refus de quota (`rate_limit_event` `rejected`, ou statut Codex atteint) et noter le chemin d'échec (A, B), la raison de `DeliveryRejected` et l'ordre avec le fait de quota ; (2) relire `reserve_governed_continuation` (`managed_supervisor.rs:64`) et dire si un parent `failed` serait accepté ; consigner dans `specs/160-reprise-quota/validation/forensic.md` ; aucun appel à un fournisseur ; sans exemple réel, les documents disent « non vu en réel »
+
+## Phase 2 - Tests rouges (les six exigences d'entrée et la contre-revue 160)
+
+- [ ] T003 [US1] Rouge d'abord (défaut 6) : dans les tests de `N`, écrire la fixture d'une mission opt-in `working` (exécution `execution-{mission}` en `running`, présence de l'enfant, demande suivie dans `pending_replies`, parent connecté qui capte ses messages) avec des fonctions qui rejouent, par le gestionnaire COMPLET `WrapperToDaemon::DeliveryRejected` et par `tick`, le fait de quota puis l'échec, et l'échec puis le fait ; tests `native160_rouge_gestionnaire_*` : sur le code livré, la tâche passe `failed`, la demande disparaît de `pending_replies` et le parent reçoit « Échec de livraison de la demande » (`D:18084-18121`) ; ils échouent
+- [ ] T004 [US2] Rouge d'abord (défaut 2) : tests `native160_rouge_reconstruction_failed` : `reconstruct_active_for_agent` et `recoverable_execution_ids_for_agent` ne rendent rien pour une exécution `failed` (`E:1327`, `:1378`, `:1395`, `:1467`) ; la reprise ordinaire ne relance pas une mission dont l'exécution est `failed`
+- [ ] T005 [US4] Rouge d'abord (défaut 5) : test `native160_rouge_gel_cumule` : pause de 600 s dans une attente de 1800 s ; une somme `pause_overlap` + attente donne 2400 s au lieu de 1800 s
+- [ ] T006 [US4] Rouge d'abord (défaut 4) : test `native160_rouge_redemarrage_pendant_attente` : sur le code de 152, `prepare_restart` reconstruit l'enfant d'une mission `working` dont l'exécution est `failed` ou l'incrémente `restart_resumes`, avant l'heure de retour
+- [ ] T007 [US3] Rouge d'abord (défaut 1) : tests `native160_rouge_compteur_durable` : après le solde d'une attente et après un redémarrage, la tâche sait encore qu'une ronde est faite ; deux rondes faites interdisent une troisième ; 10 échecs consécutifs donnent au plus 2 relances
+- [ ] T008 [US2] Rouge d'abord (défaut 3, objection 1 de la contre-revue 160) : tests `native160_rouge_relance_frontieres` : crash simulé à chacune des six frontières de R5 (a qualification sans entrée ; b entrée `waiting` ; c `relaunching` sans reconstruction ; d continuation sans réservation de remise ; e réservation sans remise gravée ; f remise gravée `dispatching` sans émission, puis reconnexion de l'instance qui la marque `indeterminate` ; g remise `acked` sans solde ; h remise `orphaned`) et double rejeu ; sur le code actuel, `deliver_reconstructed` met `now` dans le canonique et refuse `Replayed` (`D:4408-4418`) ; attendu après le code : une seule continuation, une seule remise du message d'origine, canonique identique à chaque rejeu, aucune attente orpheline, solde seulement à `acked` ; dans les cas f et h, échec explicite `native_relaunch_failed` avec l'avis durable (jamais un message perdu avec une attente soldée)
+- [ ] T032 [US2] Rouge d'abord (objection 3 de la contre-revue 160) : tests `native160_rouge_concurrence_reprise_ordinaire` : après `reconstruct_quota_failed` et avant le solde (frontières c à f), l'enfant se reconnecte ; sur le code de 152, `may_resume` autorise la tâche `working` de la chaîne et `schedule_execution_recovery` reconstruit une seconde fois l'exécution `starting` ; attendu après le code : aucune seconde continuation
+- [ ] T033 [US1] Rouge d'abord (objections 4 et 6 de la contre-revue 160, rondes 1 et 2) : tests `native160_rouge_hold_horloges` (échéance imminente pendant le hold, pause qui commence pendant le hold avec le saut de pause de 152, parent déconnecté) et `native160_rouge_refus_ancien_*` : (a) un `DeliveryRejected` de l'ancien run reçu après le solde fait échouer la mission relancée sur le code actuel de `rejected()` (`N:810-825`), y compris quand la nouvelle feuille est déjà `failed` ; (b) injection synchrone refusée (refus sans transition d'exécution, `wrapper.rs:4461`) ; (c) réponse vide (transition `completed` puis refus, `wrapper.rs:6182`, `:6195`) ; (d) refus sans corrélation après une relance
+
+## Phase 3 - Fondations (bloquantes)
+
+- [ ] T009 [P] Ajouter `resume_on_limit: Option<bool>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`) à la variante `Delegate` de `crates/bridget-transport/src/protocol.rs` ; `None` = inactif, `Some(false)` est sérialisé ; test : une requête sans ce champ produit exactement les mêmes octets `serde_json::to_vec` qu'avant, et `Some(false)` donne des octets différents
+- [ ] T010 [P] Ajouter à `Task` dans `T` les champs `quota_waits: Vec<QuotaWait>` et `quota_hold: Option<QuotaHold>` avec `#[serde(default)]` et les types de `data-model.md` ; test : un payload 157 sans ces champs se relit avec les défauts, et `visible_changed` les ignore (aucun signal Lineage)
+- [ ] T011 [P] Dans `E` : migration numérotée (version suivante) créant `execution_quota_resumes`, et `qualify_quota_failure(execution_id, identity, reset_at, now)` idempotente (même identité : rend la ligne ; autre identité pour la même exécution : refus) ; tests : création, rejeu, exécution non `failed` refusée, identité en double refusée
+- [ ] T012 [P] Dans `C` : extraire `pause_intervals(conn, from, to)` de `pause_overlap` (152 T050, `pause_overlap` en devient la somme, comportement identique) et ajouter `frozen_overlap(conn, task, from, to)` (union des intervalles de pause et de `quota_waits`, chaque intervalle quota borné à `reset_at + 30 s`) ; annoter la complexité ; tests : aucune attente, attente seule, pause seule, pause dans l'attente, chevauchement partiel, entrée ouverte avant et après `reset_at + 30 s`, entrées closes (T005 vert pour le calcul)
+- [ ] T013 [P] Dans le module `provider_limits` de la 157 : ajouter `attested_exhausted_since(agent_type, since, now)` qui rend, pour les fenêtres épuisées attestées dont l'observation est postérieure à `since`, le retour le plus tardif et l'instant d'observation le plus récent ; si la 157 n'expose pas l'instant d'observation par fenêtre, l'ajouter sans changer ses sorties existantes ; tests : fait ancien ignoré, statut Codex global sans fenêtre à 100 % ignoré, fenêtre périmée ignorée
+
+## Phase 4 - US1 Une mission opt-in n'échoue pas sur un quota (P1)
+
+**Test indépendant** : filtre `native160_attente`.
+**Dépend de** : T003, T009 à T013.
+
+- [ ] T014 [US1] Dans `N`, écrire la fonction pure `qualify_quota(task, now, limits) -> Qualification` (`Wait{reset_at}`, `TooFar{reset_at}`, `Past`, `RoundsDone{reset_at}`, `NoFact`) selon FR-003 et FR-005 ; annoter la complexité ; tests en table : retour dans 6 h, à plus de 6 h, passé, 2 rondes faites, fait observé avant l'envoi de la mission, fait observé avant la fin de la dernière attente, limite Codex globale sans fenêtre attestée
+- [ ] T015 [US1] Dans `N` et `D` : faire rendre à `rejected()` une sortie `Pass | PauseInterruption | QuotaHold | NativeFailed | StaleIgnored` ; le gestionnaire `DeliveryRejected` retourne `None` avant `get_request`, `claim_timeout` et `deliver_to_agent` pour toute sortie autre que `Pass`, et retire le suivi (`pending_replies.retain`) pour `NativeFailed` ; une tâche opt-in `working` entre en attente (fait connu) ou en `quota_hold` ; TOUT échec traité d'une tâche opt-in rend `NativeFailed` : la tâche passe `failed` et le seul avis est l'avis d'échec durable existant (`native-failure-<task_id>`, `failure_sent`), jamais le message direct ; cela couvre l'hold résolu en échec, les refus immédiats (`TooFar`, `Past`, `RoundsDone`), la réponse vide, le refus tardif après la fin d'un hold et le refus d'une tâche déjà terminale ; les tâches non opt-in rendent `Pass` (comportement exact) ; tests du gestionnaire complet : fait avant l'échec, fait après dans les 5 s, aucun fait ; `native160_attente_un_seul_avis_*` pour chaque cas ci-dessus (un avis durable, zéro message direct) et crash avant et après la sauvegarde `failed`, la réservation de l'avis, la gravure et le solde (`failure_sent`) : jamais perdu ni doublé ; la cause de pause garde la priorité ; `rejected()` rend `QuotaHold` aussi quand la tâche a déjà un hold ou une attente ouverte (chemin B passé avant A) ; test `native160_attente_chemin_a_apres_b_sans_effet` ; T003 et T037 verts
+- [ ] T035 [US1] Corrélation des refus : dans `rejected()`, pour une tâche opt-in, comparer `execution_id` et `generation` de la trame à la feuille de chaîne (`latest_in_chain`) : égaux = refus courant ; différents = `StaleIgnored` ; absents = refus courant si la tâche n'a jamais été relancée, sinon échec explicite `native_refusal_uncorrelated` ; seul un refus courant dont la feuille est `failed` peut qualifier une limite (sinon `NativeFailed` avec l'erreur d'origine : injection synchrone et réponse vide ne sont pas reprises) ; les tâches non opt-in gardent exactement leur comportement ; tests `native160_attente_refus_ancien_apres_solde_sans_effet` (T033 vert, y compris nouvelle feuille déjà `failed` : le refus ancien n'est pas pris pour le courant), `native160_attente_refus_courant_apres_relance` (nouvelle décision), `native160_attente_refus_sans_correlation_apres_relance_echoue`, `native160_attente_injection_synchrone_echec_d_origine`, `native160_attente_reponse_vide_echec_d_origine`, `native160_attente_taches_non_opt_in_inchangees`
+- [ ] T036 [US1] Étendre la trame `WrapperToDaemon::DeliveryRejected` de `crates/bridget-transport/src/protocol.rs` de `execution_id: Option<String>` et `generation: Option<u64>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`) ; dans `crates/bridget-daemon/src/wrapper.rs`, les remplir depuis `bindings.get(message_id)` aux émissions de `DeliveryRejected` (refus asynchrone `:6256`, réponse vide `:6195`, refus de pause, échec d'injection idempotente `:4461`) quand la liaison existe ; vérifier si la liaison existe au refus d'une injection synchrone et le consigner dans `validation/porte.md` ; tests de compatibilité : octets d'une trame sans champs identiques à avant ; un ancien daemon (désérialisation d'une trame avec champs) l'accepte (`WrapperToDaemon` sans `deny_unknown_fields`) ; un nouveau daemon accepte une trame sans champs ; tests de remplissage pour les chemins ci-dessus
+- [ ] T037 [US1] Rouge d'abord (objection 3 de la contre-revue 160, ronde 2) : tests `native160_rouge_double_avis` : sur le code livré, une tâche opt-in dont l'échec passe par `Handled` reçoit à la fois le message direct (`D:18108`) et l'avis durable (`N:1048`) ; refus immédiat (`TooFar`, `Past`, `RoundsDone`) et refus tardif après la résolution d'un hold : même double avis ; une tâche non opt-in garde les deux, inchangée (attendu après le code : opt-in = un seul avis, non opt-in = inchangé)
+- [ ] T016 [US1] Dans `tick` de `N` : ordre fixe par tâche : annulation, résolution du `quota_hold`, saut de pause de 152 (T012), expiration de l'échéance, relance ; chemin B (exécution `failed` lue) ; le hold inhibe l'expiration et les rappels (`collect_reminder_actions`) ; la résolution (5 s, un tick de 1 s) passe à l'attente avec `since` du hold, ou à l'échec, sans dépendre du parent ni de la pause ; ordre d'écriture : qualification (`qualify_quota_failure`, T011) PUIS entrée de tâche ; au démarrage, un `quota_hold` ouvert est résolu en échec avec l'avis durable ; tests `native160_attente_chemin_b`, `native160_attente_hold_resolu_en_echec`, `native160_attente_redemarrage_pendant_hold`, `native160_attente_qualification_orpheline_ne_sert_pas` (frontière a), `native160_attente_hold_echeance_imminente` (l'échéance expire dans 2 s : pas d'expiration pendant le hold), `native160_attente_hold_pause_commence_pendant` (le hold se résout malgré la pause), `native160_attente_hold_parent_deconnecte`
+- [ ] T017 [US1] Silence : une tâche en attente ou en `quota_hold` n'entre pas dans `failed_for_owner`, ne reçoit aucun avis, garde sa demande suivie ; `task_view` ajoute `quota_wait` (`null` ou `{round, phase, resumes_at}`), additif ; tests `native160_attente_zero_avis_d_echec` sur les deux chemins et les deux ordres (SC-001), `native160_vue_quota_wait_additive`, et comparaison des octets de la projection Lineage avant et après une attente
+
+## Phase 5 - US2 Relance unique à l'heure de retour (P1)
+
+**Test indépendant** : filtre `native160_relance`.
+**Dépend de** : T004, T008, T011, T016.
+
+- [ ] T018 [US2] Dans `E` : `reconstruct_quota_failed(parent_execution_id, identity, agent_instance_id, child_execution_id, observed_at)` selon `data-model.md` (qualification exigée, parent `failed` et feuille de chaîne, identité non utilisée, rejeu rend l'existante, continuation `reconstructed` de raison `usage_limit_reset`, `resume_execution_id` posé dans la même transaction, parent laissé `failed`) ; la reprise ordinaire n'est pas modifiée ; tests : T004 vert ; exécution non qualifiée refusée ; parent qui n'est pas la feuille refusé ; deux identités pour un parent ; échec en cours de transaction sans effet partiel ; `native160_relance_reprise_ordinaire_inchangee`
+- [ ] T019 [US2] Dans `D` : extraire de `schedule_execution_recovery` la queue qui suit une reconstruction en `deliver_reconstructed(state, conn_id, instance_id, reconstructed, issued_at, mode)` : la date d'émission du canonique est un paramètre (reprise ordinaire : `now`, comme avant ; relance de quota : `observed_at` de la continuation) ; en mode relance, `Reservation::Replayed` n'est pas une erreur : lire la phase de la remise (150 T005) et reprendre à l'état trouvé (réservation absente, réservée, en vol `dispatching`, accusée `acked`) ; `indeterminate` et `orphaned` sont rendus au tick comme remise perdue ; `EnvelopeMismatch` ou remise invalide : erreur rendue au tick, qui fait échouer la tâche avec `native_relaunch_failed` ; la reprise ordinaire garde son comportement exact (non-`Prepared` = erreur journalisée) ; tests de non-régression de la reprise ordinaire (`native152_*`, 087) et tests `native160_relance_remise_*` pour les quatre états
+- [ ] T020 [US2] Dans `tick` de `N` : relance d'une entrée `waiting` quand `maintenant >= retour + 30 s`, tâche `working` non `cancelling`, garde `admit_autonomous_effect(NativeMissionDispatch, …)` admise, enfant connecté et libre ; étapes dans l'ordre : entrée `relaunching` (tâche) ; `reconstruct_quota_failed` ; `deliver_reconstructed` en mode relance ; solde (`done`, `until`, `resume_execution_id`) SEULEMENT quand la remise est `acked` ; remise `dispatching` : l'entrée reste `relaunching` et le tick suivant relit ; remise `indeterminate` ou `orphaned` : tâche `failed` avec `native_relaunch_failed` et avis durable ; enfant absent : réessai à chaque tick, puis `mission_reply_timeout` à l'échéance (le gel quota est borné à `retour + 30 s`) ; l'identité `limit-resume:<task>:<ronde>:<retour>` est contrôlée avant l'appel ; remise non reprenable : tâche `failed` avec `native_relaunch_failed` et avis durable ; tests : T008 vert (six frontières, double rejeu, une seule remise), `native160_relance_meme_identifiant_de_mission`, `native160_relance_resultat_rendu_une_fois`, `native160_relance_enfant_absent_au_dela_de_la_borne` (SC-010 : `mission_reply_timeout` expire), `native160_relance_remise_non_reprenable_echec_explicite`
+- [ ] T034 [US2] Réserver la chaîne : `may_resume` (152 T015) refuse toute chaîne de la tâche dont l'entrée de quota est ouverte (`waiting` ou `relaunching`) ; `schedule_execution_recovery` n'agit pas sur elle ; tests `native160_relance_chaine_reservee` (T032 vert) pour la reconnexion de l'enfant après un crash aux frontières c, d, e et f, et `native160_relance_reprise_ordinaire_apres_solde` (après le solde, une panne ordinaire reprend normalement avec `restart_resumes`)
+- [ ] T021 [US2] Dans `prepare_restart` de `N` (152 T023) : une tâche avec une entrée non `done` est gardée telle quelle, sans reconstruction de l'enfant avant l'heure, sans incrément de `restart_resumes`, et son échéance est l'échéance effective (`frozen_overlap`) ; une tâche avec un `quota_hold` est passée `failed` avec son erreur d'origine et l'avis durable ; tests `native160_relance_redemarrage_pendant_attente` (T006 vert), `native160_relance_n_incremente_pas_restart_resumes`, `native160_relance_cause_lisible_apres_coup` (la continuation porte `usage_limit_reset`, la ligne de qualification existe)
+- [ ] T022 [US3] Bornes : refuser une troisième ronde ; `usage_limit` avec `limit_reset_at` pour un retour à plus de 6 h, passé, ou 2 rondes faites ; un fait observé avant la fin de la dernière attente ne qualifie pas ; tests `native160_bornes_dix_echecs_meme_retour` (au plus 2 relances, T007 vert), `native160_bornes_compteur_survit_au_solde_et_au_redemarrage`, `native160_bornes_apres_deux_rondes_deux_redemarrages_survivent` (SC-005, le troisième donne `native_resume_exhausted`)
+
+## Phase 6 - US4 Gel sans double comptage, annulation, pause (P1)
+
+**Test indépendant** : filtre `native160_gel`.
+**Dépend de** : T005, T012, T020.
+
+- [ ] T023 [US4] Remplacer l'appel à `pause_overlap` par `frozen_overlap` aux trois sites de 152 : échéance effective (152 T017), `frozen_secs` du suivi de demande et sa restauration à la reconnexion (152 T018), décision de reprise de `prepare_restart` (152 T023, T041) ; le suivi de la demande de mission est ignoré tant que la pause est active, qu'un hold existe, OU qu'une attente est ouverte avant `retour + 30 s` ; tests `native160_gel_pause_dans_l_attente` (SC-006, T005 vert), `native160_gel_chevauchement_partiel`, `native160_gel_suivi_de_demande_meme_mesure`, `native160_gel_aucun_palier_pendant_l_attente`, `native160_gel_borne_independante_de_la_connexion` et tous les tests `native152_horloges_*` verts
+- [ ] T024 [US4] Annulation et pause : `cancel_tree` ferme l'entrée ouverte ; pendant `relaunching`, réconciliation dans l'ordre de R16 (relire `resume_execution_id`, clore la feuille de chaîne, marquer la remise `indeterminate` si `dispatching`, fermer l'entrée), sinon la tâche reste `cancelling` avec `native_cancel_unverifiable:quota_relaunch` ; `may_resume` refuse `cancelling` et `cancelled` ; pendant une pause, la relance est différée et l'entrée reste ouverte ; tests `native160_gel_annulation_pendant_l_attente_sans_relance`, `native160_gel_annulation_pendant_relaunching_frontieres_c_et_d`, `native160_gel_annulation_remise_non_livree`, `native160_gel_pause_differe_la_relance`, `native160_gel_pause_levee_puis_relance`, `native160_gel_purge_150_arbre_en_attente_conserve` (sous pression de borne, parent suspendu : l'arbre n'est pas purgé, `retention_saturated` si la borne est atteinte), `native160_gel_purge_150_apres_annulation`
+
+## Phase 7 - US5 Opt-in, vue, aucune substitution (P1)
+
+**Test indépendant** : filtre `native160_optin`.
+
+- [ ] T025 [US5] Exposer `resume_on_limit` (booléen) dans le schéma `bridget_delegate` et la liste blanche de `crates/bridget-daemon/src/delegation_mcp.rs` ; l'analyse des arguments rejette toute autre forme en `InvalidParams` et conserve l'absence comme `None` ; annoncer `features.resume_on_limit`, `resume_max_wait_secs` et `resume_max_rounds` dans le catalogue ; mettre à jour le test qui fige les clés ; tests `native160_optin_sans_champ_octets_identiques`, `native160_optin_absent_et_faux_deux_enveloppes` (`envelope_mismatch`), `native160_optin_sans_opt_in_l_echec_reste_immediat`
+- [ ] T026 [US5] Test `native160_optin_aucune_substitution` : une tâche créée avec `fallback` (157) et substituée à l'admission, puis relancée après un quota, garde `agent_type`, modèle, effort et définition épinglée ; le verdict de cible et `fallback` ne sont pas réévalués ; la relance ne choisit jamais un autre fournisseur
+
+## Phase 8 - Compatibilité et finitions
+
+- [ ] T027 Relancer les filtres de T001 et comparer à `validation/baseline.md` : aucun test 148 à 157 ni 087 ne passe de vert à rouge ; vérifier les octets canoniques d'un appel sans `resume_on_limit` ; consigner dans `validation/tests-160.md`
+- [ ] T028 [P] Documenter `resume_on_limit`, `quota_wait`, `usage_limit`, les bornes (6 h, 2 rondes), la décision de 5 s, l'identité de relance, le silence pendant l'attente et les limites (gel de l'enfant seul, mémoire volatile, aucun avis) dans `docs/delegation-native.md`, `skills/bridget/SKILL.md` et `skills/bridget/references/commandes.md`
+- [ ] T029 [P] Écrire l'ADR `docs/decisions/160-reprise-sur-limite-d-usage.md` (contexte, les six exigences et leur solution, ordre d'écriture entre les deux magasins, conséquences, statut Accepté)
+- [ ] T030 Lancer la suite complète (`cargo test --workspace --features bridget-daemon/test-support --no-fail-fast` avec la recette) ; rejouer seuls les tests connus sensibles à la charge avant de conclure ; consigner dans `validation/tests-160.md`
+- [ ] T031 Relire le diff complet (Articles XIX et XX : lignes suppressibles, abstractions, chemins d'erreur), écrire `specs/160-reprise-quota/implementation.md` (dont ce qui n'a pas été vérifié en réel) et enregistrer `git diff` dans `specs/160-reprise-quota/validation/diff-160.patch`
+
+## Dépendances
+
+- T001 et T002 avant tout. T001 est la porte : sans elle, aucune autre tâche.
+- T003 à T008, T032, T033 et T037 (rouges) avant le code qui les rend verts : T003 → T015, T016 ;
+  T004 → T018 ; T005 → T012, T023 ; T006 → T021 ; T007 → T022 ; T008 → T019, T020 ;
+  T032 → T034 ; T033 → T016, T035, T036 ; T037 → T015.
+- T009 à T013 en parallèle, avant les phases 4 à 7.
+- T011 avant T016 et T018. T012 avant T021 et T023. T013 avant T014.
+- T014 avant T015 et T016. T015 avant T016. T016 avant T017. T036 avant T035.
+- T018 et T019 avant T020. T020 avant T021, T022 et T034. T015 et T036 avant T035.
+- Phase 6 après T020. Phase 7 après T017 et T020.
+- Les phases 4 à 7 touchent `native_delegation.rs` : exécution séquentielle.
+- T027 à T031 en dernier ; T028 et T029 en parallèle.
+
+## Exemples de parallélisme
+
+- T009, T010, T011, T012, T013 : fichiers distincts.
+- T028, T029 : documentation seule.
+
+## Stratégie
+
+MVP = Phases 1 à 5 : une mission opt-in attend et reprend une seule fois, sans
+avis d'échec. Puis le gel exact avec la pause et l'annulation (Phase 6), puis
+l'opt-in exposé et le test d'absence de substitution (Phase 7), puis les
+finitions.
+
+## Charge future (Article XX)
+
+- Réduisent la charge : T015 (une seule queue de notification, deux usages),
+  T019 (une seule remise de reprise, deux usages), T012 (une seule mesure du
+  gel).
+- Réduisent la charge : T015 (pas de second message d'échec direct à garder cohérent avec l'avis durable).
+- Ajoutent de la complexité justifiée : T034 et T035 (réservation de chaîne et refus ancien, exigés par la contre-revue 160), T011 et T018 (autorisation explicite de
+  la reconstruction d'un `failed`, exigée par le défaut 2), T016 (ordre d'écriture
+  entre deux magasins, exigé par le défaut 3), T012 (union des intervalles, exigée
+  par le défaut 5), T015 (décision en attente de 5 s, exigée par l'ordre
+  d'arrivée non garanti).
