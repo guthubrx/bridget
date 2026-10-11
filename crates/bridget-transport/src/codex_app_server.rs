@@ -2189,28 +2189,32 @@ fn approval_text<'a>(value: &'a Value, method: &'a str) -> &'a str {
         .unwrap_or(method)
 }
 
-/// Réponse JSON-RPC au `item/*/requestApproval` Codex, calquée sur
-/// `permission_response` ACP : le réglage `permissions` de l'équipier décide
-/// `accept` ou `decline`, l'`id` de la demande est repris tel quel.
+/// O(n), n décisions offertes : accept exige allow ; sinon decline, puis cancel.
+/// Aucun accord durable ni amendement. Sans décision fermée proposée, erreur
+/// JSON-RPC ; l'identifiant de la demande est repris tel quel.
 fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)> {
     let id = value.get("id")?;
     let method = value.get("method").and_then(Value::as_str).unwrap_or("");
-    let decision = if permissions == "allow" {
-        "accept"
-    } else {
-        "decline"
-    };
     let decision = value
         .pointer("/params/availableDecisions")
         .and_then(Value::as_array)
         .and_then(|choices| {
-            choices
-                .iter()
-                .filter_map(Value::as_str)
-                .find(|choice| *choice == decision)
-                .or_else(|| choices.iter().filter_map(Value::as_str).next())
-        })
-        .unwrap_or(decision);
+            ["accept", "decline", "cancel"].into_iter().find(|decision| {
+                (*decision != "accept" || permissions == "allow")
+                    && choices.iter().filter_map(Value::as_str).any(|choice| choice == *decision)
+            })
+        });
+    let Some(decision) = decision else {
+        return Some((
+            json!({ "id": id, "error": { "code": -32000, "message": "child_request_refused" } }),
+            json!({
+                "method": method,
+                "permissions": permissions,
+                "status": "refused",
+                "code": "child_request_refused",
+            }),
+        ));
+    };
     Some((
         json!({ "id": id, "result": { "decision": decision } }),
         json!({
@@ -4820,9 +4824,9 @@ for line in sys.stdin:
                                 if [ "${BRIDGET_CODEX_REQUEST_APPROVAL:-0}" = 1 ]; then
                                     case "${BRIDGET_CODEX_REQUEST_VARIANT:-known}" in
                                         method) printf '%s\n' '{"id":"approval-native","method":"SENTINELLE-METHOD-019\u001b[2J\r\u202e","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
-                                        request_id) printf '%s\n' '{"id":"SENTINELLE-REQUEST-ID-019","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
-                                        turn_id) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"SENTINELLE-TURN-ID-019","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
-                                        *) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
+                                        request_id) printf '%s\n' '{"id":"SENTINELLE-REQUEST-ID-019","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019","availableDecisions":["accept","decline","cancel"]}}' ;;
+                                        turn_id) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"SENTINELLE-TURN-ID-019","itemId":"i","command":"SENTINELLE-SECRETE-019","availableDecisions":["accept","decline","cancel"]}}' ;;
+                                        *) printf '%s\n' '{"id":"approval-native","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019","availableDecisions":["accept","decline","cancel"]}}' ;;
                                     esac
                                     # Attend la décision JSON-RPC (présence), puis poursuit
                                     # le tour (effet) — sauf HOLD/EXIT pour les bancs 019.
@@ -4859,9 +4863,9 @@ for line in sys.stdin:
                                         printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"foreign-thread","turnId":"foreign-turn","itemId":"foreign-command","delta":"ne pas attribuer"}}'
                                         printf '%s\n' '{"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"file-1","changes":[{"path":"src/main.rs","kind":{"type":"update"},"diff":"@@ -1 +1 @@"}]}}'
                                         printf '%s\n' '{"method":"item/plan/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"plan-1","delta":"Tester le flux"}}'
-                                        printf '%s\n' '{"id":"approval-7","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-1","startedAtMs":1787686800000,"command":"cargo test -p bridget-transport","reason":"sortie réseau"}}'
-                                        printf '%s\n' '{"id":"approval-8","method":"item/fileChange/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-2","startedAtMs":1787686800000,"reason":"écrire le fichier"}}'
-                                        printf '%s\n' '{"id":"approval-9","method":"item/permissions/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-3","startedAtMs":1787686800000,"cwd":"/tmp","permissions":{},"reason":"accès réseau"}}'
+                                        printf '%s\n' '{"id":"approval-7","method":"item/commandExecution/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-1","startedAtMs":1787686800000,"command":"cargo test -p bridget-transport","reason":"sortie réseau","availableDecisions":["accept","decline","cancel"]}}'
+                                        printf '%s\n' '{"id":"approval-8","method":"item/fileChange/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-2","startedAtMs":1787686800000,"reason":"écrire le fichier","availableDecisions":["accept","decline","cancel"]}}'
+                                        printf '%s\n' '{"id":"approval-9","method":"item/permissions/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"approval-3","startedAtMs":1787686800000,"cwd":"/tmp","permissions":{},"reason":"accès réseau","availableDecisions":["accept","decline","cancel"]}}'
                                         printf '%s\n' '{"method":"item/futureWidget/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"future-1","delta":"ne pas inventer"}}'
                                     fi
                                     case "${BRIDGET_CODEX_TEXT_MODE:-default}" in
@@ -6579,7 +6583,10 @@ for line in sys.stdin:
         let request = json!({
             "id": "approval-unit",
             "method": "item/commandExecution/requestApproval",
-            "params": { "command": "git worktree add", "turnId": "t1" }
+            "params": {
+                "command": "git worktree add", "turnId": "t1",
+                "availableDecisions": ["accept", "decline"]
+            }
         });
         let (allow_reply, allow_payload) = approval_response(&request, "allow").expect("allow");
         assert_eq!(
@@ -6603,6 +6610,46 @@ for line in sys.stdin:
             .is_none(),
             "sans id: aucune réponse inventée"
         );
+        for (label, permissions, choices, expected) in [
+            ("deny sans decline", "deny", json!(["accept", "cancel"]), "cancel"),
+            ("allow sans accept", "allow", json!(["decline", "cancel"]), "decline"),
+            ("allow accept proposé", "allow", json!(["accept"]), "accept"),
+            ("allow refus prioritaire", "allow", json!(["cancel", "decline"]), "decline"),
+            ("deny cancel proposé", "deny", json!(["cancel"]), "cancel"),
+        ] {
+            let offered = json!({
+                "id": 155000,
+                "method": "item/commandExecution/requestApproval",
+                "params": { "availableDecisions": choices }
+            });
+            let (reply, payload) = approval_response(&offered, permissions).expect(label);
+            assert_eq!(reply["id"], offered["id"], "{label}: identifiant repris tel quel");
+            assert_eq!(reply["result"]["decision"], expected, "{label}");
+            assert!(reply.get("error").is_none(), "{label}: décision proposée et fermée");
+            assert_eq!(payload["decision"], expected, "{label}: diagnostic cohérent");
+            assert!(matches!(reply["result"]["decision"].as_str(), Some("accept" | "decline" | "cancel")));
+        }
+        for (label, permissions, choices) in [
+            ("deny acceptForSession seul", "deny", Some(json!(["acceptForSession"]))),
+            ("deny amendement seul", "deny", Some(json!(["acceptWithExecpolicyAmendment"]))),
+            ("deny accept seul", "deny", Some(json!(["accept"]))),
+            ("offre vide", "allow", Some(json!([]))),
+            ("offre absente", "allow", None),
+        ] {
+            let mut offered = json!({
+                "id": format!("approval-155-{label}"),
+                "method": "item/commandExecution/requestApproval",
+                "params": {}
+            });
+            if let Some(choices) = choices {
+                offered["params"]["availableDecisions"] = choices;
+            }
+            let (reply, _) = approval_response(&offered, permissions).expect(label);
+            assert_eq!(reply["id"], offered["id"], "{label}: identifiant repris tel quel");
+            assert!(reply.get("result").is_none(), "{label}: aucun octroi inventé : {reply}");
+            assert_eq!(reply["error"]["code"], -32000, "{label}");
+            assert_eq!(reply["error"]["message"], "child_request_refused", "{label}");
+        }
     }
 
     /// ORACLE PRESENCE + EFFET dans le même corps.
