@@ -1,0 +1,13 @@
+{
+  "installed_at": "2026-10-11T23:25:27.682825+00:00",
+  "source_commit": "806d0984fe45eea9fcc885770285bc00a85d005e",
+  "binary": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+  "candidate": "/Users/moi/.cache/bridget-build-154.ip78ullm/release/bridget",
+  "sha256": "39834b7d36bd184842ea8cf99994a08e92af583178a97b0dba537643e52ffaa8",
+  "signature": "adhoc strict verified",
+  "rollback_binary": "/Users/moi/.cache/bridget-delivery154.l50umk90/rollback153-bridget",
+  "rollback_sha256": "729dfe50d6370fed3890f543e0a2bfd79b9c228169027fc6bf56b93eb9b178af",
+  "native_state_counts_before": [],
+  "processes_before": "  PID STARTED                      COMM\n60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)\n60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)\n67026 Sun Oct 11 23:45:25 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n67170 Sun Oct 11 23:45:27 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n",
+  "runtime_activated": false
+}

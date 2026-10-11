@@ -5,10 +5,10 @@
 
 Spec: 154-isolation-worktree
 Titre: Isolation optionnelle de l'enfant dans un worktree Git
-Statut: Implemented (28/28 tâches acquises ; convergence formelle et livraison à faire)
+Statut: Livré le 2026-10-12 (28/28 ; CONVERGED P2 ; installé et actif ; nettoyage terminé)
 Priorité: P1
 Tâches: 28/28 acquises sur preuves distinctes
-Tests: preuves acquises sur des passages distincts ; suite globale RC101 historique (voir validation/tests-154.md)
+Tests: Suite unique 2194 PASS/9 FAIL/72 ignorés avant correctifs ; huit échecs historiques, fixture UTC corrigée 1 PASS puis ciblés 5/3/2 PASS ; aucune seconde suite ni GREEN global
 
 Résumé:
 - Contexte: Un enfant natif travaille dans le dossier du parent. Si le parent ou un autre enfant écrit dans le même dossier, les fichiers se mélangent. Bridget ne fait que prévenir après coup (`file_collision`).
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-154-isolation-worktree`
 **Created**: 2026-10-11
-**Status**: Implemented
+**Status**: Livré (2026-10-12, CONVERGED P2, installé/actif, nettoyage terminé)
 **Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-150, SPEC-153
 

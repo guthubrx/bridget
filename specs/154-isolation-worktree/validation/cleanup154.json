@@ -1,0 +1,20 @@
+{
+  "time": "2026-10-11T23:26:16.353873+00:00",
+  "worktree_removed": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/154-isolation-worktree",
+  "branch_removed": "session-154-isolation-worktree",
+  "foreign_worktrees_present": false,
+  "source_merged_pushed": "806d0984fe45eea9fcc885770285bc00a85d005e",
+  "proofs_archive_verified": "/Users/moi/.cache/bridget-delivery154.l50umk90/proofs154",
+  "audit_durable": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-12/session-2026-10-12-spec-154-01",
+  "owned_temp_scripts_removed": [
+    "/tmp/natif154_rewrite.py",
+    "/tmp/natif154_async.py",
+    "/tmp/natif154_report.py"
+  ],
+  "kept": [
+    "Shared debug cache for sessions155–160; budget20GiB in subsequent commands",
+    "Signed154 candidate and153 rollback binary",
+    "DBs and all T3 conversation data"
+  ],
+  "cleaner": "scripts/build.py installed RC0; staging intermediates already removed by post-build cleanup"
+}

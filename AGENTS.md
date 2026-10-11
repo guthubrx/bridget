@@ -1,4 +1,14 @@
 <!-- SPECKIT START -->
+Session 154 livrée et activée le 2026-10-12 : 28/28, CONVERGED passage 2 ; Claude R2 APPROVE.
+Code 806d0984fe45eea9fcc885770285bc00a85d005e intégré/poussé github/main ; build 58,36 s RC0.
+Binaire signé installé/actif SHA 39834b7d36bd184842ea8cf99994a08e92af583178a97b0dba537643e52ffaa8.
+Daemon 67985/pont 68081 nés 01:25:36/39 CEST ; T3 PID 60116/60228 et naissances inchangés.
+Audit A 99,9, 0C/0H/0M/1L ; couverture 84/122, 68,85 % ; validateur RC0.
+Suite workspace UNIQUE antérieure 2194 PASS/9 FAIL/72 ignorés, 499,95 s ; huit échecs historiques et fixture UTC corrigée 1 PASS, puis ciblés 5/3/2 PASS. Aucun GREEN global ni seconde suite.
+WT/branche 154 retirés 01:26 ; 0,29 Gio logiques d’intermédiaires retirés, debug ≈18,30 Gio conservé pour 155–160, budget 20 Gio dans les commandes suivantes.
+Fixtures : 18 TMPDIR attestés, 7 racines vides et 74 937 515 octets hors DB retirés ; DB/sidecars et sauvegarde 153 conservés, aucun gain physique revendiqué.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/154-isolation-worktree/validation/livraison154.md
+Les checkpoints ci-dessous restent historiques, pas une preuve du runtime courant.
 Session153 livrée et activée le2026-10-11 à23:45 CEST ;29/29, CONVERGED passage1.
 Code 7c848850ba6067cf1d0d94b8edf0dd11896a1b24 intégré/poussé github/main ;57 fichiers byte-identiques.
 Build7c848850ba60 RC0, signé installé/actif :daemon67026/pont67170 nés23:45:25/27.

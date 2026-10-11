@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-11T23:25:42.293823+00:00",
+  "services": [
+    {
+      "old_pid": 67026,
+      "label": "com.bridget.daemon",
+      "checked_identity": "  PID STARTED                      COMM\n67026 Sun Oct 11 23:45:25 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n",
+      "signal": "SIGTERM",
+      "original_stopped": true,
+      "launchd_running": true,
+      "new_pid": 67985
+    },
+    {
+      "old_pid": 67170,
+      "label": "com.bridget.t3",
+      "checked_identity": "  PID STARTED                      COMM\n67170 Sun Oct 11 23:45:27 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget\n",
+      "signal": "SIGTERM",
+      "original_stopped": true,
+      "launchd_running": true,
+      "new_pid": 68081
+    }
+  ]
+}
