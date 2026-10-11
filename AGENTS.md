@@ -1,4 +1,15 @@
 <!-- SPECKIT START -->
+Complément149 identité durable en cours le 2026-10-11, dans la session déjà autorisée.
+Sources Bridget9f2ccbf23195 et T3d833387203 intégrées et poussées vers leurs forks.
+MCP officiel existant réattesté par fil ; opt-out/configurations étrangères protégés. Routes de fils opaques encodées.
+Tests ciblés T3124PASS/1SKIP et Rust25PASS/1ignored ; revue finale approuvée, format final validé.
+Binaire Bridget9f2ccbf23195 signé installé/actif : daemon30562, pont30974 depuis02:17:41/48 le11octobre. Serveur T360228 encore ancien.
+Paquet T3 corrigé signé prêt dans /Users/moi/.cache/t3-identite149-final.OBXQrQ/stage/T3 Code (Local).app.
+Défaut runtime supplémentaire : longs IDs comme noms de fichiers d’état. Correctif compact/reprise legacy9f2ccbf2 intégré/poussé, 85testsPASS et revue approuvée ; 121états compacts observés, aucun ENAMETOOLONG dans les nouveaux journaux.
+L’utilisateur a demandé d’attendre la fin des autres fils avant de relancer T3 ; aucune relance programmée.
+Reprise après activation : /Users/moi/.cache/bridget-identite149-rollback.af6k7sa_/RESUME.md.
+Reçu courant : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/identite-durable149.md.
+Les checkpoints ci-dessous restent historiques, pas une preuve du runtime actuel.
 Correctif149 de limite de fichiers activé le 2026-10-11 après demande « corrige ».
 Code Bridget0d5107afcf186bacc57aefd1925cd98f076806b8, intégré et poussé github/main.
 Binaire signé build0d5107afcf18 ; daemon10624 et pont14501 relancés individuellement.

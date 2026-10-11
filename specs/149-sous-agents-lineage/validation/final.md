@@ -1,5 +1,10 @@
 # Reçu final - session 149 (sous-agents natifs et Lineage T3)
 
+Complément du 2026-10-11 : sources d’identité durables validées et poussées. Bridget `9f2ccbf23195` signé, installé et chargé par daemon30562/pont30974 à02:17:41/48 Europe/Paris. T3 `d833387203` signé et prêt, application encore ancienne PID60116/60228.
+Tests ciblés : T3124PASS/1SKIP, Rust25PASS/1ignored puis pont85PASS ; revues approuvées. 121états compacts observés après relance, sans nouvelle erreur de nom trop long dans les journaux capturés.
+Le MCP de ce fil répond encore `identity_not_found` avant relance T3. L’utilisateur demande d’attendre la fin des autres fils. Aucune délégation native de ce fil réussie n’est déclarée à ce stade.
+Reçu actuel : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/149-sous-agents-lineage/validation/identite-durable149.md. Les checkpoints suivants restent historiques.
+
 **Complément actif du 2026-10-11 : saturation des fichiers ouverts corrigée.**
 Code `0d5107afcf186bacc57aefd1925cd98f076806b8`, tests `8d3eff76`, intégrés sur `main` et poussés vers `github/main`.
 Binaire signé installé : build `0d5107afcf18`, sha256 `b0dd9b9040604128ad28efd1680c0ff08ed08e6f19f52129963aba1a4e76ead9`.
