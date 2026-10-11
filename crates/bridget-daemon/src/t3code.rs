@@ -156,7 +156,27 @@ impl Paths {
         self.dir.join("threads")
     }
     fn thread_state(&self, thread_id: &str) -> PathBuf {
-        self.threads().join(format!("{thread_id}.json"))
+        // Le nom borné ne remplace jamais l'identifiant T3 dans le protocole.
+        self.threads()
+            .join("thread-states-v1")
+            .join(format!("{}.json", stable_uuid(thread_id)))
+    }
+    fn load_thread_state(&self, thread_id: &str) -> ThreadState {
+        let path = self.thread_state(thread_id);
+        // Seule l'absence autorise l'ancien état ; un nouveau fichier invalide
+        // ou inaccessible ne doit pas faire ressurgir un ancien curseur.
+        if !matches!(std::fs::symlink_metadata(&path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        {
+            return ThreadState::load(&path);
+        }
+        if !thread_id.is_empty()
+            && thread_id.len() <= 250 // Extension `.json` comprise : 255 octets.
+            && !thread_id.contains(['/', '\\'])
+            && !thread_id.chars().any(bridget_core::is_disallowed_control)
+        {
+            return ThreadState::load(&self.threads().join(format!("{thread_id}.json")));
+        }
+        ThreadState::default()
     }
     fn ensure(&self) -> Result<(), String> {
         crate::environment::ensure_private_directory(&self.dir)?;
@@ -1496,7 +1516,7 @@ impl LinkWorker {
             Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
         );
         let state_path = paths.thread_state(&summary.id);
-        let state = ThreadState::load(&state_path);
+        let state = paths.load_thread_state(&summary.id);
         let mut worker = Self {
             thread_id: summary.id.clone(),
             journal_dir: journal_root.join(&agent_id),
@@ -4583,16 +4603,7 @@ mod tests {
         };
         worker.project_journal(&detail, &summary(None));
         worker.journal.stop();
-        let root = worker
-            .state_path
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
-        let folder = root.join("sessions").join(&worker.agent_id);
-        let events: Vec<_> = std::fs::read_dir(folder)
+        let events: Vec<_> = std::fs::read_dir(&worker.journal_dir)
             .unwrap()
             .flat_map(|p| bridget_transport::journal::valid_events(&p.unwrap().path()))
             .collect();
@@ -6213,5 +6224,229 @@ mod tests {
         assert_eq!(copies, count, "chaque message écrit une seule fois");
         worker.journal.stop();
         worker.relay.shutdown();
+    }
+
+    // --- Session 149 : état de fil à nom borné (identifiants T3 très longs) ---
+
+    fn paths149() -> Paths {
+        let root = std::env::temp_dir().join(format!("t3-149-{}", uuid::Uuid::new_v4().simple()));
+        let paths = Paths::at(root.clone(), root.join("b.sock"));
+        paths.ensure().unwrap();
+        paths
+    }
+
+    fn legacy_state149() -> ThreadState {
+        let mut state = ThreadState::default();
+        state.seen = vec!["m1".into(), "m2".into()];
+        state.ended_turns = vec!["t1".into()];
+        state.seeded = true;
+        state.observations_seeded = true;
+        state.seen_activities = vec!["a1".into()];
+        state.notification_messages = vec!["n1".into()];
+        state.turn_origins.insert("t1".into(), "origine".into());
+        let mut waiting = pending("m2", Some("t1"));
+        waiting.request_id = "req-149".into();
+        waiting.attempts = 3;
+        waiting.response = Some("réponse préparée".into());
+        state.pending = vec![waiting, pending("m3", None)];
+        state
+    }
+
+    #[test]
+    fn spec149_state_nom_borne_deterministe_et_ecriture_privee() {
+        use std::os::unix::fs::PermissionsExt;
+        let paths = paths149();
+        let ids = [
+            "x".repeat(343),
+            "y".repeat(341),
+            "界".repeat(114),
+            "thread:delegated-task:command%3Amcp%3Ax".to_string(),
+            "../../etc/passwd".to_string(),
+            "/etc/passwd".to_string(),
+            "a\\b".to_string(),
+        ];
+        let folder = paths.threads().join("thread-states-v1");
+        let mut names = HashSet::new();
+        for id in &ids {
+            let path = paths.thread_state(id);
+            assert_eq!(path, paths.thread_state(id), "déterministe");
+            assert_eq!(path.parent().unwrap(), folder, "dossier fixe : {id:?}");
+            let name = path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(name, format!("{}.json", stable_uuid(id)));
+            assert_eq!(name.len(), 41);
+            assert!(names.insert(name.to_string()), "noms distincts");
+            let mut state = ThreadState::default();
+            state.remember(id);
+            state.save(&path).expect("écriture réelle du nom borné");
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(paths.load_thread_state(id), state, "rechargement");
+        }
+        assert_eq!(
+            std::fs::read_dir(&folder).unwrap().count(),
+            ids.len(),
+            "aucun résidu"
+        );
+        assert_eq!(std::fs::read_dir(&paths.threads()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(&paths.dir).unwrap().count(),
+            1,
+            "rien hors de threads/"
+        );
+    }
+
+    #[test]
+    fn spec149_state_legacy_migre_exactement_puis_ecrit_seulement_le_nouveau() {
+        let paths = paths149();
+        let id = "thread-legacy-149";
+        let legacy = paths.threads().join(format!("{id}.json"));
+        let original = legacy_state149();
+        original.save(&legacy).unwrap();
+        let legacy_bytes = std::fs::read(&legacy).unwrap();
+        let loaded = paths.load_thread_state(id);
+        assert_eq!(
+            loaded, original,
+            "seen, ended_turns, pending et origines intacts"
+        );
+        assert_eq!(loaded.pending[0].request_id, "req-149");
+        assert_eq!(
+            loaded.pending[0].response.as_deref(),
+            Some("réponse préparée")
+        );
+        assert_eq!(loaded.pending[0].reply_requested, Some(true));
+        assert!(!paths.thread_state(id).exists(), "la lecture n'écrit rien");
+        let mut next = loaded;
+        next.remember("m-nouveau");
+        next.save(&paths.thread_state(id)).unwrap();
+        assert_eq!(
+            std::fs::read(&legacy).unwrap(),
+            legacy_bytes,
+            "legacy intact"
+        );
+        assert_eq!(
+            paths.load_thread_state(id),
+            next,
+            "le nouveau fichier prime"
+        );
+    }
+
+    #[test]
+    fn spec149_state_nouveau_prime_et_invalide_ne_ressuscite_pas_legacy() {
+        let paths = paths149();
+        let id = "thread-prime-149";
+        legacy_state149()
+            .save(&paths.threads().join(format!("{id}.json")))
+            .unwrap();
+        let mut fresh = ThreadState::default();
+        fresh.remember("seulement-nouveau");
+        fresh.save(&paths.thread_state(id)).unwrap();
+        assert_eq!(paths.load_thread_state(id), fresh);
+        std::fs::write(paths.thread_state(id), "{ pas du json").unwrap();
+        assert_eq!(
+            paths.load_thread_state(id),
+            ThreadState::default(),
+            "invalide"
+        );
+        std::fs::remove_file(paths.thread_state(id)).unwrap();
+        std::os::unix::fs::symlink("cible-absente", paths.thread_state(id)).unwrap();
+        assert_eq!(
+            paths.load_thread_state(id),
+            ThreadState::default(),
+            "lien cassé"
+        );
+    }
+
+    #[test]
+    fn spec149_state_legacy_refuse_chemins_hors_dossier_et_noms_trop_longs() {
+        let paths = paths149();
+        let mut leak = ThreadState::default();
+        leak.remember("fuite");
+        leak.save(&paths.dir.join("outside.json")).unwrap();
+        leak.save(&paths.root.join("outside.json")).unwrap();
+        let absolute = format!("{}/outside", paths.root.display());
+        for id in [
+            "../outside".to_string(),
+            "..\\outside".to_string(),
+            absolute,
+            "a\nb".to_string(),
+            "a\u{202e}b".to_string(),
+            String::new(),
+            "z".repeat(251),
+        ] {
+            if !id.contains(['/', '\\']) && !id.is_empty() && id.len() <= 250 {
+                leak.save(&paths.threads().join(format!("{id}.json")))
+                    .unwrap();
+            }
+            assert_eq!(
+                paths.load_thread_state(&id),
+                ThreadState::default(),
+                "{id:?}"
+            );
+        }
+        let limit = "l".repeat(250);
+        // Écriture directe : l'ancien code n'avait pas le suffixe du fichier atomique.
+        let text = serde_json::to_string(&leak).unwrap();
+        std::fs::write(paths.threads().join(format!("{limit}.json")), text).unwrap();
+        assert_eq!(
+            paths.load_thread_state(&limit),
+            leak,
+            "borne 250 octets incluse"
+        );
+    }
+
+    #[test]
+    fn spec149_state_link_worker_garde_l_id_original_et_ecrit_le_nouveau_chemin() {
+        let paths = paths149();
+        let session = Arc::new(Session::new(
+            &paths,
+            ServerRuntime {
+                port: 1,
+                pid: std::process::id(),
+            },
+            TokenFile {
+                installation_id: "test".into(),
+                label: "test".into(),
+                session_id: "test".into(),
+                token: "synthetic".into(),
+                expires_at: String::new(),
+                issued_at: String::new(),
+            },
+        ));
+        for (id, migrated) in [
+            ("w".repeat(343), false),
+            ("fil-ancien-149".to_string(), true),
+        ] {
+            let legacy = paths.threads().join(format!("{id}.json"));
+            if migrated {
+                legacy_state149().save(&legacy).unwrap();
+            }
+            let mut thread = summary(None);
+            thread.id = id.clone();
+            let (stream, _peer) = UnixStream::pair().unwrap();
+            let mut worker = LinkWorker::new(
+                &paths,
+                session.clone(),
+                &thread,
+                stable_uuid(&id),
+                stable_uuid(&format!("instance:{id}")),
+                BufWriter::new(stream.try_clone().unwrap()),
+                stream,
+            )
+            .unwrap();
+            assert_eq!(worker.thread_id, id);
+            assert_eq!(worker.state_path, paths.thread_state(&id));
+            assert_eq!(worker.state == legacy_state149(), migrated);
+            worker.state.remember("après-reprise");
+            worker
+                .state
+                .save(&worker.state_path)
+                .expect("save nouveau chemin");
+            assert_eq!(ThreadState::load(&worker.state_path), worker.state);
+            assert_eq!(legacy.exists(), migrated, "aucun legacy créé");
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
     }
 }
