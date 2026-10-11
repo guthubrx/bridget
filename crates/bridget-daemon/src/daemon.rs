@@ -31054,6 +31054,237 @@ mod presence_tests {
         let _ = std::fs::remove_file(config.db_path);
     }
 
+    // T028 : quatre chemins réels partagent ce montage de ronde et ses sockets.
+    fn native153_reponse_tardive_fixture(
+        label: &str,
+    ) -> (
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        crate::delegation::Task,
+        BridgetMessage,
+        BufReader<UnixStream>,
+        BufReader<UnixStream>,
+        mpsc::Receiver<()>,
+        mpsc::Receiver<ManagedSupervisorCommand>,
+    ) {
+        let (mut state, config) = state_with_registered_agent(label);
+        let owner = "89000000-0000-4000-8000-000000000102";
+        let child = "89000000-0000-4000-8000-000000000200";
+        let (owner_writer, owner_reader) = control_socket("153p");
+        let (child_writer, child_reader) = control_socket("153c");
+        state.connections.insert("conn-1".into(), owner_writer);
+        state.connections.insert("late-child".into(), child_writer);
+        let (managed_tx, managed_rx) = mpsc::channel();
+        state.managed_tx = managed_tx;
+        assert!(matches!(
+            handle_register_with_channel(
+                "late-child", 2, "claude".into(), child.into(), Some("fixture".into()),
+                Some("acp".into()), ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp), None, Some("test".into()),
+                Some("instance-late-child".into()), None, false, Some(false), &mut state,
+            ),
+            DaemonToWrapper::Registered { credential: Some(_), .. }
+        ));
+        assert_eq!(live_connection_identity(&state, "conn-1"), Some((owner.into(), "instance-1".into())));
+        assert_eq!(live_connection_identity(&state, "late-child"), Some((child.into(), "instance-late-child".into())));
+        assert!(sender_is_authorized(&state, "late-child", child));
+        let now = unix_now_secs();
+        let task: crate::delegation::Task = serde_json::from_value(serde_json::json!({
+            "task_id": uuid::Uuid::new_v4().to_string(),
+            "owner": owner, "owner_instance": "instance-1", "origin_owner_instance": "instance-1",
+            "request": {"operation":"delegate", "request_id":"late-delegate", "agent_type":"claude",
+                "model":"fixture", "task":"ronde 1", "cwd":"/tmp", "keep_alive_secs":120},
+            "definition": {"command":"/bin/sh", "args":[], "protocol":"acp", "forbidden_env":[],
+                "pass_env":[], "permissions":"allow", "queue_capacity":32, "notify_timeout_secs":600,
+                "mcp":{"interactive":"none", "acp_session":false}, "digest":"fixture-t028"},
+            "cwd":"/tmp", "child":child, "child_instance":"instance-late-child",
+            "mission":uuid::Uuid::new_v4().to_string(), "created_at":now,
+            "state":"result_available", "result":"résultat de la première ronde", "error":null,
+            "result_sent":true, "guarded":true, "idle_deadline_at":now + 120
+        })).unwrap();
+        state.delegation_store.insert(&task, "late-delegate", b"canon-t028").unwrap();
+        let current = state.delegation_store.begin_round(
+            &task.task_id, 1, || now,
+            crate::delegation::RoundRecord { round:2, request_id:"late-continue".into(), digest:"canon-r2".into() },
+            &uuid::Uuid::new_v4().to_string(), "mission de la ronde 2",
+        ).unwrap();
+        assert_eq!(current.round_no(), 2);
+        assert!(state.delegation_store.for_mission(&task.mission).unwrap().is_none());
+        assert_eq!(state.delegation_store.past_mission_task(&task.mission).unwrap().unwrap().task_id, task.task_id);
+        let mut message = BridgetMessage::new(child, owner, "réponse tardive de la ronde 1");
+        message.in_reply_to = Some(task.mission);
+        message.hops = 4;
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "late-client", "012_scope_lateresponse", child);
+        let receiver = {
+            let state = shared.lock().unwrap();
+            assert_eq!(live_connection_identity(&state, "late-client"), Some((child.into(), "instance-late-child".into())));
+            assert!(sender_is_authorized(&state, "late-client", &message.from));
+            assert_eq!(message.to, current.owner);
+            assert_eq!(message.from, current.child);
+            assert_eq!(current.child_instance.as_deref(), Some("instance-late-child"));
+            let receiver = state.delegation_store.change_receiver().unwrap();
+            state.delegation_store.take_changes();
+            while receiver.try_recv().is_ok() {}
+            while managed_rx.try_recv().is_ok() {}
+            receiver
+        };
+        (shared, config, current, message, owner_reader, child_reader, receiver, managed_rx)
+    }
+
+    #[test]
+    fn native153_ronde_reponse_tardive_chemin_idempotent() {
+        let (shared, config, current, message, mut owner_reader, _child_reader, receiver, managed_rx) =
+            native153_reponse_tardive_fixture("n153-late-id");
+        let (epoch, meta, pending, departures) = {
+            let state = shared.lock().unwrap();
+            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap(),
+                state.pending_replies.len(), state.thread_wake_departures.len())
+        };
+        let key = IdempotencyKey { issuer_scope:"012_scope_lateresponse".into(), operation_kind:OperationKind::Send, idempotency_key:message.id.clone() };
+        let result = handle_wrapper_message("late-client", WrapperToDaemon::SendIdempotent {
+            message:message.clone(), message_id:message.id.clone(), issued_at:unix_now_secs(),
+        }, &shared);
+        assert!(matches!(result, Some(DaemonToWrapper::IdempotencyResult {
+            issue:IdempotencyIssue::Accepted { .. }, ..
+        })), "réponse passée absorbée : {result:?}");
+        let state = shared.lock().unwrap();
+        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
+        let after = state.delegation_store.projection_meta().unwrap();
+        assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
+        assert!(state.delegation_store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_err());
+        assert!(managed_rx.try_recv().is_err());
+        assert_eq!(state.pending_replies.len(), pending);
+        assert_eq!(state.thread_wake_departures.len(), departures);
+        assert!(state.store.recent_messages(10).unwrap().is_empty());
+        assert!(state.idempotency.send_delivery_phase(&key).unwrap().is_none());
+        owner_reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(owner_reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert!(line.is_empty());
+        drop(state);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native153_ronde_reponse_tardive_chemin_ordinaire() {
+        let (shared, config, current, message, mut owner_reader, _child_reader, receiver, managed_rx) =
+            native153_reponse_tardive_fixture("n153-late-ord");
+        let (epoch, meta, pending, departures) = {
+            let state = shared.lock().unwrap();
+            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap(),
+                state.pending_replies.len(), state.thread_wake_departures.len())
+        };
+        let result = handle_wrapper_message("late-child", WrapperToDaemon::Send(message.clone()), &shared);
+        assert!(matches!(result, Some(DaemonToWrapper::Ack { id, .. }) if id == message.id));
+        let state = shared.lock().unwrap();
+        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
+        let after = state.delegation_store.projection_meta().unwrap();
+        assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
+        assert!(state.delegation_store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_err());
+        assert!(managed_rx.try_recv().is_err());
+        assert_eq!(state.pending_replies.len(), pending);
+        assert_eq!(state.thread_wake_departures.len(), departures);
+        assert!(state.store.recent_messages(10).unwrap().is_empty());
+        owner_reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(owner_reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert!(line.is_empty());
+        drop(state);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native153_ronde_reponse_tardive_rejeu() {
+        let (shared, config, current, message, mut owner_reader, _child_reader, receiver, managed_rx) =
+            native153_reponse_tardive_fixture("n153-late-re");
+        let (epoch, meta) = {
+            let state = shared.lock().unwrap();
+            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap())
+        };
+        let issued_at = unix_now_secs();
+        let key = IdempotencyKey { issuer_scope:"012_scope_lateresponse".into(), operation_kind:OperationKind::Send, idempotency_key:message.id.clone() };
+        let mut first = None;
+        for _ in 0..3 {
+            let response = handle_wrapper_message("late-client", WrapperToDaemon::SendIdempotent {
+                message:message.clone(), message_id:message.id.clone(), issued_at,
+            }, &shared);
+            assert!(matches!(response, Some(DaemonToWrapper::IdempotencyResult {
+                issue:IdempotencyIssue::Accepted { .. }, ..
+            })), "rejeu passé absorbé : {response:?}");
+            let encoded = serde_json::to_value(response).unwrap();
+            if let Some(previous) = &first { assert_eq!(&encoded, previous); } else { first = Some(encoded); }
+        }
+        let state = shared.lock().unwrap();
+        assert_eq!(state.idempotency.record_count().unwrap(), 1);
+        assert!(state.idempotency.send_delivery_phase(&key).unwrap().is_none());
+        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
+        let after = state.delegation_store.projection_meta().unwrap();
+        assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
+        assert!(state.delegation_store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_err());
+        assert!(managed_rx.try_recv().is_err());
+        assert!(state.pending_replies.is_empty());
+        assert!(state.thread_wake_departures.is_empty());
+        assert!(state.store.recent_messages(10).unwrap().is_empty());
+        owner_reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(owner_reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert!(line.is_empty());
+        drop(state);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native153_ronde_reponse_tardive_expediteur_inconnu() {
+        let (shared, config, current, mut message, mut owner_reader, _child_reader, receiver, managed_rx) =
+            native153_reponse_tardive_fixture("n153-late-oth");
+        let stranger = "89000000-0000-4000-8000-000000000201";
+        let (writer, _stranger_reader) = control_socket("153t");
+        let (epoch, meta) = {
+            let mut state = shared.lock().unwrap();
+            state.connections.insert("late-stranger".into(), writer);
+            assert!(matches!(handle_register_with_channel(
+                "late-stranger", 2, "claude".into(), stranger.into(), Some("fixture".into()),
+                Some("acp".into()), ChannelReport::Known("unix".into()), Some(PresenceMode::Acp),
+                None, Some("test".into()), Some("instance-stranger".into()), None, false, Some(false), &mut state,
+            ), DaemonToWrapper::Registered { credential:Some(_), .. }));
+            assert_eq!(live_connection_identity(&state, "late-stranger"), Some((stranger.into(), "instance-stranger".into())));
+            assert!(sender_is_authorized(&state, "late-stranger", stranger));
+            assert_ne!(current.child, stranger);
+            while managed_rx.try_recv().is_ok() {}
+            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap())
+        };
+        message.from = stranger.into();
+        let result = handle_wrapper_message("late-stranger", WrapperToDaemon::Send(message.clone()), &shared);
+        assert!(matches!(result, Some(DaemonToWrapper::Ack { id, .. }) if id == message.id));
+        let delivered = match read_control(&mut owner_reader) {
+            DaemonToWrapper::Deliver(delivered) => delivered,
+            other => panic!("le tiers reste sur la remise ordinaire : {other:?}"),
+        };
+        assert_eq!((delivered.id, delivered.from, delivered.to, delivered.in_reply_to, delivered.body),
+            (message.id, message.from, message.to, message.in_reply_to, message.body));
+        let state = shared.lock().unwrap();
+        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
+        let after = state.delegation_store.projection_meta().unwrap();
+        assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
+        assert!(state.delegation_store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(state.store.recent_messages(10).unwrap().len(), 1);
+        drop(state);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     /// (GARDE) Le plancher humain relève l'échéance sans supprimer la garde.
     /// Mutant : retirer le `.max(HUMAN_REPLY_TIMEOUT_SECS)` → la demande
     /// humaine retombe à 60 s et l'assertion meurt. Mutant : appliquer le

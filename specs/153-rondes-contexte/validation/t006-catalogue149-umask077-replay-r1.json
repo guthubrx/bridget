@@ -1,0 +1,30 @@
+{
+  "started_at": "2026-10-11T19:47:44.848602+00:00",
+  "seconds": 8.71,
+  "command": [
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef",
+    "native149_catalogue",
+    "--test-threads=4",
+    "--nocapture"
+  ],
+  "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte",
+  "environment": {
+    "HOME": "/Users/moi",
+    "TMPDIR": "/private/tmp/b.p1xqyp4_",
+    "BRIDGET_HOME": "/private/tmp/b.p1xqyp4_/ns",
+    "PATH": "/opt/homebrew/anaconda3/bin:/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "CARGO_TARGET_DIR": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target",
+    "BRIDGET_BUILD_CACHE_GIB": "20"
+  },
+  "umask": "0077",
+  "rc": 0,
+  "compiled_source_receipt": "/Users/moi/.cache/bridget-delivery153.46dlquql/t003-t004-t005-t007-native153-green-r1.json",
+  "binary_sha_before": "95c8033934d5cc38ff8f929e3e403260b644d3f820996eb72ec7e510223e0a93",
+  "binary_sha_after": "95c8033934d5cc38ff8f929e3e403260b644d3f820996eb72ec7e510223e0a93",
+  "results": [
+    "ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1425 filtered out; finished in 8.66s"
+  ],
+  "log": "/Users/moi/.cache/bridget-delivery153.46dlquql/t006-catalogue149-umask077-replay-r1.log",
+  "log_sha256": "d26bb65f0601bd671f1faaebe0e9fee0fe862d9c549955345f800657c003ac87",
+  "no_recompilation": true
+}

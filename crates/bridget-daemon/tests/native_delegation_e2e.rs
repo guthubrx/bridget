@@ -430,6 +430,8 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
         cwd: root.to_string_lossy().into_owned(),
         posture: Some(SpawnPosture::Discovery),
         reply_timeout: None,
+        keep_alive_secs: None,
+        brief: None,
     }
 }
 
@@ -573,7 +575,23 @@ if "--restricted" not in args:
         )
         .replacen(started, identity, 1)
         .replacen("initialized = False\nfor line in sys.stdin:", resumed_init, 1)
-        .replacen("    if blocked:\n        continue", nested, 1);
+        .replacen("    if blocked:\n        continue", nested, 1)
+        // T019 réemploie ce fournisseur : mêmes permissions et réponses148/152.
+        .replacen(
+            "record(\"prompt\", blocked=blocked,",
+            "record(\"prompt\", instance_id=os.environ.get(\"BRIDGET_AGENT_INSTANCE_ID\"), content=content, blocked=blocked,",
+            1,
+        )
+        .replacen(
+            "    text = \"fixture-glm5.3-answer-148\"",
+            r#"    text = "fixture-glm5.3-answer-148"
+    # La carte peut citer une mission passée ; retenir le marqueur récent.
+    for round153 in (3, 2, 1):
+        if f"RONDE_153_{round153}" in content:
+            text = f"fixture-153-result-{round153}"
+            break"#,
+            1,
+        );
     assert!(provider.contains("native_bootstrap="));
     assert!(provider.contains("delegated152 = rpc152"));
     provider.replacen(
@@ -934,6 +952,302 @@ fn native152_rouge_identite_frontieres_marqueur_lisible_different() {
 #[test]
 fn native152_rouge_identite_frontieres_marqueur_deja_reconcilie() {
     native_identity_boundary152(NativeBoundary152::MarkerReconciled);
+}
+
+#[test]
+fn native153_e2e_trois_rondes() {
+    // Réemploi152 : CLI/profil privés réellement capturés, sans T3 ni modèle.
+    let mut f = Fixture::new_with_provider(15, true);
+    let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
+    f.human_grant();
+    let db = rusqlite::Connection::open_with_flags(
+        f.root.join("state/bridget.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let (generation, mut previous_seq): (String, u64) = db
+        .query_row(
+            "SELECT generation,seq FROM native_delegation_projection_meta WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let instructions = [
+        "RONDE_153_1 Revue des faits locaux.",
+        "RONDE_153_2 Corrige les seuls points du delta.",
+        "RONDE_153_3 Nouvelle revue des corrections.",
+    ];
+    let delta = json!({
+        "objective":"Corriger les points relevés dans la revue.",
+        "summary":"DELTA_BRIEF_153 : ajuster les seuls points signalés.",
+        "next_step":"Relire les corrections, sans reprendre tout le dossier."
+    });
+    let mut request = delegate(&f.root, "three-rounds-153", instructions[0]);
+    let NativeDelegationRequest::Delegate {
+        keep_alive_secs, ..
+    } = &mut request
+    else {
+        unreachable!()
+    };
+    // La borne haute évite l'expiration des premiers des16 enfants pendant
+    // les admissions séquentielles. Leur fin reste explicite et contrôlée.
+    *keep_alive_secs = Some(7200);
+    let created = f.request(&mut parent, request);
+    let id = created["task_id"]
+        .as_str()
+        .expect("mission admise")
+        .to_string();
+    let child = created["child_agent_id"].as_str().unwrap().to_string();
+    f.status_until(&mut parent, &id, "result_available");
+    let initial = native_task152(&f, &id);
+    let instance = initial["child_instance"].as_str().unwrap().to_string();
+    let marker = f.remember_native_group(&child);
+    assert_eq!(
+        assert_native_identity152(&f, &id, created["message_id"].as_str().unwrap()),
+        instance
+    );
+    let mut missions = Vec::new();
+    let mut result_ids = Vec::new();
+    // Trois rondes bornées. Chaque attente reprend la borne20s du harnais.
+    for (index, instruction) in instructions.iter().enumerate() {
+        let round = index + 1;
+        let admitted = if index == 0 {
+            created.clone()
+        } else {
+            f.request(
+                &mut parent,
+                NativeDelegationRequest::Continue {
+                    task_id: id.clone(),
+                    request_id: format!("three-rounds-153-r{round}"),
+                    task: (*instruction).into(),
+                    brief: (index == 1).then(|| delta.clone()),
+                },
+            )
+        };
+        assert_eq!(admitted["task_id"], id, "{admitted}");
+        assert_eq!(admitted["child_agent_id"], child, "{admitted}");
+        let mission = admitted["message_id"].as_str().unwrap().to_string();
+        let mut completed = f.status_until(&mut parent, &id, "result_available");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while completed["continuable"] != true
+            || f.replies
+                .iter()
+                .all(|reply| reply.in_reply_to.as_deref() != Some(mission.as_str()))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "remise ronde{round} absente : {completed}; {}",
+                f.root.display()
+            );
+            completed = f.request(
+                &mut parent,
+                NativeDelegationRequest::Status {
+                    task_id: id.clone(),
+                },
+            );
+            assert_ne!(completed["status"], "failed", "{completed}");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let expected_result = format!("fixture-153-result-{round}");
+        assert_eq!(completed["round"], round as u64);
+        assert_eq!(completed["result"], expected_result);
+        let saved = native_task152(&f, &id);
+        assert_eq!(saved["child"], child);
+        assert_eq!(saved["child_instance"], instance);
+        assert_eq!(saved["round"], round as u64);
+        assert_eq!(saved["result_sent"], true);
+        assert_eq!(saved["cleanup_done"], false);
+        assert_eq!(saved["guard_released"], false);
+        assert!(saved["idle_deadline_at"].is_i64());
+        assert_eq!(f.marker_store().load(&child).unwrap().pgid, marker.pgid);
+        assert!(group_exists(marker.pgid).unwrap());
+        let replies: Vec<_> = f
+            .replies
+            .iter()
+            .filter(|reply| reply.in_reply_to.as_deref() == Some(mission.as_str()))
+            .collect();
+        assert_eq!(replies.len(), 1);
+        let expected_id = if index == 0 {
+            format!("native-result-{id}")
+        } else {
+            format!("native-result-{id}-r{round}")
+        };
+        assert_eq!(replies[0].id, expected_id);
+        assert_eq!(replies[0].from, child);
+        assert_eq!(replies[0].to, PARENT);
+        assert_eq!(replies[0].body, expected_result);
+        missions.push(mission);
+        result_ids.push(replies[0].id.clone());
+        let (observed_generation, seq): (String, u64) = db
+            .query_row(
+                "SELECT generation,seq FROM native_delegation_projection_meta WHERE singleton=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(observed_generation, generation);
+        assert!(
+            seq > previous_seq,
+            "mutation visible absente à la ronde{round}"
+        );
+        previous_seq = seq;
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM native_delegations", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        if index == 1 {
+            let body = saved["round_body"].as_str().unwrap();
+            assert!(body.contains("DELTA_BRIEF_153"));
+            assert!(body.contains("\n\n--- Consigne ---\n"));
+            assert!(body.ends_with(*instruction));
+        } else if index == 2 {
+            assert_eq!(saved["round_body"], *instruction);
+        }
+    }
+    assert_eq!(
+        missions
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    assert_eq!(
+        result_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    let evidence = evidence152(&f);
+    let starts: Vec<_> = evidence
+        .iter()
+        .filter(|event| event["event"] == "started" && event["instance_id"] == instance)
+        .collect();
+    assert_eq!(starts.len(), 1, "une seule instance de fournisseur");
+    let prompts: Vec<_> = evidence
+        .iter()
+        .filter(|event| event["event"] == "prompt" && event["instance_id"] == instance)
+        .collect();
+    assert_eq!(prompts.len(), 3, "trois missions réellement reçues");
+    for (prompt, instruction) in prompts.iter().zip(instructions) {
+        assert_eq!(
+            prompt["pid"], starts[0]["pid"],
+            "même processus fournisseur"
+        );
+        assert!(prompt["content"].as_str().unwrap().contains(instruction));
+    }
+    assert!(
+        prompts[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("DELTA_BRIEF_153")
+    );
+    let ended = f.request(
+        &mut parent,
+        NativeDelegationRequest::Cancel {
+            task_id: id.clone(),
+        },
+    );
+    assert_eq!(ended["status"], "result_available");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let saved = native_task152(&f, &id);
+        assert_eq!(saved["guard_released"], true);
+        assert_eq!(saved["idle_deadline_at"], Value::Null);
+        if saved["cleanup_done"] == true && !group_exists(marker.pgid).unwrap() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fin explicite non confirmée ; {}",
+            f.root.display()
+        );
+        f.request(
+            &mut parent,
+            NativeDelegationRequest::Status {
+                task_id: id.clone(),
+            },
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    // Les16 suivants ont tous rendu leur résultat et restent réellement vivants.
+    let mut idle_tasks = Vec::new();
+    for index in 0..16 {
+        let mut request = delegate(&f.root, &format!("idle153-{index}"), "Revue inactive153.");
+        let NativeDelegationRequest::Delegate {
+            keep_alive_secs, ..
+        } = &mut request
+        else {
+            unreachable!()
+        };
+        *keep_alive_secs = Some(7200);
+        let admitted = f.request(&mut parent, request);
+        let idle_id = admitted["task_id"].as_str().unwrap().to_string();
+        let mut completed = f.status_until(&mut parent, &idle_id, "result_available");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while completed["continuable"] != true {
+            assert!(
+                Instant::now() < deadline,
+                "garde inactive153 absente : {completed}"
+            );
+            completed = f.request(
+                &mut parent,
+                NativeDelegationRequest::Status {
+                    task_id: idle_id.clone(),
+                },
+            );
+            assert_ne!(completed["status"], "failed", "{completed}");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let saved = native_task152(&f, &idle_id);
+        assert_eq!(saved["state"], "result_available");
+        assert_eq!(saved["result"], ANSWER);
+        assert_eq!(saved["guarded"], true);
+        assert_eq!(saved["guard_released"], false);
+        assert_eq!(saved["cleanup_done"], false);
+        assert!(saved["idle_deadline_at"].is_i64());
+        let idle_marker = f.remember_native_group(saved["child"].as_str().unwrap());
+        assert!(group_exists(idle_marker.pgid).unwrap());
+        idle_tasks.push(idle_id);
+    }
+    let held: i64 = db.query_row(
+        "SELECT COUNT(*) FROM native_delegations WHERE json_extract(payload,'$.state')='result_available' AND json_extract(payload,'$.guarded')=1 AND json_extract(payload,'$.cleanup_done')=0",
+        [],
+        |row| row.get(0),
+    ).unwrap();
+    assert_eq!(held, 16);
+    for idle_marker in f.native_groups.iter().skip(1) {
+        assert!(group_exists(idle_marker.pgid).unwrap());
+    }
+    let mut seventeenth = delegate(&f.root, "idle153-17", "Délégation au plafond153.");
+    let NativeDelegationRequest::Delegate {
+        keep_alive_secs, ..
+    } = &mut seventeenth
+    else {
+        unreachable!()
+    };
+    *keep_alive_secs = Some(7200);
+    let refused = f.request(&mut parent, seventeenth);
+    assert_eq!(refused["code"], "task_limit", "{refused}");
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM native_delegations", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        17
+    );
+    assert_eq!(
+        evidence152(&f)
+            .iter()
+            .filter(|event| event["event"] == "started")
+            .count(),
+        17
+    );
+    for task_id in idle_tasks {
+        let ended = f.request(&mut parent, NativeDelegationRequest::Cancel { task_id });
+        assert_eq!(ended["status"], "result_available");
+    }
 }
 
 #[test]

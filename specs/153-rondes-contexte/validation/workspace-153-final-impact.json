@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-11T20:54:10.845094+00:00",
+  "workspace_receipt": "/Users/moi/.cache/bridget-delivery153.46dlquql/workspace-153-r1-results.json",
+  "changed_files": [
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "workspace_sha256": "d3ea623489cf99a329b8f91774b0dc9e5da9de4c5b5491ddb0601f1924c131b9",
+      "final_sha256": "d104148d7a3503c380bfc73730f1ce0fbd6d2a3beca91c6bbf57975e3de09522"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "workspace_sha256": "2f8242259f5eee83b72203680a832060cf125b8f4ef0ef1c82d9f78dcd850f0a",
+      "final_sha256": "5f6233f81a185aa713b2a1bac9beebcf030e375640aa355c726933c8576f68d4"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "workspace_sha256": "fe4a1d680502b08d62db907537dae84a32d999656bedc9114e28dcc67468aee2",
+      "final_sha256": "ab16810d9489f8100b954eab721164ee04a20765fe23b4fc3c6117604b47a9e6"
+    }
+  ],
+  "unchanged_count": 197,
+  "final_green_receipt": "/Users/moi/.cache/bridget-delivery153.46dlquql/t015-t019-native153-corrections-green-r1.json",
+  "final_regression_receipt": "/Users/moi/.cache/bridget-delivery153.46dlquql/t021-final-lib-regressions-r1.json",
+  "global_green": false,
+  "impact": "Native new Task round1 changes stored new payload but normalized round_no/resultID1 stay equivalent; Continue ownership/epoch only new tool. Final179lib regressions fresh plus40native153+1E2E fresh; MCPoldmatrice15freshR2; holds_slot cfg(test) test-only code absent release. Other workspace paths retained by unchanged source and bounded impact, not final-hash workspace claim."
+}

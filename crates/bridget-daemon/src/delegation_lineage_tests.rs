@@ -41,6 +41,8 @@ fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequ
         cwd: "/tmp".into(),
         posture: None,
         reply_timeout: None,
+        keep_alive_secs: None,
+        brief: None,
     }
 }
 
@@ -89,6 +91,13 @@ fn task(
         mission_issued_at: None,
         restart_resumes: 0,
         cancel_stopped: Vec::new(),
+        round: 0,
+        idle_deadline_at: None,
+        round_body: None,
+        rounds: Vec::new(),
+        guarded: false,
+        guard_released: false,
+        unacked_rounds: Vec::new(),
     }
 }
 
@@ -1127,6 +1136,350 @@ fn native150_ouverture_10000_lignes() {
     // La migration 148 a dérivé la racine de chaque ligne.
     assert!(store.tasks().unwrap().iter().all(|t| t.root_owner_agent_id == "humain"));
     meta(&store);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_fondations_payloads149_150_et_predicats() {
+    for version in [149, 150] {
+        let mut payload = serde_json::to_value(task("t153", "parent", "ip", "ip", "child", Some("ic"), "queued", 1)).unwrap();
+        let fields = payload.as_object_mut().unwrap();
+        for field in ["round", "idle_deadline_at", "round_body", "rounds", "guarded", "guard_released", "unacked_rounds", "acknowledged_at", "launch_issued_at", "mission_issued_at", "restart_resumes", "cancel_stopped"] {
+            fields.remove(field);
+        }
+        if version == 149 {
+            for field in ["cleanup_done", "failure_sent", "reply_timeout", "delivery_acked"] {
+                fields.remove(field);
+            }
+        }
+        let mut restored: Task = serde_json::from_value(payload).unwrap();
+        assert_eq!(restored.round, 0);
+        assert_eq!(restored.round_no(), 1);
+        assert_eq!(restored.idle_deadline_at, None);
+        assert_eq!(restored.round_body, None);
+        assert!(restored.rounds.is_empty());
+        assert!(!restored.guarded && !restored.guard_released);
+        assert!(restored.unacked_rounds.is_empty());
+        assert_eq!(restored.result_message_id(), "native-result-t153");
+        restored.round = 2;
+        assert_eq!(restored.result_message_id(), "native-result-t153-r2");
+        assert_eq!(restored.result_message_id_for_round(1), "native-result-t153");
+        assert!(restored.holds_slot());
+        restored.state = "result_available".into();
+        assert!(!restored.holds_slot() && !restored.continuable());
+        restored.guarded = true;
+        restored.result_sent = true;
+        restored.idle_deadline_at = Some(100);
+        assert!(restored.holds_slot() && restored.continuable());
+        restored.guard_released = true;
+        assert!(restored.holds_slot() && !restored.continuable());
+        restored.cleanup_done = true;
+        assert!(!restored.holds_slot());
+    }
+}
+
+#[test]
+fn native153_fondations_index_legacy_courant_et_etranger() {
+    let dir = temp_dir("153-index");
+    let path = dir.join("store.sqlite");
+    seed_v148(&path, &[("legacy", "parent", "ip", "ip", "child", Some("ic"))]);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))").unwrap();
+    drop(conn);
+    let store = open_store(&path);
+    let index: String = store.test_connection().query_row("SELECT sql FROM sqlite_master WHERE name='native_delegations_state'", [], |r| r.get(0)).unwrap();
+    assert!(index.contains("'$.guarded'") && index.contains("'$.cleanup_done'") && index.contains("owner_instance"));
+    assert_eq!(store.test_connection().query_row("SELECT count(*) FROM native_delegation_past_missions", [], |r| r.get::<_, u32>(0)).unwrap(), 0);
+    assert!(store.past_mission_task("missing").unwrap().is_none());
+    store.test_connection().execute("INSERT INTO native_delegation_past_missions(mission,task_id) VALUES('old-mission','legacy')", []).unwrap();
+    assert_eq!(store.past_mission_task("old-mission").unwrap().unwrap().task_id, "legacy");
+    drop(store);
+    let store = open_store(&path);
+    assert_eq!(store.test_connection().query_row("SELECT sql FROM sqlite_master WHERE name='native_delegations_state'", [], |r| r.get::<_, String>(0)).unwrap(), index);
+    drop(store);
+
+    let foreign_path = dir.join("foreign.sqlite");
+    let conn = Connection::open(&foreign_path).unwrap();
+    conn.execute_batch(V148_DDL).unwrap();
+    conn.execute_batch("CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.sta te'))").unwrap();
+    assert!(matches!(DelegationStore::open(&foreign_path), Err(rusqlite::Error::InvalidQuery)));
+    assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE name='native_delegation_past_missions'", [], |r| r.get::<_, u32>(0)).unwrap(), 0, "migration étrangère intégralement annulée");
+    assert!(conn.query_row("SELECT sql FROM sqlite_master WHERE name='native_delegations_state'", [], |r| r.get::<_, String>(0)).unwrap().contains("'$.sta te'"));
+    drop(conn);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_fondations_projection_ignore_sept_champs_et_garde_immuable() {
+    let dir = temp_dir("153-projection");
+    let store = open_store(&dir.join("store.sqlite"));
+    for guarded in [false, true] {
+        let id = format!("t153-{guarded}");
+        let mut original = task(&id, "parent", "ip", "ip", &format!("child-{guarded}"), Some("ic"), "queued", 1);
+        original.guarded = guarded;
+        store.insert(&original, &format!("req-{id}"), b"canon").unwrap();
+        let old = store.get(&id).unwrap().unwrap();
+        let mut changed = old.clone();
+        changed.round = 2;
+        changed.idle_deadline_at = Some(100);
+        changed.round_body = Some("instruction".into());
+        changed.rounds.push(RoundRecord { round: 2, request_id: "r2".into(), digest: "digest".into() });
+        changed.guarded = !guarded;
+        changed.guard_released = true;
+        changed.unacked_rounds.push(1);
+        assert!(!visible_changed(&old, &changed));
+        let before = meta(&store);
+        let _ = store.take_changes();
+        store.save(&changed).unwrap();
+        assert_eq!(store.get(&id).unwrap().unwrap().guarded, guarded);
+        assert_eq!(meta(&store).seq, before.seq);
+        assert!(store.take_changes().is_empty());
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_ronde_begin_round_ecriture_complete_et_signal_committe() {
+    let dir = temp_dir("153-round");
+    let path = dir.join("store.sqlite");
+    let store = open_store(&path);
+    let rx = store.change_receiver().unwrap();
+    let mut previous = task("round-task", "parent", "ip", "origin", "child", Some("ic"), "result_available", 1);
+    previous.round = 2;
+    previous.guarded = true;
+    previous.result = Some("résultat précédent".into());
+    previous.error = Some("ancien diagnostic".into());
+    previous.result_sent = true;
+    previous.cleanup_done = true;
+    previous.failure_sent = true;
+    previous.started_at = Some(10);
+    previous.completed_at = Some(20);
+    previous.launch_issued_at = Some(11);
+    previous.mission_issued_at = Some(12);
+    previous.mission_deadline_at = Some(50);
+    previous.idle_deadline_at = Some(200);
+    previous.restart_resumes = 2;
+    previous.cancel_stopped = vec!["ancien-arrêt".into()];
+    previous.unacked_rounds = vec![1];
+    previous.rounds = vec![RoundRecord { round: 2, request_id: "req-r2".into(), digest: "digest-r2".into() }];
+    store.insert(&previous, "req-round-task", b"canon").unwrap();
+    store.acknowledge_tasks(&[previous.task_id.clone()], 21).unwrap();
+    let old = store.get(&previous.task_id).unwrap().unwrap();
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    let _ = store.take_changes();
+    while rx.try_recv().is_ok() {}
+    let record = RoundRecord { round: 3, request_id: "req-r3".into(), digest: "digest-r3".into() };
+    let next = store.begin_round(&old.task_id, 2, || 100, record, "new-mission", "nouvelle instruction").unwrap();
+    assert_eq!(next.round, 3);
+    assert_eq!(next.state, "mission_pending");
+    assert_eq!(next.mission, "new-mission");
+    assert_eq!(next.round_body.as_deref(), Some("nouvelle instruction"));
+    assert_eq!(next.rounds.len(), 2);
+    assert_eq!(next.rounds[1].request_id, "req-r3");
+    assert_eq!(next.rounds[1].digest, "digest-r3");
+    assert_eq!(next.unacked_rounds, [1, 2]);
+    assert_eq!(next.result, None);
+    assert_eq!(next.error, None);
+    assert!(!next.result_sent && !next.delivery_acked && !next.failure_sent && !next.cleanup_done);
+    assert_eq!(next.acknowledged_at, None);
+    assert_eq!(next.mission_deadline_at, None);
+    assert_eq!(next.mission_issued_at, None);
+    assert_eq!(next.completed_at, None);
+    assert_eq!(next.idle_deadline_at, None);
+    assert_eq!(next.started_at, old.started_at);
+    assert_eq!(next.launch_issued_at, old.launch_issued_at);
+    assert_eq!(next.restart_resumes, 2);
+    assert_eq!(next.cancel_stopped, old.cancel_stopped);
+    let mut expected = serde_json::to_value(&old).unwrap();
+    for field in ["round", "state", "mission", "round_body", "rounds", "unacked_rounds", "result", "error", "result_sent", "delivery_acked", "failure_sent", "cleanup_done", "acknowledged_at", "mission_deadline_at", "mission_issued_at", "completed_at", "idle_deadline_at", "updated_at"] {
+        expected.as_object_mut().unwrap().remove(field);
+    }
+    let mut actual = serde_json::to_value(&next).unwrap();
+    actual.as_object_mut().unwrap().retain(|key, _| expected.get(key).is_some());
+    assert_eq!(actual, expected, "tous les autres faits restent identiques");
+    assert!(store.for_mission(&old.mission).unwrap().is_none());
+    assert_eq!(store.past_mission_task(&old.mission).unwrap().unwrap().mission, "new-mission");
+    assert_eq!(meta(&store).seq, before.seq + 1);
+    assert_eq!(meta(&store).generation, before.generation);
+    assert_eq!(store.wait_epoch().get(), epoch + 1);
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(store.take_changes().get("parent").unwrap().seq, before.seq + 1);
+    let conn = Connection::open(&path).unwrap();
+    let durable: String = conn.query_row("SELECT payload FROM native_delegations WHERE task_id=?1", [&old.task_id], |r| r.get(0)).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&durable).unwrap(), serde_json::to_value(&next).unwrap());
+    let mut completed = next.clone();
+    completed.state = "result_available".into();
+    completed.result = Some("résultat ronde 3".into());
+    store.save(&completed).unwrap();
+    assert!(store.get(&old.task_id).unwrap().unwrap().completed_at.unwrap() > 20);
+    drop(conn);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_ronde_begin_round_refus_frontiere_garde_cas_et_horloge_fraiche() {
+    let dir = temp_dir("153-refus");
+    let store = open_store(&dir.join("store.sqlite"));
+    for (case, expected_round, now, released) in [("deadline", 1, 100, false), ("released", 1, 99, true), ("cas", 2, 99, false), ("clock", 1, 100, false)] {
+        let mut old = task(case, "parent", "ip", "origin", case, Some("ic"), "result_available", 1);
+        old.guarded = true;
+        old.guard_released = released;
+        old.result_sent = true;
+        old.result = Some("résultat conservé".into());
+        old.idle_deadline_at = Some(100);
+        store.insert(&old, &format!("req-{case}"), b"canon").unwrap();
+        let before = meta(&store);
+        let epoch = store.wait_epoch().get();
+        let payload = serde_json::to_value(store.get(case).unwrap().unwrap()).unwrap();
+        let _ = store.take_changes();
+        let clock_reads = std::cell::Cell::new(0);
+        let result = store.begin_round(case, expected_round, || {
+            clock_reads.set(clock_reads.get() + 1);
+            assert!(store.past_mission_task(&old.mission).unwrap().is_none(), "horloge avant toute écriture");
+            now
+        }, RoundRecord { round: expected_round + 1, request_id: format!("continue-{case}"), digest: "digest".into() }, "new-mission", "instruction");
+        assert!(result.is_err(), "{case}");
+        if case == "clock" {
+            let admission_now = 99;
+            assert!(admission_now < old.idle_deadline_at.unwrap());
+            assert_eq!(clock_reads.get(), 1, "l'admission passée ne remplace pas la lecture fraîche");
+        }
+        assert_eq!(serde_json::to_value(store.get(case).unwrap().unwrap()).unwrap(), payload);
+        assert!(store.past_mission_task(&old.mission).unwrap().is_none());
+        assert_eq!(meta(&store).seq, before.seq);
+        assert_eq!(store.wait_epoch().get(), epoch);
+        assert!(store.take_changes().is_empty());
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_ronde_begin_round_ack_acquis_non_reporté_et_rollback_sans_signal() {
+    let dir = temp_dir("153-rollback");
+    let store = open_store(&dir.join("store.sqlite"));
+    let mut old = task("rollback", "parent", "ip", "origin", "child", Some("ic"), "result_available", 1);
+    old.guarded = true;
+    old.result_sent = true;
+    old.delivery_acked = true;
+    old.idle_deadline_at = Some(200);
+    store.insert(&old, "req-rollback", b"canon").unwrap();
+    let rx = store.change_receiver().unwrap();
+    let _ = store.take_changes();
+    while rx.try_recv().is_ok() {}
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    let payload = serde_json::to_value(store.get("rollback").unwrap().unwrap()).unwrap();
+    store.test_connection().execute_batch("CREATE TRIGGER refuse_round BEFORE UPDATE ON native_delegations BEGIN SELECT RAISE(ABORT,'rollback round'); END;").unwrap();
+    assert!(store.begin_round("rollback", 1, || 100, RoundRecord { round: 2, request_id: "req-r2".into(), digest: "digest".into() }, "new-mission", "instruction").is_err());
+    assert_eq!(serde_json::to_value(store.get("rollback").unwrap().unwrap()).unwrap(), payload);
+    assert!(store.past_mission_task(&old.mission).unwrap().is_none());
+    assert_eq!(meta(&store).seq, before.seq);
+    assert_eq!(store.wait_epoch().get(), epoch);
+    assert!(store.take_changes().is_empty());
+    assert!(rx.try_recv().is_err());
+    store.test_connection().execute_batch("DROP TRIGGER refuse_round").unwrap();
+    let next = store.begin_round("rollback", 1, || 100, RoundRecord { round: 2, request_id: "req-r2".into(), digest: "digest".into() }, "new-mission", "instruction").unwrap();
+    assert!(next.unacked_rounds.is_empty(), "l'ACK de la ronde passée est déjà acquis");
+    assert!(!next.delivery_acked, "la nouvelle ronde doit acquérir sa propre remise");
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_limites_purge_refuse_arbre_avec_garde() {
+    let dir = temp_dir("153-purge-garde");
+    let store = open_store(&dir.join("store.sqlite"));
+    let mut guarded = task("guarded", "parent", "ip", "ip", "child", Some("ic"), "result_available", 1);
+    guarded.guarded = true;
+    guarded.idle_deadline_at = Some(maintenant() + 60);
+    guarded.result = Some("résultat".into());
+    guarded.result_sent = true;
+    guarded.delivery_acked = true;
+    // Le délai reste une ceinture, même si le nettoyage est déjà marqué.
+    guarded.cleanup_done = true;
+    store.insert(&guarded, "req-guarded", b"canon").unwrap();
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    let payload = serde_json::to_value(store.get("guarded").unwrap().unwrap()).unwrap();
+    let _ = store.take_changes();
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 0);
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, true), 0);
+    assert_eq!(serde_json::to_value(store.get("guarded").unwrap().unwrap()).unwrap(), payload);
+    assert_eq!(meta(&store).seq, before.seq);
+    assert_eq!(meta(&store).generation, before.generation);
+    assert_eq!(store.wait_epoch().get(), epoch);
+    assert!(store.take_changes().is_empty());
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_limites_ronde_indeterminee_puis_n1_accusee_purge_refusee() {
+    let dir = temp_dir("153-purge-unacked");
+    let store = open_store(&dir.join("store.sqlite"));
+    for state in ["cancelled", "result_available"] {
+        poser(&store, state, "parent", None, state, true, true, false);
+        let mut saved = store.get(state).unwrap().unwrap();
+        saved.round = 2;
+        saved.unacked_rounds = vec![1];
+        store.save(&saved).unwrap();
+        store.test_connection().execute("INSERT INTO native_delegation_past_missions(mission,task_id) VALUES(?1,?2)", params![format!("previous-{state}"), state]).unwrap();
+    }
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    let _ = store.take_changes();
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 0);
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, true), 0);
+    for state in ["cancelled", "result_available"] {
+        let saved = store.get(state).unwrap().unwrap();
+        assert_eq!(saved.unacked_rounds, [1]);
+        assert!(saved.delivery_acked && saved.cleanup_done);
+        assert!(store.past_mission_task(&format!("previous-{state}")).unwrap().is_some());
+    }
+    assert_eq!(meta(&store).seq, before.seq);
+    assert_eq!(meta(&store).generation, before.generation);
+    assert_eq!(store.wait_epoch().get(), epoch);
+    assert!(store.take_changes().is_empty());
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native153_limites_purge_supprime_missions_passees() {
+    let dir = temp_dir("153-purge-history");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "root", "parent", None, "result_available", true, true, false);
+    poser(&store, "leaf", "parent", Some("root"), "cancelled", true, true, false);
+    poser(&store, "retained", "autre-parent", None, "working", false, false, false);
+    for id in ["root", "leaf", "retained"] {
+        store.test_connection().execute("INSERT INTO native_delegation_past_missions(mission,task_id) VALUES(?1,?2)", params![format!("previous-{id}"), id]).unwrap();
+    }
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    let _ = store.take_changes();
+    store.test_connection().execute_batch("CREATE TRIGGER refuse_tree BEFORE DELETE ON native_delegations WHEN old.task_id='leaf' BEGIN SELECT RAISE(ABORT,'rollback tree'); END;").unwrap();
+    assert!(store.purge_trees(maintenant() + 8 * JOUR, None, 16, |_| true).is_err());
+    assert_eq!(restantes(&store).len(), 3);
+    for id in ["root", "leaf", "retained"] {
+        assert!(store.past_mission_task(&format!("previous-{id}")).unwrap().is_some());
+    }
+    assert_eq!(meta(&store).seq, before.seq);
+    assert_eq!(meta(&store).generation, before.generation);
+    assert_eq!(store.wait_epoch().get(), epoch);
+    assert!(store.take_changes().is_empty());
+    store.test_connection().execute_batch("DROP TRIGGER refuse_tree").unwrap();
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+    let missions: Vec<String> = store.test_connection().prepare("SELECT mission FROM native_delegation_past_missions ORDER BY mission").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(missions, ["previous-retained"]);
+    assert!(store.get("root").unwrap().is_none() && store.get("leaf").unwrap().is_none());
+    assert!(store.past_mission_task("previous-root").unwrap().is_none());
+    assert!(store.past_mission_task("previous-leaf").unwrap().is_none());
+    assert!(store.past_mission_task("previous-retained").unwrap().is_some());
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }

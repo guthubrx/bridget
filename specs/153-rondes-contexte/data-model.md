@@ -10,7 +10,7 @@ lecture : un payload 149 ou 150 se relit sans erreur.
 |---|---|---|---|
 | `round` | `u32` | 0 (lu comme 1) | Numéro de la ronde courante (1 à 8) |
 | `idle_deadline_at` | `Option<i64>` | `None` | Garde posée : instant d'arrêt de l'enfant inactif |
-| `round_body` | `Option<String>` | `None` | Corps de la mission de la ronde courante (brief + consigne). `None` : la consigne seule de `request.task` |
+| `round_body` | `Option<String>` | `None` | Corps de la mission de la ronde courante (brief + consigne). `None` : consigne initiale de `request.task` pour la ronde1 héritée ; une Continue stocke toujours sa nouvelle consigne |
 | `rounds` | `Vec<RoundRecord>` | vide | Rondes 2 et suivantes déjà ouvertes, pour le rejeu |
 | `guard_released` | `bool` | `false` | Fin explicite durable : interdit toute pose de garde et toute ronde. Posée par l'annulation (agent ou humaine) d'une tâche `guarded` en `result_available` |
 | `guarded` | `bool` | `false` | Vrai si la délégation porte `keep_alive_secs` (fixé à l'admission, jamais modifié) |
@@ -57,7 +57,10 @@ T005 : deux sérialisations du même brief sont identiques).
 La garde se pose dans la même sauvegarde que `result_sent = true`
 (sous le verrou d'état), si `request.keep_alive_secs` est présent.
 
-## `begin_round(task_id, expected_round, ...)`
+## `begin_round(task_id, expected_round, clock, record, mission, round_body)`
+
+Signature : `clock: FnOnce() -> i64`, `record: RoundRecord` ; retour
+`Result<Task, String>`, tâche confirmée après commit. Aucun type enveloppe neuf.
 
 Transaction unique sur la ligne de la tâche :
 
@@ -70,14 +73,17 @@ Transaction unique sur la ligne de la tâche :
    `delivery_acked` est faux, ajouter `expected_round` à `unacked_rounds` ;
 3. écrire : `round = expected + 1`, `mission = <nouvel UUID>`, `round_body`,
    `rounds += {round, request_id, digest}`, `result = None`, `result_sent = false`,
-   `delivery_acked = false` (150), `error = None`, `mission_deadline_at = None`,
-   `completed_at = None`, `idle_deadline_at = None`, `cleanup_done = false`,
-   `state = "mission_pending"` ; remettre à zéro les champs par ronde ajoutés
-   par 151 et 152 ;
+   `delivery_acked = false` (150), `acknowledged_at = None` (151),
+   `failure_sent = false`, `error = None`, `mission_deadline_at = None`,
+   `mission_issued_at = None` (152), `completed_at = None`,
+   `idle_deadline_at = None`, `cleanup_done = false`, `state = "mission_pending"` ;
 4. incrémenter la projection (mutation visible) ;
-5. signaler le propriétaire racine après le commit (`committed()`).
+5. après commit seulement, réveiller `wait_epoch.bump()` puis signaler le
+   propriétaire racine (`committed()`). Aucun signal sur rollback ou refus.
 
-`started_at` reste celui de la ronde 1.
+`started_at` et `launch_issued_at` restent ceux de la ronde1. `restart_resumes`
+reste le compteur de la vie entière de la tâche (plafond2), et `cancel_stopped`
+conserve sa preuve. Identité, filiation, demande et sécurité sont inchangées.
 
 ## Missions passées (nouvelle table d'index)
 
@@ -130,3 +136,35 @@ Le prédicat de purge d'un arbre exige `cleanup_done`, aucun enfant vivant et
 comptage des places (128 au total, 16 par instance) utilise `holds_slot()` : la
 place reste tenue tant que le nettoyage d'une tâche avec garde n'est pas confirmé.
 En SQL, `guarded` est un champ de la charge utile (pas de chemin dans `request`).
+
+
+## Index de quota existant, étendu dans la migration locale
+
+Réutiliser `native_delegations_state` avec les expressions, dans cet ordre :
+`json_extract(payload,'$.state')`,
+`coalesce(json_extract(payload,'$.guarded'),0)`,
+`coalesce(json_extract(payload,'$.cleanup_done'),0)`, `owner_instance`.
+Les six états actifs conservent leur branche SQL. Ajouter les trois états
+terminaux `result_available`, `failed` et `cancelled` lorsque guarded=1 et
+cleanup_done=0. Le préfixe state rend les deux branches indexables.
+Recherche des places O(log n + a), a ≤128 ; total retenu4096 inchangé de150.
+Aucun nouveau quota/index parallèle, aucune mesure de performance inventée.
+
+`open` reconnaît l'ancienne définition et la remplace par DROP/CREATE dans une
+transaction Immediate. Il conserve la nouvelle définition et refuse une
+définition inconnue. `CREATE IF NOT EXISTS` seul ne réalise pas la migration.
+`guarded` reste immuable, y compris dans `save_projected`.
+
+## Présence de brief
+
+Sur Delegate et Continue, `deserialize_present_optional` existant lit l'objet
+comme `Value` : omission → `None` ; présence `null` → `Some(Value::Null)`,
+puis refus `brief_invalid` par le validateur existant. Le test T005 passe par
+le JSON réel des deux variantes. Omission des nouveaux champs inchangée.
+
+Toutes les levées de garde posent ensemble guard_released=true et
+idle_deadline_at=None, y compris cancel_tree et prepare_restart avant une nouvelle
+pose possible. Dans tree_settled, unacked_rounds vide est une condition autonome,
+hors de l'alternative cancelled/delivery_acked. La recopie sélectionne aussi une
+tâche avec delivery_acked=true lorsque ses anciennes rondes restent non accusées.
+Le chemin tardif compare l'identité live sans recover_child ni écriture.

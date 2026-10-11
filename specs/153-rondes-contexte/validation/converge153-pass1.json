@@ -1,0 +1,2346 @@
+{
+  "session": "153-rondes-contexte",
+  "phase": "Converge153 PASS1",
+  "verdict": "CONVERGED",
+  "preparation_started_at": "2026-10-11T20:53:06Z",
+  "completed_at": "2026-10-11T21:06:10Z",
+  "working_tree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte",
+  "authorization": "Phase6 my-specify-all ; lecture des sources, tâches et preuves. Seul présent rapport privé écrit. Aucun code, tâche ou document modifié.",
+  "coverage": {
+    "functional_requirements": {
+      "expected": 31,
+      "mapped": 31,
+      "missing": 0,
+      "absent_ids": [
+        "FR-027",
+        "FR-028"
+      ]
+    },
+    "success_criteria": {
+      "expected": 17,
+      "mapped": 17,
+      "missing": 0,
+      "runtime_not_fully_verified": [
+        "SC-001",
+        "SC-002",
+        "SC-006"
+      ]
+    },
+    "user_stories": {
+      "expected": 5,
+      "mapped": 5,
+      "missing": 0
+    }
+  },
+  "task_count": {
+    "total": 29,
+    "checked": 29,
+    "unchecked": 0
+  },
+  "missing_tasks": [],
+  "proposed_append": null,
+  "freeze": {
+    "tasks_byte_identical": true,
+    "source_mismatches": [],
+    "sha256_before": {
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md": "e0191a5e8baeed395c8b63f429491bd1814575f733c3502f936ded45f88d951c",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/plan.md": "f54fd936b113a41aca877d53fcf9c0c753bc982c28c17ed7ced72d1cba5bc763",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/tasks.md": "a406fc926f3d0ddaa6896d2fdf72ced204aa14d50fcdd0e6b7a0d76090d7f5e2",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/checklists/requirements.md": "b156ea0a9cfed19215411a1e07351b83b0f474f9445d1629ea936ac85ce48dd9",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs": "d104148d7a3503c380bfc73730f1ce0fbd6d2a3beca91c6bbf57975e3de09522",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs": "5f6233f81a185aa713b2a1bac9beebcf030e375640aa355c726933c8576f68d4",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs": "39dddd60ed6288401c2bc38ef2f76dc8416eac67cfa25ecae46b0110cc140c37",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs": "ab16810d9489f8100b954eab721164ee04a20765fe23b4fc3c6117604b47a9e6",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer.rs": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs": "d79af7b23176ea9da78b8a76f5388198395ace85fa8119b05ef152b1bae8760c"
+    },
+    "sha256_after": {
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md": "e0191a5e8baeed395c8b63f429491bd1814575f733c3502f936ded45f88d951c",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/plan.md": "f54fd936b113a41aca877d53fcf9c0c753bc982c28c17ed7ced72d1cba5bc763",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/tasks.md": "a406fc926f3d0ddaa6896d2fdf72ced204aa14d50fcdd0e6b7a0d76090d7f5e2",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/checklists/requirements.md": "b156ea0a9cfed19215411a1e07351b83b0f474f9445d1629ea936ac85ce48dd9",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/implementation.md": "dcadc6fcd462174a0cf2b4237bf111c13a385eebb466d57cada3d2f15b49d6f2",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/validation/diff-153.patch": "433c1291bb3c29c7bd95c2ed6b7b5ca3b81caa5a1e9d8392b8f81a2bc6ab3ec5",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs": "d104148d7a3503c380bfc73730f1ce0fbd6d2a3beca91c6bbf57975e3de09522",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs": "5f6233f81a185aa713b2a1bac9beebcf030e375640aa355c726933c8576f68d4",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs": "39dddd60ed6288401c2bc38ef2f76dc8416eac67cfa25ecae46b0110cc140c37",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs": "ab16810d9489f8100b954eab721164ee04a20765fe23b4fc3c6117604b47a9e6",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer.rs": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs": "d79af7b23176ea9da78b8a76f5388198395ace85fa8119b05ef152b1bae8760c",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs": "bf224cd5600f9f7a29339253e59b9ae753fa28e79097978ca8efcebdc7c333b3",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "0eceb870614bb31d669d5b2a6b05afbdac2915a6ab9d9943247739031feaa87b",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs": "e3b517f07d2a77bb7990ea412e0c5b5a85d26319c312ae806d3570d5ee972c05",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer149_tests.rs": "f4b003ee3478f2d72fb695c6cade66fb7bd0757e92100647a0414cb3f9674b7c",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_mcp.rs": "16f620b8e1f4563b36ae5e50d34a975f352f2a903f8713ab7b5bccfd8668d5e6",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/wrapper.rs": "6890cc4be7fda97c81b21a1c4f8500ceb2af05c0fdd18fcf706543c354465426",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs": "a65d6849698d24c230b816036895d4a69e718ae6ac83e35cb64bc56535361350",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/claude_native_permissions_test.rs": "cc7e65db7472bd279721cc6ae11acddf9b93ccd29c2f608587d0294e403f73ca"
+    }
+  },
+  "matrix": [
+    {
+      "id": "FR-001",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 117
+      },
+      "topic": "Brief facultatif fermé, Delegate et Continue",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 2010
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 1
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 763
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1049
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2792
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2806
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs",
+          "line": 2472
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-002",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 119
+      },
+      "topic": "Même validateur handoff et borne rendue16384 octets",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/handoff.rs",
+          "line": 460
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/handoff.rs",
+          "line": 490
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1049
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2819
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2876
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-003",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 122
+      },
+      "topic": "Brief invalide : champ+raison, aucun effet ni clé consommée",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 40
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 763
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1049
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2764
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2792
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2806
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2819
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-004",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 124
+      },
+      "topic": "Rendu exact avant consigne ; sans brief, consigne seule",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1049
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2026
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2876
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1100
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-005",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 126
+      },
+      "topic": "Brief inclus dans canon/digest de rejeu",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 769
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1063
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2853
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 7935
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-006",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 127
+      },
+      "topic": "Déclarations inertes, même rendu/avertissements handoff",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/handoff.rs",
+          "line": 460
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs",
+          "line": 2111
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 1
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/docs/delegation-native.md",
+          "line": 118
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2876
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Le test utilise des références synthétiques et compare le rendu existant ; aucune validation de source réelle n'est revendiquée."
+    },
+    {
+      "id": "FR-007",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 134
+      },
+      "topic": "Garde entière60–7200s, omission conservée",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 2010
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 1
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 760
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2920
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs",
+          "line": 2472
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-008",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 137
+      },
+      "topic": "Durée de garde dans enveloppe idempotente",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 769
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2920
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-009",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 138
+      },
+      "topic": "Garde posée seulement avec remise Accepted/result_sent ; lectures pures",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2179
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 201
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2968
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4152
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-010",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 143
+      },
+      "topic": "Place tenue jusqu'à arrêt confirmé, plafonds128/16",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 416
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 858
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3254
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3328
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3446
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-011",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 147
+      },
+      "topic": "Expiration retire garde et déclenche arrêt, résultat/status conservés",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1819
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2968
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-012",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 150
+      },
+      "topic": "Fin agent/humaine sur résultat remis ou non",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 993
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 455
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3075
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-013",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 158
+      },
+      "topic": "Fin du parent libère et arrête descendants",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2472
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3188
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-014",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 160
+      },
+      "topic": "Redémarrage libère toute garde",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1698
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1705
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3156
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-015",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 165
+      },
+      "topic": "Continue sur même tâche/enfant/instance ; consigne1–65536",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1032
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1041
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1177
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1027
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-016",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 168
+      },
+      "topic": "Transaction/CAS, resets de ronde, mission passée et ACK ; faits vie entière conservés",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 323
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 362
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 390
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1244
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1362
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-017",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 173
+      },
+      "topic": "Mission/résultat uniques par ronde, échéance issue du délai original",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 143
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 364
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2026
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4152
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4321
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1109
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-018",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 176
+      },
+      "topic": "10 rejeux sans effet, ancienne clé retourne vue actuelle avant pause",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1063
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1075
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 545
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-019",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 179
+      },
+      "topic": "Refus ordonnés ; propriétaire/epoch purs ; exception garde expirée ou enfant absent",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 277
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1060
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1124
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 545
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3945
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4106
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-020",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 189
+      },
+      "topic": "Révocations/grant et sources actuelles avant nouvelle ronde",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1086
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1198
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1165
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3945
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 454
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 614
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-021",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 203
+      },
+      "topic": "Échec de ronde arrête enfant ; pas relance automatique de nouvelle ronde",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1787
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4321
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-022",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 206
+      },
+      "topic": "Ronde conserve posture demandée, cwd, modèle et définition",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1143
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 362
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 454
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1244
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-023",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 211
+      },
+      "topic": "Catalogue annonce60/7200/8/16384",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 728
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 185
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs",
+          "line": 2472
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-024",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 213
+      },
+      "topic": "Statut/Wait de ronde et boîte courante ; forme9 états Lineage inchangée",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 147
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 201
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 161
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 56
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3531
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4152
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1214
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-025",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 216
+      },
+      "topic": "Defaults149/150, octets request150 et comportement sans garde",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 116
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 2010
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2026
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1144
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2867
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3039
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 7935
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-026",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 218
+      },
+      "topic": "Purge bloque garde et enfant encore vivant",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 35
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2591
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1394
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3446
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-029",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 220
+      },
+      "topic": "ACK de chaque ronde protège purge, y compris cancelled",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 35
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2669
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 230
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1422
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1453
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4380
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-030",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 223
+      },
+      "topic": "Réponse tardive authentifiée absorbée purement aux2 dispatches ; tiers normal",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1449
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 471
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 9160
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 18129
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31136
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31173
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31204
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31247
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-031",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 193
+      },
+      "topic": "Politique actuelle complète et posture originale None ; PreToolUse/ACK réutilisés",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1086
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1152
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer.rs",
+          "line": 35
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 454
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+          "line": 206
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+          "line": 282
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 614
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-032",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 227
+      },
+      "topic": "Horloge fraîche après recontrôles, sous verrou/transaction et juste avant écriture",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1177
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 385
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1324
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3945
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "FR-033",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 154
+      },
+      "topic": "guard_released durable, impossible de reposer garde après fin explicite",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1000
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 455
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2182
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2472
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3075
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3156
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3188
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-001",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 235
+      },
+      "topic": "Vie conservée avec garde et arrêt sans garde",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2179
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2968
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3039
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1062
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Garde et arrêt exercés, durée murale réelle60s non mesurée ; aucune attestation de ce délai réel."
+    },
+    {
+      "id": "SC-002",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 237
+      },
+      "topic": "Même instance/processus sur trois rondes",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1177
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 362
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1055
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1123
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Instance/PID/PGID vérifiés avec fournisseur synthétique ; mémoire factuelle d'un modèle réel non vérifiée, T024 l'autorise explicitement."
+    },
+    {
+      "id": "SC-003",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 240
+      },
+      "topic": "Dix rejeux : une ronde/mission, sans effet owner/epoch",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1063
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 545
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-004",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 242
+      },
+      "topic": "16 enfants inactifs,17e refusée ; Continue ne consomme aucun nouveau slot",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 416
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1177
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3328
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1175
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Preuves composées : quota16/17 réel et Continue sans insert/spawn ; pas d'affirmation d'une recette qui ferait Continue sur les16 enfants."
+    },
+    {
+      "id": "SC-005",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 244
+      },
+      "topic": "Aucun arbre purgé avec garde ou enfant encore en marche",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 35
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2591
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1394
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-006",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 246
+      },
+      "topic": "Expiration au tick suivant ; cadence1 seconde existante",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1819
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 5103
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 5108
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2968
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Frontière et tick exercés ; cadence lue, délai mural d'arrêt non mesuré."
+    },
+    {
+      "id": "SC-007",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 248
+      },
+      "topic": "Pause refuse nouvelle clé, admet rejeu sans effet",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1065
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1075
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 545
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3945
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-008",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 250
+      },
+      "topic": "Rendu identique à preview,16385 refusé sans tâche",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/handoff.rs",
+          "line": 460
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1049
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2819
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2876
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-009",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 253
+      },
+      "topic": "Calls sans nouveaux champs compatibles150 ; références exécutées conservées",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 2010
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 116
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2026
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 7935
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1144
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2867
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3039
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "195 noms/cibles/résultats T001 concordent dans workspaceR1, 179lib revalidés sur sources finales ; pas de GREEN workspace final."
+    },
+    {
+      "id": "SC-010",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 255
+      },
+      "topic": "Résultat de ronde2 remis une fois avec ID propre",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 143
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2179
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4152
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 1064
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-011",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 257
+      },
+      "topic": "N non ACK/N+1 ACK bloque purge, ACK tardifN autorise",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2669
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 35
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1422
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4380
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-012",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 259
+      },
+      "topic": "Retour tardifN durantN+1, tâche et réveils inchangés",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1449
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 9160
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 18129
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31136
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31173
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+          "line": 31204
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-013",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 262
+      },
+      "topic": "Droits réduits refusés, inchangés admis",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1152
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 454
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 614
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-014",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 264
+      },
+      "topic": "Frontière exacte idle_deadline refuse avant tick",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1124
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 385
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3945
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1324
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-015",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 273
+      },
+      "topic": "Arrêt refusé tient slot ; résultat non remis reste réessayable avec même clé",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 416
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1137
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3446
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4106
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-016",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 266
+      },
+      "topic": "Annulation avant remise terminale ne repose pas garde",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1000
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 455
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2182
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3075
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "SC-017",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 269
+      },
+      "topic": "Échéance franchie pendant contrôles refusée ; combinaisons/postureNone stables",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1152
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 385
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1324
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 454
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "US1",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 67
+      },
+      "topic": "Brief structuré",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 2010
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/handoff.rs",
+          "line": 460
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 763
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1049
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2764
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2819
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2876
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs",
+          "line": 2472
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "US2",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 76
+      },
+      "topic": "Garde et fin",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2179
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 993
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1698
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2354
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2968
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3039
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3075
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3156
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3188
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Pas de mesure murale60s, cfSC001."
+    },
+    {
+      "id": "US3",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 86
+      },
+      "topic": "Nouvelle ronde sur même enfant",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1032
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 323
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer.rs",
+          "line": 35
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 1
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3741
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3945
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4152
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 454
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 958
+        }
+      ],
+      "assessment": "COUVERT_AVEC_LIMITE",
+      "limit": "Même processus/instance prouvé ; mémoire réelle d'un modèle non vérifiée, cfSC002."
+    },
+    {
+      "id": "US4",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 97
+      },
+      "topic": "Limites, pause, rétention et recette3rondes",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 416
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1075
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 35
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2669
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3328
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3358
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1422
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4380
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "line": 958
+        }
+      ],
+      "assessment": "COUVERT"
+    },
+    {
+      "id": "US5",
+      "requirement": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "line": 106
+      },
+      "topic": "Compatibilité sans nouveaux champs et9 états",
+      "realization": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 2010
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+          "line": 116
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 56
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+          "line": 76
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+          "line": 7935
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1144
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+          "line": 1214
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2867
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3039
+        }
+      ],
+      "assessment": "COUVERT"
+    }
+  ],
+  "evidence": {
+    "final_native_green": {
+      "file": "/Users/moi/.cache/bridget-delivery153.46dlquql/t015-t019-native153-corrections-green-r1.json",
+      "sha256": "45d6ab537328caaf8af27d63cbe2c5c2734d5ac6245116566590d175cc4976f9",
+      "lib_passed": 40,
+      "e2e_passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "rc": 0,
+      "seconds": 69.14,
+      "sources_stable": true
+    },
+    "final_lib_baseline": {
+      "file": "/Users/moi/.cache/bridget-delivery153.46dlquql/t021-final-lib-regressions-r1.json",
+      "sha256": "39b6f84fcade50294b7fd471558a4e81f887f3c94284cdc7ffab4d4c84b8d4be",
+      "passed": 179,
+      "failed": 0,
+      "ignored": 0,
+      "matched_names": 179,
+      "rc": 0,
+      "seconds": 65.33,
+      "sources_stable": true
+    },
+    "workspace_reference": {
+      "file": "/Users/moi/.cache/bridget-delivery153.46dlquql/workspace-153-r1-analysis-v2.json",
+      "sha256": "f8d8485ac0e7ae80a5a643c6f0a55c29e44e7fdb146192c9d47f8d27545116b9",
+      "targets": 94,
+      "passed": 2145,
+      "failed": 10,
+      "ignored": 72,
+      "rc": 101,
+      "seconds": 550.82,
+      "baseline_name_target_matches": 195,
+      "baseline_pass": 194,
+      "baseline_ignored": 1,
+      "raw_pass": 2148,
+      "raw_extra_nested_pass": 3,
+      "final_hash_workspace": false
+    },
+    "final_impact": {
+      "file": "/Users/moi/.cache/bridget-delivery153.46dlquql/workspace-153-final-impact.json",
+      "sha256": "4de6a52049f59346cab3d5c7e31aa597c78050d6284af5bd2fbecd55028c1444",
+      "unchanged": 197,
+      "total": 200,
+      "changed": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs"
+      ],
+      "global_green": false
+    },
+    "capture": {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/validation/diff-153.patch",
+      "sha256": "433c1291bb3c29c7bd95c2ed6b7b5ca3b81caa5a1e9d8392b8f81a2bc6ab3ec5",
+      "files": 34,
+      "hunks": 146,
+      "bytes": 453132,
+      "full_patch_read_claimed": false
+    }
+  },
+  "six_answers_XX": [
+    {
+      "question": "Pourquoi cette solution est-elle nécessaire ?",
+      "answer": "Le contrat autorisé demande brief, garde et rondes sur le même enfant. Les corps de tests montrent les exigences de fin durable, refus sans mutation, remise par ronde et conservation des ACK. Le correctif FR-019 a deux RED réels dans les handlers, puis GREEN ciblé ; aucune tâche de confort proposée."
+    },
+    {
+      "question": "Pourquoi est-elle plus simple ou plus maintenable ?",
+      "answer": "Elle étend Task et ses stores, le registre/droits existant, WaitEpoch, l'arrêt152, l'entretien150 et l'attente151. Elle réutilise validate_and_render et le même Value de schéma handoff. Une transaction de ronde concentre CAS, resets et signaux. L'index historique évite de retrouver une ancienne mission par parcours des tâches. La fixture tardive a quatre usages réels. Aucun nouveau module, moteur ou helper de diagnostic n'est nécessaire."
+    },
+    {
+      "question": "Quelles hypothèses ont été prises ?",
+      "answer": "Identité live et instance correspondent ; l'enfant reste Running sous la même commande attestée ; le contexte et les sources restent valides ; la politique complète reste égale au snapshot en conservant la posture initialement demandée. La garde est valide à une lecture fraîche juste avant les écritures. Le code vérifie ces conditions, sans supposer un ACK ou une mémoire de modèle."
+    },
+    {
+      "question": "Qu'est-ce qui a été vérifié ?",
+      "answer": "Lecture fraîche des réalisations et tests des31FR,17SC,5US, dont production N intégrale, CAS/SQL/rollback,2 chemins de réponse tardive et4 vrais tests de dispatch,12 combinaisons de politique et3 refus, adaptateurs, corps de l'E2E trois rondes. Reçus lus :40lib+1E2E PASS RC0,179lib PASS et179/179 références finales concordantes,195/195 noms+cibles/résultats du workspaceR1,197/200 sources inchangées à l'impact final. Aucun test lancé par cet agent."
+    },
+    {
+      "question": "Qu'est-ce qui n'a pas été vérifié ?",
+      "answer": "Mémoire factuelle d'un modèle réel, UI T3, activation/production, durée murale60s, performance mesurée, couverture et mutation. Le workspace n'a pas été rejoué sur les hashes finaux :R1 reste2145PASS/10FAIL/72ignorés RC101 ; huit échecs historiques sont conservés. SC004 combine preuves quota16/17 et Continue sans création de tâche ; pas de recette de continuation des16 enfants revendiquée."
+    },
+    {
+      "question": "Qu'aurait-on pu supprimer et pourquoi l'avoir conservé ?",
+      "answer": "Aucune suppression supplémentaire à comportement utile constant n'est prouvée :0ligne. Les sept champs portent durée/rejeu/ACK et fin durable ; les faits de vie entière sont conservés. L'index des missions passées permet la capture tardive pure et la purge atomique. Les contrôles de politique/identité, la garde d'horloge fraîche, les oracles stricts et les anciens reçus sont nécessaires à la preuve. holds_slot reste cfg(test), avec neuf assertions dans quatre tests ; son retrait de production est déjà réalisé."
+    }
+  ],
+  "minimalism": {
+    "net_lines_suppressible": 0,
+    "assertion": "Aucune suppression supplémentaire prouvée à comportement constant ; aucun nouvel audit final exécuté.",
+    "retained_reason": "CAS/horloge, fin durable, droits complets et ACK de toutes les rondes répondent aux exigences. Les oracles indépendants et anciens reçus sont conservés."
+  },
+  "limits": [
+    "SC001 : durée murale60s non mesurée.",
+    "SC002 : instance/PID/PGID constants établis avec fournisseur synthétique, mémoire factuelle de modèle réel non vérifiée ; T024 consigne ce non-lancement autorisé.",
+    "SC006 : frontière et arrêt testés avec horloge/tick ; cadence1s lue, délai réel d'arrêt non mesuré.",
+    "SC004 : quota16/17 et continuation sans nouvel insert/spawn constituent des preuves composées ; aucune recette de continuation des16 enfants annoncée.",
+    "WorkspaceR1 antérieur aux trois deltas finaux ; huit échecs hérités conservés. Deux nouveaux défauts et FR019 résolus par vérifications affectées. Aucun GREEN global.",
+    "195 noms/cibles/résultats T001 établis dans workspaceR1 ;179lib revalidés sur binaire final,15 intégrations PASS et1 ignorée maintenues par preuve antérieure et impact explicite.",
+    "Aucun Cargo/test/build/service/modèle/Git mutateur exécuté par cet agent. Performance, couverture/mutation, UI T3 et activation production non vérifiées.",
+    "Confrontation code/tests actuelle ; la capture146hunks est identifiée, aucune relecture intégrale de cette capture fraîche n'est revendiquée par cette Phase6."
+  ],
+  "read_manifest": {
+    "fresh": true,
+    "reused_previous_result_as_fresh": false,
+    "documentary_reads": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/spec.md",
+        "ranges": [
+          [
+            1,
+            333
+          ],
+          [
+            4,
+            32
+          ],
+          [
+            36,
+            113
+          ]
+        ],
+        "note": "Lecture complète pendant préparation, puis fiche finale ; exigences inchangées au gel documentaire."
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/plan.md",
+        "ranges": [
+          [
+            1,
+            228
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/tasks.md",
+        "ranges": [
+          [
+            1,
+            105
+          ],
+          [
+            49,
+            74
+          ]
+        ],
+        "note": "Lecture préparation complète, deltas finaux relus puis empreintes avant/après identiques."
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/checklists/requirements.md",
+        "ranges": [
+          [
+            1,
+            48
+          ],
+          [
+            44,
+            54
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/implementation.md",
+        "ranges": [
+          [
+            1,
+            108
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/validation/tests-153.md",
+        "ranges": [
+          [
+            527,
+            626
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/validation/couplage.md",
+        "ranges": [
+          [
+            107,
+            144
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/docs/delegation-native.md",
+        "ranges": [
+          [
+            65,
+            127
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/.speckit/constitution.md",
+        "ranges": [
+          [
+            466,
+            644
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/.agents/skills/my-specify-all/SKILL.md",
+        "ranges": [
+          [
+            372,
+            404
+          ]
+        ]
+      }
+    ],
+    "source_reads": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "ranges": [
+          [
+            1,
+            2758
+          ],
+          [
+            2764,
+            4531
+          ],
+          [
+            1032,
+            1196
+          ],
+          [
+            2669,
+            2735
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation.rs",
+        "ranges": [
+          [
+            1,
+            277
+          ],
+          [
+            292,
+            480
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage.rs",
+        "ranges": [
+          [
+            1,
+            505
+          ],
+          [
+            335,
+            405
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+        "ranges": [
+          [
+            1144,
+            1485
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+        "ranges": [
+          [
+            185,
+            231
+          ],
+          [
+            454,
+            740
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/daemon.rs",
+        "ranges": [
+          [
+            31058,
+            31315
+          ],
+          [
+            31178,
+            31190
+          ],
+          [
+            5098,
+            5111
+          ],
+          [
+            9153,
+            9198
+          ],
+          [
+            18117,
+            18165
+          ]
+        ],
+        "note": "Troncation31181–31185 corrigée par lecture ciblée."
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "ranges": [
+          [
+            958,
+            1255
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/delegation_mcp.rs",
+        "ranges": [
+          [
+            1,
+            205
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/mcp.rs",
+        "ranges": [
+          [
+            2470,
+            2560
+          ],
+          [
+            3854,
+            3867
+          ],
+          [
+            620,
+            642
+          ],
+          [
+            2110,
+            2127
+          ],
+          [
+            2450,
+            2455
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer.rs",
+        "ranges": [
+          [
+            35,
+            108
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+        "ranges": [
+          [
+            178,
+            247
+          ],
+          [
+            280,
+            314
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-transport/src/protocol.rs",
+        "ranges": [
+          [
+            2010,
+            2088
+          ],
+          [
+            7935,
+            8018
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/wrapper.rs",
+        "ranges": [
+          [
+            5035,
+            5064
+          ],
+          [
+            8119,
+            8130
+          ],
+          [
+            8179,
+            8192
+          ],
+          [
+            8205,
+            8218
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+        "ranges": [
+          [
+            388,
+            411
+          ]
+        ]
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/crates/bridget-daemon/src/handoff.rs",
+        "ranges": [
+          [
+            460,
+            505
+          ]
+        ]
+      }
+    ],
+    "receipt_reads": [
+      "/Users/moi/.cache/bridget-delivery153.46dlquql/t015-t019-native153-corrections-green-r1.json",
+      "/Users/moi/.cache/bridget-delivery153.46dlquql/t021-final-lib-regressions-r1.json",
+      "/Users/moi/.cache/bridget-delivery153.46dlquql/workspace-153-r1-results.json",
+      "/Users/moi/.cache/bridget-delivery153.46dlquql/workspace-153-r1-analysis-v2.json",
+      "/Users/moi/.cache/bridget-delivery153.46dlquql/workspace-153-final-impact.json",
+      "/Users/moi/.cache/bridget-delivery153.46dlquql/baseline153-results.json"
+    ],
+    "receipt_method": "Champs de résultats/RC/durée/stabilité lus,195 comparaisons V2 évaluées et résumées par filtre+cible. Données d'environnement privées non imprimées."
+  },
+  "documentary_ready_observed_by": "2026-10-11T21:04:34Z"
+}

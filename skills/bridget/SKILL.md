@@ -35,7 +35,7 @@ Lire `bridget_task_status` pour consulter sa tâche. Le résultat corrélé revi
 automatiquement au parent. `waiting_for_children` signifie que la mission attend
 encore ses enfants. Une fin de tour seule ne produit pas de résultat.
 `bridget_task_cancel` annule la tâche et sa descendance active. Ces opérations
-refusent les tâches d'un autre parent. Les résultats publiés restent stables.
+refusent les tâches d'un autre parent. Les résultats publiés restent stables par ronde.
 Le catalogue annonce le délai maximal de réponse à la mission. Le reçu donne
 `mission_deadline_at`, la date brute après remise. Un rejeu garde cette date.
 Le délai métier exclut les pauses ; son expiration produit `mission_reply_timeout`.
@@ -72,6 +72,41 @@ Les comportements 149 (héritage, posture facultative) exigent le binaire et les
 processus chargés en version 149. Leur présence dans les sources ne prouve pas leur
 activation dans la session. Le suivi humain passe par `bridget lineage` dans un
 terminal, avec `--t3-thread` et `--project-root` ; ce n'est pas un outil MCP.
+
+### Rondes et brief - contrat153
+
+Pour corriger avec le même enfant, demander `keep_alive_secs` à la délégation :
+entier de 60 à 7 200 secondes. Sans lui, conserver le nettoyage habituel.
+Après le résultat, appeler `bridget_task_continue` avec `task_id`, une nouvelle
+`request_id` et `task`. `brief` est facultatif. Garder exactement la même
+clé et la même enveloppe pour un rejeu. Au plus huit rondes, première comprise.
+Le modèle, le dossier, la posture et l'instance de l'enfant restent les mêmes.
+
+La vue courante ajoute `round`, `idle_deadline_at` et `continuable`.
+L'attente151 porte sur cette ronde. La garde commence à l'envoi du résultat ;
+sa présence ne dispense pas des contrôles de délai, pause, enfant et droits.
+Une source changée ou une politique actuelle différente ferme la continuation.
+
+Pour finir avec cet enfant, employer `bridget_task_cancel`. Sur un résultat
+disponible, le statut et le résultat restent conservés. L'expiration, l'arrêt
+humain, le nettoyage du parent ou le redémarrage du daemon terminent aussi la
+garde. L'enfant inactif tient sa place jusqu'à son arrêt confirmé.
+
+Rédiger `brief` comme le brouillon de `bridget_handoff`, avec `objective`
+et `summary`. Corps rendu : 16 384 octets au plus, sans troncature ; `null`
+et champs inconnus sont refusés. Citer uniquement son contexte autorisé.
+Sources non vérifiées, aucune lecture implicite ; journal plus largement
+lisible que l'enfant, aucun secret. Pour une correction, transmettre un delta utile.
+
+Sept refus ajoutés : `brief_invalid`, `keep_alive_out_of_range`,
+`keep_alive_not_enabled`, `keep_alive_ended`, `round_in_progress`,
+`result_delivery_pending` et `round_limit`. `result_delivery_pending`
+demande de reprendre le même appel après environ une seconde. Une garde terminée
+ne se réouvre pas. Voir la référence des commandes pour les autres refus.
+
+Le même enfant ne garantit pas le souvenir d'un vrai modèle. Le contexte peut
+renforcer un biais. Une contre-revue indépendante exige une nouvelle délégation.
+Vérifier le catalogue de la session ; ce fichier ne prouve pas l'activation153.
 
 ### Pause, panne et annulation - contrat152
 
@@ -317,6 +352,7 @@ l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
 | Demande | Action utile |
 |---|---|
 | « Fais relire ce travail par B » | Envoyer à B le périmètre, les questions et les références utiles, avec `reply:true` et un délai adapté. Ne pas lancer un nouvel agent implicitement. |
+| « Fais corriger puis relire par le même enfant » | Poser la garde à la délégation, puis ouvrir une ronde après chaque résultat avec une clé distincte. Terminer avec `bridget_task_cancel`. Pour une contre-revue indépendante, créer une nouvelle délégation. |
 | « Partage les dernières étapes de A avec B » | `bridget_journal` sur A, extrait borné avec `to:B`. Ajouter `reply:true` seulement si un retour est demandé. |
 | « Préviens-moi quand A finit, maximum 15 minutes » | Vérifier les sources dans `types`, puis `sub` sur A : `turn_ended`, `once:true`, `ttl_secs:900`. |
 | « Prolonge de 10 minutes » / « Arrête la surveillance » | Retrouver l'abonnement par `list`, puis suivre la procédure de remplacement ou `unsub` de la référence. Il n'existe pas d'action `renew`. |

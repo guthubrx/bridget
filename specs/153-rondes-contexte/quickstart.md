@@ -1,7 +1,7 @@
 # Vérification rapide - Session153
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte`.
 
 ## Environnement de test (obligatoire)
 
@@ -9,13 +9,14 @@ Toutes les commandes partent du worktree
 umask 077
 R=$(mktemp -d /tmp/b.XXXX); mkdir -m 700 $R/ns
 env -i HOME=$HOME TMPDIR=$R BRIDGET_HOME=$R/ns \
-  PATH=~/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+  PATH=/opt/homebrew/anaconda3/bin:$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin \
   perl -e 'alarm 1800; exec @ARGV' -- \
-  cargo test -p bridget-daemon --features test-support <filtre> -- --test-threads=4
+  /opt/homebrew/anaconda3/bin/python3 scripts/build.py cargo test --locked --offline \
+    -p bridget-daemon --features test-support <filtre> -- --test-threads=4 --nocapture
 ```
 
 Suite complète avant clôture : même environnement,
-`cargo test --workspace --features bridget-daemon/test-support --no-fail-fast`.
+`/opt/homebrew/anaconda3/bin/python3 scripts/build.py cargo test --locked --offline --workspace --features bridget-daemon/test-support --no-fail-fast`.
 
 ## Scénarios à observer
 
@@ -28,7 +29,7 @@ Suite complète avant clôture : même environnement,
 6. Trois rondes avec un faux enfant : test d'intégration `native_delegation_e2e`
    (filtre `native153_e2e`).
 7. Non-régression : filtres `native148`, `native149`, `native150`,
-   `delegation149`, `spec_103`.
+   `delegation149`, `spec103`, `spec_087`.
 
 ## Recette réelle (mémoire de l'enfant)
 
@@ -36,7 +37,7 @@ Environnement isolé uniquement, sans relance des services de production :
 
 1. Déléguer avec `keep_alive_secs=600` une tâche : « retiens le mot BLEU-7 et
    réponds OK ».
-2. Après le résultat, appeler `bridget_task_continue` avec une nouvelle
+2. Observer au moins60s que l’enfant reste connecté sans arrêt, puis appeler `bridget_task_continue` avec une nouvelle
    `request_id` et la consigne : « quel mot t'ai-je demandé de retenir ? ».
 3. Attendu : l'enfant répond `BLEU-7`, `child_instance` identique, ronde 2.
 4. Appeler `bridget_task_cancel` : l'enfant est arrêté, `status` reste
@@ -44,3 +45,8 @@ Environnement isolé uniquement, sans relance des services de production :
 
 Si la recette réelle n'est pas lancée, la consigner « non vérifié » dans
 `validation/tests-153.md`.
+
+
+La livraison finale est distincte de cette recette privée. Le principal vérifie
+Git, disque et runtime, active de façon coordonnée sans interrompre les autres
+fils T3, puis nettoie le worktree153. Aucun succès actif n'est déduit du seul build.

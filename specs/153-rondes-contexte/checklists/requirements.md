@@ -41,6 +41,14 @@
   de libérer son enfant, redémarrage du daemon, 17e délégation avec 16 enfants
   inactifs, purge d'un arbre avec enfant inactif, brief invalide ou trop gros,
   droits retirés entre deux rondes, échec d'une ronde.
-- Trois questions utilisateur restent ouvertes, chacune avec un défaut noté.
-- Dépendances 151 et 152 : spécifications non encore écrites à la date de cette
-  spec. Points de couplage listés en T001.
+- Choix retenus : garde60–7200s, huit rondes, brief sans historique automatique.
+- Dépendances151 et152 livrées et présentes. Couplage frais consigné dans
+  validation/couplage.md, référence des tests dans validation/baseline.md.
+- Ces cases contrôlent la qualité du contrat. Elles ne déclarent aucun scénario153
+  exécuté ni critère de succès runtime satisfait avant les preuves des tâches.
+
+- Clôture T027 :29/29 ;41 PASS natifs/E2E finaux,179 références lib confirmées,
+  16 intégrations maintenues par preuve/impact. Workspace R1 antérieur et échecs
+  restent distincts. Ces cases de qualité ne prouvent pas un modèle réel,
+  sa mémoire, UI T3 ou activation de production.
+- Converge, audit et livraison restent des phases séparées.

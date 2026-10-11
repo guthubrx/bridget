@@ -41,7 +41,7 @@ Ne pas changer de clé après une issue inconnue.
 Le parent reçoit automatiquement un résultat corrélé à la mission.
 `bridget_task_status` permet aussi de lire l'état durable avec `task_id`.
 Un enfant actif retarde la publication du résultat de son parent.
-Le résultat publié ne change plus. Une fin de tour ne suffit pas à le publier.
+Le résultat publié d'une ronde ne change plus. Une fin de tour ne suffit pas à le publier.
 `bridget_task_cancel` annule sa tâche et ses descendants actifs.
 Le catalogue annonce `mission_reply_limit_secs` (3600 secondes, le défaut),
 `mission_reply_min_secs` (60) et `mission_reply_max_secs` (86 400).
@@ -62,6 +62,78 @@ des descendants avant sa remise. Rejouer la demande retrouve la même tâche.
 La vue courante donne `resume_attempts`, le nombre de décisions de reprise après panne.
 Ce compteur est sauvegardé avant la reprise. Un crash peut donc consommer une
 tentative avant son effet ; il ne permet jamais de dépasser la borne.
+
+## Rondes et brief - contrat153
+
+Pour faire corriger un travail par le même enfant, ajouter `keep_alive_secs`
+à `bridget_delegate`. Ce nombre entier va de 60 à 7 200 secondes. Sans ce
+champ, le nettoyage habituel suit le résultat. Vérifier le catalogue réellement
+chargé : les sources ou fichiers installés ne prouvent pas l'activation153.
+
+Avec cette garde, l'enfant reste disponible après l'envoi de son résultat.
+La tâche reste `result_available`. `idle_deadline_at` indique la fin de la
+garde, calculée dès cet envoi. Ce délai diffère de `reply_timeout`, qui borne
+la réponse à chaque mission. Une lecture ou une attente ne prolonge aucun délai.
+
+Après le résultat, ouvrir la ronde suivante avec le même `task_id` :
+
+```json
+{"name":"bridget_task_continue","arguments":{"task_id":"<task_id rendu>","request_id":"corrections-r2","task":"Corrige les deux défauts signalés et rends les preuves.","brief":{"objective":"Corriger le contrat relu","summary":"La première revue a identifié deux défauts. Applique seulement ces corrections."}}}
+```
+
+Choisir une nouvelle `request_id` pour chaque ronde. Si sa réponse se perd,
+reprendre exactement cette clé et ces arguments. Le rejeu rend la vue courante
+sans ouvrir une ronde de plus, même pendant la pause. Une enveloppe différente
+rend `envelope_mismatch`. Ne pas changer de clé après une issue inconnue.
+
+Une tâche admet au plus huit rondes, première mission comprise. L'enfant,
+son instance, le dossier, le modèle et la posture restent les mêmes.
+Chaque ronde reçoit une mission et un message de résultat distincts. La vue
+de tâche et `bridget_task_wait` concernent la ronde courante. À son ouverture,
+le résultat courant devient vide ; les messages de résultats déjà publiés restent
+distincts. Les lectures seules ne déclarent pas la remise.
+
+Le statut ajoute `round`, `idle_deadline_at` et `continuable`. Ce dernier
+signale un résultat envoyé avec une garde encore présente. L'appel revérifie
+le délai, la présence de l'enfant, la pause, le plafond et les droits. Un
+indicateur vrai ne garantit donc pas l'admission de la prochaine ronde.
+Une source de droits changée ou une politique actuelle différente refuse
+la ronde. Aucun champ de sécurité n'est écarté pour permettre la continuation.
+
+Pour finir, appeler `bridget_task_cancel` avec le `task_id`. Sur un résultat
+disponible, la fin est durable : l'enfant est nettoyé, le statut et le résultat
+sont conservés. Pendant une ronde active, l'annulation habituelle s'applique.
+L'expiration, l'arrêt humain ou le nettoyage du parent terminent aussi la garde.
+Un redémarrage du daemon la termine ; aucune nouvelle ronde n'est alors possible.
+Un enfant inactif tient sa place, parmi les 16 par instance et 128 au total,
+jusqu'à la confirmation de son arrêt.
+
+`brief` est facultatif sur Delegate et Continue. Il suit le brouillon de
+`bridget_handoff` : `objective` et `summary` sont obligatoires. Résultats,
+décisions, questions, prochain pas, références et limites sont facultatifs.
+Le dossier rendu fait au plus 16 384 octets, sans troncature. Un objet invalide,
+un champ inconnu ou `null` est refusé. Le dossier précède la consigne dans
+la même mission ; il n'envoie pas un message de passation séparé.
+
+Rédiger ce dossier depuis son contexte autorisé. Les sources citées ne sont
+pas vérifiées (`sources_not_verified`). Bridget ne les lit pas. Le journal
+peut être lisible plus largement que l'enfant : aucun secret dans le brief.
+Pour une correction, transmettre le delta utile et ses preuves, sans recopier
+tout l'historique.
+
+| Nouveau refus | Suite utile |
+|---|---|
+| `brief_invalid` | Corriger le champ indiqué ; aucune clé n'est consommée. |
+| `keep_alive_out_of_range` | Choisir un entier de 60 à 7 200 à la délégation. |
+| `keep_alive_not_enabled` | Cette tâche n'a pas de garde ; créer une nouvelle délégation si nécessaire. |
+| `keep_alive_ended` | La garde est terminée ou l'enfant est absent ; cette tâche ne peut plus continuer. |
+| `round_in_progress` | Attendre la fin de la ronde courante. |
+| `result_delivery_pending` | Attendre environ une seconde, puis reprendre le même appel et la même clé. |
+| `round_limit` | Huit rondes ont été ouvertes ; créer une nouvelle délégation si nécessaire. |
+
+Le même processus ne garantit pas qu'un vrai modèle se souvienne de tous les
+faits. Le contexte accumulé peut aussi renforcer un biais. Pour une contre-revue
+indépendante, créer une nouvelle délégation avec son propre brief.
 
 ## Attendre un résultat ou une réponse - contrat 151
 
@@ -109,7 +181,7 @@ Il ajoute les champs suivants :
 
 `queued`, `starting`, `mission_pending`, `working` et `cancelling` donnent le même
 `work_state: "working"`. Les quatre autres états gardent leur nom. Le résultat
-publié est figé : deux lectures donnent le même résumé.
+publié est figé pour cette ronde : deux lectures donnent le même résumé.
 
 ### Lire la boîte de fin et déclarer la lecture
 
@@ -477,13 +549,19 @@ retire seulement les arbres nécessaires pour repasser sous 4096, sans limite de
 Un arbre n'est jamais purgé dans ces cas :
 
 - une de ses tâches est active ou son nettoyage n'est pas fini ;
+- une garde reste posée ;
 - un résultat ou un avis d'échec n'a pas été accusé par le destinataire ;
+- un résultat d'une ronde passée n'a pas encore son accusé de remise ;
 - un de ses sous-agents est connecté, routé, en cours de lancement, en cours de
   décommission ou désiré `Running`.
 
 Avant la purge, chaque sous-agent est retiré de la flotte. Une remise indéterminée n'a
 pas d'accusé : elle bloque donc son arbre. Si ces arbres remplissent la borne, la
 délégation est refusée avec `retention_saturated`.
+
+`bridget_task_ack` déclare la lecture du parent. Il ne remplace pas l'accusé
+de remise du message et ne rend pas un arbre purgeable. Une réponse authentifiée
+à une ancienne mission est absorbée sans modifier la tâche ni réveiller le parent.
 
 Après une purge, `bridget_task_status` sur cette tâche rend le refus existant de tâche
 inconnue (`task_unavailable`). La vue Lineage fait une lecture complète sans tâche

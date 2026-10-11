@@ -5,10 +5,10 @@
 
 Spec: 153-rondes-contexte
 Titre: Rondes multiples sur un même enfant et brief de contexte structuré
-Statut: Spécifiée
+Statut: Implemented
 Priorité: P1
-Tâches: 0/29
-Tests: à écrire en rouge d'abord (filtre `native153_`)
+Tâches: 29/29
+Tests:40 natifs +1 E2E PASS ;179 références lib PASS sur binaire final ;16 intégrations maintenues par preuve/impact. Workspace R1 :2145 PASS/10 FAIL/72 ignorés avant correctifs ciblés, aucun GREEN global. Mémoire réelle non vérifiée.
 
 Résumé:
 - Contexte: Un enfant natif est arrêté dès que son résultat est remis (`cancel_tree` au nettoyage). Une revue suivie de corrections puis d'une nouvelle revue oblige à créer un nouvel enfant, sans mémoire. L'enfant ne reçoit qu'une consigne en texte libre.
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-153-rondes-contexte`
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implemented
 **Priority**: P1
 **Dependencies**: SPEC-150, SPEC-151, SPEC-152
 
@@ -176,13 +176,18 @@ garde ses neuf états.
 - **FR-018** : Rejouer une `request_id` déjà admise pour cette tâche et la même
   enveloppe rend la tâche, sans nouvelle ronde, même pendant une pause. Une
   autre enveloppe rend `envelope_mismatch`.
-- **FR-019** : Refus nommés, sans écriture : `round_in_progress` (ronde en
-  cours), `keep_alive_ended` (garde levée, tâche terminale ou enfant absent),
+- **FR-019** : Refus nommés, sans nouvelle ronde, mission ni clé consommée : `round_in_progress` (ronde en
+  cours dont l’enfant reste attesté), `keep_alive_ended` (garde levée, tâche terminale ou enfant absent),
   `keep_alive_not_enabled` (tâche créée sans `keep_alive_secs`),
   `result_delivery_pending` (résultat prêt mais pas encore envoyé par `tick` :
   **refus réessayable**, attendre environ une seconde), `round_limit`
   (8 rondes atteintes), `referent_paused`, `task_unavailable` (autre parent ou
-  tâche purgée).
+  tâche purgée). Les refus et les rejeux ne modifient pas la tâche. Seule exception :
+  si la tâche appartient au demandeur et que sa garde a expiré ou que son enfant
+  est absent, `keep_alive_ended` confirme durablement cette fin (`guard_released`
+  vrai, `idle_deadline_at` vide), sans changer le résultat ni l'état métier.
+  L’absence attestée prime sur `round_in_progress`, même si la ronde est
+  encore active : elle confirme durablement la fin de garde.
 - **FR-020** : Avant d'ouvrir une ronde, Bridget revérifie les droits du parent
   (révocations, grants, instance) et les sources de la politique figée de
   l'enfant, comme au lancement. Une source changée refuse la ronde avec le refus
@@ -276,7 +281,7 @@ garde ses neuf états.
 
 **Entités**
 
-- **Tâche native** : inchangée (SPEC-150). Quatre champs s'ajoutent.
+- **Tâche native** : identité et filiation conservées (SPEC-150). Sept champs s'ajoutent : `round`, `idle_deadline_at`, `round_body`, `rounds`, `guarded`, `guard_released` et `unacked_rounds`.
 - **Ronde** : un cycle consigne, travail de l'enfant, résultat. Une tâche en a 1
   à 8. La ronde courante est portée par la tâche.
 - **Garde** : droit de garder l'enfant vivant entre deux rondes, borné par
@@ -290,21 +295,24 @@ garde ses neuf états.
 
 - SPEC-150 est livrée : `reply_timeout`, `delivery_acked`, purge par arbre,
   `AutonomousEffect::NativeDelegation`, comptages actifs indexés.
-- SPEC-151 livre le résultat structuré, l'attente d'une tâche et la boîte de
+- SPEC-151 est livrée : résultat structuré, attente d'une tâche et boîte de
   fin. SPEC-153 s'y branche par la ronde courante. Les points de couplage sont
   vérifiés en T001.
-- SPEC-152 livre la reprise d'une mission (fait `suspended_at`, chaîne
-  d'exécutions lue par `latest_in_chain`) et le gel des horloges d'une tâche non
-  terminale. Une tâche inactive est terminale et n'a pas de `suspended_at` : son
-  délai d'inactivité n'est pas gelé par une pause. Fin d'un enfant inactif pendant
-  une pause : aucune perte, le résultat est déjà remis.
+- SPEC-152 est livrée : reprise d'une mission et chaîne d'exécutions lue par
+  `latest_in_chain`. Le journal de pause et `pause_overlap` déterminent le gel
+  des échéances métier sans modifier les dates brutes. Le statut `suspended`
+  est dérivé ; aucun champ `suspended_at` n'existe. Une tâche inactive est
+  terminale : son délai d'inactivité n'est pas gelé par une pause. Son résultat
+  reste protégé quand l'enfant se termine pendant une pause.
 - L'enfant garde sa mémoire parce que son processus fournisseur reste vivant.
   La taille de son contexte croît à chaque ronde. Le plafond de 8 rondes limite
   ce risque.
 - Une revue indépendante (sans biais de la ronde précédente) reste un cas pour
   une nouvelle délégation sans garde.
 - Les tests suivent la recette `umask 077` de la session 150.
-- La livraison suit 147 à 150 : fichiers sur disque, sans relance de service.
+- Le principal livre chaque session, puis nettoie son worktree. Il distingue
+  les sources Git, les fichiers installés et le code actif. L'activation est
+  coordonnée pour préserver les autres fils T3.
 
 ## Hors périmètre
 
@@ -319,12 +327,9 @@ garde ses neuf états.
 - Isolation de l'espace de travail (SPEC-154).
 - Questions de l'enfant au parent pendant une ronde (SPEC-155).
 
-## Questions pour l'utilisateur
+## Choix retenus dans le contrat autorisé
 
-1. **Bornes de la garde.** Défaut retenu : `keep_alive_secs` de 60 à 7 200, sans
-   valeur par défaut (absence = pas de garde). Souhaitez-vous un autre plafond ?
-2. **Plafond de rondes.** Défaut retenu : 8 rondes par tâche. Souhaitez-vous une
-   autre valeur ?
-3. **Brief.** Défaut retenu : dossier de passation seul, sans extrait de
-   l'historique du parent. Faut-il aussi un extrait automatique ? (Non retenu :
-   Bridget ne détient pas cet historique.)
+1. `keep_alive_secs` de 60 à 7 200, sans valeur par défaut : absence = pas de garde.
+2. Plafond de huit rondes par tâche.
+3. Brief limité au dossier de passation. Aucun extrait automatique de l'historique
+   du parent, que Bridget ne détient pas.

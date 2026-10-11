@@ -63,9 +63,9 @@ ronde : annulation existante (`cancelling`).
 | `brief_invalid` | delegate, continue | brief refusé par le validateur (message : champ et raison) | aucune ; clé libre |
 | `keep_alive_out_of_range` | delegate | hors 60 à 7 200 | aucune |
 | `keep_alive_not_enabled` | continue | tâche créée sans `keep_alive_secs` | aucune |
-| `round_in_progress` | continue | la ronde courante n'est pas finie | aucune |
+| `round_in_progress` | continue | la ronde courante n'est pas finie et l’enfant reste attesté | aucune |
 | `result_delivery_pending` | continue | résultat prêt (`result_available`) mais pas encore envoyé par `tick` (cadence 1 s). **Réessayable** : refaire le même appel après environ une seconde ; la `request_id` n'est pas consommée | aucune |
-| `keep_alive_ended` | continue | garde levée, tâche `failed` ou `cancelled`, enfant absent, ou `now >= idle_deadline_at` | aucune |
+| `keep_alive_ended` | continue | garde levée, tâche `failed` ou `cancelled`, absence attestée de l’enfant même si la ronde est active (prioritaire sur `round_in_progress`), ou `now >= idle_deadline_at` | aucune ronde, mission ou clé ; seule fin de garde expirée/enfant absent confirmée durablement après contrôle de propriété |
 | `round_limit` | continue | 8 rondes déjà ouvertes | aucune |
 
 Refus réutilisés : `permission_attestation_unavailable` (attestation actuelle absente) et `permission_not_inherited` (politique actuelle du parent plus faible que la politique figée de l'enfant), `referent_paused` (150), `envelope_mismatch`,
@@ -108,3 +108,16 @@ consigne seule sans brief. Résultat de la ronde N >= 2 : identifiant
 Aucun changement de forme. Une ronde ouverte est une mutation visible
 (`result_available` vers `mission_pending`). Le lecteur relit la tâche. La fin
 explicite d'un enfant inactif ne change pas le `status`.
+
+
+Présence de `brief` : omission autorisée ; `null` explicite refuse
+`brief_invalid` pour Delegate et Continue. Le schéma reste celui du dossier
+handoff existant. Aucune variante/alias public supplémentaire.
+La fin durable décrite pour `keep_alive_ended` pose `guard_released` et vide
+`idle_deadline_at` ; elle préserve le résultat et l'état métier (FR-019).
+
+Le refus définitif de fin de garde ou d'enfant absent précède
+result_delivery_pending. Ce refus réessayable ne vise que result_available non
+libéré avant l'envoi. Refus réutilisés de la revalidation :
+cwd_changed, cwd_unavailable et invalid_record. Les contrôles legacy148 de grant
+et de cwd restent obligatoires lorsque le snapshot est absent.

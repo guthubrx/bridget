@@ -1,5 +1,5 @@
 //! Projection des faits de la saga dans le même magasin transactionnel.
-use super::{DelegationStore, Task};
+use super::{DelegationStore, RoundRecord, Task};
 use bridget_transport::protocol::{HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, NativeDelegationRequest};
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -30,9 +30,16 @@ const RETENTION_SECS: i64 = 7 * 24 * 3600;
 const TOMBSTONE_SECS: i64 = 30 * 24 * 3600;
 
 /// Arbre soldé : chaque tâche est terminale et nettoyée, et toute remise due
-/// (résultat ou avis d'échec) est accusée. Une tâche annulée n'attend aucune remise.
+/// (résultat ou avis d'échec) est accusée. L'annulation ne dispense pas des
+/// anciennes rondes non accusées ; aucune garde d'inactivité ne doit rester.
 fn tree_settled(tree: &[Task]) -> bool {
-    tree.iter().all(|t| t.terminal() && t.cleanup_done && (t.state == "cancelled" || t.delivery_acked))
+    tree.iter().all(|t| {
+        t.terminal()
+            && t.cleanup_done
+            && t.idle_deadline_at.is_none()
+            && t.unacked_rounds.is_empty()
+            && (t.state == "cancelled" || t.delivery_acked)
+    })
 }
 
 /// Dernière fin de l'arbre ; `updated_at` pour les tâches 148 sans `completed_at`.
@@ -233,6 +240,11 @@ impl DelegationStore {
             )
             .map_err(|e| e.to_string())?;
             tx.execute(
+                "DELETE FROM native_delegation_past_missions WHERE task_id=?1",
+                [&task.task_id],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
                 "DELETE FROM native_delegations WHERE task_id=?1",
                 [&task.task_id],
             )
@@ -272,6 +284,12 @@ impl DelegationStore {
         // Ces références ne suivent jamais une instance runtime ou un retry.
         task.root_owner_agent_id = old.root_owner_agent_id.clone();
         task.parent_task_id = old.parent_task_id.clone();
+        // La réservation est décidée à l'admission, jamais par une sauvegarde stale.
+        task.guarded = old.guarded;
+        task.guard_released |= old.guard_released;
+        if task.guard_released {
+            task.idle_deadline_at = None;
+        }
         // Seule acknowledge_tasks pose ce fait ; une copie stale ne le remplace pas.
         task.acknowledged_at = old.acknowledged_at;
         let changed = visible_changed(&old, &task)
@@ -298,6 +316,92 @@ impl DelegationStore {
             self.committed(task.root_owner(), mutation)
         }
         Ok(())
+    }
+
+    /// O(log n + log h + B + r), n tâches, h missions passées, B payload, r <= 7.
+    /// La lecture CAS, l'historique et la projection partagent un seul commit.
+    pub fn begin_round(
+        &self,
+        task_id: &str,
+        expected_round: u32,
+        clock: impl FnOnce() -> i64,
+        record: RoundRecord,
+        mission: &str,
+        round_body: &str,
+    ) -> Result<Task, String> {
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let payload: String = tx.query_row(
+            "SELECT payload FROM native_delegations WHERE task_id=?1",
+            [task_id],
+            |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())?.ok_or("task_unavailable")?;
+        let old: Task = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+        if old.round_no() != expected_round {
+            return Err("round_in_progress".into());
+        }
+        if !old.guarded {
+            return Err("keep_alive_not_enabled".into());
+        }
+        if old.guard_released || matches!(old.state.as_str(), "failed" | "cancelled") {
+            return Err("keep_alive_ended".into());
+        }
+        if old.state != "result_available" {
+            return Err("round_in_progress".into());
+        }
+        if !old.result_sent {
+            return Err("result_delivery_pending".into());
+        }
+        let idle_deadline = old.idle_deadline_at.ok_or("keep_alive_ended")?;
+        if expected_round >= 8 || old.rounds.len() >= 7 {
+            return Err("round_limit".into());
+        }
+        if record.round != expected_round + 1 {
+            return Err("invalid_request".into());
+        }
+        let mut next = old.clone();
+        next.round = expected_round + 1;
+        next.mission = mission.into();
+        next.round_body = Some(round_body.into());
+        next.rounds.push(record);
+        if !old.delivery_acked && !next.unacked_rounds.contains(&expected_round) {
+            next.unacked_rounds.push(expected_round);
+        }
+        next.result = None;
+        next.result_sent = false;
+        next.delivery_acked = false;
+        next.acknowledged_at = None;
+        next.failure_sent = false;
+        next.error = None;
+        next.mission_deadline_at = None;
+        next.mission_issued_at = None;
+        next.idle_deadline_at = None;
+        next.cleanup_done = false;
+        next.state = "mission_pending".into();
+        next = stamp(next, Some(&old));
+        // stamp conserve les fins ordinaires ; une nouvelle ronde en ouvre une autre.
+        next.completed_at = None;
+        let payload = serde_json::to_string(&next).map_err(|error| error.to_string())?;
+        // Dernière lecture d'heure avant les écritures, jamais l'heure d'admission.
+        if clock() >= idle_deadline {
+            return Err("keep_alive_ended".into());
+        }
+        tx.execute(
+            "INSERT INTO native_delegation_past_missions(mission,task_id) VALUES(?1,?2)",
+            params![old.mission, task_id],
+        ).map_err(|error| error.to_string())?;
+        let changed = tx.execute(
+            "UPDATE native_delegations SET payload=?2 WHERE task_id=?1 AND max(coalesce(json_extract(payload,'$.round'),0),1)=?3 AND json_extract(payload,'$.state')='result_available'",
+            params![task_id, payload, expected_round],
+        ).map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("round_in_progress".into());
+        }
+        let mutation = increment(&tx).map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+        self.wait_epoch.bump();
+        self.committed(next.root_owner(), mutation);
+        Ok(next)
     }
 
     pub fn lineage_page(&self, root: &str, limit: u32, cursor: Option<&str>, mut journal: impl FnMut(&Task)->bool) -> Result<Value,E> {
@@ -358,13 +462,20 @@ impl DelegationStore {
         let task=self.get(task_id).map_err(|_|E::StoreUnavailable)?.filter(|t|t.root_owner()==root).ok_or(E::TaskUnavailable)?;
         let count:u32=tx.query_row("SELECT count(*) FROM native_delegation_cancel_receipts",[],|r|r.get(0)).map_err(|_|E::StoreUnavailable)?;
         if count>=4096 {return Err(E::ResourceLimit)}
-        let drives=!task.terminal();
+        let drives=!task.terminal() || (task.guarded && task.state=="result_available");
         let mut changed=task.clone();
-        let mutation=if drives && task.state!="cancelling" {
+        if drives {
+            changed.guard_released=true;
+            changed.idle_deadline_at=None;
+        }
+        let state_changed=!task.terminal() && task.state!="cancelling";
+        if state_changed {
             changed.state="cancelling".into();changed=stamp(changed,Some(&task));
+        }
+        if state_changed || changed.guard_released!=task.guard_released || changed.idle_deadline_at!=task.idle_deadline_at {
             tx.execute("UPDATE native_delegations SET payload=?2 WHERE task_id=?1",params![task_id,serde_json::to_string(&changed).map_err(|_|E::StoreUnavailable)?]).map_err(|_|E::StoreUnavailable)?;
-            Some(increment(&tx).map_err(|_|E::StoreUnavailable)?)
-        }else{None};
+        }
+        let mutation=if state_changed {Some(increment(&tx).map_err(|_|E::StoreUnavailable)?)}else{None};
         let receipt=json!({"version":1,"task_id":task_id,"status":changed.state});
         tx.execute("INSERT INTO native_delegation_cancel_receipts(root,request_id,task_id,receipt) VALUES(?1,?2,?3,?4)",params![root,request_id,task_id,receipt.to_string()]).map_err(|_|E::StoreUnavailable)?;
         tx.commit().map_err(|_|E::StoreUnavailable)?;

@@ -1,6 +1,7 @@
 # Recherche - Session153 rondes multiples et contexte transmis
 
-Date : 2026-10-11. Source : lecture du checkout principal non modifié
+Date : 2026-10-11. Les constats R1–R9 et leurs numéros de lignes ci-dessous
+sont historiques (préparation avant livraison152). Source initiale : lecture du checkout principal non modifié
 `/Users/moi/Nextcloud/10.Scripts/64.bridget` (base `1f2c661d`, état 149) et des
 documents de la session 150. Les lignes citées sont celles de cette base. Le code
 du worktree 150 n'a pas été lu : les éléments livrés par 150 sont cités par leur
@@ -161,10 +162,11 @@ spec (`specs/150-socle-delegation/`) et seront relus en T001.
   n'appelle pas `spawn_task`.
 - **Risque** : un grant humain retiré ou un fichier de politique modifié entre
   deux rondes laisserait l'enfant travailler avec l'ancienne politique.
-- **Décision** : la ronde exécute les mêmes contrôles. Les lignes `:535-553`
-  sont extraites dans une fonction `recheck_task_authority`, appelée par
-  `spawn_task` et par `Continue`. Deux usages : l'extraction est justifiée
-  (duplication d'un contrôle de sécurité). Refus : codes existants.
+- **Décision actualisée152** : `native_launch_registry` existe désormais,
+  appelé par lancement et reprise. Continue réutilise cette fonction pour
+  révocations et sources. La comparaison de politique actuelle reste locale
+  à Continue, avec `parent_fact` et `child_policy` ; aucun helper extrait neuf.
+  Comparaison complète, posture demandée conservée, refus existants.
 
 ## R11 - Pause
 
@@ -176,9 +178,10 @@ spec (`specs/150-socle-delegation/`) et seront relus en T001.
 - **Décision** : `Continue` utilise `NativeDelegation`. Le rejeu précède la
   garde de pause, comme en 150.
 - **Limite** : le délai d'inactivité n'est pas gelé pendant une pause en 153.
-  Raison : SPEC-152 pose `suspended_at` seulement sur les états non terminaux
-  (`specs/152-reprise-missions/data-model.md`, lignes 10-24) et repousse
-  `mission_deadline_at` à la levée. Une tâche inactive est terminale. Un enfant
+  Raison actualisée152 : le journal de pause (`pause_overlap`) détermine le
+  gel des échéances métier non terminales à la lecture, sans réécrire les dates
+  brutes. `suspended` est dérivé ; `suspended_at` n'existe pas. Une tâche
+  inactive est terminale. Un enfant
   peut donc expirer pendant une longue pause. Aucun résultat n'est perdu (déjà
   remis). Le parent peut déléguer de nouveau. Geler aussi cette garde demanderait
   de mesurer la durée de pause pour des tâches terminales : rejeté (Art. XIX).
@@ -251,3 +254,28 @@ Voir `adversarial-review-codex.md`. Effets sur la recherche :
 - `tick` : la garde ajoute une comparaison par tâche en attente, déjà
   parcourue : O(p), p = tâches en attente (≤ 4096).
 - Pas de boucle imbriquée sur une même collection. Pas de N+1.
+
+
+## R15 — Réemploi frais après livraison152 (base ee03ebdc)
+
+Passage unique de lecture du code WT153, avec cartes exactes dans
+`validation/couplage.md` et arbitrages dans `reuse-audit.md`.
+`deserialize_present_optional` préserve brief:null ; `validate_and_render`
+est public(crate). L'index de quota garde son nom et son préfixe state : migration
+Immediate de l'ancienne définition reconnue, pas d'index concurrent ni scan des
+terminaux. `native_launch_registry` existe ; comparaison complète de politique
+actuelle locale à Continue. Schéma handoff Value réutilisé aux deux adaptateurs.
+
+`begin_round` est nécessaire car `save_projected` conserve les dates terminales
+et l'accusé151. Remettre uniquement les champs de ronde à zéro ; conserver
+`restart_resumes` (plafond2 vie entière), `launch_issued_at` et `started_at`.
+Ronde1 garde l'identifiant historique ; les quatre consommateurs de résultat
+doivent consulter la ronde courante, y compris la boîte151. ACK151 de lecture et
+ACK150 de livraison restent deux preuves distinctes.
+
+La reprise152 des rondes actives, les refus d'identité/CAS/stockage et les sources
+attestées sont préservés. `pause_overlap` gèle l'échéance métier, pas la minuterie
+de l'appelant151 ni la garde terminale153. Coûts de corps O(B) et recontrôles de
+politique/registre/sources à compter séparément ; O(log n + r) ne décrit que les
+lectures et le rejeu local, r≤7. Coût quota O(log n + a), a≤128, total150 séparé.
+Aucune performance mesurée ni implémentation153 déclarée par cette lecture.

@@ -626,6 +626,7 @@ fn execute_tool_at_with_identity(
     match name {
         "bridget_capabilities"
         | "bridget_delegate"
+        | "bridget_task_continue"
         | "bridget_task_status"
         | "bridget_task_wait"
         | "bridget_task_ack"
@@ -2106,7 +2107,17 @@ fn initialize_result() -> Value {
     })
 }
 
-fn tools() -> Vec<Value> {
+pub(crate) fn tools() -> Vec<Value> {
+    let brief_schema = json!({"type":"object","properties":{
+        "objective":{"type":"string","minLength":1,"maxLength":1024},
+        "summary":{"type":"string","minLength":1,"maxLength":8192},
+        "results":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2048},"evidence":{"type":"string","minLength":1,"maxLength":2048}},"required":["text"],"additionalProperties":false}},
+        "decisions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
+        "questions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
+        "next_step":{"type":"string","minLength":1,"maxLength":2048},
+        "references":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":{"type":"string","minLength":1,"maxLength":256},"host":{"type":"string"},"path":{"type":"string"},"url":{"type":"string"},"id":{"type":"string"},"target":{"type":"string"},"agent":{"type":"string"},"thread_id":{"type":"string"},"artifact_id":{"type":"string"},"version_id":{"type":"string"},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","label"],"additionalProperties":false}},
+        "limitations":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}}
+    },"required":["objective","summary"],"additionalProperties":false});
     let mut catalogue = vec![
         json!({"name":"bridget_request_wait","description":"Attend la réponse de sa demande suivie sans la renvoyer ni modifier son état. Si l'hôte coupe l'appel, reprendre avec le même request_id. La réponse peut aussi arriver par le message normal.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1},"wait_timeout":{"type":"integer","minimum":1,"maximum":crate::delegation_mcp::WAIT_TIMEOUT_MAX_SECS,"default":crate::delegation_mcp::WAIT_TIMEOUT_DEFAULT_SECS}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({
@@ -2193,16 +2204,7 @@ fn tools() -> Vec<Value> {
             "description": "Dossier de passation rédigé par l'agent (objectif et résumé obligatoires ; résultats, décisions, questions, prochain pas, références, limites facultatifs). preview valide et rend le corps sans rien envoyer ; send transmet le corps exact au destinataire UUID par l'envoi idempotent habituel (id et issued_at à réutiliser à l'identique pour rejouer). Aucune source n'est lue ni certifiée ; conservation du journal (sept jours par défaut) ; pas de confidentialité au-delà du ledger. Corps ≤ 16 Kio, refusé plutôt que tronqué. Le schéma est indicatif : le validateur du dossier fait autorité (octets UTF-8, chaînes non blanches, champs inconnus et null refusés).",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["preview","send"]},
-                "draft":{"type":"object","properties":{
-                    "objective":{"type":"string","minLength":1,"maxLength":1024},
-                    "summary":{"type":"string","minLength":1,"maxLength":8192},
-                    "results":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2048},"evidence":{"type":"string","minLength":1,"maxLength":2048}},"required":["text"],"additionalProperties":false}},
-                    "decisions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
-                    "questions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
-                    "next_step":{"type":"string","minLength":1,"maxLength":2048},
-                    "references":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":{"type":"string","minLength":1,"maxLength":256},"host":{"type":"string"},"path":{"type":"string"},"url":{"type":"string"},"id":{"type":"string"},"target":{"type":"string"},"agent":{"type":"string"},"thread_id":{"type":"string"},"artifact_id":{"type":"string"},"version_id":{"type":"string"},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","label"],"additionalProperties":false}},
-                    "limitations":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}}
-                },"required":["objective","summary"],"additionalProperties":false},
+                "draft":brief_schema,
                 "to":{"type":"string","minLength":36,"maxLength":36},
                 "reply":{"type":"boolean","default":false},
                 "reply_timeout":{"type":"integer","minimum":1},
@@ -2448,7 +2450,7 @@ fn tools() -> Vec<Value> {
             }
         }),
     ];
-    catalogue.extend(crate::delegation_mcp::tools());
+    catalogue.extend(crate::delegation_mcp::tools(&brief_schema));
     catalogue
 }
 
@@ -2467,14 +2469,77 @@ mod tests {
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
     #[test]
+    fn native153_mcp_continue_catalogue_et_champs_fermes() {
+        let catalogue = tools();
+        let handoff_schema = &catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_handoff")
+            .unwrap()["inputSchema"]["properties"]["draft"];
+        for (name, args) in [
+            (
+                "bridget_delegate",
+                json!({"request_id":"r","agent_type":"a","model":"m","task":"t","cwd":"/c","parent":"forged"}),
+            ),
+            (
+                "bridget_task_continue",
+                json!({"task_id":"child","request_id":"r","task":"t","parent":"forged"}),
+            ),
+        ] {
+            let tool = catalogue.iter().find(|tool| tool["name"] == name).unwrap();
+            let schema = &tool["inputSchema"];
+            assert_eq!(&schema["properties"]["brief"], handoff_schema);
+            assert_eq!(schema["additionalProperties"], false);
+            assert!(
+                tool["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("sources_not_verified")
+            );
+            assert!(matches!(
+                execute_tool_at(
+                    "owner",
+                    name,
+                    args.as_object().unwrap(),
+                    Path::new("/missing-rounds153")
+                ),
+                Err(ToolError::InvalidParams(message)) if message == "champ inconnu"
+            ));
+        }
+        let continuation = catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_task_continue")
+            .unwrap();
+        assert_eq!(
+            continuation["inputSchema"]["required"],
+            json!(["task_id", "request_id", "task"])
+        );
+        assert_eq!(
+            continuation["annotations"],
+            json!({"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true})
+        );
+        let delegate = catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_delegate")
+            .unwrap();
+        let duration = &delegate["inputSchema"]["properties"]["keep_alive_secs"];
+        assert_eq!(duration["type"], "integer");
+        assert_eq!(duration["minimum"], 60);
+        assert_eq!(duration["maximum"], 7200);
+    }
+
+    #[test]
     fn native151_ack_facade_schema_ferme_bornes_et_annotations() {
         let catalogue = tools();
         let ack = catalogue
             .iter()
             .find(|tool| tool["name"] == "bridget_task_ack")
             .expect("outil ACK informatif publié");
-        assert_eq!(catalogue.len(), 27);
-        assert_eq!(crate::delegation_mcp::tools().len(), 6);
+        assert_eq!(catalogue.len(), 28);
+        let brief_schema = &catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_handoff")
+            .unwrap()["inputSchema"]["properties"]["draft"];
+        assert_eq!(crate::delegation_mcp::tools(brief_schema).len(), 7);
         let schema = &ack["inputSchema"];
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["task_ids"]));
@@ -3792,7 +3857,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    27
+                    28
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -4076,6 +4141,7 @@ mod tests {
         let expected = [
             "bridget_capabilities",
             "bridget_delegate",
+            "bridget_task_continue",
             "bridget_task_status",
             "bridget_task_wait",
             "bridget_task_ack",

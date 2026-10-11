@@ -3,6 +3,7 @@ use super::*;
 use crate::delegation::Task;
 use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, SpawnPosture};
 use serde_json::{Value, json};
+use sha2::Digest;
 use std::path::Path;
 const MISSION_REPLY_LIMIT_SECS: i64 = 3600;
 const WAIT_DEFAULT_SECS: u64 = 600;
@@ -37,6 +38,9 @@ impl ParentPermission {
 }
 
 fn failure(code: &str) -> Value {
+    if let Some(message) = code.strip_prefix("brief_invalid:") {
+        return json!({"status":"refused","code":"brief_invalid","message":message});
+    }
     json!({"status":"refused","code":code})
 }
 
@@ -180,6 +184,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "child_agent_id":task.child,"message_id":task.mission,
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
         "mission_deadline_at":task.mission_deadline_at,
+        "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.continuable(),
         "result":if full {body} else {None},"error":task.error,
         "work_state":work_state,"summary":summary,
         "summary_truncated":body.zip(summary).is_some_and(|(body, summary)| body.len() > summary.len()),
@@ -196,15 +201,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
 fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value, String> {
     let phase =
         if matches!(task.state.as_str(), "result_available" | "failed") && !task.delivery_acked {
-            let prefix = if task.state == "failed" {
-                "native-failure-"
+            let message_id = if task.state == "failed" {
+                format!("native-failure-{}", task.task_id)
             } else {
-                "native-result-"
+                task.result_message_id()
             };
             let key = IdempotencyKey::new(
                 &crate::communication::issuer_scope(&task.task_id),
                 OperationKind::Send,
-                &format!("{prefix}{}", task.task_id),
+                &message_id,
             )
             .map_err(|e| e.to_string())?;
             st.idempotency
@@ -488,14 +493,25 @@ fn handle_with_fact(
         };
     }
     // Résoudre Git hors du verrou, puis comparer avec le fait vivant au puits.
-    let candidate_project = if let NativeDelegationRequest::Delegate { cwd, .. } = &request {
-        let host = state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .host
-            .clone();
+    let (host, project_cwd) = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let cwd = match &request {
+            NativeDelegationRequest::Delegate { cwd, .. } => Some(cwd.clone()),
+            NativeDelegationRequest::Continue { task_id, .. } => {
+                // Ce calcul n'est qu'un candidat Git. La propriété, les erreurs
+                // de magasin et le rejeu sont contrôlés ensuite dans leur ordre.
+                st.delegation_store.get(task_id).ok().flatten()
+                    .filter(|task| live_connection_identity(&st, conn)
+                        .is_some_and(|(owner, _)| task.owner == owner))
+                    .map(|task| task.cwd)
+            }
+            _ => None,
+        };
+        (st.host.clone(), cwd)
+    };
+    let candidate_project = if let Some(cwd) = project_cwd {
         crate::communication::resolve_communication_project(
-            cwd,
+            &cwd,
             &host,
             bridget_transport::protocol::CommunicationProjectSource::Git,
             None,
@@ -507,7 +523,7 @@ fn handle_with_fact(
         &request,
         NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::Cancel { .. }
     );
-    let result = {
+    let (result, drives) = {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(thread) = thread {
             let owner = crate::t3code::stable_uuid(thread);
@@ -524,7 +540,11 @@ fn handle_with_fact(
                 };
             }
         }
-        match handle_locked_with_project(
+        // Parmi les Continue réussis, seul begin_round écrit. Le compteur est
+        // lu avant/après sous le même verrou en O(1), sans tick sur un rejeu.
+        let previous_epoch = matches!(&request, NativeDelegationRequest::Continue { .. })
+            .then(|| st.delegation_store.wait_epoch().get());
+        let result = match handle_locked_with_project(
             conn,
             request,
             candidate_project.as_ref(),
@@ -533,7 +553,10 @@ fn handle_with_fact(
         ) {
             Ok(result) => result,
             Err(code) => failure(&code),
-        }
+        };
+        let drives = drives
+            || previous_epoch.is_some_and(|seen| st.delegation_store.wait_epoch().get() != seen);
+        (result, drives)
     };
     // Un refus ne crée ni ne modifie aucune tâche active : il ne doit pas faire
     // avancer les autres tâches (une purge de borne éventuelle ne retire que des arbres soldés).
@@ -702,7 +725,7 @@ fn handle_locked_with_project(
                         "development_refusal":development.err()})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS}),
+                json!({"version":1,"providers":entries,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
         NativeDelegationRequest::Delegate {
@@ -714,6 +737,8 @@ fn handle_locked_with_project(
             cwd,
             posture,
             reply_timeout,
+            keep_alive_secs,
+            brief,
         } => {
             if request_id.is_empty()
                 || request_id.len() > 128
@@ -728,6 +753,14 @@ fn handle_locked_with_project(
             }) {
                 return Err("reply_timeout_out_of_range".into());
             }
+            if keep_alive_secs.is_some_and(|secs| !(60..=7200).contains(&secs)) {
+                return Err("keep_alive_out_of_range".into());
+            }
+            let round_body = brief.as_ref().map(|draft| {
+                crate::handoff::validate_and_render(draft)
+                    .map(|rendered| format!("{}\n\n--- Consigne ---\n{task}", rendered.body))
+                    .map_err(|error| format!("brief_invalid:{error}"))
+            }).transpose()?;
             let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
             if let Some(mut saved) = st
                 .delegation_store
@@ -922,6 +955,13 @@ fn handle_locked_with_project(
                     reply_timeout: reply_timeout.and_then(|secs| i64::try_from(secs).ok()),
                     delivery_acked: false,
                     acknowledged_at: None,
+                    round: 1,
+                    idle_deadline_at: None,
+                    round_body,
+                    rounds: Vec::new(),
+                    guarded: keep_alive_secs.is_some(),
+                    guard_released: false,
+                    unacked_rounds: Vec::new(),
                 };
                 st.delegation_store
                     .insert(&record, request_id, &canonical)?;
@@ -956,7 +996,11 @@ fn handle_locked_with_project(
                 .get(task_id)?
                 .ok_or("task_unavailable")?;
             recover_owner(st, &mut task, &owner, &instance)?;
-            if !matches!(task.state.as_str(), "cancelled" | "result_available") {
+            if task.guarded && task.state == "result_available" {
+                task.guard_released = true;
+                task.idle_deadline_at = None;
+                st.delegation_store.save(&task)?;
+            } else if !matches!(task.state.as_str(), "cancelled" | "result_available") {
                 task.state = "cancelling".into();
                 st.delegation_store.save(&task)?;
             }
@@ -985,6 +1029,165 @@ fn handle_locked_with_project(
             Ok(json!({"version":1,"acknowledged":acknowledged,"already":already}))
         }
         NativeDelegationRequest::Wait { .. } => Err("wait_unsupported".into()),
+        NativeDelegationRequest::Continue {
+            task_id,
+            request_id,
+            task,
+            brief,
+        } => {
+            // Lookup/rejeu O(log n + r), r <= 7 ; rendu, canon et SHA O(B).
+            // Les recontrôles de flotte et de sources gardent les coûts documentés
+            // de restart_identity et native_launch_registry, plus le JSON de politique.
+            if request_id.is_empty()
+                || request_id.len() > 128
+                || request_id.chars().any(bridget_core::is_disallowed_control)
+                || task.trim().is_empty()
+                || task.len() > 65536
+            {
+                return Err("invalid_request".into());
+            }
+            let round_body = if let Some(draft) = brief {
+                let rendered = crate::handoff::validate_and_render(draft)
+                    .map_err(|error| format!("brief_invalid:{error}"))?;
+                format!("{}\n\n--- Consigne ---\n{task}", rendered.body)
+            } else {
+                task.clone()
+            };
+            let mut saved = st
+                .delegation_store
+                .get(task_id)?
+                .ok_or("task_unavailable")?;
+            if !can_own_task(st, &saved, &owner, &instance)? {
+                return Err("task_unavailable".into());
+            }
+            let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+            let digest = format!("{:x}", sha2::Sha256::digest(&canonical));
+            if let Some(record) = saved
+                .rounds
+                .iter()
+                .find(|record| &record.request_id == request_id)
+            {
+                if record.digest != digest {
+                    return Err("envelope_mismatch".into());
+                }
+                return current_task_view(st, &saved, true);
+            }
+            let control = crate::referent_control::read(st.store.connection())
+                .map_err(|_| "control_state_unavailable")?;
+            if matches!(
+                crate::referent_control::admit_autonomous_effect(
+                    crate::referent_control::AutonomousEffect::NativeDelegation,
+                    &control
+                ),
+                crate::referent_control::Admission::Deferred { .. }
+            ) {
+                return Err("referent_paused".into());
+            }
+            let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
+            if saved.permission_snapshot.is_none() {
+                root_permission(st, &owner, &instance)?.ok_or("delegation_grant_required")?;
+            }
+            if !saved.guarded {
+                return Err("keep_alive_not_enabled".into());
+            }
+            if saved.guard_released || matches!(saved.state.as_str(), "failed" | "cancelled") {
+                return Err("keep_alive_ended".into());
+            }
+            let child_live = match (&saved.child_instance, st.router.get_agent(&saved.child)) {
+                (Some(child_instance), Some(route))
+                    if live_connection_identity(st, &route.connection_id)
+                        == Some((saved.child.clone(), child_instance.clone())) =>
+                {
+                    if st
+                        .fleet
+                        .desired_entry(&saved.child)
+                        .map_err(|error| error.to_string())?
+                        .is_some_and(|entry| {
+                            entry.lifecycle_state == DesiredLifecycleState::Running
+                        })
+                    {
+                        match restart_identity(st, &saved) {
+                            Ok(identity) => {
+                                identity.instance_id == *child_instance
+                                    && st.managed_by_instance.get(child_instance)
+                                        == Some(&identity.command_id)
+                            }
+                            Err(code) if code == "native_restart_identity_mismatch" => false,
+                            Err(error) => return Err(error),
+                        }
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+            if !child_live
+                || saved
+                    .idle_deadline_at
+                    .is_some_and(|deadline| unix_timestamp() >= deadline)
+            {
+                saved.guard_released = true;
+                saved.idle_deadline_at = None;
+                st.delegation_store.save(&saved)?;
+                return Err("keep_alive_ended".into());
+            }
+            if saved.state != "result_available" {
+                return Err("round_in_progress".into());
+            }
+            if !saved.result_sent {
+                return Err("result_delivery_pending".into());
+            }
+            if saved.round_no() >= 8 {
+                return Err("round_limit".into());
+            }
+            let registry = native_launch_registry(st, &saved)?;
+            let NativeDelegationRequest::Delegate {
+                agent_type,
+                posture,
+                ..
+            } = &saved.request
+            else {
+                return Err("invalid_record".into());
+            };
+            if let Some(snapshot) = &saved.permission_snapshot {
+                let fact = fact.as_ref().ok_or("permission_attestation_unavailable")?;
+                let (policy, _) = crate::native_permissions::child_policy(
+                    fact,
+                    registry.get(agent_type)?,
+                    Path::new(&saved.cwd),
+                    &st.source_env,
+                    *posture,
+                )?;
+                if policy != snapshot.child_policy {
+                    return Err("permission_not_inherited".into());
+                }
+            } else {
+                authorize_cwd(
+                    st,
+                    &owner,
+                    &instance,
+                    &saved.cwd,
+                    saved
+                        .effective_posture
+                        .or(*posture)
+                        .unwrap_or(SpawnPosture::Discovery),
+                    candidate_project,
+                )?;
+            }
+            let next = st.delegation_store.begin_round(
+                task_id,
+                saved.round_no(),
+                unix_timestamp,
+                crate::delegation::RoundRecord {
+                    round: saved.round_no() + 1,
+                    request_id: request_id.clone(),
+                    digest,
+                },
+                &Uuid::new_v4().to_string(),
+                &round_body,
+            )?;
+            current_task_view(st, &next, true)
+        }
         NativeDelegationRequest::Grant { .. } => unreachable!(),
     }
 }
@@ -1152,7 +1355,7 @@ pub(super) fn authorize_retained_result(
     let child_instance = task.child_instance.as_ref().ok_or_else(invalid)?;
     if task.state != "result_available" || task.result.as_deref() != Some(message.body.as_str())
         || message.body.trim().is_empty() || message.body.len() > 262144
-        || message.id != format!("native-result-{}", task.task_id)
+        || message.id != task.result_message_id()
         || message.from != task.child || message.to != task.owner
         || message.in_reply_to.as_deref() != Some(task.mission.as_str())
         || message.reply || message.intent.is_some()
@@ -1255,7 +1458,14 @@ pub(super) fn capture_reply(
         return Ok(false);
     };
     let Some(mut task) = st.delegation_store.for_mission(correlation)? else {
-        return Ok(false);
+        // Une ancienne ronde est absorbée seulement sous l'identité courante
+        // de cet enfant. Cette lecture ne répare aucun lien ni checkpoint.
+        let Some(past) = st.delegation_store.past_mission_task(correlation)? else {
+            return Ok(false);
+        };
+        return Ok(past.child == message.from && past.owner == message.to
+            && past.child_instance.as_ref().is_some_and(|instance|
+                live_connection_identity(st, conn) == Some((past.child.clone(), instance.clone()))));
     };
     if task.child != message.from
         || task.owner != message.to
@@ -1491,6 +1701,11 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
     let mut tasks = st.delegation_store.tasks()?;
     tasks.sort_by_key(|task| task.state == "queued");
     for mut task in tasks {
+        if task.guarded && (!task.guard_released || task.idle_deadline_at.is_some()) {
+            task.guard_released = true;
+            task.idle_deadline_at = None;
+            st.delegation_store.save(&task)?;
+        }
         if task.state == "failed" {
             // Une feuille encore active d'une mission déjà échouée ne doit
             // pas retenir le résultat acquis de sa racine après la panne.
@@ -1596,6 +1811,18 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         for mut task in tasks.iter().cloned() {
             if control.paused && matches!(task.state.as_str(), "queued" | "starting" | "mission_pending" | "working") {
                 continue;
+            }
+            // O(1) par tâche : l'expiration conserve l'état et le résultat.
+            if task.state == "result_available"
+                && task.idle_deadline_at.is_some_and(|deadline| unix_timestamp() >= deadline)
+            {
+                task.guard_released = true;
+                task.idle_deadline_at = None;
+                if let Err(error) = st.delegation_store.save(&task) {
+                    error!("fin de garde native non persistée: {error}");
+                    continue;
+                }
+                info!("keep_alive_expired: {}", task.task_id);
             }
             if task.state == "cancelling" {
                 match cancellation_root(&st, &task) {
@@ -1721,7 +1948,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             if task.state == "cancelled" {
                 continue;
             }
-            if task.state == "result_available" && task.result_sent && !task.cleanup_done {
+            if task.state == "result_available" && task.result_sent && !task.cleanup_done
+                && task.idle_deadline_at.is_none()
+            {
                 cleanups.push(task);
                 continue;
             }
@@ -1800,7 +2029,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 if task.child_instance.is_none() {
                     continue;
                 }
-                let mut message = bridget_core::BridgetMessage::new(&task.owner, &task.child, body);
+                let mut message = bridget_core::BridgetMessage::new(
+                    &task.owner, &task.child, task.round_body.as_deref().unwrap_or(body),
+                );
                 message.id = task.mission.clone();
                 message.reply = true;
                 message.reply_timeout = u64::try_from(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).ok();
@@ -1921,7 +2152,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     &task.owner,
                     task.result.as_deref().unwrap_or(""),
                 );
-                response.id = format!("native-result-{}", task.task_id);
+                response.id = task.result_message_id();
                 response.in_reply_to = Some(task.mission.clone());
                 // Même un replay vérifie la tâche durable et son destinataire
                 // actuel avant de consulter la clé idempotente existante.
@@ -1947,8 +2178,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 {
                     task.result_sent = true;
                     task.error = None;
+                    if task.guarded && !task.guard_released
+                        && let NativeDelegationRequest::Delegate { keep_alive_secs: Some(secs), .. } = &task.request
+                    {
+                        // Même sauvegarde que result_sent ; durée bornée à l'admission.
+                        task.idle_deadline_at = Some(unix_timestamp().saturating_add(*secs as i64));
+                    }
                     if st.delegation_store.save(&task).is_err() {
                         task.result_sent = false;
+                        task.idle_deadline_at = None;
                     }
                 } else {
                     match result {
@@ -1988,7 +2226,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     let _ = st.delegation_store.save(&task);
                 }
             }
-            if task.state == "result_available" && task.result_sent && !task.cleanup_done {
+            if task.state == "result_available" && task.result_sent && !task.cleanup_done
+                && task.idle_deadline_at.is_none()
+            {
                 cleanups.push(task);
             }
         }
@@ -2224,13 +2464,21 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
             }
             return;
         }
-        // Tous les membres sont classés. Aucun résultat/échec terminal n'est marqué.
+        // Tous les membres sont classés. La fin de garde est durable avant
+        // les arrêts, même pour les tâches actives ou le résultat non remis.
         for entry in &mut tasks {
+            let guard_changed = entry.guarded && (!entry.guard_released || entry.idle_deadline_at.is_some());
+            if guard_changed {
+                entry.guard_released = true;
+                entry.idle_deadline_at = None;
+            }
             if !entry.terminal() && entry.state != "cancelling" {
                 entry.state = "cancelling".into();
                 if st.delegation_store.save(entry).is_err() {
                     return;
                 }
+            } else if guard_changed && st.delegation_store.save(entry).is_err() {
+                return;
             }
         }
         (
@@ -2410,33 +2658,72 @@ pub(super) fn purge_retained(st: &DaemonState, now: i64, bound: Option<usize>, m
 
 /// Recopie l'accusé des remises natives dans la tâche (`delivery_acked`), preuve
 /// durable que `purge_expired_sends` ne peut plus effacer (R2.2). Lit la phase de
-/// `native-result-<task>` ou `native-failure-<task>` sous `issuer_scope(task_id)`.
+/// l'identifiant de résultat de chaque ronde ou `native-failure-<task>` sous
+/// `issuer_scope(task_id)`, avant que les remises puissent être purgées.
 /// Sans lot : le total de tâches est borné à 4096. Une remise indéterminée ou
 /// effacée ne produit aucune preuve : l'arbre reste conservé. Rend le nombre de
 /// preuves recopiées, ou une erreur dès qu'une lecture ou une écriture échoue :
 /// l'appelant ne doit alors pas effacer les remises.
-/// Complexité : O(n log n) — n ≤ 4096 tâches, une lecture indexée par tâche en attente.
+/// Complexité : O(n r log d + B), n <= 4096 tâches, r <= 8 rondes,
+/// d remises indexées et B octets de payloads lus/sauvegardés.
 pub(super) fn copy_delivery_acks(st: &DaemonState) -> Result<usize, String> {
     let mut copied = 0;
-    for mut task in st.delegation_store.tasks()?.into_iter().filter(|task| !task.delivery_acked) {
-        let prefix = match task.state.as_str() {
-            "result_available" if task.result_sent => "native-result-",
-            "failed" if task.failure_sent => "native-failure-",
-            _ => continue,
-        };
-        let key = IdempotencyKey::new(
-            &crate::communication::issuer_scope(&task.task_id),
-            OperationKind::Send,
-            &format!("{prefix}{}", task.task_id),
-        )
-        .map_err(|error| error.to_string())?;
-        let phase = st.idempotency.send_delivery_phase(&key).map_err(|error| error.to_string())?;
-        if phase.as_deref() != Some("acked") {
-            continue;
+    for mut task in st
+        .delegation_store
+        .tasks()?
+        .into_iter()
+        .filter(|task| !task.delivery_acked || !task.unacked_rounds.is_empty())
+    {
+        let scope = crate::communication::issuer_scope(&task.task_id);
+        let mut proofs = 0;
+        if !task.delivery_acked {
+            let message_id = match task.state.as_str() {
+                "result_available" if task.result_sent => Some(task.result_message_id()),
+                "failed" if task.failure_sent => Some(format!("native-failure-{}", task.task_id)),
+                _ => None,
+            };
+            if let Some(message_id) = message_id {
+                let key = IdempotencyKey::new(&scope, OperationKind::Send, &message_id)
+                    .map_err(|error| error.to_string())?;
+                if st
+                    .idempotency
+                    .send_delivery_phase(&key)
+                    .map_err(|error| error.to_string())?
+                    .as_deref()
+                    == Some("acked")
+                {
+                    task.delivery_acked = true;
+                    proofs += 1;
+                }
+            }
         }
-        task.delivery_acked = true;
-        st.delegation_store.save(&task).map_err(|error| format!("accusé de {} non persisté : {error}", task.task_id))?;
-        copied += 1;
+        let mut unacked = Vec::with_capacity(task.unacked_rounds.len());
+        for round in &task.unacked_rounds {
+            let key = IdempotencyKey::new(
+                &scope,
+                OperationKind::Send,
+                &task.result_message_id_for_round(*round),
+            )
+            .map_err(|error| error.to_string())?;
+            if st
+                .idempotency
+                .send_delivery_phase(&key)
+                .map_err(|error| error.to_string())?
+                .as_deref()
+                == Some("acked")
+            {
+                proofs += 1;
+            } else {
+                unacked.push(*round);
+            }
+        }
+        if proofs > 0 {
+            task.unacked_rounds = unacked;
+            st.delegation_store
+                .save(&task)
+                .map_err(|error| format!("accusé de {} non persisté : {error}", task.task_id))?;
+            copied += proofs;
+        }
     }
     Ok(copied)
 }
@@ -2473,6 +2760,1772 @@ mod tests {
     use std::path::Path;
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
 
+    #[test]
+    fn native153_brief_invalide_sans_tache_ni_cle() {
+        let (st, config, _rx, _reader) = fixture("brief-invalid");
+        let shared = Arc::new(Mutex::new(st));
+        for brief in [
+            json!({"objective":"o","summary":"s","unknown":true}),
+            json!({"objective":" ","summary":"s"}),
+            json!({"summary":"s"}),
+        ] {
+            let expected = crate::handoff::validate_and_render(&brief).unwrap_err().to_string();
+            let mut payload = serde_json::to_value(request("brief-invalid")).unwrap();
+            payload["brief"] = brief;
+            let decoded = serde_json::from_value(payload).unwrap();
+            let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", decoded, &shared) else {
+                panic!("réponse native attendue")
+            };
+            assert_eq!(result["code"], "brief_invalid", "refus public nommé : {result}");
+            assert_eq!(result["message"], expected, "champ et raison du validateur existant");
+            assert!(shared.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        }
+        let mut payload = serde_json::to_value(request("brief-invalid")).unwrap();
+        payload["brief"] = json!({"objective":"o","summary":"s"});
+        let mut st = shared.lock().unwrap();
+        handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1, "clé libre après refus");
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_brief_null_delegate_sur_le_fil() {
+        let (mut st, config, _rx, _reader) = fixture("brief-null");
+        let mut payload = serde_json::to_value(request("brief-null")).unwrap();
+        payload["brief"] = Value::Null;
+        let decoded: NativeDelegationRequest = serde_json::from_value(payload).unwrap();
+        assert!(matches!(&decoded, NativeDelegationRequest::Delegate { brief: Some(Value::Null), .. }));
+        let error = handle_locked("conn-1", decoded, &mut st).unwrap_err();
+        assert!(error.starts_with("brief_invalid"), "null présent refusé : {error}");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        handle_locked("conn-1", request("brief-null"), &mut st).unwrap();
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_brief_null_continue_sur_le_fil() {
+        let (mut st, config, _rx, _reader) = fixture("brief-null-round");
+        let decoded: NativeDelegationRequest = serde_json::from_str(
+            r#"{"operation":"continue","task_id":"absent","request_id":"r2","task":"suite","brief":null}"#,
+        ).unwrap();
+        assert!(matches!(&decoded, NativeDelegationRequest::Continue { brief: Some(Value::Null), .. }));
+        let error = handle_locked("conn-1", decoded, &mut st).unwrap_err();
+        assert!(error.starts_with("brief_invalid"), "validation avant lecture de tâche : {error}");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_brief_bornes_rendu_et_consigne() {
+        let (mut st, config, _rx, _reader) = fixture("brief-bounds");
+        let mut brief = json!({
+            "objective":"o", "summary":"s".repeat(8192),
+            "decisions":["d".repeat(2048),"d".repeat(2048),"d".repeat(2048),"d"]
+        });
+        let bytes = crate::handoff::validate_and_render(&brief).unwrap().bytes;
+        let remaining = crate::handoff::MAX_BODY_BYTES - bytes + 1;
+        assert!(remaining < crate::handoff::MAX_ITEM_BYTES);
+        brief["decisions"][3] = json!("d".repeat(remaining));
+        let rendered = crate::handoff::validate_and_render(&brief).unwrap();
+        assert_eq!(rendered.bytes, 16_384);
+        let mut oversized = brief.clone();
+        oversized["decisions"][3] = json!("d".repeat(remaining + 1));
+        let handoff_error = crate::handoff::validate_and_render(&oversized).unwrap_err();
+        assert!(handoff_error.reason.contains("16385"));
+        let mut payload = serde_json::to_value(request("brief-bounds")).unwrap();
+        payload["brief"] = oversized;
+        let error = handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap_err();
+        assert!(error.starts_with("brief_invalid"), "borne rendue : {error}");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        let mut payload = serde_json::to_value(request("brief-bounds")).unwrap();
+        let instruction = "c".repeat(65_536);
+        payload["task"] = json!(instruction);
+        payload["brief"] = brief;
+        let view = handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        let saved = st.delegation_store.get(view["task_id"].as_str().unwrap()).unwrap().unwrap();
+        let expected = format!("{}\n\n--- Consigne ---\n{}", rendered.body, instruction);
+        assert_eq!(saved.round_body.as_deref(), Some(expected.as_str()));
+        assert!(expected.chars().count() < crate::wrapper::INJECTED_BODY_MAX_CHARS);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_brief_rejeu_canon() {
+        let (mut st, config, _rx, _reader) = fixture("brief-replay");
+        let mut payload = serde_json::to_value(request("brief-replay")).unwrap();
+        payload["brief"] = json!({"objective":"o","summary":"s"});
+        let decoded: NativeDelegationRequest = serde_json::from_value(payload.clone()).unwrap();
+        let first = handle_locked("conn-1", decoded.clone(), &mut st).unwrap();
+        assert_eq!(handle_locked("conn-1", decoded, &mut st).unwrap(), first);
+        payload["brief"]["summary"] = json!("autre contexte");
+        assert_eq!(handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap_err(), "envelope_mismatch");
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_brief_sans_option_octets_150() {
+        let expected = format!(
+            r#"{{"operation":"delegate","request_id":"canon150","agent_type":"native-test","model":"custom/model","effort":"high","task":"Inspecte les faits locaux","cwd":{},"posture":"discovery"}}"#,
+            serde_json::to_string(&std::env::temp_dir().to_string_lossy()).unwrap(),
+        );
+        assert_eq!(serde_json::to_vec(&request("canon150")).unwrap(), expected.as_bytes());
+    }
+
+    #[test]
+    fn native153_brief_corps_envoye_a_l_enfant() {
+        use std::io::BufRead;
+        let (mut st, config, rx, _parent_reader) = fixture("brief-wire");
+        let brief = json!({"objective":"Relire","summary":"Faits vérifiés","references":[{"kind":"file","host":"fixture","path":"/synthetic/facts.txt","label":"faits"}]});
+        let rendered = crate::handoff::validate_and_render(&brief).unwrap();
+        let preview = crate::handoff::preview_result(&rendered);
+        let expected = format!("{}\n\n--- Consigne ---\nInspecte les faits locaux", preview["body"].as_str().unwrap());
+        let mut payload = serde_json::to_value(request("brief-wire")).unwrap();
+        payload["brief"] = brief;
+        let view = handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        let id = view["task_id"].as_str().unwrap().to_owned();
+        let shared = Arc::new(Mutex::new(st));
+        tick(&shared);
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("lancement existant attendu")
+        };
+        let (writer, mut reader) = super::super::presence_tests::control_socket("n153-brief");
+        reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        {
+            let mut st = shared.lock().unwrap();
+            assert!(matches!(handle_register_with_channel(
+                "child-conn", 2, "native-test".into(), prepared.lease.name.clone(),
+                Some(st.host.clone()), Some("codex_app_server".into()),
+                ChannelReport::Known("unix".into()), Some(PresenceMode::Acp), None,
+                Some("macOS".into()), Some(prepared.lease.instance_id.clone()), None,
+                false, Some(true), &mut st,
+            ), DaemonToWrapper::Registered { .. }));
+            st.connections.insert("child-conn".into(), writer);
+            st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
+            st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+            st.managed_spawns.get_mut(&id).unwrap().wrapper_conn = Some("child-conn".into());
+        }
+        tick(&shared);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap() else {
+            panic!("mission idempotente attendue : {line}")
+        };
+        assert_eq!(message.body, expected, "corps de l’aperçu avant la consigne, sans lire les références");
+        assert_eq!(message.id, shared.lock().unwrap().delegation_store.get(&id).unwrap().unwrap().mission);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_garde_bornes_et_enveloppe() {
+        let (mut st, config, _rx, _reader) = fixture("guard-bounds");
+        for duration in [59, 7201] {
+            let mut payload = serde_json::to_value(request("guard-bounds")).unwrap();
+            payload["keep_alive_secs"] = json!(duration);
+            assert_eq!(
+                handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st)
+                    .unwrap_err(),
+                "keep_alive_out_of_range"
+            );
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+        }
+        for (key, duration) in [("guard-min", 60), ("guard-max", 7200)] {
+            let mut payload = serde_json::to_value(request(key)).unwrap();
+            payload["keep_alive_secs"] = json!(duration);
+            let first = handle_locked(
+                "conn-1",
+                serde_json::from_value(payload.clone()).unwrap(),
+                &mut st,
+            )
+            .unwrap();
+            let task = st
+                .delegation_store
+                .get(first["task_id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
+            assert!(task.guarded, "garde figée à l’admission");
+            assert_eq!(task.idle_deadline_at, None, "pas de délai avant la remise");
+            assert_eq!(
+                handle_locked(
+                    "conn-1",
+                    serde_json::from_value(payload.clone()).unwrap(),
+                    &mut st
+                )
+                .unwrap(),
+                first
+            );
+            payload["keep_alive_secs"] = json!(120);
+            assert_eq!(
+                handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st)
+                    .unwrap_err(),
+                "envelope_mismatch"
+            );
+        }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_garde_resultat_remis_puis_expiration_sans_changer_le_resultat() {
+        let mut payload = serde_json::to_value(request("guard-result")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, mut parent) =
+            super::super::presence_tests::control_socket("n153-guard-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-guard-child");
+        parent
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&id).unwrap().unwrap();
+            let mut response =
+                bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat gardé");
+            response.in_reply_to = Some(task.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
+            st.managed_spawns.get(&id).unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop.clone()]);
+        let before = unix_timestamp();
+        tick(&shared);
+        let after = unix_timestamp();
+        let mut wire = String::new();
+        parent.read_line(&mut wire).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(wire.trim()).unwrap()
+        else {
+            panic!("résultat réel attendu : {wire}")
+        };
+        assert_eq!(message.body, "résultat gardé");
+        {
+            let st = shared.lock().unwrap();
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            assert_eq!(task.state, "result_available");
+            assert!(task.result_sent && !task.cleanup_done && !stop.is_requested());
+            assert!(
+                (before + 120..=after + 120)
+                    .contains(&task.idle_deadline_at.expect("garde posée avec la remise"))
+            );
+            assert_eq!(
+                st.presences[task.child_instance.as_ref().unwrap()].state,
+                "connected"
+            );
+            assert!(!task.guard_released);
+            task.idle_deadline_at = Some(unix_timestamp() - 1);
+            st.delegation_store.save(&task).unwrap();
+        }
+        tick(&shared);
+        tick(&shared);
+        let task = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.state, "result_available");
+        assert_eq!(task.result.as_deref(), Some("résultat gardé"));
+        assert!(task.guard_released && task.cleanup_done);
+        assert_eq!(task.idle_deadline_at, None);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_garde_absente_nettoie_comme_150() {
+        let (shared, config, id, _, _) = parent_en_cours_150(request("guard-legacy"), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("n153-legacy-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-legacy-child");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&id).unwrap().unwrap();
+            let mut response =
+                bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat sans garde");
+            response.in_reply_to = Some(task.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
+            st.managed_spawns.get(&id).unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        let task = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&id)
+            .unwrap()
+            .unwrap();
+        assert!(task.result_sent && task.cleanup_done);
+        assert!(!task.guarded);
+        assert_eq!(task.idle_deadline_at, None);
+        assert_eq!(task.state, "result_available");
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_garde_annulations_agent_humaine_avant_et_apres_envoi() {
+        for human in [false, true] {
+            for sent_before_cancel in [false, true] {
+                let mut payload = serde_json::to_value(request("guard-cancel")).unwrap();
+                payload["keep_alive_secs"] = json!(120);
+                let (shared, config, id, _, _) =
+                    parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+                let (parent_writer, _parent) =
+                    super::super::presence_tests::control_socket("n153-cancel-parent");
+                let (child_writer, _child) =
+                    super::super::presence_tests::control_socket("n153-cancel-child");
+                let stop = {
+                    let mut st = shared.lock().unwrap();
+                    st.connections.insert("conn-1".into(), parent_writer);
+                    st.connections.insert("child-conn".into(), child_writer);
+                    let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+                    task.state = "result_available".into();
+                    task.result = Some("résultat acquis avant la fin explicite".into());
+                    st.delegation_store.save(&task).unwrap();
+                    st.managed_spawns.get(&id).unwrap().stop.clone()
+                };
+                let (done, observer) = observer_arrets_152(vec![stop]);
+                if sent_before_cancel {
+                    tick(&shared);
+                }
+                {
+                    let mut st = shared.lock().unwrap();
+                    let before = st.delegation_store.get(&id).unwrap().unwrap();
+                    assert_eq!(before.result_sent, sent_before_cancel);
+                    if human {
+                        let (receipt, drives) = st
+                            .delegation_store
+                            .human_cancel(before.root_owner(), &id, "human-end")
+                            .unwrap();
+                        assert!(drives, "la fin humaine pilote une tâche terminale gardée");
+                        assert_eq!(receipt["status"], "result_available");
+                    } else {
+                        assert_eq!(
+                            handle_locked(
+                                "conn-1",
+                                NativeDelegationRequest::Cancel {
+                                    task_id: id.clone()
+                                },
+                                &mut st
+                            )
+                            .unwrap()["status"],
+                            "result_available"
+                        );
+                    }
+                    let saved = st.delegation_store.get(&id).unwrap().unwrap();
+                    assert!(
+                        saved.guard_released,
+                        "fin durable human={human}, sent={sent_before_cancel}"
+                    );
+                    assert_eq!(saved.idle_deadline_at, None);
+                    assert_eq!(saved.result, before.result);
+                }
+                tick(&shared);
+                tick(&shared);
+                let task = shared
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .get(&id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(task.state, "result_available");
+                assert!(task.result_sent && task.cleanup_done && task.guard_released);
+                assert_eq!(
+                    task.idle_deadline_at, None,
+                    "aucune repose de garde après l’envoi"
+                );
+                assert!(task.rounds.is_empty());
+                done.send(()).unwrap();
+                assert_eq!(observer.join().unwrap(), vec![true]);
+                cleanup(&config);
+            }
+        }
+    }
+
+    #[test]
+    fn native153_garde_redemarrage_libere_aussi_la_tache_active() {
+        for terminal in [false, true] {
+            let mut payload = serde_json::to_value(request("guard-restart")).unwrap();
+            payload["keep_alive_secs"] = json!(120);
+            let (shared, config, id, _, _) =
+                parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+            let mut st = shared.lock().unwrap();
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            if terminal {
+                task.state = "result_available".into();
+                task.result = Some("résultat avant panne".into());
+                task.result_sent = true;
+                task.idle_deadline_at = Some(unix_timestamp() + 120);
+                st.delegation_store.save(&task).unwrap();
+            }
+            reouvrir_flotte_152(&mut st, &config);
+            prepare_restart(&st).unwrap();
+            let saved = st.delegation_store.get(&id).unwrap().unwrap();
+            assert!(
+                saved.guard_released,
+                "release même avant pose de garde terminal={terminal}"
+            );
+            assert_eq!(saved.idle_deadline_at, None);
+            if terminal {
+                assert_eq!(saved.result, task.result);
+                assert_eq!(saved.state, "result_available");
+            }
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native153_garde_nettoyage_parent_libere_descendant_avant_arret() {
+        let (mut st, config, rx, _reader) = fixture("guard-tree");
+        let mut payload = serde_json::to_value(request("guard-tree")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let view =
+            handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        let mut root = st
+            .delegation_store
+            .get(view["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        spawn_task(&mut st, &mut root).unwrap();
+        let ManagedSupervisorCommand::Start {
+            stop: root_stop, ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("racine gérée attendue")
+        };
+        let mut child = root.clone();
+        child.task_id = Uuid::new_v4().to_string();
+        child.parent_task_id = Some(root.task_id.clone());
+        child.owner = root.child.clone();
+        child.owner_instance = root.child_instance.clone().unwrap();
+        child.origin_owner_instance = child.owner_instance.clone();
+        child.child = Uuid::new_v4().to_string();
+        child.child_instance = None;
+        child.mission = Uuid::new_v4().to_string();
+        child.state = "queued".into();
+        child.launch_issued_at = None;
+        st.delegation_store
+            .insert(
+                &child,
+                "guard-child",
+                &serde_json::to_vec(&child.request).unwrap(),
+            )
+            .unwrap();
+        spawn_task(&mut st, &mut child).unwrap();
+        let ManagedSupervisorCommand::Start {
+            stop: child_stop, ..
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("descendant géré attendu")
+        };
+        child.state = "result_available".into();
+        child.result = Some("résultat descendant conservé".into());
+        child.result_sent = true;
+        child.idle_deadline_at = Some(unix_timestamp() + 120);
+        st.delegation_store.save(&child).unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        let (done, observer) = observer_arrets_152(vec![child_stop, root_stop]);
+        cancel_tree(&shared, &root);
+        let st = shared.lock().unwrap();
+        for id in [&root.task_id, &child.task_id] {
+            let saved = st.delegation_store.get(id).unwrap().unwrap();
+            assert!(saved.guard_released && saved.cleanup_done);
+            assert_eq!(saved.idle_deadline_at, None);
+        }
+        let saved = st.delegation_store.get(&child.task_id).unwrap().unwrap();
+        assert_eq!(saved.result, child.result);
+        assert_eq!(saved.state, "result_available");
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true, true]);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_limites_enfant_inactif_compte() {
+        let (mut st, config, _rx, _reader) = fixture("idle-count");
+        for (index, state) in [
+            "result_available",
+            "failed",
+            "cancelled",
+            "result_available",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut payload =
+                serde_json::to_value(request(&format!("idle-count-{index}"))).unwrap();
+            payload["keep_alive_secs"] = json!(120);
+            let view =
+                handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+            let mut task = st
+                .delegation_store
+                .get(view["task_id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
+            task.state = state.into();
+            task.cleanup_done = index == 3;
+            task.result_sent = state == "result_available";
+            task.idle_deadline_at = (index == 0).then(|| unix_timestamp() + 120);
+            st.delegation_store.save(&task).unwrap();
+            assert_eq!(task.holds_slot(), index != 3);
+        }
+        let plain = handle_locked("conn-1", request("idle-plain"), &mut st).unwrap();
+        let mut plain = st
+            .delegation_store
+            .get(plain["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        plain.state = "result_available".into();
+        st.delegation_store.save(&plain).unwrap();
+        handle_locked("conn-1", request("idle-active"), &mut st).unwrap();
+        let sql = "EXPLAIN QUERY PLAN SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE owner_instance=?1 AND (json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling') OR (json_extract(payload,'$.state') IN ('result_available','failed','cancelled') AND coalesce(json_extract(payload,'$.guarded'),0)=1 AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0))";
+        let plan: Vec<String> = st
+            .delegation_store
+            .test_connection()
+            .prepare(sql)
+            .unwrap()
+            .query_map(["instance-1"], |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        eprintln!("T012 EXPLAIN quota : {plan:?}");
+        assert!(
+            plan.iter()
+                .filter(|line| line
+                    .contains("SEARCH native_delegations USING INDEX native_delegations_state"))
+                .count()
+                >= 2
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line.contains("SCAN native_delegations"))
+        );
+        assert_eq!(
+            st.delegation_store.admission_counts("instance-1").unwrap(),
+            (4, 4, 6)
+        );
+        assert_eq!(
+            st.delegation_store
+                .admission_counts("instance-etrangere")
+                .unwrap(),
+            (4, 0, 6)
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_limites_17e_delegation_refusee_avec_16_inactifs() {
+        let (mut st, config, _rx, _reader) = fixture("idle-sixteen");
+        for index in 0..16 {
+            let mut payload = serde_json::to_value(request(&format!("idle-{index}"))).unwrap();
+            payload["keep_alive_secs"] = json!(120);
+            let view =
+                handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+            let mut task = st
+                .delegation_store
+                .get(view["task_id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
+            task.state = "result_available".into();
+            task.result_sent = true;
+            task.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&task).unwrap();
+        }
+        assert_eq!(
+            st.delegation_store.admission_counts("instance-1").unwrap(),
+            (16, 16, 16)
+        );
+        assert_eq!(
+            handle_locked("conn-1", request("idle-seventeenth"), &mut st).unwrap_err(),
+            "task_limit"
+        );
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 16);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_limites_expiration_arret_refuse_place_tenue() {
+        let mut payload = serde_json::to_value(request("idle-stop-expiry")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-stop-expiry");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("child-conn".into(), child_writer);
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            task.state = "result_available".into();
+            task.result = Some("résultat avant expiration".into());
+            task.result_sent = true;
+            task.idle_deadline_at = Some(unix_timestamp() - 1);
+            st.delegation_store.save(&task).unwrap();
+            for index in 1..16 {
+                let mut payload =
+                    serde_json::to_value(request(&format!("idle-expiry-{index}"))).unwrap();
+                payload["keep_alive_secs"] = json!(120);
+                let view =
+                    handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st)
+                        .unwrap();
+                let mut idle = st
+                    .delegation_store
+                    .get(view["task_id"].as_str().unwrap())
+                    .unwrap()
+                    .unwrap();
+                idle.state = "result_available".into();
+                idle.result_sent = true;
+                idle.idle_deadline_at = Some(unix_timestamp() + 120);
+                st.delegation_store.save(&idle).unwrap();
+            }
+            st.managed_spawns.get(&id).unwrap().stop.clone()
+        };
+        let confirmed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_confirmed = confirmed.clone();
+        let (done, end) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut outcomes = Vec::new();
+            loop {
+                match end.try_recv() {
+                    Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                if !stop.waiters.lock().unwrap().is_empty() {
+                    let success = worker_confirmed.load(Ordering::SeqCst);
+                    outcomes.push(success);
+                    stop.complete(if success {
+                        StopOutcome::Stopped
+                    } else {
+                        StopOutcome::Timeout {
+                            state: "arrêt non confirmé".into(),
+                        }
+                    });
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            outcomes
+        });
+        tick(&shared);
+        {
+            let mut st = shared.lock().unwrap();
+            let saved = st.delegation_store.get(&id).unwrap().unwrap();
+            assert!(saved.guard_released && !saved.cleanup_done && saved.holds_slot());
+            assert_eq!(saved.idle_deadline_at, None);
+            assert_eq!(saved.result.as_deref(), Some("résultat avant expiration"));
+            assert_eq!(
+                handle_locked("conn-1", request("expiry-seventeenth"), &mut st).unwrap_err(),
+                "task_limit"
+            );
+        }
+        confirmed.store(true, Ordering::SeqCst);
+        tick(&shared);
+        let mut st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&id).unwrap().unwrap();
+        assert!(saved.cleanup_done && !saved.holds_slot());
+        assert_eq!(saved.state, "result_available");
+        assert_eq!(
+            handle_locked("conn-1", request("expiry-seventeenth"), &mut st).unwrap()["status"],
+            "queued"
+        );
+        done.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), vec![false, true]);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_limites_annulation_arret_refuse_place_tenue() {
+        let mut payload = serde_json::to_value(request("idle-stop-cancel")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-stop-cancel");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("child-conn".into(), child_writer);
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            task.state = "result_available".into();
+            task.result = Some("résultat avant fin explicite".into());
+            task.result_sent = true;
+            task.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&task).unwrap();
+            for index in 1..16 {
+                let mut payload =
+                    serde_json::to_value(request(&format!("idle-cancel-{index}"))).unwrap();
+                payload["keep_alive_secs"] = json!(120);
+                let view =
+                    handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st)
+                        .unwrap();
+                let mut idle = st
+                    .delegation_store
+                    .get(view["task_id"].as_str().unwrap())
+                    .unwrap()
+                    .unwrap();
+                idle.state = "result_available".into();
+                idle.result_sent = true;
+                idle.idle_deadline_at = Some(unix_timestamp() + 120);
+                st.delegation_store.save(&idle).unwrap();
+            }
+            assert_eq!(
+                handle_locked(
+                    "conn-1",
+                    NativeDelegationRequest::Cancel {
+                        task_id: id.clone()
+                    },
+                    &mut st
+                )
+                .unwrap()["status"],
+                "result_available"
+            );
+            st.managed_spawns.get(&id).unwrap().stop.clone()
+        };
+        let worker_stop = stop.clone();
+        let (done, end) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut attempts = 0;
+            loop {
+                match end.try_recv() {
+                    Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                if !worker_stop.waiters.lock().unwrap().is_empty() {
+                    attempts += 1;
+                    worker_stop.complete(StopOutcome::Timeout {
+                        state: "fin explicite sans arrêt confirmé".into(),
+                    });
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            attempts
+        });
+        tick(&shared);
+        let mut st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&id).unwrap().unwrap();
+        assert!(saved.guard_released && !saved.cleanup_done && saved.holds_slot());
+        assert_eq!(saved.idle_deadline_at, None);
+        assert_eq!(saved.state, "result_available");
+        assert_eq!(
+            saved.result.as_deref(),
+            Some("résultat avant fin explicite")
+        );
+        assert_eq!(
+            handle_locked("conn-1", request("cancel-seventeenth"), &mut st).unwrap_err(),
+            "task_limit"
+        );
+        done.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), 1);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_limites_lecteur_lignee() {
+        let mut payload = serde_json::to_value(request("lineage-rounds")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("n153-lineage-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-lineage-child");
+        let (first, delivery) = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let first = st.delegation_store.get(&id).unwrap().unwrap();
+            let delivery = st
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    &format!("execution-{}", first.mission),
+                    first.child_instance.as_ref().unwrap(),
+                    unix_timestamp(),
+                )
+                .unwrap()
+                .unwrap();
+            (first, delivery)
+        };
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: delivery.delivery_id,
+                    delivery_generation: delivery.delivery_generation,
+                },
+                &shared
+            )
+            .is_none()
+        );
+        transition_wrapper_152(&shared, &first, "running");
+        transition_wrapper_152(&shared, &first, "completed");
+        let (receiver, before, shape) = {
+            let st = shared.lock().unwrap();
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            task.state = "result_available".into();
+            task.result = Some("revue terminée".into());
+            task.result_sent = true;
+            task.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&task).unwrap();
+            let receiver = st.delegation_store.change_receiver().unwrap();
+            while receiver.try_recv().is_ok() {}
+            st.delegation_store.take_changes();
+            let before = st.delegation_store.projection_meta().unwrap();
+            let page = st
+                .delegation_store
+                .lineage_page(OWNER, 100, None, |_| false)
+                .unwrap();
+            assert_eq!(page["tasks"].as_array().unwrap().len(), 1);
+            assert_eq!(page["tasks"][0]["status"], "result_available");
+            let shape = page["tasks"][0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>();
+            assert!(!shape.contains("round") && !shape.contains("idle_deadline_at"));
+            (receiver, before, shape)
+        };
+        {
+            let mut st = shared.lock().unwrap();
+            let view = handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Continue {
+                    task_id: id.clone(),
+                    request_id: "lineage-round-2".into(),
+                    task: "corrige les points de la revue".into(),
+                    brief: None,
+                },
+                &mut st,
+            )
+            .unwrap();
+            assert_eq!(view["status"], "mission_pending");
+        }
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("mutation de ronde non reçue");
+        {
+            let st = shared.lock().unwrap();
+            let changes = st.delegation_store.take_changes();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[OWNER].generation, before.generation);
+            assert_eq!(changes[OWNER].seq, before.seq + 1);
+            let page = st
+                .delegation_store
+                .lineage_page(OWNER, 100, None, |_| false)
+                .unwrap();
+            assert_eq!(page["tasks"].as_array().unwrap().len(), 1);
+            let entry = &page["tasks"][0];
+            assert_eq!(entry["task_id"], id);
+            assert_eq!(
+                entry["child_instance_id"],
+                first.child_instance.as_ref().unwrap().as_str()
+            );
+            assert_eq!(entry["status"], "mission_pending");
+            assert_eq!(
+                entry
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<_>>(),
+                shape
+            );
+        }
+        tick(&shared);
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("mutation working non reçue");
+        let (second, delivery, stop) = {
+            let st = shared.lock().unwrap();
+            let changes = st.delegation_store.take_changes();
+            assert_eq!(changes.len(), 1);
+            assert!(changes[OWNER].seq > before.seq + 1);
+            let page = st
+                .delegation_store
+                .lineage_page(OWNER, 100, None, |_| false)
+                .unwrap();
+            assert_eq!(page["tasks"].as_array().unwrap().len(), 1);
+            assert_eq!(page["tasks"][0]["task_id"], id);
+            assert_eq!(page["tasks"][0]["status"], "working");
+            assert_eq!(
+                page["tasks"][0]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<HashSet<_>>(),
+                shape
+            );
+            let second = st.delegation_store.get(&id).unwrap().unwrap();
+            let delivery = st
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    &format!("execution-{}", second.mission),
+                    second.child_instance.as_ref().unwrap(),
+                    unix_timestamp(),
+                )
+                .unwrap()
+                .unwrap();
+            (second, delivery, st.managed_spawns[&id].stop.clone())
+        };
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: delivery.delivery_id,
+                    delivery_generation: delivery.delivery_generation,
+                },
+                &shared
+            )
+            .is_none()
+        );
+        transition_wrapper_152(&shared, &second, "running");
+        transition_wrapper_152(&shared, &second, "completed");
+        {
+            let mut st = shared.lock().unwrap();
+            let mut reply = bridget_core::BridgetMessage::new(
+                &second.child,
+                &second.owner,
+                "corrections faites",
+            );
+            reply.in_reply_to = Some(second.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &reply).unwrap());
+        }
+        tick(&shared);
+        let before_end = {
+            let st = shared.lock().unwrap();
+            assert!(st.delegation_store.get(&id).unwrap().unwrap().continuable());
+            while receiver.try_recv().is_ok() {}
+            st.delegation_store.take_changes();
+            st.delegation_store.projection_meta().unwrap()
+        };
+        let (done, worker) = observer_arrets_152(vec![stop]);
+        let DaemonToWrapper::NativeDelegationResult { result } = handle(
+            "conn-1",
+            NativeDelegationRequest::Cancel {
+                task_id: id.clone(),
+            },
+            &shared,
+        ) else {
+            panic!("fin explicite attendue")
+        };
+        assert_eq!(result["status"], "result_available");
+        done.send(()).unwrap();
+        assert_eq!(worker.join().unwrap(), vec![true]);
+        {
+            let st = shared.lock().unwrap();
+            let after = st.delegation_store.projection_meta().unwrap();
+            assert_eq!(after.generation, before_end.generation);
+            assert_eq!(after.seq, before_end.seq);
+            assert!(st.delegation_store.take_changes().is_empty());
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+            let saved = st.delegation_store.get(&id).unwrap().unwrap();
+            assert!(saved.guard_released && saved.cleanup_done);
+            assert_eq!(saved.result.as_deref(), Some("corrections faites"));
+        }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_ronde_meme_enfant_rejeu_et_plafond() {
+        let mut payload = serde_json::to_value(request("round-first")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("n153-replay-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-replay-child");
+        let mut st = shared.lock().unwrap();
+        st.connections.insert("conn-1".into(), parent_writer);
+        st.connections.insert("child-conn".into(), child_writer);
+        let mut original = st.delegation_store.get(&id).unwrap().unwrap();
+        original.state = "result_available".into();
+        original.result = Some("résultat de ronde 1".into());
+        original.result_sent = true;
+        original.idle_deadline_at = Some(unix_timestamp() + 120);
+        original.restart_resumes = 2;
+        st.delegation_store.save(&original).unwrap();
+        let (tx, rx) = mpsc::channel();
+        st.managed_tx = tx;
+        let mut round_two = None;
+        for round in 2..=8 {
+            let brief = json!({"objective":format!("Ronde {round}"),"summary":"Delta confirmé"});
+            let instruction = format!("Consigne de ronde {round}");
+            let next = NativeDelegationRequest::Continue {
+                task_id: id.clone(),
+                request_id: format!("round-{round}"),
+                task: instruction.clone(),
+                brief: Some(brief.clone()),
+            };
+            let before = st.delegation_store.get(&id).unwrap().unwrap();
+            let view = handle_locked("conn-1", next.clone(), &mut st).unwrap();
+            let mut saved = st.delegation_store.get(&id).unwrap().unwrap();
+            assert_eq!(view["status"], "mission_pending");
+            assert_eq!(view["round"], round);
+            assert_eq!(saved.task_id, original.task_id);
+            assert_eq!(saved.child, original.child);
+            assert_eq!(saved.child_instance, original.child_instance);
+            assert_ne!(saved.mission, before.mission);
+            assert_eq!(saved.result, None);
+            assert!(!saved.result_sent && !saved.delivery_acked && !saved.failure_sent);
+            assert_eq!(saved.acknowledged_at, None);
+            assert_eq!(saved.mission_issued_at, None);
+            assert_eq!(saved.mission_deadline_at, None);
+            assert_eq!(saved.completed_at, None);
+            assert_eq!(saved.started_at, original.started_at);
+            assert_eq!(saved.launch_issued_at, original.launch_issued_at);
+            assert_eq!(saved.restart_resumes, 2, "budget de vie entière conservé");
+            assert_eq!(
+                saved.round_body.as_deref(),
+                Some(
+                    format!(
+                        "{}\n\n--- Consigne ---\n{instruction}",
+                        crate::handoff::validate_and_render(&brief).unwrap().body
+                    )
+                    .as_str()
+                )
+            );
+            assert_eq!(saved.rounds.len(), (round - 1) as usize);
+            assert_eq!(saved.unacked_rounds, (1..round).collect::<Vec<_>>());
+            let bytes = serde_json::to_vec(&saved).unwrap();
+            let epoch = st.delegation_store.wait_epoch();
+            let seen = epoch.get();
+            let meta = st.delegation_store.projection_meta().unwrap();
+            st.delegation_store.take_changes();
+            for _ in 0..10 {
+                drop(st);
+                let DaemonToWrapper::NativeDelegationResult { result } =
+                    handle("conn-1", next.clone(), &shared)
+                else {
+                    panic!("réponse native attendue pour le rejeu")
+                };
+                st = shared.lock().unwrap();
+                assert_eq!(result, view);
+                let after = st.delegation_store.get(&id).unwrap().unwrap();
+                eprintln!(
+                    "FR019 rejeu réel ronde {round}: état {}→{}, epoch {seen}→{}",
+                    saved.state,
+                    after.state,
+                    epoch.get()
+                );
+                assert_eq!(epoch.get(), seen, "le rejeu ne pilote pas de tick");
+                assert_eq!(serde_json::to_vec(&after).unwrap(), bytes);
+                let after_meta = st.delegation_store.projection_meta().unwrap();
+                assert_eq!(
+                    (&after_meta.generation, after_meta.seq),
+                    (&meta.generation, meta.seq)
+                );
+                assert!(st.delegation_store.take_changes().is_empty());
+            }
+            assert_eq!(
+                serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+                bytes
+            );
+            let mut changed = next.clone();
+            if let NativeDelegationRequest::Continue { task, .. } = &mut changed {
+                task.push_str(" différente");
+            }
+            assert_eq!(
+                handle_locked("conn-1", changed, &mut st).unwrap_err(),
+                "envelope_mismatch"
+            );
+            let mut changed = next.clone();
+            if let NativeDelegationRequest::Continue { brief, .. } = &mut changed {
+                *brief = Some(json!({"objective":"autre","summary":"autre"}));
+            }
+            assert_eq!(
+                handle_locked("conn-1", changed, &mut st).unwrap_err(),
+                "envelope_mismatch"
+            );
+            assert!(rx.try_recv().is_err(), "aucun nouveau lancement");
+            assert_eq!(
+                st.idempotency
+                    .spawn_commands(&st.fleet.supervisor_scope())
+                    .unwrap()
+                    .len(),
+                1
+            );
+            if round == 2 {
+                round_two = Some(next);
+            }
+            if round == 3 {
+                pauser_150(&st, true);
+                let current = handle_locked(
+                    "conn-1",
+                    NativeDelegationRequest::Status {
+                        task_id: id.clone(),
+                    },
+                    &mut st,
+                )
+                .unwrap();
+                let presence = st.presences.remove("instance-1").unwrap();
+                st.presences.insert("instance-2".into(), presence);
+                st.conn_instances
+                    .insert("conn-1".into(), "instance-2".into());
+                st.delegation_store
+                    .grant(
+                        "instance-2",
+                        Path::new(&original.cwd),
+                        SpawnPosture::Development,
+                        false,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    live_connection_identity(&st, "conn-1"),
+                    Some((OWNER.into(), "instance-2".into()))
+                );
+                assert!(can_own_task(&st, &saved, OWNER, "instance-2").unwrap());
+                let seen = epoch.get();
+                let meta = st.delegation_store.projection_meta().unwrap();
+                st.delegation_store.take_changes();
+                drop(st);
+                let DaemonToWrapper::NativeDelegationResult { result } =
+                    handle("conn-1", round_two.clone().unwrap(), &shared)
+                else {
+                    panic!("réponse native attendue pour le rejeu d'une clé passée")
+                };
+                st = shared.lock().unwrap();
+                assert_eq!(
+                    result, current,
+                    "une clé passée rend la ronde courante pendant la pause"
+                );
+                assert_eq!(epoch.get(), seen, "aucune reprise du propriétaire au rejeu");
+                assert_eq!(
+                    serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+                    bytes
+                );
+                let after_meta = st.delegation_store.projection_meta().unwrap();
+                assert_eq!(
+                    (after_meta.generation, after_meta.seq),
+                    (meta.generation, meta.seq)
+                );
+                assert!(st.delegation_store.take_changes().is_empty());
+                let presence = st.presences.remove("instance-2").unwrap();
+                st.presences.insert("instance-1".into(), presence);
+                st.conn_instances
+                    .insert("conn-1".into(), "instance-1".into());
+                pauser_150(&st, false);
+            }
+            saved.state = "result_available".into();
+            saved.result = Some(format!("résultat {round}"));
+            saved.result_sent = true;
+            saved.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&saved).unwrap();
+        }
+        assert_eq!(
+            handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Continue {
+                    task_id: id,
+                    request_id: "round-9".into(),
+                    task: "encore".into(),
+                    brief: None
+                },
+                &mut st
+            )
+            .unwrap_err(),
+            "round_limit"
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_ronde_refus_ordonnes_et_fin_durable() {
+        for (case, expected) in [
+            ("sans_garde", "keep_alive_not_enabled"),
+            ("active", "round_in_progress"),
+            ("liberee", "keep_alive_ended"),
+            ("failed", "keep_alive_ended"),
+            ("cancelled", "keep_alive_ended"),
+            ("enfant_absent", "keep_alive_ended"),
+            ("echeance_exacte", "keep_alive_ended"),
+            ("pause", "referent_paused"),
+            ("grant_retire", "delegation_grant_required"),
+            ("autre_parent", "task_unavailable"),
+        ] {
+            let mut payload = serde_json::to_value(request("round-refusal")).unwrap();
+            if case != "sans_garde" {
+                payload["keep_alive_secs"] = json!(120);
+            }
+            let (shared, config, id, _, _) =
+                parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+            let mut st = shared.lock().unwrap();
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            task.state = if case == "active" {
+                "working"
+            } else if matches!(case, "failed" | "cancelled") {
+                case
+            } else {
+                "result_available"
+            }
+            .into();
+            task.result = Some("résultat conservé".into());
+            task.result_sent = !matches!(case, "failed" | "cancelled" | "liberee");
+            task.idle_deadline_at = (case != "sans_garde").then(|| unix_timestamp() + 120);
+            if case == "liberee" {
+                task.guard_released = true;
+                task.idle_deadline_at = None;
+            }
+            if case == "echeance_exacte" {
+                task.idle_deadline_at = Some(unix_timestamp());
+            }
+            st.delegation_store.save(&task).unwrap();
+            if case == "enfant_absent" {
+                st.router.unregister_by_conn("child-conn");
+            }
+            if case == "pause" {
+                pauser_150(&st, true);
+                let presence = st.presences.remove("instance-1").unwrap();
+                st.presences.insert("instance-2".into(), presence);
+                st.conn_instances
+                    .insert("conn-1".into(), "instance-2".into());
+                st.delegation_store
+                    .grant(
+                        "instance-2",
+                        Path::new(&task.cwd),
+                        SpawnPosture::Development,
+                        false,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    live_connection_identity(&st, "conn-1"),
+                    Some((OWNER.into(), "instance-2".into()))
+                );
+                assert!(can_own_task(&st, &task, OWNER, "instance-2").unwrap());
+            }
+            if case == "grant_retire" {
+                st.delegation_store
+                    .test_connection()
+                    .execute(
+                        "DELETE FROM native_delegation_grants WHERE owner_instance='instance-1'",
+                        [],
+                    )
+                    .unwrap();
+            }
+            let mut _foreign_peer = None;
+            let conn = if case == "autre_parent" {
+                let host = st.host.clone();
+                let foreign_agent = Uuid::new_v4().to_string();
+                let foreign_instance = Uuid::new_v4().to_string();
+                let (writer, reader) =
+                    super::super::presence_tests::control_socket("n153-foreign-parent");
+                st.connections.insert("foreign-round".into(), writer);
+                _foreign_peer = Some(reader);
+                let registration = handle_register_with_channel(
+                    "foreign-round",
+                    2,
+                    "native-test".into(),
+                    foreign_agent.clone(),
+                    Some(host),
+                    Some("codex_app_server".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("macOS".into()),
+                    Some(foreign_instance.clone()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st,
+                );
+                assert!(
+                    matches!(registration, DaemonToWrapper::Registered { .. }),
+                    "réponse réelle d'enregistrement du parent étranger : {registration:?}"
+                );
+                assert_eq!(
+                    live_connection_identity(&st, "foreign-round"),
+                    Some((foreign_agent, foreign_instance))
+                );
+                "foreign-round"
+            } else {
+                "conn-1"
+            };
+            let before = st.delegation_store.get(&id).unwrap().unwrap();
+            let epoch = st.delegation_store.wait_epoch();
+            let seen = epoch.get();
+            let meta = st.delegation_store.projection_meta().unwrap();
+            st.delegation_store.take_changes();
+            let request = NativeDelegationRequest::Continue {
+                task_id: id.clone(),
+                request_id: "round-refused".into(),
+                task: "instruction suivante".into(),
+                brief: None,
+            };
+            drop(st);
+            let DaemonToWrapper::NativeDelegationResult { result } = handle(conn, request, &shared)
+            else {
+                panic!("réponse native attendue pour le refus {case}")
+            };
+            let st = shared.lock().unwrap();
+            assert_eq!(result["status"], "refused", "cas={case}");
+            assert_eq!(result["code"], expected, "cas={case}");
+            let saved = st.delegation_store.get(&id).unwrap().unwrap();
+            eprintln!(
+                "FR019 refus réel {case}: owner_instance {}→{}, epoch {seen}→{}",
+                before.owner_instance,
+                saved.owner_instance,
+                epoch.get()
+            );
+            assert_eq!(saved.state, before.state);
+            assert_eq!(saved.result, before.result);
+            assert_eq!(saved.mission, before.mission);
+            assert_eq!(saved.rounds.len(), 0);
+            if matches!(case, "enfant_absent" | "echeance_exacte") {
+                assert!(saved.guard_released);
+                assert_eq!(saved.idle_deadline_at, None);
+            } else {
+                assert_eq!(epoch.get(), seen, "aucune mutation au refus {case}");
+                assert_eq!(
+                    serde_json::to_vec(&saved).unwrap(),
+                    serde_json::to_vec(&before).unwrap()
+                );
+                let after_meta = st.delegation_store.projection_meta().unwrap();
+                assert_eq!(
+                    (after_meta.generation, after_meta.seq),
+                    (meta.generation, meta.seq)
+                );
+                assert!(st.delegation_store.take_changes().is_empty());
+            }
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native153_ronde_continue_avant_envoi_reessayable() {
+        let mut payload = serde_json::to_value(request("round-before-result")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("n153-before-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-before-child");
+        let next = NativeDelegationRequest::Continue {
+            task_id: id.clone(),
+            request_id: "round-after-result".into(),
+            task: "suite".into(),
+            brief: None,
+        };
+        {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            task.state = "result_available".into();
+            task.result = Some("résultat prêt avant remise".into());
+            st.delegation_store.save(&task).unwrap();
+            let bytes =
+                serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap();
+            assert_eq!(
+                handle_locked("conn-1", next.clone(), &mut st).unwrap_err(),
+                "result_delivery_pending"
+            );
+            assert_eq!(
+                serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+                bytes
+            );
+        }
+        tick(&shared);
+        let mut st = shared.lock().unwrap();
+        assert!(st.delegation_store.get(&id).unwrap().unwrap().result_sent);
+        assert_eq!(
+            handle_locked("conn-1", next, &mut st).unwrap()["status"],
+            "mission_pending"
+        );
+        assert_eq!(st.delegation_store.get(&id).unwrap().unwrap().round_no(), 2);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_ronde_resultat_id_distinct_par_ronde() {
+        let mut payload = serde_json::to_value(request("round-results")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, mut parent) =
+            super::super::presence_tests::control_socket("n153-round-parent");
+        let (child_writer, mut child) =
+            super::super::presence_tests::control_socket("n153-round-child");
+        for reader in [&parent, &child] {
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+        }
+        {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+        }
+        let mut missions = Vec::new();
+        let mut result_ids = Vec::new();
+        for round in 1..=2 {
+            let task = shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&id)
+                .unwrap()
+                .unwrap();
+            missions.push(task.mission.clone());
+            let delivery = shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    &format!("execution-{}", task.mission),
+                    task.child_instance.as_ref().unwrap(),
+                    unix_timestamp(),
+                )
+                .unwrap()
+                .unwrap();
+            assert!(
+                handle_wrapper_message(
+                    "child-conn",
+                    WrapperToDaemon::DeliverAcked {
+                        delivery_id: delivery.delivery_id,
+                        delivery_generation: delivery.delivery_generation
+                    },
+                    &shared
+                )
+                .is_none()
+            );
+            transition_wrapper_152(&shared, &task, "running");
+            transition_wrapper_152(&shared, &task, "completed");
+            {
+                let mut st = shared.lock().unwrap();
+                let mut response = bridget_core::BridgetMessage::new(
+                    &task.child,
+                    &task.owner,
+                    format!("résultat {round}"),
+                );
+                response.in_reply_to = Some(task.mission.clone());
+                assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
+            }
+            tick(&shared);
+            let mut raw = String::new();
+            parent.read_line(&mut raw).unwrap();
+            let DaemonToWrapper::DeliverIdempotent {
+                message,
+                delivery_id,
+                delivery_generation,
+                ..
+            } = decode(raw.trim()).unwrap()
+            else {
+                panic!("résultat réel attendu : {raw}")
+            };
+            assert_eq!(
+                message.id,
+                if round == 1 {
+                    format!("native-result-{id}")
+                } else {
+                    format!("native-result-{id}-r2")
+                }
+            );
+            assert_eq!(message.body, format!("résultat {round}"));
+            assert_eq!(message.in_reply_to.as_deref(), Some(task.mission.as_str()));
+            result_ids.push(message.id);
+            {
+                let st = shared.lock().unwrap();
+                let saved = st.delegation_store.get(&id).unwrap().unwrap();
+                let bytes = serde_json::to_vec(&saved).unwrap();
+                let view = current_task_view(&st, &saved, true).unwrap();
+                assert_eq!(view["round"], round);
+                assert_eq!(view["message_id"], task.mission);
+                assert_eq!(
+                    view["mailbox"]["state"], "claimed",
+                    "boîte de la ronde courante"
+                );
+                assert_eq!(
+                    serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+                    bytes
+                );
+            }
+            let DaemonToWrapper::NativeDelegationResult { result: wait } = handle(
+                "conn-1",
+                NativeDelegationRequest::Wait {
+                    task_ids: vec![id.clone()],
+                    wait_timeout: Some(1),
+                },
+                &shared,
+            ) else {
+                panic!("attente native prête attendue")
+            };
+            assert_eq!(wait["ready"][0]["round"], round);
+            assert_eq!(wait["ready"][0]["message_id"], task.mission);
+            assert!(
+                handle_wrapper_message(
+                    "conn-1",
+                    WrapperToDaemon::DeliverAcked {
+                        delivery_id,
+                        delivery_generation
+                    },
+                    &shared
+                )
+                .is_none()
+            );
+            {
+                let st = shared.lock().unwrap();
+                assert_eq!(copy_delivery_acks(&st).unwrap(), 1);
+                assert!(
+                    st.delegation_store
+                        .get(&id)
+                        .unwrap()
+                        .unwrap()
+                        .delivery_acked
+                );
+            }
+            if round == 1 {
+                let DaemonToWrapper::NativeDelegationResult { result } = handle(
+                    "conn-1",
+                    NativeDelegationRequest::Continue {
+                        task_id: id.clone(),
+                        request_id: "results-round-2".into(),
+                        task: "nouvelle consigne".into(),
+                        brief: None,
+                    },
+                    &shared,
+                ) else {
+                    panic!("ronde suivante attendue")
+                };
+                assert_eq!(result["status"], "mission_pending");
+                let mut raw = String::new();
+                child.read_line(&mut raw).unwrap();
+                let DaemonToWrapper::DeliverIdempotent { message, .. } =
+                    decode(raw.trim()).unwrap()
+                else {
+                    panic!("nouvelle mission envoyée sans tick ajouté : {raw}")
+                };
+                assert_eq!(message.body, "nouvelle consigne");
+                assert_ne!(message.id, task.mission);
+            }
+        }
+        assert_ne!(missions[0], missions[1]);
+        assert_ne!(result_ids[0], result_ids[1]);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_ronde_echeance_deuxieme_ronde_arrete_enfant() {
+        let mut payload = serde_json::to_value(request("round-timeout")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("n153-timeout-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("n153-timeout-child");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            task.state = "result_available".into();
+            task.result = Some("premier résultat".into());
+            task.result_sent = true;
+            task.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&task).unwrap();
+            handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Continue {
+                    task_id: id.clone(),
+                    request_id: "timeout-round-2".into(),
+                    task: "suite".into(),
+                    brief: None,
+                },
+                &mut st,
+            )
+            .unwrap();
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            st.store
+                .create_request(&task.mission, &task.owner, &task.child, 3600)
+                .unwrap();
+            task.state = "working".into();
+            task.mission_deadline_at = Some(unix_timestamp() - 1);
+            st.delegation_store.save(&task).unwrap();
+            st.managed_spawns.get(&id).unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        let task = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.round_no(), 2);
+        assert_eq!(task.state, "failed");
+        assert_eq!(task.error.as_deref(), Some("mission_reply_timeout"));
+        assert!(task.cleanup_done && task.guard_released);
+        assert_eq!(task.idle_deadline_at, None);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native153_limites_accuse_tardif_de_n_autorise_la_purge() {
+        use sha2::Digest;
+        let (mut st, config, _rx, _reader) = fixture("round-late-ack");
+        let mut payload = serde_json::to_value(request("late-ack-first")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let view =
+            handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        let id = view["task_id"].as_str().unwrap().to_owned();
+        let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+        task.state = "result_available".into();
+        task.result_sent = true;
+        task.idle_deadline_at = Some(unix_timestamp() + 120);
+        st.delegation_store.save(&task).unwrap();
+        let old_mission = task.mission.clone();
+        let old_delivery = remise_native_150(&mut st, &task, "native-result-", false);
+        let canonical = serde_json::to_vec(&NativeDelegationRequest::Continue {
+            task_id: id.clone(),
+            request_id: "late-ack-second".into(),
+            task: "deuxième".into(),
+            brief: None,
+        })
+        .unwrap();
+        let next_mission = Uuid::new_v4().to_string();
+        task = st
+            .delegation_store
+            .begin_round(
+                &id,
+                1,
+                unix_timestamp,
+                crate::delegation::RoundRecord {
+                    round: 2,
+                    request_id: "late-ack-second".into(),
+                    digest: format!("{:x}", sha2::Sha256::digest(&canonical)),
+                },
+                &next_mission,
+                "deuxième",
+            )
+            .unwrap();
+        assert_eq!(task.unacked_rounds, vec![1]);
+        assert!(
+            st.delegation_store
+                .past_mission_task(&old_mission)
+                .unwrap()
+                .is_some()
+        );
+        task.state = "result_available".into();
+        task.result_sent = true;
+        task.cleanup_done = true;
+        task.guard_released = true;
+        task.idle_deadline_at = None;
+        st.delegation_store.save(&task).unwrap();
+        let message_id = task.result_message_id();
+        let key = IdempotencyKey::new(
+            &crate::communication::issuer_scope(&id),
+            OperationKind::Send,
+            &message_id,
+        )
+        .unwrap();
+        let now = unix_timestamp();
+        st.idempotency
+            .reserve(
+                &key,
+                message_id.as_bytes(),
+                now,
+                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                now,
+                CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            )
+            .unwrap();
+        let mut message =
+            bridget_core::BridgetMessage::new(&task.child, &task.owner, "deuxième résultat");
+        message.id = message_id;
+        let delivery = SendDelivery {
+            delivery_id: "delivery-round-two153".into(),
+            recipient_instance_id: "instance-1".into(),
+            delivery_generation: 1,
+            expires_at: now + CLIENT_IDEMPOTENCY_HORIZON_SECS,
+            message_bytes: serde_json::to_vec(&message).unwrap(),
+        };
+        st.idempotency.begin_send_delivery(&key, &delivery).unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: delivery.delivery_id,
+                    delivery_generation: 1
+                },
+                &shared
+            )
+            .is_none()
+        );
+        {
+            let st = shared.lock().unwrap();
+            assert_eq!(copy_delivery_acks(&st).unwrap(), 1);
+            let saved = st.delegation_store.get(&id).unwrap().unwrap();
+            assert!(
+                saved.delivery_acked,
+                "accusé de la ronde courante uniquement"
+            );
+            assert_eq!(saved.unacked_rounds, vec![1]);
+            assert_eq!(
+                st.delegation_store
+                    .purge_trees(now + 8 * JOUR_150, None, 128, |_| true)
+                    .unwrap(),
+                0
+            );
+        }
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: old_delivery,
+                    delivery_generation: 1
+                },
+                &shared
+            )
+            .is_none()
+        );
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            copy_delivery_acks(&st).unwrap(),
+            1,
+            "ancienne ronde recopiée même si delivery_acked courant est vrai"
+        );
+        assert!(
+            st.delegation_store
+                .get(&id)
+                .unwrap()
+                .unwrap()
+                .unacked_rounds
+                .is_empty()
+        );
+        assert_eq!(copy_delivery_acks(&st).unwrap(), 0);
+        assert_eq!(
+            st.delegation_store
+                .purge_trees(now + 8 * JOUR_150, None, 128, |_| true)
+                .unwrap(),
+            1
+        );
+        assert!(
+            st.delegation_store
+                .past_mission_task(&old_mission)
+                .unwrap()
+                .is_none()
+        );
+        cleanup(&config);
+    }
+
     // T002 : réutiliser la vraie admission et remise de mission de la fixture150.
     // Les sockets restent ouverts pour observer les avis et les reprises.
     fn mission_152(paused: bool) -> (
@@ -2482,7 +4535,7 @@ mod tests {
         BufReader<UnixStream>,
         BufReader<UnixStream>,
     ) {
-        let (shared, config, id, _, _) = parent_en_cours_150(Some(120), 0);
+        let (shared, config, id, _, _) = parent_en_cours_150(request_delai_150("parent", Some(120)), 0);
         let (parent_writer, parent_reader) =
             super::super::presence_tests::control_socket("n152-parent");
         let (child_writer, child_reader) =
@@ -5575,6 +7628,8 @@ mod tests {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             posture: Some(SpawnPosture::Discovery),
             reply_timeout: None,
+            keep_alive_secs: None,
+            brief: None,
         }
     }
     fn cleanup(config: &DaemonConfig) {
@@ -6480,6 +8535,8 @@ mod tests {
             cwd: std::env::temp_dir().to_string_lossy().into_owned(),
             posture: Some(SpawnPosture::Discovery),
             reply_timeout: None,
+            keep_alive_secs: None,
+            brief: None,
         };
         handle_locked("conn-1", job, &mut st).unwrap();
         let shared = Arc::new(Mutex::new(st));
@@ -7292,10 +9349,10 @@ mod tests {
     }
 
     /// Une mission parente en cours (`working`, échéance posée) dont l'enfant délègue à son tour.
-    fn parent_en_cours_150(delai: Option<u64>, retard: i64) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
+    fn parent_en_cours_150(native_request: NativeDelegationRequest, retard: i64) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
         use std::io::BufRead;
         let (mut st, config, rx, _parent_reader) = fixture("n150-delai-parent");
-        let first = handle_locked("conn-1", request_delai_150("parent", delai), &mut st).unwrap();
+        let first = handle_locked("conn-1", native_request, &mut st).unwrap();
         let task_id = first["task_id"].as_str().unwrap().to_owned();
         if retard > 0 {
             // Lancement retardé : la tâche a été admise `retard` secondes avant d'être lancée.
@@ -7344,7 +9401,7 @@ mod tests {
 
     #[test]
     fn native150_delai_enfant_explicite_trop_long() {
-        let (shared, config, parent_id, deadline, _) = parent_en_cours_150(None, 0);
+        let (shared, config, parent_id, deadline, _) = parent_en_cours_150(request_delai_150("parent", None), 0);
         let mut st = shared.lock().unwrap();
         // Il reste au plus 3600 s au parent : 3601 s explicites le dépassent.
         assert!(deadline - unix_timestamp() <= 3600);
@@ -7363,7 +9420,7 @@ mod tests {
 
     #[test]
     fn native150_delai_enfant_implicite_inchange() {
-        let (shared, config, _parent_id, _deadline, _) = parent_en_cours_150(None, 0);
+        let (shared, config, _parent_id, _deadline, _) = parent_en_cours_150(request_delai_150("parent", None), 0);
         let mut st = shared.lock().unwrap();
         // Sans délai explicite : aucun contrôle, comme en 149.
         let implicite = handle_locked("child-conn", request_delai_150("sous-implicite", None), &mut st).unwrap();
@@ -7375,14 +9432,14 @@ mod tests {
 
     #[test]
     fn native150_delai_applique_echeance_et_suivi() {
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(Some(120), 0);
+        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", Some(120)), 0);
         assert_eq!(message.reply_timeout, Some(120), "suivi de la demande de mission");
         let created_at = shared.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap().created_at;
         assert!((120..=125).contains(&(deadline - created_at)), "échéance = admission + 120 s : {}", deadline - created_at);
         drop(shared);
         cleanup(&config);
         // Sans délai explicite : 3600 s, comme en 149.
-        let (shared, config, _task_id, _deadline, message) = parent_en_cours_150(None, 0);
+        let (shared, config, _task_id, _deadline, message) = parent_en_cours_150(request_delai_150("parent", None), 0);
         assert_eq!(message.reply_timeout, Some(3600));
         drop(shared);
         cleanup(&config);
@@ -7418,7 +9475,7 @@ mod tests {
 
     #[test]
     fn native150_delai_enfant_explicite_parent_sans_echeance() {
-        let (shared, config, parent_id, _deadline, _) = parent_en_cours_150(None, 0);
+        let (shared, config, parent_id, _deadline, _) = parent_en_cours_150(request_delai_150("parent", None), 0);
         let mut st = shared.lock().unwrap();
         // Parent sans échéance durable : aucun contrôle (R8), même pour le maximum.
         let mut parent = st.delegation_store.get(&parent_id).unwrap().unwrap();
@@ -7575,7 +9632,7 @@ mod tests {
     fn native150_delai_suivi_realigne_apres_echec_d_ecriture() {
         // Ancien suivi150 divergent : la date d'émission152 ne nécessite plus
         // d'alignement au premier envoi. Conserver le cas réel d'UPDATE en échec.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(Some(120), 30);
+        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", Some(120)), 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
@@ -7604,7 +9661,7 @@ mod tests {
     #[test]
     fn native150_delai_suivi_aligne_sur_admission_apres_lancement_retarde() {
         // Délai explicite, lancement retardé de 30 s : le suivi durable suit l'admission de la mission.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(Some(120), 30);
+        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", Some(120)), 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
@@ -7620,7 +9677,7 @@ mod tests {
         drop(shared);
         cleanup(&config);
         // FR-010 : le défaut3600 part aussi de la première émission de mission.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(None, 30);
+        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", None), 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();

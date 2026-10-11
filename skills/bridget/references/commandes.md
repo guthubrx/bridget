@@ -95,7 +95,7 @@ Exception133 : un sous-agent interne T3 attesté ne peut utiliser que
 `bridget_who` et `bridget_send`, avec provenance enfant et routage du parent.
 Il n'a ni boîte de réception ni identité durable ; la réponse revient au parent.
 
-La politique fournisseur100, étendue en151, autorise la liste fermée des outils
+La politique fournisseur100, étendue en151 et153, autorise la liste fermée des outils
 Bridget ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 
@@ -116,14 +116,15 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_status` — lire la santé assainie du daemon.
 - `bridget_control_status` — lire l'état de contrôle, le compte inbox et un historique borné.
 - `bridget_capabilities` — lire le catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent, avec `inherit`, `development` et leurs motifs de refus.
-- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent. `reply_timeout` (entier, 60 à 86 400 secondes, défaut 3600) fixe le délai de réponse de la mission ; il fait partie de l'enveloppe de rejeu.
-- `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant.
-- `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id`.
+- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent. `reply_timeout` (entier, 60 à 86 400 secondes, défaut 3600) fixe le délai de réponse de la mission. `keep_alive_secs` (entier, 60 à 7 200) garde l'enfant après le résultat ; `brief` ajoute un dossier structuré facultatif. Ces champs font partie de l'enveloppe de rejeu.
+- `bridget_task_continue` — ouvrir la ronde suivante avec `task_id`, `request_id` et `task` ; `brief` facultatif. Même enfant, dossier, modèle et posture ; huit rondes au plus, première comprise. Aucune sélection de fournisseur ou de droits dans cet appel.
+- `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant ; `round`, `idle_deadline_at` et `continuable` décrivent la ronde courante.
+- `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id` ; sur un résultat disponible avec garde, finir avec l'enfant en conservant l'état et le résultat.
 - `bridget_task_wait` — attendre de 1 à 16 tâches distinctes du parent, avec `task_ids` ; `wait_timeout` entier de 1 à 3600 secondes, défaut 600. Lecture pure, retour dès qu'une tâche termine.
 - `bridget_request_wait` — attendre sa demande suivie, avec `request_id` égal à l'`id` rendu par `bridget_send` avec `reply:true` ; mêmes bornes de `wait_timeout`. Lecture pure, sans nouvel envoi.
 - `bridget_task_ack` — déclarer la lecture de 1 à 16 tâches distinctes du parent, avec `task_ids`, en `result_available` ou `failed`. Accusé informatif, sans effet sur la remise ou la purge.
 
-Ces quatre outils148 utilisent le moteur Bridget avec ou sans T3. Le profil
+Les outils de délégation native utilisent le moteur Bridget avec ou sans T3. Le profil
 Bridget `glm` ne se confond pas avec l'instance fournisseur T3 `claude_glm`.
 Conserver exactement `request_id` et les arguments sur un rejeu. Le résultat
 revient automatiquement au parent avec sa corrélation de mission. Une fin de
@@ -150,6 +151,42 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Rondes et brief des missions natives (153)
+
+`bridget_task_continue` exige une tâche du même parent, `request_id` de 1 à
+128 caractères et `task` de 1 à 65 536 octets. Nouvelle clé à chaque ronde ;
+même clé et mêmes arguments pour un rejeu, y compris pendant la pause.
+L'ouverture donne une nouvelle mission et remet le résultat courant à vide.
+L'attente151 suit la ronde courante. Les messages des anciennes rondes conservent
+leurs identifiants et leurs propres accusés de remise.
+
+La garde commence à l'envoi du résultat. Le statut `continuable` indique ce
+résultat envoyé avec une garde présente ; délai, enfant, pause, plafond et droits
+sont revérifiés à l'appel. Le catalogue annonce `keep_alive_min_secs=60`,
+`keep_alive_max_secs=7200`, `max_rounds=8` et `brief_max_bytes=16384`.
+La fin explicite, l'expiration, l'arrêt humain, le nettoyage du parent et le
+redémarrage du daemon terminent la garde. L'arrêt doit être confirmé pour libérer
+la place. Une réponse authentifiée à une mission passée ne réveille pas le parent.
+
+`brief` reprend exactement le brouillon de `bridget_handoff` : `objective`
+et `summary` requis ; `results`, `decisions`, `questions`, `next_step`,
+`references` et `limitations` facultatifs. Corps rendu de 16 384 octets au
+plus, sans troncature. Champ inconnu ou `null` : `brief_invalid`. Dossier puis
+consigne dans une mission unique. Sources non vérifiées, aucune lecture implicite ;
+le journal peut être plus largement lisible que l'enfant, aucun secret.
+
+Sept refus ajoutés : `brief_invalid`, `keep_alive_out_of_range`,
+`keep_alive_not_enabled`, `keep_alive_ended`, `round_in_progress`,
+`result_delivery_pending`, `round_limit`. `result_delivery_pending` permet
+de reprendre le même appel après environ une seconde ; la clé reste libre.
+Une garde finie ne se réouvre pas. Les refus existants d'identité, de pause,
+de source et de droits restent applicables. La politique actuelle doit être
+identique à celle figée pour l'enfant, sans retirer de champ de sécurité.
+
+Le même processus ne prouve pas la mémoire d'un vrai modèle. Un contexte long
+peut renforcer un biais. Pour une contre-revue indépendante, créer une nouvelle
+délégation. La recette réelle de mémoire reste distincte des tests synthétiques.
 
 ## Pause et reprise des missions natives (152)
 
@@ -1039,7 +1076,7 @@ réelle a été réussie ; vérifier le catalogue et les résultats des appels.
 
 ## Version active et rechargement
 
-Comparer le catalogue réellement retourné par le client avec les vingt-trois noms
+Comparer le catalogue réellement retourné par le client avec les vingt-quatre noms
 ci-dessus avant d'annoncer la disponibilité des outils. Un binaire installé et un
 serveur MCP vivant sont deux processus distincts : une ancienne session garde
 son ancien binaire et son ancien catalogue. Les garanties de domaine exigent en

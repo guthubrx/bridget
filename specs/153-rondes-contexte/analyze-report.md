@@ -1,70 +1,124 @@
-# Rapport d'analyse - Session153 rondes multiples et contexte transmis
+# Analyze153 — deux passages, gate documentaire final
 
-Date : 2026-10-11. Analyse en lecture seule des artefacts `spec.md`, `plan.md`,
-`research.md`, `data-model.md`, `contracts/rounds153.md`, `tasks.md`,
-`reuse-audit.md`, `checklists/requirements.md`. Aucun code n'a été modifié.
+Statut : PASS. Aucun CRITICAL/HIGH actif ; périmètre inchangé.
+SPECIFY_FEATURE=153-rondes-contexte ; feature dir : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte.
 
-## Couverture
+## Prérequis officiels et fallback
 
-| Élément | Résultat |
-|---|---|
-| Exigences FR-001 à FR-033 | 33 sur 33 reliées à au moins une tâche |
-| Critères SC-001 à SC-017 | 17 sur 17 reliés à un test ou à la recette (SC-002 : recette réelle T024 + test `child_instance` T013/T019) |
-| Scénarios US1 à US5 | 5 sur 5 ont une phase de tâches et un filtre de test |
-| Tâches sans exigence | 0 (T001, T021, T025 à T027 sont des tâches de clôture) |
-| Tests rouges d'abord | T004, T005, T008, T013 précèdent leur code |
+Sync officiel exécuté dans WT153 :
+`python3 /Users/moi/.speckit/scripts/sync-project.py`, RC0, ponts à jour,
+sélection étrangère147 conservée. Préchecks officiels paths-only puis
+require-tasks/include-tasks : RC127, script
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/.specify/scripts/bash/check-prerequisites.sh` absent.
+Aucun hooks/extensions présent à contourner. Fallback manuel complet autorisé
+par le pipeline : artefacts réels, constitution, checklists, code livré et
+matrice inspectés. Aucun script/helper installé.
 
-Table FR vers tâches : FR-001 à FR-006 : T005-T007. FR-007 à FR-014 : T008-T012.
-FR-015 à FR-022 : T004, T013-T016. FR-023, FR-024 : T006, T009, T018. FR-025 :
-T002, T003, T021. FR-026 : T012, T029. FR-027 : T004, T020. FR-028 : T017, T022.
-FR-029 : T004, T029. FR-030 : T028. FR-031 : T014. FR-032 : T004, T015.
-FR-033 : T008, T010, T011.
+Premier passage Analyse en lecture seule :11 constats ci-dessous avant éditions.
+Auto-fix documentaire153 autorisé par my-specify-all et le principal.
+Second passage en lecture seule sur les fichiers corrigés : identifiants et
+mapping contrôlés ; anciennes contradictions retirées ; décisions Sonnet F1–F8
+prises dans les tâches existantes ; aucun relâchement de sécurité.
 
-## Cohérence entre artefacts
-
-| Point contrôlé | Verdict |
-|---|---|
-| Nombre de refus : 7 dans spec (FR-003, FR-007, FR-019), contrat et plan | cohérent |
-| Nombre de rondes : 8 dans spec, contrat, data-model, tâches | cohérent |
-| Bornes de garde 60 à 7 200 dans spec, contrat, catalogue (T009) | cohérent |
-| Ordre des refus : plan et contrat renvoient au plan | cohérent |
-| Aucun nouvel état (R2) et neuf états Lineage | cohérent |
-| Identifiant de résultat par ronde (R4, data-model, T016) | cohérent |
-| Numéro des tâches dans la fiche : 29 (T028 et T029 ajoutées après contre-revue, placées dans leur phase ; T030 supprimée après réalignement sur 151 révisée) | cohérent |
-| Table nouvelle (missions passées) : plan, data-model, reuse-audit, tâches T003/T029 | cohérent |
-| Format `tasks.md` : identifiant, marqueur `[P]`, `[USn]`, chemin | conforme |
-| Statuts et priorités SpecKit valides | conformes |
-| Tiret cadratin | absent |
-
-## Constats
-
-| # | Sévérité | Constat | Action |
+| ID | Gravité initiale | Constat | Résolution documentaire |
 |---|---|---|---|
-| A1 | Moyenne | SPEC-150 n'est pas livrée dans le checkout lu. Les prédicats de comptage et de purge, `AutonomousEffect::NativeDelegation` et la lecture de phase `acked` sont cités par spec, pas par ligne de code. | T001(b) relit le code de 150 avant T002. T012 et T016 en dépendent. |
-| A2 | Moyenne | Le lecteur T3 n'est pas dans ce dépôt. Une tâche qui passe de `result_available` à `mission_pending` n'est pas vérifiable côté T3. | Mutation visible normale (relecture complète) ; test T020 côté Bridget ; consigné « non vérifié » côté T3. |
-| A3 | Moyenne | SPEC-151 et SPEC-152 restent en évolution. `prepare_restart` est réécrit par 152 ; 151 ajoute `work_state` et peut ajouter des champs par ronde. | T001 liste les points ; invariant I5 ; T011(d) et T018 s'adaptent au code livré. |
-| A4 | Basse | Le délai d'inactivité n'est pas gelé par une pause : 152 ne gèle que les tâches non terminales (`suspended_at`). | Assumé et documenté (R11). Aucun résultat perdu. |
-| A5 | Basse | Une attente 151 lancée sur une tâche inactive rend aussitôt le résultat de la ronde précédente. | `round` ajouté aux vues (T018) ; sémantique écrite dans la documentation (T022). |
-| A6 | Basse | Le résultat de la ronde N est remplacé par celui de la ronde N+1 dans la tâche. Le résultat N reste dans le message remis au parent seulement. | Assumé. La remise de N reste protégée de la purge par `unacked_rounds` (FR-029). |
-| A7 | Basse | Corps de mission jusqu'à 80 Kio contre 120 000 caractères de plafond injecté. | Test de borne T005. |
-| A8 | Info | Les noms `ProjectRound` et `Continuation` (garde de pause) ressemblent aux rondes de tâche. | Différence notée dans `reuse-audit.md`, `research.md` R11 et l'ADR (T023). |
-| A10 | Moyenne | Le recalcul de la politique de l'enfant (`child_policy`) puis l'égalité avec la politique figée peut produire de faux refus si le JSON contient des champs variables. | T014 : test « ronde immédiate sans changement admise » ; repli : comparer les seuls champs de droits. |
-| A12 | Basse | Réalignement sur 151 révisée : l'attente est une lecture pure, `tick` seul écrit la remise. `continuable` est faux jusqu'à 1 s après la fin de ronde. | Refus réessayable `result_delivery_pending` (spec, contrat, T013, T015, T022) ; FR-033, I6 partagé et T030 supprimés ; `mark_result_sent` retiré (un seul appelant, Art. XIX) : la pose de la garde est locale à `tick`. |
-| A13 | Moyenne | Contre-revue ronde 2, point 1 : l'heure d'admission peut être périmée après les revérifications de sources. | `begin_round` relit l'heure (horloge injectable) ; I7, FR-032, T004, T015, SC-017. |
-| A14 | Moyenne | Contre-revue ronde 2, point 2 : une annulation reçue avant l'envoi du résultat n'avait aucun effet, puis la garde était posée. | `guard_released` durable ; FR-012, FR-033, I8, T008, T010, T011, SC-016. |
-| A15 | Basse | Contre-revue ronde 2, point 3 : la posture effective à la place de la posture demandée change la politique Codex. | Recalcul avec la posture demandée ; matrice de tests posture, parents natifs, conversions (T014, SC-017). Si l'égalité reste instable, arbitrage utilisateur, pas d'affaiblissement. |
-| A11 | Basse | T028 et T029 ne sont pas dans l'ordre numérique du fichier. | Voulu : numéros stables après contre-revue ; l'ordre d'exécution suit les phases (note dans Dépendances). |
-| A9 | Info | `human_cancel` sur une tâche inactive lève la garde sans mutation visible. Le contrat 149 dit « une tâche terminale rend son état courant ». | Compatible : le `status` ne change pas. Ajouter une phrase au contrat dans l'ADR 153. |
+| C1 | CRITICAL | Politique entière contredite par le fallback droits seuls | CLOS — plan.md Risques/T014 : fallback retiré, aucun champ omis |
+| C2 | HIGH | Option<Value> effaçait brief:null | CLOS — T002/T005/modèle : désérialiseur existant, vrai JSON des deux variantes |
+| C3 | HIGH | Reset trop large des champs151/152 | CLOS — I5/T004 : resets nommés, compteur2/checkpoint de vie entière préservés |
+| C4 | HIGH | Quatrième consommation résultat151 absente | CLOS — T016/T018 : current_task_view et TaskWait courants inclus |
+| C5 | CRITICAL | Quotas avec terminaux risquaient un scan | CLOS — T003/T012 : index même nom/quatre clés et migration Immediate gardée |
+| C6 | HIGH | Refus sans écriture contredisait la fin de garde | CLOS — FR019/contrat/T015 : seule confirmation durable de garde déjà finie |
+| C7 | MEDIUM | Références historiques et suspension fictive | CLOS — WT153,152 livré, journal pause/dates brutes et livraison coordonnée |
+| C8 | MEDIUM | Maximum FR033 pris pour33 exigences | CLOS — 31 identifiants présents ; FR027/028 absentes, aucun ajout |
+| C9 | MEDIUM | Filtre spec_103 vide et087 omis | CLOS — T001/T021/quickstart : six filtres réels,17 spec103 |
+| C10 | MEDIUM | Réemplois droits/MCP devenus obsolètes | CLOS — native_launch_registry et schéma Value réutilisés ;6→7/23→24/27→28 |
+| C11 | MEDIUM | T004 parallèle avant champs T003 | CLOS — Dépendance T004 après T003, coordination constructeurs T002/T003 |
 
-Aucun constat bloquant. Aucune duplication non arbitrée.
+## Couverture du contrat vers les tâches
 
-## Questions ouvertes (3, avec défaut)
+31/31 exigences présentes,17/17 critères,5/5 histoires,29 tâches.
+FR027 etFR028 n'existent pas dans le contrat ; elles ne sont pas inventées.
+Cette couverture mesure le mapping documentaire, pas la couverture des tests
+ni une réalisation du code153. T022–T027 couvrent documentation/recette/clôture.
 
-1. Bornes de la garde : 60 à 7 200 s, sans défaut.
-2. Plafond de rondes : 8.
-3. Brief : dossier de passation seul ; pas d'extrait d'historique du parent.
+| Exigence ou critère/histoire | Tâches de réalisation et preuve prévues |
+|---|---|
+| FR-001 | T002, T005, T006, T015, T017 |
+| FR-002 | T002, T005, T006, T015 |
+| FR-003 | T002, T005, T006, T015 |
+| FR-004 | T005, T006, T007, T015 |
+| FR-005 | T002, T005, T013, T015 |
+| FR-006 | T006, T017, T022 |
+| FR-007 | T002, T008, T009 |
+| FR-008 | T002, T008, T009 |
+| FR-009 | T008, T010 |
+| FR-010 | T003, T012 |
+| FR-011 | T008, T010, T011 |
+| FR-012 | T008, T011 |
+| FR-013 | T008, T011 |
+| FR-014 | T008, T011 |
+| FR-015 | T013, T015, T019 |
+| FR-016 | T004, T013, T015 |
+| FR-017 | T013, T015, T016, T019 |
+| FR-018 | T013, T015 |
+| FR-019 | T013, T015 |
+| FR-020 | T013, T014, T015 |
+| FR-021 | T013, T015 |
+| FR-022 | T014, T015, T019 |
+| FR-023 | T006, T009, T017 |
+| FR-024 | T003, T018, T020 |
+| FR-025 | T002, T003, T005, T021 |
+| FR-026 | T012 |
+| FR-029 | T004, T029 |
+| FR-030 | T003, T004, T028 |
+| FR-031 | T013, T014, T015 |
+| FR-032 | T004, T013, T015 |
+| FR-033 | T003, T004, T008, T011 |
+| SC-001 | T008, T010, T024 |
+| SC-002 | T019, T024 |
+| SC-003 | T013, T015 |
+| SC-004 | T012, T019 |
+| SC-005 | T012, T029 |
+| SC-006 | T008, T010 |
+| SC-007 | T013, T015 |
+| SC-008 | T005, T006 |
+| SC-009 | T001, T002, T003, T005, T021 |
+| SC-010 | T016, T019 |
+| SC-011 | T029 |
+| SC-012 | T028 |
+| SC-013 | T013, T014 |
+| SC-014 | T004, T013, T015 |
+| SC-015 | T012, T013, T015 |
+| SC-016 | T008, T011 |
+| SC-017 | T004, T014, T015 |
+| US-001 | T002, T003, T005, T006, T007, T017 |
+| US-002 | T008, T009, T010, T011, T012 |
+| US-003 | T013, T014, T015, T016, T017, T018, T028 |
+| US-004 | T012, T019, T020, T029 |
+| US-005 | T001, T002, T003, T005, T021 |
 
-## Verdict
+## Cinq gates manuels
 
-Prête pour l'implémentation, sous réserve de T001 (relecture du code de 150,
-151 et 152). Si T001 révèle un écart avec `plan.md`, corriger `plan.md` avant T002.
+- [x] Artefacts et sélection153 réels ; aucun étatfeature étranger modifié.
+- [x] Constitution/standards/checklists lus ; qualité du contrat distincte des tests.
+- [x] Couverture31FR/17SC/5US vers29tâches, sans exigence inventée.
+- [x] Réemploi frais PASS5/5 ; doublons et contradictions arbitrés.
+- [x] Dépendances150/151/152 présentes, baseline prouvée et ordre RED avant code.
+
+Réemploi : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/reuse-audit.md.
+Couplage : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/validation/couplage.md.
+Référence T001 : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/validation/baseline.md,
+**194 PASS/0 FAIL/1 ignoré**, six filtres réels ; ancien filtre vide conservé.
+200 empreintes Rust/Cargo.lock correspondent au code WT153 avant GO.
+La contre-revue de plan153r1 est APPROVE_WITH_CHANGES, corrections intégrées
+sans nouveaux IDs ni scénarios ; reçu :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte/specs/153-rondes-contexte/adversarial-review-claude.md.
+
+## Prochaine étape et limites
+
+T001 seule peut être cochée. T002/T003 fondations coordonnées ; T004 après T003.
+Owners proposés : protocole/MCP qualité ; magasin/projection/index persistance ;
+moteur natif/E2E façade. Aucun code/test153 encore produit par ce gate.
+Pas de modèle réel, T3, activation153, benchmark, mutation ou couverture mesurés.
+Les déclarations historiques de research restent marquées historiques et
+sont remplacées pour l'exécution par la carte actuelle de couplage.

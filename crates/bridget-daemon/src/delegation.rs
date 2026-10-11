@@ -46,6 +46,13 @@ pub(crate) struct DelegationStore {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RoundRecord {
+    pub round: u32,
+    pub request_id: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
     #[serde(default)]
@@ -105,6 +112,20 @@ pub(crate) struct Task {
     /// Arrêts déjà confirmés pour l'annulation de cet arbre.
     #[serde(default)]
     pub cancel_stopped: Vec<String>,
+    #[serde(default)]
+    pub round: u32,
+    #[serde(default)]
+    pub idle_deadline_at: Option<i64>,
+    #[serde(default)]
+    pub round_body: Option<String>,
+    #[serde(default)]
+    pub rounds: Vec<RoundRecord>,
+    #[serde(default)]
+    pub guarded: bool,
+    #[serde(default)]
+    pub guard_released: bool,
+    #[serde(default)]
+    pub unacked_rounds: Vec<u32>,
 }
 
 impl Task {
@@ -114,17 +135,49 @@ impl Task {
             "result_available" | "failed" | "cancelled"
         )
     }
+
+    pub fn round_no(&self) -> u32 {
+        self.round.max(1)
+    }
+
+    pub fn result_message_id(&self) -> String {
+        self.result_message_id_for_round(self.round_no())
+    }
+
+    /// O(L), L longueur de l'identifiant ; même règle pour les ACK passés.
+    pub fn result_message_id_for_round(&self, round: u32) -> String {
+        if round <= 1 {
+            format!("native-result-{}", self.task_id)
+        } else {
+            format!("native-result-{}-r{round}", self.task_id)
+        }
+    }
+
+    #[cfg(test)]
+    pub fn holds_slot(&self) -> bool {
+        !self.terminal() || (self.guarded && !self.cleanup_done)
+    }
+
+    pub fn continuable(&self) -> bool {
+        self.state == "result_available"
+            && self.result_sent
+            && self.idle_deadline_at.is_some()
+            && !self.guard_released
+    }
 }
 
 impl DelegationStore {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS native_delegations (
+        let tx = rusqlite::Transaction::new_unchecked(
+            &conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS native_delegations (
             task_id TEXT PRIMARY KEY, owner_instance TEXT NOT NULL,
             request_id TEXT NOT NULL, canonical BLOB NOT NULL, payload TEXT NOT NULL,
             UNIQUE(owner_instance, request_id));
-            CREATE INDEX IF NOT EXISTS native_delegations_state ON native_delegations(json_extract(payload,'$.state'));
             CREATE UNIQUE INDEX IF NOT EXISTS native_delegations_mission ON native_delegations(json_extract(payload,'$.mission'));
             CREATE UNIQUE INDEX IF NOT EXISTS native_delegations_owner_request ON native_delegations(json_extract(payload,'$.owner'),request_id);
             CREATE INDEX IF NOT EXISTS native_delegations_failed_agent ON native_delegations(json_extract(payload,'$.owner'),json_extract(payload,'$.state'));
@@ -133,7 +186,29 @@ impl DelegationStore {
             CREATE TABLE IF NOT EXISTS native_delegation_revocations (agent_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS native_delegation_refusals (
             owner TEXT NOT NULL, request_id TEXT NOT NULL, canonical BLOB NOT NULL,
-            code TEXT NOT NULL, refused_at INTEGER NOT NULL, PRIMARY KEY(owner, request_id));")?;
+            code TEXT NOT NULL, refused_at INTEGER NOT NULL, PRIMARY KEY(owner, request_id));
+            CREATE TABLE IF NOT EXISTS native_delegation_past_missions (
+            mission TEXT PRIMARY KEY, task_id TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS native_delegation_past_missions_task
+            ON native_delegation_past_missions(task_id);")?;
+        const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
+        const CURRENT_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'),coalesce(json_extract(payload,'$.guarded'),0),coalesce(json_extract(payload,'$.cleanup_done'),0),owner_instance)";
+        let existing: Option<String> = tx.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='native_delegations_state'",
+            [],
+            |row| row.get(0),
+        ).optional()?;
+        // Migration froide O(n log n) : un seul index existant est reconstruit.
+        match existing {
+            None => tx.execute_batch(CURRENT_INDEX)?,
+            Some(sql) if sql.trim() == CURRENT_INDEX => {}
+            Some(sql) if sql.trim() == LEGACY_INDEX => {
+                tx.execute_batch("DROP INDEX native_delegations_state")?;
+                tx.execute_batch(CURRENT_INDEX)?;
+            }
+            Some(_) => return Err(rusqlite::Error::InvalidQuery),
+        }
+        tx.commit()?;
         let (notify, receiver) = std::sync::mpsc::sync_channel(1);
         let store = Self {
             conn,
@@ -336,16 +411,17 @@ impl DelegationStore {
     }
 
     /// Comptages d'admission : (tâches actives, actives de l'instance, tâches conservées).
-    /// Complexité : O(a) pour les actives (a ≤ 128, recherche par l'index d'état),
+    /// Complexité : O(log n + a) pour les places (a ≤ 128, index d'état étendu),
     /// O(n) pour le total (balayage de l'index, n ≤ 4096) ; aucun payload n'est lu.
     pub fn admission_counts(&self, instance: &str) -> Result<(usize, usize, usize), String> {
-        const ACTIVE: &str = "json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling')";
+        const HOLDS_SLOT: &str = "json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling') OR (json_extract(payload,'$.state') IN ('result_available','failed','cancelled') AND coalesce(json_extract(payload,'$.guarded'),0)=1 AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0)";
         let count = |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<usize, String> {
             self.conn.query_row(&sql, args, |row| row.get(0)).map_err(|error| error.to_string())
         };
         Ok((
-            count(format!("SELECT count(*) FROM native_delegations WHERE {ACTIVE}"), &[])?,
-            count(format!("SELECT count(*) FROM native_delegations WHERE owner_instance=?1 AND {ACTIVE}"), &[&instance])?,
+            // Évite le parcours des terminaux par l'index owner_instance seul.
+            count(format!("SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE ({HOLDS_SLOT})"), &[])?,
+            count(format!("SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE owner_instance=?1 AND ({HOLDS_SLOT})"), &[&instance])?,
             count("SELECT count(*) FROM native_delegations".into(), &[])?,
         ))
     }
@@ -389,6 +465,16 @@ impl DelegationStore {
         payload
             .map(|payload| serde_json::from_str(&payload).map_err(|error| error.to_string()))
             .transpose()
+    }
+
+    /// O(log h + log n + B), h missions passées, n tâches et B octets du payload.
+    pub fn past_mission_task(&self, mission: &str) -> Result<Option<Task>, String> {
+        let payload: Option<String> = self.conn.query_row(
+            "SELECT task.payload FROM native_delegation_past_missions past JOIN native_delegations task ON task.task_id=past.task_id WHERE past.mission=?1",
+            [mission],
+            |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())?;
+        payload.map(|payload| serde_json::from_str(&payload).map_err(|error| error.to_string())).transpose()
     }
 
     pub fn grant(

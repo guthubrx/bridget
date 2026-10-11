@@ -2023,6 +2023,27 @@ pub enum NativeDelegationRequest {
         /// Délai de réponse de la mission en secondes ; absent = 3600 (session 150).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply_timeout: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep_alive_secs: Option<u64>,
+        // Un null explicite reste présent pour le refus métier ; l'absence
+        // conserve les octets des requêtes antérieures.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        brief: Option<serde_json::Value>,
+    },
+    Continue {
+        task_id: String,
+        request_id: String,
+        task: String,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        brief: Option<serde_json::Value>,
     },
     Status {
         task_id: String,
@@ -7894,6 +7915,8 @@ mod spec104_search_contract_tests {
             cwd: "/c".to_string(),
             posture: None,
             reply_timeout: None,
+            keep_alive_secs: None,
+            brief: None,
         };
         let expected = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
         assert_eq!(serde_json::to_vec(&request).unwrap(), expected.to_vec());
@@ -7906,6 +7929,64 @@ mod spec104_search_contract_tests {
             panic!("variante attendue : Delegate");
         };
         assert_eq!(reply_timeout, Some(120));
+    }
+
+    #[test]
+    fn native153_protocole_delegate_sans_champs_garde_octets150() {
+        let wire = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120}"#;
+        let request: NativeDelegationRequest = serde_json::from_slice(wire).unwrap();
+        let NativeDelegationRequest::Delegate {
+            keep_alive_secs,
+            brief,
+            ..
+        } = &request
+        else {
+            panic!("variante attendue : Delegate");
+        };
+        assert_eq!(*keep_alive_secs, None);
+        assert_eq!(*brief, None);
+        assert_eq!(serde_json::to_vec(&request).unwrap(), wire.to_vec());
+    }
+
+    #[test]
+    fn native153_protocole_continue_aller_retour() {
+        for wire in [
+            r#"{"operation":"continue","task_id":"child","request_id":"round2","task":"continue","brief":{"objective":"objectif","summary":"résultat"}}"#,
+            r#"{"operation":"continue","task_id":"child","request_id":"round2","task":"continue"}"#,
+            r#"{"operation":"continue","task_id":"child","request_id":"round2","task":"continue","brief":null}"#,
+        ] {
+            let request: NativeDelegationRequest = serde_json::from_str(wire).unwrap();
+            assert_eq!(serde_json::to_string(&request).unwrap(), wire);
+            assert!(matches!(request, NativeDelegationRequest::Continue { .. }));
+        }
+    }
+
+    #[test]
+    fn native153_protocole_brief_serialisation_deterministe() {
+        let first: NativeDelegationRequest = serde_json::from_str(
+            r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/c","keep_alive_secs":600,"brief":{"summary":"résultat","objective":"objectif"}}"#,
+        )
+        .unwrap();
+        let second: NativeDelegationRequest = serde_json::from_str(
+            r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/c","keep_alive_secs":600,"brief":{"objective":"objectif","summary":"résultat"}}"#,
+        )
+        .unwrap();
+        assert_eq!(first, second);
+        let encoded = serde_json::to_vec(&first).unwrap();
+        assert_eq!(encoded, serde_json::to_vec(&second).unwrap());
+        let NativeDelegationRequest::Delegate {
+            keep_alive_secs,
+            brief,
+            ..
+        } = serde_json::from_slice(&encoded).unwrap()
+        else {
+            panic!("variante attendue : Delegate");
+        };
+        assert_eq!(keep_alive_secs, Some(600));
+        assert_eq!(
+            brief,
+            Some(serde_json::json!({"objective":"objectif","summary":"résultat"}))
+        );
     }
 
     #[test]

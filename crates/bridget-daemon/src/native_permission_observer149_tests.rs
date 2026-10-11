@@ -191,10 +191,10 @@ fn native149_cycle_de_vie_fichiers_prives_et_nettoyage_raii() {
     assert_eq!(vus.len(), 2, "exactement socket + overlay : {vus:?}");
     assert!(vus.iter().any(|name| name.starts_with("np-") && name.ends_with(".sock")));
     assert!(vus.iter().any(|name| name.starts_with("no-") && name.ends_with(".json")));
-    // La composition d'overlay vise les deux outils Bridget, et rien d'autre.
+    // La composition vise Delegate, Continue et Capabilities, et rien d'autre.
     let settings: Value = serde_json::from_slice(&fs::read(observer.overlay()).unwrap()).unwrap();
     let matcher = settings["hooks"]["PreToolUse"][0]["matcher"].as_str().unwrap();
-    assert_eq!(matcher, "mcp__bridget__bridget_delegate|mcp__bridget__bridget_capabilities");
+    assert_eq!(matcher, "mcp__bridget__bridget_delegate|mcp__bridget__bridget_task_continue|mcp__bridget__bridget_capabilities");
     // Aucun droit de la session ne traverse l'overlay.
     let overlay = fs::read_to_string(observer.overlay()).unwrap();
     assert!(!overlay.contains("session_id") && !overlay.contains("prompt_id") && !overlay.contains("nonce"));
@@ -204,37 +204,45 @@ fn native149_cycle_de_vie_fichiers_prives_et_nettoyage_raii() {
 
 #[test]
 fn native149_fait_publie_acquitte_le_hook_avant_sa_reprise() {
-    let root = fixture_root("ack");
-    let (emit, rx) = collector();
-    let observer = Observer::start(&root, &definition(&root), &[], "instance-149", emit).unwrap();
-    let out = root.join("out-ack.json");
-    let client = connect_payload(&observer, &root, valid_payload(&observer, "sess-149", json!({"request_id":"req-149"})), &out);
-    observer.bind_provider(client.id()).unwrap();
-    let (fact, request_id, observation_id, unavailable) = wait_fact(&rx);
-    assert!(unavailable.is_none());
-    let fact = fact.expect("le fait validé est publié");
-    assert_eq!(fact.version, 1);
-    assert_eq!(fact.source, "native_wrapper");
-    assert_eq!(fact.run_id, "prompt-149");
-    assert_eq!(fact.provider_session_id, "sess-149");
-    assert_eq!(fact.provider_instance_id, "instance-149");
-    assert_eq!(fact.driver, "claude_stream_json");
-    assert_eq!(fact.cwd, std::env::current_dir().unwrap().to_string_lossy());
-    assert_eq!(fact.runtime_mode, "approval-required");
-    assert_eq!(fact.interaction_mode, "default");
-    assert_eq!(fact.provider_policy["permission_mode"], json!("default"));
-    assert_eq!(fact.provider_policy["permission_callback"]["kind"], json!("native_wrapper"));
-    assert!(fact.provider_policy["launch_context"].is_object());
-    assert_eq!(bridget_transport::protocol::validate_permissions(&fact, false), Ok(()));
-    assert_eq!(request_id.as_deref(), Some("req-149"), "la demande délégataire est corrélée");
-    let observation_id = observation_id.expect("observation corrélée");
-    // Ni le nonce, ni le socket, ni l'overlay ne quittent l'observer.
-    let (_, nonce) = overlay_identity(&observer);
-    let sérialisé = serde_json::to_string(&fact).unwrap();
-    assert!(!sérialisé.contains(&nonce) && !sérialisé.contains("np-") && !sérialisé.contains("no-"));
-    // L'ACK précède la reprise du hook : sans lui, rien ne repart.
-    Observer::acknowledge(&observer.acknowledgement_sink(), observation_id, true);
-    assert_eq!(wait_file(&out), "{\"accepted\":true,\"code\":\"ok\"}");
+    for (tool, scope) in [
+        ("mcp__bridget__bridget_delegate", "req-149"),
+        ("mcp__bridget__bridget_task_continue", "req-153-r2"),
+    ] {
+        let root = fixture_root("ack");
+        let (emit, rx) = collector();
+        let observer = Observer::start(&root, &definition(&root), &[], "instance-149", emit).unwrap();
+        let out = root.join("out-ack.json");
+        let mut payload = valid_payload(&observer, "sess-149", json!({"request_id":scope}));
+        payload["tool_name"] = json!(tool);
+        let mut client = connect_payload(&observer, &root, payload, &out);
+        observer.bind_provider(client.id()).unwrap();
+        let (fact, request_id, observation_id, unavailable) = wait_fact(&rx);
+        assert!(unavailable.is_none());
+        let fact = fact.expect("le fait validé est publié");
+        assert_eq!(fact.version, 1);
+        assert_eq!(fact.source, "native_wrapper");
+        assert_eq!(fact.run_id, "prompt-149");
+        assert_eq!(fact.provider_session_id, "sess-149");
+        assert_eq!(fact.provider_instance_id, "instance-149");
+        assert_eq!(fact.driver, "claude_stream_json");
+        assert_eq!(fact.cwd, std::env::current_dir().unwrap().to_string_lossy());
+        assert_eq!(fact.runtime_mode, "approval-required");
+        assert_eq!(fact.interaction_mode, "default");
+        assert_eq!(fact.provider_policy["permission_mode"], json!("default"));
+        assert_eq!(fact.provider_policy["permission_callback"]["kind"], json!("native_wrapper"));
+        assert!(fact.provider_policy["launch_context"].is_object());
+        assert_eq!(bridget_transport::protocol::validate_permissions(&fact, false), Ok(()));
+        assert_eq!(request_id.as_deref(), Some(scope), "demande corrélée pour {tool}");
+        let observation_id = observation_id.expect("observation corrélée");
+        // Ni le nonce, ni le socket, ni l'overlay ne quittent l'observer.
+        let (_, nonce) = overlay_identity(&observer);
+        let sérialisé = serde_json::to_string(&fact).unwrap();
+        assert!(!sérialisé.contains(&nonce) && !sérialisé.contains("np-") && !sérialisé.contains("no-"));
+        // L'ACK précède la reprise du hook : sans lui, rien ne repart.
+        Observer::acknowledge(&observer.acknowledgement_sink(), observation_id, true);
+        assert_eq!(wait_file(&out), "{\"accepted\":true,\"code\":\"ok\"}");
+        assert!(client.wait().unwrap().success());
+    }
 }
 
 #[test]
@@ -272,14 +280,19 @@ fn native149_overlay_modifie_est_refuse_par_un_refus_nomme() {
 
 #[test]
 fn native149_delegation_sans_request_id_est_refusee_sans_fait() {
-    let root = fixture_root("unbound");
-    let (emit, rx) = collector();
-    let observer = Observer::start(&root, &definition(&root), &[], "instance-149", emit).unwrap();
-    let out = root.join("out-unbound.json");
-    let client = connect_payload(&observer, &root, valid_payload(&observer, "sess-149", json!({})), &out);
-    observer.bind_provider(client.id()).unwrap();
-    assert_eq!(wait_file(&out), "{\"accepted\":false,\"code\":\"permission_attestation_unavailable\"}");
-    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "aucun fait émis sans request_id");
+    for tool in ["mcp__bridget__bridget_delegate", "mcp__bridget__bridget_task_continue"] {
+        let root = fixture_root("unbound");
+        let (emit, rx) = collector();
+        let observer = Observer::start(&root, &definition(&root), &[], "instance-149", emit).unwrap();
+        let out = root.join("out-unbound.json");
+        let mut payload = valid_payload(&observer, "sess-149", json!({}));
+        payload["tool_name"] = json!(tool);
+        let mut client = connect_payload(&observer, &root, payload, &out);
+        observer.bind_provider(client.id()).unwrap();
+        assert_eq!(wait_file(&out), "{\"accepted\":false,\"code\":\"permission_attestation_unavailable\"}");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "aucun fait émis sans request_id pour {tool}");
+        assert!(client.wait().unwrap().success());
+    }
 }
 
 #[test]

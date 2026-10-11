@@ -1,0 +1,36 @@
+{
+  "started_at": "2026-10-11T19:33:49.753349+00:00",
+  "seconds": 18.91,
+  "command": [
+    "/opt/homebrew/anaconda3/bin/python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-transport",
+    "native153_protocole",
+    "--lib",
+    "--",
+    "--test-threads=4",
+    "--nocapture"
+  ],
+  "cwd": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/153-rondes-contexte",
+  "environment": {
+    "HOME": "/Users/moi",
+    "TMPDIR": "/private/tmp/b.p1xqyp4_",
+    "BRIDGET_HOME": "/private/tmp/b.p1xqyp4_/ns",
+    "PATH": "/opt/homebrew/anaconda3/bin:/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "CARGO_TARGET_DIR": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target",
+    "BRIDGET_BUILD_CACHE_GIB": "20"
+  },
+  "rc": 0,
+  "source_sha_before": "a65d6849698d24c230b816036895d4a69e718ae6ac83e35cb64bc56535361350",
+  "source_sha_after": "a65d6849698d24c230b816036895d4a69e718ae6ac83e35cb64bc56535361350",
+  "results": [
+    "ok. 3 passed; 0 failed; 0 ignored; 0 measured; 306 filtered out; finished in 0.00s"
+  ],
+  "log": "/Users/moi/.cache/bridget-delivery153.46dlquql/t002-protocol153-r1.log",
+  "log_sha256": "996380aad46512f7aba4acd58c8e341a453070a21cd791f9c1f9aacef1046a7a"
+}

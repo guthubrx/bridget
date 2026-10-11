@@ -171,6 +171,8 @@ fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Opti
         cwd: cwd.into(),
         posture,
         reply_timeout: None,
+        keep_alive_secs: None,
+        brief: None,
     }
 }
 
@@ -201,10 +203,14 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
     assert_eq!(
         clés,
         [
+            "brief_max_bytes",
             "cwd_root",
             "cwd_scope",
+            "keep_alive_max_secs",
+            "keep_alive_min_secs",
             "max_children",
             "max_depth",
+            "max_rounds",
             "mission_reply_limit_secs",
             "mission_reply_max_secs",
             "mission_reply_min_secs",
@@ -217,6 +223,10 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
     assert_eq!(catalogue["mission_reply_limit_secs"], 3600);
     assert_eq!(catalogue["mission_reply_min_secs"], 60);
     assert_eq!(catalogue["mission_reply_max_secs"], 86_400);
+    assert_eq!(catalogue["brief_max_bytes"], 16_384);
+    assert_eq!(catalogue["keep_alive_min_secs"], 60);
+    assert_eq!(catalogue["keep_alive_max_secs"], 7200);
+    assert_eq!(catalogue["max_rounds"], 8);
     for entry in fixture_entries(&catalogue) {
         assert_eq!(entry["inherit"], true, "{}", entry["agent_type"]);
         assert_eq!(entry["development"], true, "{}", entry["agent_type"]);
@@ -356,6 +366,13 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
         reply_timeout: None,
         delivery_acked: false,
         acknowledged_at: None,
+        round: 0,
+        idle_deadline_at: None,
+        round_body: None,
+        rounds: Vec::new(),
+        guarded: false,
+        guard_released: false,
+        unacked_rounds: Vec::new(),
         launch_issued_at: None,
         mission_issued_at: None,
         restart_resumes: 0,
@@ -431,6 +448,294 @@ fn native149_spawn_refuse_les_entrees_gelees_changees_sans_lancement() {
     assert_eq!(erreur, "settings_revision_changed");
     assert!(rx.try_recv().is_err(), "launch count inchangé");
     let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native153_ronde_politique_complete_matrice() {
+    for (parent, target) in [
+        ("codex", "native-test"),
+        ("codex", "claude-child"),
+        ("claude", "claude-child"),
+        ("native", "native-test"),
+    ] {
+        for posture in [
+            None,
+            Some(SpawnPosture::Discovery),
+            Some(SpawnPosture::Development),
+        ] {
+            let (mut st, config, rx, _parent_reader) = fixture_with_reader("round-policy");
+            let root = st.fixture_root.as_ref().unwrap().0.clone();
+            let cwd = root.join("project-149").canonicalize().unwrap();
+            let fact = if parent == "claude" {
+                claude_fact(
+                    &root.join("config-149"),
+                    &cwd,
+                    &st.source_env,
+                    "bypassPermissions",
+                )
+            } else {
+                codex_fact(
+                    cwd.to_str().unwrap(),
+                    json!({"type":"dangerFullAccess"}),
+                    "never",
+                )
+            };
+            insert_fact(&mut st, fact, None);
+            let mut readers = Vec::new();
+            let mut task = None;
+            let mut requester = "conn-1".to_owned();
+            for stage in 0..if parent == "native" { 2 } else { 1 } {
+                let mut request = delegate_request(
+                    target,
+                    &format!("policy-{stage}"),
+                    cwd.to_str().unwrap(),
+                    posture,
+                );
+                if let NativeDelegationRequest::Delegate {
+                    keep_alive_secs, ..
+                } = &mut request
+                {
+                    *keep_alive_secs = Some(120);
+                }
+                let view = handle_locked(&requester, request, &mut st).unwrap();
+                let mut admitted = st
+                    .delegation_store
+                    .get(view["task_id"].as_str().unwrap())
+                    .unwrap()
+                    .unwrap();
+                spawn_task(&mut st, &mut admitted).unwrap();
+                let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap()
+                else {
+                    panic!("lancement de la fixture attendu")
+                };
+                let connection = format!("policy-child-{stage}");
+                let (writer, reader) = super::super::presence_tests::control_socket("n153-policy");
+                let host = st.host.clone();
+                assert!(matches!(
+                    handle_register_with_channel(
+                        &connection,
+                        2,
+                        prepared.agent_type.clone(),
+                        prepared.lease.name.clone(),
+                        Some(host),
+                        Some(prepared.resolved_definition.protocol.clone()),
+                        ChannelReport::Known("unix".into()),
+                        Some(
+                            if prepared.resolved_definition.protocol == "codex_app_server" {
+                                PresenceMode::Acp
+                            } else {
+                                PresenceMode::Cli
+                            }
+                        ),
+                        None,
+                        Some("macOS".into()),
+                        Some(prepared.lease.instance_id.clone()),
+                        None,
+                        false,
+                        Some(true),
+                        &mut st
+                    ),
+                    DaemonToWrapper::Registered { .. }
+                ));
+                st.connections.insert(connection.clone(), writer);
+                st.fleet
+                    .register_connected(
+                        &prepared.lease,
+                        &prepared.lease.instance_id,
+                        unix_timestamp(),
+                    )
+                    .unwrap();
+                st.managed_spawns
+                    .get_mut(&admitted.task_id)
+                    .unwrap()
+                    .wrapper_conn = Some(connection.clone());
+                admitted.state = "working".into();
+                st.store
+                    .create_request(&admitted.mission, &admitted.owner, &admitted.child, 3600)
+                    .unwrap();
+                st.delegation_store.save(&admitted).unwrap();
+                readers.push(reader);
+                task = Some(admitted);
+                if parent == "native" && stage == 0 {
+                    requester = connection;
+                }
+            }
+            let mut task = task.unwrap();
+            assert!(task.permission_snapshot.is_some());
+            let policy = task
+                .permission_snapshot
+                .as_ref()
+                .unwrap()
+                .child_policy
+                .clone();
+            let definition = task.definition.clone();
+            task.state = "result_available".into();
+            task.result = Some("résultat de la politique héritée".into());
+            task.result_sent = true;
+            task.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&task).unwrap();
+            let view = handle_locked(
+                &requester,
+                NativeDelegationRequest::Continue {
+                    task_id: task.task_id.clone(),
+                    request_id: "policy-round-2".into(),
+                    task: "relecture".into(),
+                    brief: None,
+                },
+                &mut st,
+            )
+            .unwrap();
+            assert_eq!(
+                view["status"], "mission_pending",
+                "parent={parent}, cible={target}, posture={posture:?}"
+            );
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(
+                saved.permission_snapshot.as_ref().unwrap().child_policy,
+                policy,
+                "toute la politique, aucun champ retiré"
+            );
+            assert_eq!(saved.definition, definition);
+            let NativeDelegationRequest::Delegate {
+                posture: original, ..
+            } = saved.request
+            else {
+                unreachable!()
+            };
+            assert_eq!(original, posture, "None reste la demande d'origine");
+            assert_eq!(saved.child_instance, task.child_instance);
+            assert!(rx.try_recv().is_err());
+            let _ = fs::remove_file(&config.db_path);
+        }
+    }
+}
+
+#[test]
+fn native153_ronde_sources_changees_et_attestation_courante() {
+    for (case, expected) in [
+        ("source", "settings_revision_changed"),
+        ("reduite", "permission_not_inherited"),
+        ("absente", "permission_attestation_unavailable"),
+    ] {
+        let (mut st, config, rx, _parent_reader) = fixture_with_reader("round-recheck");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").canonicalize().unwrap();
+        let settings = root.join("config-149/settings.json");
+        fs::write(&settings, br#"{"model":"fixture-153"}"#).unwrap();
+        let target = if case == "source" {
+            "claude-child"
+        } else {
+            "native-test"
+        };
+        let fact = if case == "source" {
+            claude_fact(
+                &root.join("config-149"),
+                &cwd,
+                &st.source_env,
+                "bypassPermissions",
+            )
+        } else {
+            codex_fact(
+                cwd.to_str().unwrap(),
+                json!({"type":"dangerFullAccess"}),
+                "never",
+            )
+        };
+        insert_fact(&mut st, fact, None);
+        let mut request = delegate_request(target, "recheck-first", cwd.to_str().unwrap(), None);
+        if let NativeDelegationRequest::Delegate {
+            keep_alive_secs, ..
+        } = &mut request
+        {
+            *keep_alive_secs = Some(120);
+        }
+        let view = handle_locked("conn-1", request, &mut st).unwrap();
+        let mut task = st
+            .delegation_store
+            .get(view["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        spawn_task(&mut st, &mut task).unwrap();
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("lancement géré attendu")
+        };
+        let (writer, _reader) = super::super::presence_tests::control_socket("n153-recheck");
+        let host = st.host.clone();
+        assert!(matches!(
+            handle_register_with_channel(
+                "recheck-child",
+                2,
+                prepared.agent_type.clone(),
+                prepared.lease.name.clone(),
+                Some(host),
+                Some(prepared.resolved_definition.protocol.clone()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Cli),
+                None,
+                Some("macOS".into()),
+                Some(prepared.lease.instance_id.clone()),
+                None,
+                false,
+                Some(true),
+                &mut st
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        st.connections.insert("recheck-child".into(), writer);
+        st.fleet
+            .register_connected(
+                &prepared.lease,
+                &prepared.lease.instance_id,
+                unix_timestamp(),
+            )
+            .unwrap();
+        st.managed_spawns
+            .get_mut(&task.task_id)
+            .unwrap()
+            .wrapper_conn = Some("recheck-child".into());
+        task.state = "result_available".into();
+        task.result = Some("résultat acquis avant recontrôle".into());
+        task.result_sent = true;
+        task.idle_deadline_at = Some(unix_timestamp() + 120);
+        st.delegation_store.save(&task).unwrap();
+        if case == "source" {
+            fs::write(&settings, br#"{"model":"mutated-153"}"#).unwrap();
+        }
+        if case == "reduite" {
+            insert_fact(
+                &mut st,
+                codex_fact(
+                    cwd.to_str().unwrap(),
+                    json!({"type":"readOnly","networkAccess":false}),
+                    "never",
+                ),
+                None,
+            );
+        }
+        if case == "absente" {
+            st.native_permission_facts.clear();
+        }
+        let before =
+            serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        let error = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Continue {
+                task_id: task.task_id.clone(),
+                request_id: "recheck-round-2".into(),
+                task: "suite".into(),
+                brief: None,
+            },
+            &mut st,
+        )
+        .unwrap_err();
+        assert_eq!(error, expected, "cas={case}");
+        assert_eq!(
+            serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        assert!(rx.try_recv().is_err());
+        let _ = fs::remove_file(&config.db_path);
+    }
 }
 
 // ── Reprise après redémarrage du daemon (recette R9.2) ──────────────────────
