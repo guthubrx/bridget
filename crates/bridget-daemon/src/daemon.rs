@@ -7170,6 +7170,38 @@ const SEND_PURGE_GRACE_SECS: i64 = 30 * 24 * 3600;
 /// Âge minimal d'un nom ou d'une preuve d'identité orphelins avant retrait.
 const IDENTITY_FILES_MIN_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
 
+/// Entretien des magasins SQLite, sous le verrou de l'état. Ordre imposé (session 150) :
+/// la recopie des accusés natifs précède `purge_expired_sends`, qui efface les remises
+/// quelle que soit leur phase ; la purge des arbres suit, jamais au démarrage.
+fn maintain_stores(st: &DaemonState, now: i64) {
+    match st.idempotency.settle_expired_dispatching(now) {
+        Ok(0) => {}
+        Ok(count) => info!(
+            "entretien: {count} remise(s) expirée(s) passée(s) de « en vol » à « sort inconnu »"
+        ),
+        Err(error) => warn!("entretien: remises expirées : {error}"),
+    }
+    // Sans preuve enregistrée, les remises ne sont pas effacées dans ce passage.
+    match native_delegation::copy_delivery_acks(st) {
+        Ok(acked) => {
+            if acked > 0 {
+                info!("entretien: {acked} accusé(s) de remise native recopié(s) dans les tâches");
+            }
+            match st.idempotency.purge_expired_sends(now, SEND_PURGE_GRACE_SECS) {
+                Ok(0) => {}
+                Ok(count) => {
+                    info!("entretien: {count} envoi(s) expiré(s) depuis plus de 30 jours purgé(s)")
+                }
+                Err(error) => warn!("entretien: purge des envois : {error}"),
+            }
+        }
+        Err(error) => {
+            warn!("entretien: accusés natifs non recopiés, purge des envois suspendue : {error}")
+        }
+    }
+    native_delegation::maintain_retention(st, now);
+}
+
 /// Session 116 : un passage d'entretien. Chaque étape est indépendante : un
 /// échec est journalisé et n'empêche pas les suivantes. Le verrou de l'état
 /// n'est tenu que pour les deux requêtes SQL et la lecture des instances
@@ -7178,23 +7210,7 @@ fn run_maintenance(state: &Arc<Mutex<DaemonState>>, root: &std::path::Path) {
     let now = unix_now_secs();
     let connected: HashSet<String> = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        match st.idempotency.settle_expired_dispatching(now) {
-            Ok(0) => {}
-            Ok(count) => info!(
-                "entretien: {count} remise(s) expirée(s) passée(s) de « en vol » à « sort inconnu »"
-            ),
-            Err(error) => warn!("entretien: remises expirées : {error}"),
-        }
-        match st
-            .idempotency
-            .purge_expired_sends(now, SEND_PURGE_GRACE_SECS)
-        {
-            Ok(0) => {}
-            Ok(count) => {
-                info!("entretien: {count} envoi(s) expiré(s) depuis plus de 30 jours purgé(s)")
-            }
-            Err(error) => warn!("entretien: purge des envois : {error}"),
-        }
+        maintain_stores(&st, now);
         st.conn_instances.values().cloned().collect()
     };
     let identite = crate::mcp_identity::purge_stale_identity_files(

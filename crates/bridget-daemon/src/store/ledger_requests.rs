@@ -295,6 +295,20 @@ impl Store {
         self.query_requests("SELECT id, sender, target, state, created_at, deadline_at, escalation_level, cancel_reason, completed_at FROM tracked_requests WHERE state = 'open' ORDER BY deadline_at", [])
     }
 
+    /// Aligne l'échéance durable d'une demande encore ouverte (mission native à délai
+    /// explicite : le suivi compte depuis l'admission de la mission, pas depuis la création
+    /// de la tâche). Une demande close n'est pas rouverte.
+    pub fn set_request_deadline(&self, id: &str, deadline_at: i64) -> Result<bool, StoreError> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE tracked_requests SET deadline_at = ?1 WHERE id = ?2 AND state = 'open'",
+                rusqlite::params![deadline_at, id],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(changed == 1)
+    }
+
     pub fn cancel_request(
         &mut self,
         id: &str,

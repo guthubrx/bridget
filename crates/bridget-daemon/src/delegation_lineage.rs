@@ -22,6 +22,24 @@ struct Cursor {
     task_id: String,
 }
 
+/// Borne de rétention publiée aux lecteurs T3 (contrats 148 et 149).
+pub(crate) const MAX_RETAINED_TASKS: usize = 4096;
+/// Âge minimal d'un arbre purgeable hors pression de borne.
+const RETENTION_SECS: i64 = 7 * 24 * 3600;
+/// Durée de vie d'une pierre tombale de clé de rejeu (comme `purge_expired_sends`).
+const TOMBSTONE_SECS: i64 = 30 * 24 * 3600;
+
+/// Arbre soldé : chaque tâche est terminale et nettoyée, et toute remise due
+/// (résultat ou avis d'échec) est accusée. Une tâche annulée n'attend aucune remise.
+fn tree_settled(tree: &[Task]) -> bool {
+    tree.iter().all(|t| t.terminal() && t.cleanup_done && (t.state == "cancelled" || t.delivery_acked))
+}
+
+/// Dernière fin de l'arbre ; `updated_at` pour les tâches 148 sans `completed_at`.
+fn tree_age(tree: &[Task]) -> i64 {
+    tree.iter().map(|t| t.completed_at.unwrap_or(t.updated_at)).max().unwrap_or(0)
+}
+
 impl Task {
     pub fn root_owner(&self) -> &str {
         if self.root_owner_agent_id.is_empty() { &self.owner } else { &self.root_owner_agent_id }
@@ -73,11 +91,11 @@ fn increment(tx: &Transaction<'_>) -> rusqlite::Result<ProjectionMutation> {
 impl DelegationStore {
     pub(super) fn initialize_lineage(&self) -> rusqlite::Result<()> {
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS native_delegation_projection_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation TEXT NOT NULL,seq INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS native_delegation_cancel_receipts(root TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(root,request_id));")?;
+            CREATE TABLE IF NOT EXISTS native_delegation_cancel_receipts(root TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(root,request_id));
+            CREATE TABLE IF NOT EXISTS native_delegation_tombstones(owner TEXT NOT NULL,request_id TEXT NOT NULL,purged_at INTEGER NOT NULL,PRIMARY KEY(owner,request_id));")?;
         self.conn.execute("INSERT OR IGNORE INTO native_delegation_projection_meta(singleton,generation,seq) VALUES(1,?1,0)", [uuid::Uuid::new_v4().to_string()])?;
         // Les anciens liens sont dérivés seulement des identités native148 durables.
         let records = self.tasks().map_err(|_| rusqlite::Error::InvalidQuery)?;
-        if records.len()>4096 { return Err(rusqlite::Error::InvalidQuery); }
         let children: BTreeMap<_,_> = records.iter().map(|task| (task.child.as_str(), task)).collect();
         let tx = self.conn.unchecked_transaction()?;
         for record in &records {
@@ -144,6 +162,76 @@ impl DelegationStore {
         let result:Vec<Task>=rows.map(|r|r.map_err(|e|e.to_string()).and_then(|p|serde_json::from_str(&p).map_err(|e|e.to_string()))).collect::<Result<_,_>>()?;
         if result.len()>4096 {return Err("descendant_limit".into())}
         Ok(result)
+    }
+
+    /// Arbres soldés (racine sans parent + descendants), racine en tête.
+    /// Complexité : O(r · d) — r racines terminales, d taille d'arbre ; r·d ≤ lignes conservées (≤ 4096).
+    fn settled_trees(&self) -> Result<Vec<Vec<Task>>, String> {
+        let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.parent_task_id') IS NULL AND json_extract(payload,'$.state') IN ('result_available','failed','cancelled')").map_err(|e|e.to_string())?;
+        let roots:Vec<Task>=statement.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?
+            .map(|r|r.map_err(|e|e.to_string()).and_then(|p|serde_json::from_str(&p).map_err(|e|e.to_string()))).collect::<Result<_,_>>()?;
+        // Une racine qui n'est le parent de personne est un arbre d'une tâche : pas de requête récursive.
+        let parents:HashSet<String>=self.conn.prepare("SELECT DISTINCT json_extract(payload,'$.parent_task_id') FROM native_delegations WHERE json_extract(payload,'$.parent_task_id') IS NOT NULL").map_err(|e|e.to_string())?
+            .query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<_,_>>().map_err(|e|e.to_string())?;
+        let mut trees=Vec::new();
+        for root in roots {
+            let mut tree=if parents.contains(&root.task_id) {self.descendants(&root.task_id)?} else {Vec::new()};
+            tree.insert(0,root);
+            if tree_settled(&tree) {trees.push(tree)}
+        }
+        Ok(trees)
+    }
+
+    /// Purge les arbres soldés du plus ancien au plus récent, `max_trees` au plus par passage
+    /// (128 à l'entretien ; sans limite à l'admission, où la borne de rétention suffit).
+    /// Hors pression (`bound` absent), seuls les arbres finis depuis plus de 7 jours
+    /// partent ; sous pression (`bound` = borne de rétention), l'âge est ignoré et la
+    /// purge s'arrête dès que le total repasse sous la borne. `releasable` est le contrôle de vivacité des sous-agents, refait par
+    /// l'appelant sous le verrou du daemon : il retire aussi les enfants de la flotte
+    /// et rend `false` pour conserver l'arbre. Rend le nombre d'arbres supprimés.
+    /// Complexité : O(n log n) — n ≤ 4096 lignes conservées ; une transaction par arbre.
+    pub fn purge_trees(&self, now: i64, bound: Option<usize>, max_trees: usize, mut releasable: impl FnMut(&[Task])->bool) -> Result<usize,String> {
+        let mut trees:Vec<(i64,Vec<Task>)>=self.settled_trees()?.into_iter().map(|t|(tree_age(&t),t)).collect();
+        trees.sort_by(|a,b|(a.0,&a.1[0].task_id).cmp(&(b.0,&b.1[0].task_id)));
+        let mut total:usize=self.conn.query_row("SELECT count(*) FROM native_delegations",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+        let mut purged=0;
+        for (age,tree) in trees {
+            if purged>=max_trees || bound.is_some_and(|b|total<b) {break}
+            if bound.is_none() && now.saturating_sub(age)<=RETENTION_SECS {break}
+            if !releasable(&tree) {continue}
+            self.delete_tree(&tree,now)?;
+            total=total.saturating_sub(tree.len());
+            purged+=1;
+        }
+        Ok(purged)
+    }
+
+    /// Libère les clés de rejeu purgées depuis 30 jours ou plus.
+    /// Complexité : O(T) — balayage des T pierres (pas d'index sur `purged_at`) ; appelée
+    /// une fois par passage d'entretien horaire, T borné par les purges des 30 derniers jours.
+    pub fn purge_expired_tombstones(&self, now: i64) -> Result<usize,String> {
+        self.conn.execute("DELETE FROM native_delegation_tombstones WHERE purged_at<=?1",[now.saturating_sub(TOMBSTONE_SECS)]).map_err(|e|e.to_string())
+    }
+
+    /// Une clé dont la tâche a été purgée se rejoue en refus, jamais en nouvelle tâche.
+    pub(super) fn tombstoned(&self, owner: &str, request_id: &str) -> Result<bool,String> {
+        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_tombstones WHERE owner=?1 AND request_id=?2)",params![owner,request_id],|r|r.get(0)).map_err(|e|e.to_string())
+    }
+
+    /// Suppression atomique d'un arbre : pierres tombales, reçus d'annulation, lignes,
+    /// nouvelle génération. Le propriétaire racine est signalé après le commit.
+    fn delete_tree(&self, tree: &[Task], now: i64) -> Result<(),String> {
+        let tx=self.conn.unchecked_transaction().map_err(|e|e.to_string())?;
+        for task in tree {
+            tx.execute("INSERT OR REPLACE INTO native_delegation_tombstones(owner,request_id,purged_at) SELECT json_extract(payload,'$.owner'),request_id,?2 FROM native_delegations WHERE task_id=?1",params![task.task_id,now]).map_err(|e|e.to_string())?;
+            tx.execute("DELETE FROM native_delegation_cancel_receipts WHERE task_id=?1",[&task.task_id]).map_err(|e|e.to_string())?;
+            tx.execute("DELETE FROM native_delegations WHERE task_id=?1",[&task.task_id]).map_err(|e|e.to_string())?;
+        }
+        let mutation=ProjectionMutation{generation:uuid::Uuid::new_v4().to_string(),seq:1};
+        tx.execute("UPDATE native_delegation_projection_meta SET generation=?1,seq=?2 WHERE singleton=1",params![mutation.generation,mutation.seq]).map_err(|e|e.to_string())?;
+        tx.commit().map_err(|e|e.to_string())?;
+        self.committed(tree[0].root_owner(),mutation);
+        Ok(())
     }
 
     pub(super) fn insert_projected(&self, task: &Task, request_id: &str, canonical: &[u8]) -> Result<(),String> {

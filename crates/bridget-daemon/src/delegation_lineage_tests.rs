@@ -40,6 +40,7 @@ fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequ
         task: instruction.into(),
         cwd: "/tmp".into(),
         posture: None,
+        reply_timeout: None,
     }
 }
 
@@ -81,6 +82,8 @@ fn task(
         result_sent: false,
         cleanup_done: false,
         failure_sent: false,
+        reply_timeout: None,
+        delivery_acked: false,
     }
 }
 
@@ -288,7 +291,8 @@ fn delegation149_migration_fermee_cycle_profondeur_et_volume() {
     assert!(DelegationStore::open(&path).is_err());
     drop(std::fs::remove_dir_all(dir));
 
-    // Volume : au-delà de 4096 records, l'ouverture refuse.
+    // Volume : plus de 4096 lignes ne bloquent plus l'ouverture (session 150) ;
+    // le test `native150_ouverture_10000_lignes` couvre le grand volume.
     let dir = temp_dir("volume");
     let path = dir.join("store.sqlite");
     {
@@ -302,7 +306,7 @@ fn delegation149_migration_fermee_cycle_profondeur_et_volume() {
             ).unwrap();
         }
     }
-    assert!(DelegationStore::open(&path).is_err());
+    assert_eq!(DelegationStore::open(&path).unwrap().tasks().unwrap().len(), 4097);
     drop(std::fs::remove_dir_all(dir));
 }
 
@@ -823,4 +827,271 @@ fn delegation149_parent_lineage_profondeur_et_descendants() {
     drop(store_volume);
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(dir_volume).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Session 150 : champs ajoutés à la tâche.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn native150_champs_absents_relus_par_defaut_et_accuse_silencieux() {
+    // Un payload 148/149 sans `reply_timeout` ni `delivery_acked` se relit
+    // avec `None` et `false`.
+    let dir = temp_dir("champs150");
+    let path = dir.join("store.sqlite");
+    seed_v148(&path, &[("t-150", "humain", "inst", "inst", "agent-150", Some("inst-c"))]);
+    let store = open_store(&path);
+    let ancienne = store.get("t-150").unwrap().unwrap();
+    assert_eq!(ancienne.reply_timeout, None);
+    assert!(!ancienne.delivery_acked);
+
+    // Poser `delivery_acked` n'est pas un changement visible : ni seq, ni signal.
+    let mut terminee = task("t-ack", "humain", "inst", "inst", "agent-ack", Some("inst-c"), "result_available", 100);
+    terminee.result = Some("sortie".into());
+    store.insert(&terminee, "req-t-ack", b"canon").unwrap();
+    let avant = meta(&store);
+    let _ = store.take_changes();
+    let mut accusee = store.get("t-ack").unwrap().unwrap();
+    accusee.delivery_acked = true;
+    store.save(&accusee).unwrap();
+    assert!(store.get("t-ack").unwrap().unwrap().delivery_acked);
+    assert_eq!(meta(&store).seq, avant.seq);
+    assert!(store.take_changes().is_empty());
+
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Session 150 : purge par arbre (table de vérité R2, partie magasin).
+// La vivacité des sous-agents est jugée par le garde passé à `purge_trees`.
+// ---------------------------------------------------------------------------
+
+const JOUR: i64 = 24 * 3600;
+
+fn maintenant() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+/// Tâche d'un arbre : la racine appartient à `racine`, un enfant appartient à
+/// l'agent enfant de son parent. `etat` terminal ⇒ `cleanup_done` et remise
+/// accusée sont réglés par les paramètres.
+#[allow(clippy::too_many_arguments)]
+fn poser(
+    store: &DelegationStore,
+    task_id: &str,
+    racine: &str,
+    parent: Option<&str>,
+    etat: &str,
+    accuse: bool,
+    nettoye: bool,
+    avis_envoye: bool,
+) {
+    let owner = parent.map_or(racine.to_string(), |p| format!("agent-{p}"));
+    let mut t = task(task_id, &owner, &format!("inst-{owner}"), &format!("inst-{owner}"), &format!("agent-{task_id}"), Some(&format!("inst-agent-{task_id}")), etat, 1_000);
+    t.root_owner_agent_id = racine.into();
+    t.parent_task_id = parent.map(Into::into);
+    t.delivery_acked = accuse;
+    t.cleanup_done = nettoye;
+    t.failure_sent = avis_envoye;
+    t.result_sent = etat == "result_available";
+    if etat == "result_available" {
+        t.result = Some("sortie".into());
+    }
+    store.insert(&t, &format!("req-{task_id}"), b"canon").unwrap();
+}
+
+/// `pression` : borne artificielle de 1 ligne, pour exercer la purge de borne
+/// sans semer 4096 lignes (le test d'admission utilise la vraie borne).
+fn purger(store: &DelegationStore, now: i64, pression: bool) -> usize {
+    store.purge_trees(now, pression.then_some(1), crate::disk_hygiene::MAX_ENTRIES_PER_PASS, |_| true).unwrap()
+}
+
+fn restantes(store: &DelegationStore) -> Vec<String> {
+    store.tasks().unwrap().into_iter().map(|t| t.task_id).collect()
+}
+
+#[test]
+fn native150_purge_arbre_termine_et_accuse_purge() {
+    let dir = temp_dir("purge-ok");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "result_available", true, true, false);
+    poser(&store, "enfant", "humain", Some("racine"), "failed", true, true, true);
+    store.human_cancel("humain", "racine", "annulation-1").unwrap();
+    let avant = meta(&store);
+    let _ = store.take_changes();
+
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+
+    assert!(restantes(&store).is_empty());
+    let apres = meta(&store);
+    assert_ne!(apres.generation, avant.generation, "nouvelle génération de projection");
+    assert_eq!(apres.seq, 1);
+    // Pierres tombales : une par tâche, clé = (propriétaire, request_id).
+    let pierres: i64 = store.conn.query_row("SELECT count(*) FROM native_delegation_tombstones", [], |r| r.get(0)).unwrap();
+    assert_eq!(pierres, 2);
+    // Reçu d'annulation retiré avec l'arbre.
+    let recus: i64 = store.conn.query_row("SELECT count(*) FROM native_delegation_cancel_receipts", [], |r| r.get(0)).unwrap();
+    assert_eq!(recus, 0);
+    // Propriétaire racine signalé après le commit, avec la nouvelle génération.
+    let changes = store.take_changes();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes["humain"].generation, apres.generation);
+    // Aucune tâche fantôme dans la projection.
+    let page = store.lineage_page("humain", 100, None, |_| false).unwrap();
+    assert!(page["tasks"].as_array().unwrap().is_empty());
+
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_resultat_non_accuse_conserve() {
+    let dir = temp_dir("purge-non-accuse");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "result_available", false, true, false);
+    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
+    assert_eq!(restantes(&store), vec!["racine".to_string()]);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_echec_sans_avis_envoye_conserve() {
+    let dir = temp_dir("purge-avis");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "failed", false, true, false);
+    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
+    assert_eq!(restantes(&store).len(), 1);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_annule_sans_remise_purge() {
+    let dir = temp_dir("purge-annule");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "cancelled", false, true, false);
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+    assert!(restantes(&store).is_empty());
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_nettoyage_inacheve_conserve() {
+    let dir = temp_dir("purge-nettoyage");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "cancelled", false, false, false);
+    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
+    assert_eq!(restantes(&store).len(), 1);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_tache_active_dans_l_arbre_le_conserve() {
+    let dir = temp_dir("purge-active");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "result_available", true, true, false);
+    poser(&store, "enfant", "humain", Some("racine"), "working", false, false, false);
+    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
+    assert_eq!(restantes(&store).len(), 2);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_deux_arbres_du_meme_proprietaire_sont_independants() {
+    let dir = temp_dir("purge-deux-arbres");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "termine", "humain", None, "result_available", true, true, false);
+    poser(&store, "actif", "humain", None, "working", false, false, false);
+    poser(&store, "actif-enfant", "humain", Some("actif"), "working", false, false, false);
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+    let mut ids = restantes(&store);
+    ids.sort();
+    assert_eq!(ids, vec!["actif".to_string(), "actif-enfant".to_string()]);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_arbre_recent_conserve_hors_pression() {
+    let dir = temp_dir("purge-recent");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "racine", "humain", None, "result_available", true, true, false);
+    assert_eq!(purger(&store, maintenant() + 6 * JOUR, false), 0);
+    assert_eq!(restantes(&store).len(), 1);
+    // Sous pression de borne, l'âge ne compte plus.
+    assert_eq!(purger(&store, maintenant() + 6 * JOUR, true), 1);
+    assert!(restantes(&store).is_empty());
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_le_garde_de_vivacite_peut_refuser_un_arbre() {
+    let dir = temp_dir("purge-garde");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(&store, "vivant", "humain", None, "result_available", true, true, false);
+    poser(&store, "mort", "humain", None, "result_available", true, true, false);
+    let mut vus = Vec::new();
+    let purges = store
+        .purge_trees(maintenant() + 8 * JOUR, None, crate::disk_hygiene::MAX_ENTRIES_PER_PASS, |arbre| {
+            vus.push(arbre[0].task_id.clone());
+            arbre[0].task_id != "vivant"
+        })
+        .unwrap();
+    assert_eq!(purges, 1);
+    assert_eq!(restantes(&store), vec!["vivant".to_string()]);
+    assert_eq!(vus.len(), 2, "le garde juge chaque arbre candidat");
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_purge_borne_par_passage_et_plus_ancien_d_abord() {
+    let dir = temp_dir("purge-borne");
+    let store = open_store(&dir.join("store.sqlite"));
+    let total = crate::disk_hygiene::MAX_ENTRIES_PER_PASS + 2;
+    for i in 0..total {
+        poser(&store, &format!("t-{i:03}"), "humain", None, "cancelled", false, true, false);
+    }
+    let now = maintenant() + 8 * JOUR;
+    assert_eq!(purger(&store, now, false), crate::disk_hygiene::MAX_ENTRIES_PER_PASS);
+    assert_eq!(restantes(&store).len(), 2);
+    assert_eq!(purger(&store, now, false), 2);
+    assert!(restantes(&store).is_empty());
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native150_ouverture_10000_lignes() {
+    let dir = temp_dir("ouverture-10000");
+    let path = dir.join("store.sqlite");
+    {
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch(V148_DDL).unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0..10_000 {
+            let task_id = format!("t-10k-{i}");
+            tx.execute(
+                "INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",
+                params![task_id, format!("inst-{i}"), format!("req-{task_id}"), b"v148", v148_payload(&task_id, "humain", "inst", "inst", &format!("agent-{i}"), Some("inst-c")).to_string()],
+            ).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let store = open_store(&path);
+    assert_eq!(store.tasks().unwrap().len(), 10_000);
+    // La migration 148 a dérivé la racine de chaque ligne.
+    assert!(store.tasks().unwrap().iter().all(|t| t.root_owner_agent_id == "humain"));
+    meta(&store);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
 }

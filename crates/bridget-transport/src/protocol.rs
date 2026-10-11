@@ -2020,6 +2020,9 @@ pub enum NativeDelegationRequest {
         cwd: String,
         #[serde(default)]
         posture: Option<SpawnPosture>,
+        /// Délai de réponse de la mission en secondes ; absent = 3600 (session 150).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_timeout: Option<u64>,
     },
     Status {
         task_id: String,
@@ -7854,5 +7857,31 @@ mod spec104_search_contract_tests {
         let unknown: Result<WrapperToDaemon, _> =
             serde_json::from_str(r#"{"type":"ledger_search_v2","request":{"query":"x"}}"#);
         assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn native150_delai_requete_sans_champ_garde_les_octets_149() {
+        // Sans `reply_timeout`, la requête sérialise exactement comme en 149.
+        let request = NativeDelegationRequest::Delegate {
+            request_id: "k".to_string(),
+            agent_type: "a".to_string(),
+            model: "m".to_string(),
+            effort: None,
+            task: "t".to_string(),
+            cwd: "/c".to_string(),
+            posture: None,
+            reply_timeout: None,
+        };
+        let expected = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
+        assert_eq!(serde_json::to_vec(&request).unwrap(), expected.to_vec());
+        let reread: NativeDelegationRequest = serde_json::from_slice(expected).unwrap();
+        assert_eq!(reread, request);
+        let NativeDelegationRequest::Delegate { reply_timeout, .. } = serde_json::from_str(
+            r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/c","reply_timeout":120}"#,
+        )
+        .unwrap() else {
+            panic!("variante attendue : Delegate");
+        };
+        assert_eq!(reply_timeout, Some(120));
     }
 }

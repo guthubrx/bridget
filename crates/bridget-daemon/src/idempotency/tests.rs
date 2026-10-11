@@ -2251,3 +2251,44 @@ fn spec116_purge_des_envois_epargne_les_lancements_et_respecte_la_marge() {
         "la remise suit en cascade"
     );
 }
+
+/// Session 150 : `send_delivery_phase` rend la phase brute, y compris celles
+/// que `send_delivery` masque, et `None` pour une clé sans remise.
+#[test]
+fn native150_purge_phase_de_remise_cinq_cas() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let delivery = |id: &str, instance: &str, generation: u64| SendDelivery {
+        delivery_id: id.to_string(),
+        recipient_instance_id: instance.to_string(),
+        delivery_generation: generation,
+        expires_at: NOW + HORIZON,
+        message_bytes: sample_message_bytes(id, "peer-1"),
+    };
+    let key_for = |id: &str| {
+        IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, id).unwrap()
+    };
+    let begin = |store: &mut IdempotencyStore, id: &str, instance: &str, generation: u64| {
+        let key = key_for(id);
+        store.reserve(&key, id.as_bytes(), NOW, HORIZON, NOW, 30).unwrap();
+        store.begin_send_delivery(&key, &delivery(id, instance, generation)).unwrap();
+        key
+    };
+    // Absente : aucune ligne pour la clé.
+    assert_eq!(store.send_delivery_phase(&key_for("absente")).unwrap(), None);
+    // dispatching : remise déposée, non accusée.
+    let en_vol = begin(&mut store, "en-vol", "instance-1", 1);
+    assert_eq!(store.send_delivery_phase(&en_vol).unwrap().as_deref(), Some("dispatching"));
+    // acked.
+    let accusee = begin(&mut store, "accusee", "instance-2", 2);
+    store.acknowledge_send_delivery("accusee", "instance-2", 2).unwrap();
+    assert_eq!(store.send_delivery_phase(&accusee).unwrap().as_deref(), Some("acked"));
+    // indeterminate : masquée par `send_delivery`, visible ici.
+    let quarantaine = begin(&mut store, "quarantaine", "instance-3", 3);
+    store.mark_delivery_indeterminate("quarantaine", "instance-3", 3).unwrap();
+    assert_eq!(store.send_delivery(&quarantaine).unwrap(), None);
+    assert_eq!(store.send_delivery_phase(&quarantaine).unwrap().as_deref(), Some("indeterminate"));
+    // orphaned.
+    let orpheline = begin(&mut store, "orpheline", "instance-4", 4);
+    store.orphan_dispatching_for_instance("instance-4", "destinataire purgé").unwrap();
+    assert_eq!(store.send_delivery_phase(&orpheline).unwrap().as_deref(), Some("orphaned"));
+}

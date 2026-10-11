@@ -57,6 +57,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
             task: format!("Mission {task_id}\n"),
             cwd: "/tmp".into(),
             posture: None,
+            reply_timeout: None,
         },
         permission_snapshot: None,
         effective_posture: None,
@@ -73,6 +74,8 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         result_sent: false,
         cleanup_done: false,
         failure_sent: false,
+        reply_timeout: None,
+        delivery_acked: false,
     }
 }
 
@@ -895,3 +898,89 @@ fn native149_snapshot_v2_exclut_le_filtre_avant_normalisation() {
     let parse = crate::t3code_contract_v2::parse_snapshot(&coquille.to_string()).unwrap();
     assert_eq!(parse.threads.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Session 150 : la purge d'entretien force un Resync, l'ouverture ne purge rien.
+// ---------------------------------------------------------------------------
+
+/// Tâche annulée, nettoyée et finie en 1970 : purgeable dès le premier passage.
+fn tache_ancienne_150(task_id: &str, owner: &str) -> crate::delegation::Task {
+    let mut task = lineage_task(task_id, owner, "cancelled");
+    task.cleanup_done = true;
+    task.completed_at = Some(1_000);
+    task
+}
+
+#[test]
+fn native150_purge_entretien_signale_resync() {
+    let (state, root, _peer) = fixture("l150-resync", "human_lineage_watch_v1");
+    let task_id = "15000000-0000-4000-8000-00000000000a";
+    {
+        let st = state.lock().unwrap();
+        st.delegation_store.insert(&tache_ancienne_150(task_id, &owner_agent()), "req-150a", b"c").unwrap();
+    }
+    let (client, mut reader, handle) = open_watch_socket(&state, &root);
+    assert_eq!(next_event(&mut reader)["status"], "ready");
+    let avant = state.lock().unwrap().delegation_store.projection_meta().unwrap();
+    {
+        let st = state.lock().unwrap();
+        super::super::maintain_stores(&st, super::super::unix_now_secs());
+        assert!(st.delegation_store.get(task_id).unwrap().is_none(), "arbre purgé");
+    }
+    let resync = next_event(&mut reader);
+    assert_eq!(resync["status"], "resync", "{resync}");
+    assert_ne!(resync["generation"], json!(avant.generation));
+    // Le lecteur refait une lecture complète : plus de tâche fantôme.
+    let page = state.lock().unwrap().delegation_store.lineage_page(&owner_agent(), 10, None, |_| false).unwrap();
+    assert!(page["tasks"].as_array().unwrap().is_empty());
+    drop(reader);
+    drop(client);
+    drop(handle);
+}
+
+#[test]
+fn native150_purge_ouverture_du_daemon_ne_purge_rien() {
+    let (st, config) = crate::daemon::presence_tests::state_with_registered_agent("l150-ouverture");
+    st.delegation_store.insert(&tache_ancienne_150("15000000-0000-4000-8000-00000000000b", "proprietaire-150"), "req-150b", b"c").unwrap();
+    drop(st);
+    let (tx, _rx) = mpsc::channel();
+    let rouvert = DaemonState::new(&config, tx).unwrap();
+    assert_eq!(rouvert.delegation_store.tasks().unwrap().len(), 1, "aucune purge à l'ouverture");
+    drop(rouvert);
+    let _ = std::fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native150_pause_annulation_humaine_disponible() {
+    let (state, root, _peer) = fixture("l150-pause-cancel", "human_lineage_cancel_v1");
+    let task_id = "15000000-0000-4000-8000-00000000000c";
+    {
+        let st = state.lock().unwrap();
+        st.delegation_store.insert(&lineage_task(task_id, &owner_agent(), "queued"), "req-150c", b"c").unwrap();
+        let conn = st.store.connection();
+        let generation = crate::referent_control::read(conn).unwrap().generation;
+        crate::referent_control::set(
+            conn,
+            crate::referent_control::ControlMutation {
+                command_id: "pause-150-lineage",
+                expected_generation: generation,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: Some("test 150"),
+                actor: "humain",
+                now: 1_788_400_000,
+                agent_posture: None,
+                auto_reassignment: None,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(crate::referent_control::read(conn).unwrap().paused);
+    }
+    let cancel = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}));
+    assert_eq!(cancel, json!({"version":1,"task_id":task_id,"status":"cancelling"}), "{cancel}");
+    // Le reçu est durable : le rejeu rend le même reçu, toujours en pause.
+    let rejoue = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}));
+    assert_eq!(rejoue, cancel);
+}
+

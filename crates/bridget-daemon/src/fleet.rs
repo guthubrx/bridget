@@ -542,6 +542,11 @@ impl FleetSupervisor {
             .is_some())
     }
 
+    #[cfg(test)]
+    pub(crate) fn desired_write_count(&self) -> usize {
+        self.desired.write_count()
+    }
+
     pub fn decommission(&self, name: &str) -> Result<bool, FleetError> {
         let changed = self
             .desired
@@ -551,6 +556,18 @@ impl FleetSupervisor {
             self.roster.forget(name);
         }
         Ok(changed)
+    }
+
+    /// Décommissionne plusieurs entrées en une lecture et au plus une écriture de la flotte.
+    /// Même effet que `decommission` pour chaque nom présent.
+    pub fn decommission_all(&self, names: &[&str]) -> Result<usize, FleetError> {
+        let present = self
+            .desired
+            .set_lifecycle_states(names, DesiredLifecycleState::Decommissioned)?;
+        for name in &present {
+            self.roster.forget(name);
+        }
+        Ok(present.len())
     }
 
     /// Importe explicitement dans le registre v4 un ancien agent arrêté.

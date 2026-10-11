@@ -226,6 +226,9 @@ impl std::error::Error for DesiredStateError {
 pub struct DesiredStateStore {
     path: PathBuf,
     transition_lock: Mutex<()>,
+    /// Nombre d'écritures réussies de `fleet.json`, pour mesurer le coût des lots en test.
+    #[cfg(test)]
+    writes: std::sync::atomic::AtomicUsize,
 }
 
 impl DesiredStateStore {
@@ -239,7 +242,14 @@ impl DesiredStateStore {
         Self {
             path: path.into(),
             transition_lock: Mutex::new(()),
+            #[cfg(test)]
+            writes: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_count(&self) -> usize {
+        self.writes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn path(&self) -> &Path {
@@ -362,6 +372,34 @@ impl DesiredStateStore {
             return Ok(Some(updated));
         }
         Ok(Some(entry.clone()))
+    }
+
+    /// Applique un état de cycle de vie à plusieurs entrées en une lecture et au plus
+    /// une écriture. Les noms absents sont ignorés. Rend les noms des entrées présentes.
+    /// Complexité : O(F + d) — F entrées de flotte, d noms demandés.
+    pub fn set_lifecycle_states(
+        &self,
+        names: &[&str],
+        lifecycle_state: DesiredLifecycleState,
+    ) -> Result<Vec<String>, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let mut present = Vec::new();
+        let mut changed = false;
+        for name in names {
+            if let Some(entry) = fleet.equipiers.get_mut(*name) {
+                changed |= entry.lifecycle_state != lifecycle_state;
+                entry.lifecycle_state = lifecycle_state;
+                present.push((*name).to_string());
+            }
+        }
+        if changed {
+            self.persist_unlocked(&fleet)?;
+        }
+        Ok(present)
     }
 
     /// Marque une génération arrêtée uniquement si elle possède encore
@@ -496,7 +534,10 @@ impl DesiredStateStore {
                 path: self.path.clone(),
                 source,
             }
-        })
+        })?;
+        #[cfg(test)]
+        self.writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 }
 

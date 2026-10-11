@@ -314,6 +314,19 @@ impl IdempotencyStore {
         Ok(delivery.into_delivery())
     }
 
+    /// Phase brute (`dispatching`, `acked`, `indeterminate`, `orphaned`) de la
+    /// remise d'une clé, `None` si la ligne n'existe pas. Contrairement à
+    /// `send_delivery`, aucune phase n'est masquée : la rétention de la
+    /// délégation native (session 150) distingue « accusée » de « effacée ».
+    ///
+    /// Complexité : O(log n) via l'index unique de la clé idempotente.
+    pub(crate) fn send_delivery_phase(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<String>, IdempotencyError> {
+        Ok(self.stored_send_delivery(key)?.map(|delivery| delivery.phase))
+    }
+
     fn stored_send_delivery(
         &self,
         key: &IdempotencyKey,

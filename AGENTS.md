@@ -1,4 +1,5 @@
 <!-- SPECKIT START -->
+Sessions150-158 en cours (pipeline my.specify-all) dans .worktrees/150-socle-delegation. Plan courant : specs/150-socle-delegation/plan.md.
 Complément149 identité durable en cours le 2026-10-11, dans la session déjà autorisée.
 Sources Bridget9f2ccbf23195 et T3d833387203 intégrées et poussées vers leurs forks.
 MCP officiel existant réattesté par fil ; opt-out/configurations étrangères protégés. Routes de fils opaques encodées.

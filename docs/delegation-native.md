@@ -43,7 +43,10 @@ Le parent reçoit automatiquement un résultat corrélé à la mission.
 Un enfant actif retarde la publication du résultat de son parent.
 Le résultat publié ne change plus. Une fin de tour ne suffit pas à le publier.
 `bridget_task_cancel` annule sa tâche et ses descendants actifs.
-Le catalogue annonce `mission_reply_limit_secs`, actuellement 3600 secondes.
+Le catalogue annonce `mission_reply_limit_secs` (3600 secondes, le défaut),
+`mission_reply_min_secs` (60) et `mission_reply_max_secs` (86 400).
+`reply_timeout` est facultatif : il fixe le délai de réponse de cette mission,
+en secondes entières. Sans lui, le délai reste 3600 secondes.
 Le reçu donne `mission_deadline_at` après admission de la remise. Cette échéance
 reste identique après rejeu ou reprise. Son expiration produit
 `mission_reply_timeout`, puis le nettoyage de la mission. Un délai de réponse
@@ -170,6 +173,76 @@ statut inconnu ferme le contrat.
 Preuve : l'interface web a été testée avec un daemon simulé. Aucune preuve ne couvre
 le daemon réel, l'application de bureau ou une installation. Ne pas annoncer cette
 fonction comme livrée.
+
+## Délai de réponse choisi
+
+`reply_timeout` fait partie de l'enveloppe de la demande. Rejouer la même clé avec un
+autre délai produit `envelope_mismatch`. Omettre le champ et envoyer `3600` sont deux
+enveloppes différentes.
+
+Une valeur hors de 60 à 86 400 est refusée. Bridget ne la corrige pas.
+
+Un enfant qui fixe un `reply_timeout` ne peut pas dépasser le temps restant de sa tâche
+parente. Sans `reply_timeout`, rien n'est contrôlé : le comportement reste celui de la
+session 149. La même valeur règle l'échéance de la mission et le suivi de la demande.
+Avec un délai explicite, le suivi de la demande compte depuis l'admission de la mission,
+même si le lancement de l'enfant a pris du retard.
+Les tâches déjà actives gardent leur délai de 3600 secondes.
+
+## Refus
+
+Le refus revient dans `native_delegation_refused`, avec le code ci-dessous.
+Aucun de ces refus ne crée de tâche. Aucun ne consomme la clé de rejeu.
+
+| Code | Cause |
+|---|---|
+| `referent_paused` | Le référent est en pause et la clé est nouvelle. |
+| `control_state_unavailable` | L'état de pause est illisible : Bridget refuse plutôt que de déléguer pendant une pause possible. |
+| `request_expired` | La tâche de cette clé a été purgée depuis moins de 30 jours. |
+| `retention_saturated` | 4096 tâches sont conservées et aucun arbre n'est purgeable. |
+| `reply_timeout_out_of_range` | `reply_timeout` est hors de 60 à 86 400. |
+| `reply_timeout_exceeds_parent` | Le délai explicite d'un enfant dépasse le temps restant du parent. Sans délai explicite, aucun contrôle (comportement 149). |
+
+Ordre des contrôles : identité, forme de la demande, bornes du délai, rejeu
+(`envelope_mismatch`, `request_expired`), pause (`referent_paused`, ou
+`control_state_unavailable` si l'état de pause est illisible), droits, `task_limit`,
+`retention_saturated`, lignée du parent, délai de l'enfant.
+
+`task_limit` reste pour 128 tâches actives, ou 16 enfants actifs par instance.
+L'historique cumulé ne le provoque plus.
+
+## Pause du référent
+
+Pendant la pause, une nouvelle clé reçoit `referent_paused`. Rejouer une clé déjà
+admise rend la tâche existante. La lecture du catalogue, la lecture de statut et
+l'annulation restent possibles. Après la levée de la pause, la même clé réussit.
+
+Une pause n'arrête pas encore les missions en cours. La session 152 traite ce point.
+
+## Rétention des tâches
+
+Bridget garde au plus 4096 tâches. Il purge par arbre : une tâche sans parent et tous ses
+descendants. L'entretien horaire purge les arbres finis depuis plus de 7 jours, 128 au
+plus par passage. Si 4096 tâches sont conservées, les arbres purgeables les plus anciens
+partent d'abord, même avant 7 jours. L'entretien le fait dans le même quota de 128 arbres
+par passage, partagé avec la purge d'âge. Une nouvelle délégation le fait aussi : elle
+retire seulement les arbres nécessaires pour repasser sous 4096, sans limite de 128.
+
+Un arbre n'est jamais purgé dans ces cas :
+
+- une de ses tâches est active ou son nettoyage n'est pas fini ;
+- un résultat ou un avis d'échec n'a pas été accusé par le destinataire ;
+- un de ses sous-agents est connecté, routé, en cours de lancement, en cours de
+  décommission ou désiré `Running`.
+
+Avant la purge, chaque sous-agent est retiré de la flotte. Une remise indéterminée n'a
+pas d'accusé : elle bloque donc son arbre. Si ces arbres remplissent la borne, la
+délégation est refusée avec `retention_saturated`.
+
+Après une purge, `bridget_task_status` sur cette tâche rend le refus existant de tâche
+inconnue (`task_unavailable`). La vue Lineage fait une lecture complète sans tâche
+fantôme. Le rejeu de la clé rend `request_expired` pendant 30 jours. La clé redevient
+libre au passage d'entretien qui suit ces 30 jours (1 h au plus de décalage).
 
 ## Ce qui ne change pas
 

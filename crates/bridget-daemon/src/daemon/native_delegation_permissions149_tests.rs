@@ -170,6 +170,7 @@ fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Opti
         task: "Mission fixture 149".into(),
         cwd: cwd.into(),
         posture,
+        reply_timeout: None,
     }
 }
 
@@ -192,7 +193,10 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
     // Aucune invitation à un grant humain : la forme de la réponse est fermée.
     let mut clés: Vec<&str> = catalogue.as_object().unwrap().keys().map(String::as_str).collect();
     clés.sort();
-    assert_eq!(clés, ["cwd_root", "cwd_scope", "max_children", "max_depth", "mission_reply_limit_secs", "providers", "version"]);
+    assert_eq!(clés, ["cwd_root", "cwd_scope", "max_children", "max_depth", "mission_reply_limit_secs", "mission_reply_max_secs", "mission_reply_min_secs", "providers", "version"]);
+    assert_eq!(catalogue["mission_reply_limit_secs"], 3600);
+    assert_eq!(catalogue["mission_reply_min_secs"], 60);
+    assert_eq!(catalogue["mission_reply_max_secs"], 86_400);
     for entry in fixture_entries(&catalogue) {
         assert_eq!(entry["inherit"], true, "{}", entry["agent_type"]);
         assert_eq!(entry["development"], true, "{}", entry["agent_type"]);
@@ -329,6 +333,8 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
         result_sent: false,
         cleanup_done: false,
         failure_sent: false,
+        reply_timeout: None,
+        delivery_acked: false,
     }
 }
 

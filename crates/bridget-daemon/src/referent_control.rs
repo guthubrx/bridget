@@ -111,6 +111,8 @@ pub enum AutonomousEffect {
     ReminderNudge,
     /// Continuation automatique d'une exécution.
     Continuation,
+    /// Admission d'une nouvelle délégation native (session 150).
+    NativeDelegation,
 }
 
 /// Verdict de la garde unique.
@@ -129,7 +131,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
     match effect {
         AutonomousEffect::ProjectRound
         | AutonomousEffect::ReminderNudge
-        | AutonomousEffect::Continuation => Admission::Admitted,
+        | AutonomousEffect::Continuation
+        | AutonomousEffect::NativeDelegation => Admission::Admitted,
     }
 }
 
@@ -807,6 +810,7 @@ mod tests {
             AutonomousEffect::ProjectRound,
             AutonomousEffect::ReminderNudge,
             AutonomousEffect::Continuation,
+            AutonomousEffect::NativeDelegation,
         ] {
             assert_eq!(
                 admit_autonomous_effect(effect, &active),
@@ -818,6 +822,7 @@ mod tests {
             AutonomousEffect::ProjectRound,
             AutonomousEffect::ReminderNudge,
             AutonomousEffect::Continuation,
+            AutonomousEffect::NativeDelegation,
         ] {
             assert_eq!(
                 admit_autonomous_effect(effect, &active),

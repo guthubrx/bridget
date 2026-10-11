@@ -6,7 +6,7 @@ use std::path::Path;
 
 #[path = "delegation_lineage.rs"]
 mod lineage;
-pub(crate) use lineage::ProjectionMutation;
+pub(crate) use lineage::{MAX_RETAINED_TASKS, ProjectionMutation};
 
 pub(crate) struct DelegationStore {
     conn: Connection,
@@ -54,6 +54,12 @@ pub(crate) struct Task {
     pub cleanup_done: bool,
     #[serde(default)]
     pub failure_sent: bool,
+    /// Délai de réponse choisi à la délégation (secondes) ; absent = 3600.
+    #[serde(default)]
+    pub reply_timeout: Option<i64>,
+    /// Preuve durable que la remise du résultat ou de l'avis d'échec a été accusée.
+    #[serde(default)]
+    pub delivery_acked: bool,
 }
 
 impl Task {
@@ -123,6 +129,7 @@ impl DelegationStore {
                 .map(Some)
                 .map_err(|error| error.to_string()),
             Some(_) => Err("envelope_mismatch".into()),
+            None if self.tombstoned(owner, request_id)? => Err("request_expired".into()),
             None => Ok(None),
         }
     }
@@ -164,6 +171,21 @@ impl DelegationStore {
                 })
             })
             .collect()
+    }
+
+    /// Comptages d'admission : (tâches actives, actives de l'instance, tâches conservées).
+    /// Complexité : O(a) pour les actives (a ≤ 128, recherche par l'index d'état),
+    /// O(n) pour le total (balayage de l'index, n ≤ 4096) ; aucun payload n'est lu.
+    pub fn admission_counts(&self, instance: &str) -> Result<(usize, usize, usize), String> {
+        const ACTIVE: &str = "json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling')";
+        let count = |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<usize, String> {
+            self.conn.query_row(&sql, args, |row| row.get(0)).map_err(|error| error.to_string())
+        };
+        Ok((
+            count(format!("SELECT count(*) FROM native_delegations WHERE {ACTIVE}"), &[])?,
+            count(format!("SELECT count(*) FROM native_delegations WHERE owner_instance=?1 AND {ACTIVE}"), &[&instance])?,
+            count("SELECT count(*) FROM native_delegations".into(), &[])?,
+        ))
     }
 
     pub fn pending(&self) -> Result<Vec<Task>, String> {

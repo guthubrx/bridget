@@ -40,6 +40,16 @@ Le catalogue annonce le délai maximal de réponse à la mission. Le reçu donne
 son échéance après remise ; un rejeu ne la prolonge pas. Son expiration produit
 `mission_reply_timeout`. Un timeout de transport ou d'attente n'annule rien.
 
+`reply_timeout` est facultatif (60 à 86 400 secondes, défaut 3600). Il fait partie
+de l'enveloppe : le rejeu garde la même valeur. Le catalogue annonce le défaut, le
+minimum et le maximum. Un enfant ne peut pas dépasser le temps restant de sa tâche
+parente. Refus propres à la délégation, sans tâche créée ni clé consommée :
+`referent_paused` (pause du référent, nouvelle clé), `request_expired` (clé d'une
+tâche purgée depuis moins de 30 jours), `retention_saturated` (4096 tâches
+conservées, aucune purgeable), `reply_timeout_out_of_range`,
+`reply_timeout_exceeds_parent`, et `control_state_unavailable` (état de contrôle du
+référent illisible : refus fermé). Une tâche purgée rend `task_unavailable` au statut.
+
 Le parent doit déjà avoir une identité et un projet attestés. L'enfant ne reçoit
 pas les credentials de session T3. Le catalogue annonce les refus par posture.
 Sans posture, l'enfant hérite de la politique prouvée du parent ; aucun grant

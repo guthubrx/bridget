@@ -116,7 +116,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_status` — lire la santé assainie du daemon.
 - `bridget_control_status` — lire l'état de contrôle, le compte inbox et un historique borné.
 - `bridget_capabilities` — lire le catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent, avec `inherit`, `development` et leurs motifs de refus.
-- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent.
+- `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent. `reply_timeout` (entier, 60 à 86 400 secondes, défaut 3600) fixe le délai de réponse de la mission ; il fait partie de l'enveloppe de rejeu.
 - `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant.
 - `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id`.
 
@@ -132,6 +132,13 @@ grant. Les droits humains explicites restent prioritaires. L'exception133 ci-des
 `mission_reply_limit_secs` ; le reçu indique `mission_deadline_at` après remise.
 Ce délai durable ne se renouvelle pas sur retry. Son expiration produit
 `mission_reply_timeout`, distinct d'une attente de transport du parent.
+Le catalogue annonce aussi `mission_reply_min_secs` (60) et `mission_reply_max_secs`
+(86 400). Refus de la session 150 : `referent_paused`, `request_expired`,
+`retention_saturated`, `reply_timeout_out_of_range`, `reply_timeout_exceeds_parent`,
+`control_state_unavailable` (état de contrôle illisible, refus fermé).
+Aucun ne crée de tâche ni ne consomme la clé. Le rejeu d'une clé déjà admise rend la
+tâche existante, même pendant la pause. Bridget garde au plus 4096 tâches et purge par
+arbre ; la lecture de statut d'une tâche purgée rend `task_unavailable`.
 Une révocation humaine ferme l'agent après changement d'instance aussi. Seul
 un nouveau grant explicite la lève.
 

@@ -278,6 +278,7 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
         task: task.into(),
         cwd: root.to_string_lossy().into_owned(),
         posture: Some(SpawnPosture::Discovery),
+        reply_timeout: None,
     }
 }
 

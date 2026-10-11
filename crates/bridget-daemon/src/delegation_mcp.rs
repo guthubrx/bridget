@@ -9,7 +9,7 @@ use std::path::Path;
 pub(crate) fn tools() -> Vec<Value> {
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_cancel","description":"Annule sa mission native et sa descendance ; aucune mission d'un autre parent n'est accessible.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
     ]
@@ -34,6 +34,7 @@ pub(crate) fn execute(
             "task",
             "cwd",
             "posture",
+            "reply_timeout",
         ],
         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
         _ => return Err(ClientError::InvalidParams("outil natif inconnu".into())),
@@ -68,6 +69,11 @@ pub(crate) fn execute(
                 Some(Value::String(value)) if value=="discovery" => Some(SpawnPosture::Discovery),
                 Some(Value::String(value)) if value=="development" => Some(SpawnPosture::Development),
                 _ => return Err(ClientError::InvalidParams("posture invalide".into())),
+            },
+            reply_timeout: match args.get("reply_timeout") {
+                None | Some(Value::Null) => None,
+                Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
+                _ => return Err(ClientError::InvalidParams("reply_timeout invalide".into())),
             },
         },
         "bridget_task_status" => NativeDelegationRequest::Status {
@@ -115,5 +121,34 @@ mod tests {
             Err(ClientError::InvalidParams(_))
         ));
         assert_eq!(tools().len(), 4);
+    }
+
+    #[test]
+    fn native150_delai_schema_liste_blanche_et_forme() {
+        let delegate = tools().into_iter().find(|tool| tool["name"] == "bridget_delegate").unwrap();
+        let property = &delegate["inputSchema"]["properties"]["reply_timeout"];
+        assert_eq!(property["type"], "integer");
+        assert_eq!((property["minimum"].as_u64(), property["maximum"].as_u64()), (Some(60), Some(86_400)));
+        assert!(!delegate["inputSchema"]["required"].as_array().unwrap().iter().any(|key| key == "reply_timeout"));
+        let identity = ResolvedIdentity { name: "owner".into(), instance_id: "instance".into(), delegated_origin: None };
+        let base = |extra: Value| {
+            let mut args = json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp"});
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            args
+        };
+        // Forme invalide : refusée avant toute connexion. Les bornes restent au daemon.
+        for invalide in [json!("abc"), json!(-5), json!(60.5), json!(true)] {
+            assert!(matches!(
+                execute(&identity, "bridget_delegate", &base(json!({"reply_timeout": invalide})), Path::new("/missing")),
+                Err(ClientError::InvalidParams(_))
+            ));
+        }
+        // Forme valide : le champ passe la liste blanche, l'échec vient de la connexion.
+        for valide in [json!(120), json!(null)] {
+            assert!(!matches!(
+                execute(&identity, "bridget_delegate", &base(json!({"reply_timeout": valide})), Path::new("/missing")),
+                Err(ClientError::InvalidParams(_))
+            ));
+        }
     }
 }
