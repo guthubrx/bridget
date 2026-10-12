@@ -1,0 +1,6 @@
+{
+  "rc": 127,
+  "stdout": "",
+  "stderr": "bash: .specify/scripts/bash/check-prerequisites.sh: No such file or directory\n",
+  "base": "bd37e927eee0b28f058df9d6a6992e38665a6ad0"
+}

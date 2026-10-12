@@ -1069,14 +1069,19 @@ fn admit_delegate(
         // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
         let control = crate::referent_control::read(st.store.connection())
             .map_err(|_| "control_state_unavailable")?;
-        if matches!(
-            crate::referent_control::admit_autonomous_effect(
-                crate::referent_control::AutonomousEffect::NativeDelegation,
-                &control
-            ),
-            crate::referent_control::Admission::Deferred { .. }
-        ) {
-            return Err("referent_paused".into());
+        let halt = st
+            .delegation_store
+            .delegation_halt()
+            .map_err(|_| "control_state_unavailable")?;
+        if let crate::referent_control::Admission::Deferred { motif } =
+            crate::referent_control::admit_native_delegation(&control, &halt)
+        {
+            return Err(if motif == "pause" {
+                "referent_paused"
+            } else {
+                motif
+            }
+            .into());
         }
         if !matches!(pass, WorkspacePass::Commit { .. })
             && st
@@ -1442,9 +1447,23 @@ fn handle_locked_with_project(
     }
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
     match &request {
+        // Lecture indexée149 avant tout catalogue, fait, quota ou préflight.
+        NativeDelegationRequest::CallerScope {} => {
+            let caller_read_only = st.delegation_store.for_child(&owner)?.is_some_and(|task| {
+                let requested = match &task.request {
+                    NativeDelegationRequest::Delegate { posture, .. } => *posture,
+                    _ => None,
+                };
+                !task.cleanup_done
+                    && task.effective_posture.or(requested) == Some(SpawnPosture::Discovery)
+            });
+            Ok(json!({"version":1,"caller_read_only":caller_read_only}))
+        }
         NativeDelegationRequest::Catalogue => {
             let permission = root_permission(st, &owner, &instance)?;
             let fact=parent_fact(st,&owner,&instance,None,attested)?;
+            let halted = st.delegation_store.delegation_halt()
+                .map_err(|_| "control_state_unavailable")?.halted;
             let verdict_cwd = fact.as_ref().map(|f| PathBuf::from(&f.cwd))
                 .or_else(|| permission.as_ref().and_then(ParentPermission::root).map(Path::to_path_buf));
             let entries: Vec<Value> = st.registry.resolved_definitions()?.into_iter()
@@ -1517,7 +1536,7 @@ fn handle_locked_with_project(
                         "development_refusal":development.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),"can_run":can_run,"constraints":constraints,"quota":quota})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"features":{"fallback":true,"fallback_max":3},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
+                json!({"version":1,"providers":entries,"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -1777,14 +1796,19 @@ fn handle_locked_with_project(
             }
             let control = crate::referent_control::read(st.store.connection())
                 .map_err(|_| "control_state_unavailable")?;
-            if matches!(
-                crate::referent_control::admit_autonomous_effect(
-                    crate::referent_control::AutonomousEffect::NativeDelegation,
-                    &control
-                ),
-                crate::referent_control::Admission::Deferred { .. }
-            ) {
-                return Err("referent_paused".into());
+            let halt = st
+                .delegation_store
+                .delegation_halt()
+                .map_err(|_| "control_state_unavailable")?;
+            if let crate::referent_control::Admission::Deferred { motif } =
+                crate::referent_control::admit_native_delegation(&control, &halt)
+            {
+                return Err(if motif == "pause" {
+                    "referent_paused"
+                } else {
+                    motif
+                }
+                .into());
             }
             let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
             if saved.permission_snapshot.is_none() {
@@ -10112,12 +10136,416 @@ mod tests {
     }
 
     #[test]
+    fn control158_halt_refuse_nouvelle_cle() {
+        let (mut st, config, rx, _reader) = fixture("h158-neuve");
+        st.delegation_store.set_delegation_halt("halt-neuve", true, "humain", Some("fixture158"), || Ok(0), unix_timestamp()).unwrap();
+        assert_eq!(handle_locked("conn-1", request("neuve158"), &mut st).unwrap_err(), "delegations_halted");
+        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée pendant l’arrêt");
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn control158_halt_rejeu_cle_admise_rend_la_tache() {
+        let (mut st, config, rx, _reader) = fixture("h158-rejeu");
+        let original = request("admise158");
+        let first = handle_locked("conn-1", original.clone(), &mut st).unwrap();
+        st.delegation_store.set_delegation_halt("halt-rejeu", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+        assert_eq!(handle_locked("conn-1", original, &mut st).unwrap(), first);
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn control158_halt_cle_libre_apres_levee() {
+        let (mut st, config, rx, _reader) = fixture("h158-levee");
+        let original = request("libre158");
+        st.delegation_store.set_delegation_halt("halt-libre", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+        assert_eq!(handle_locked("conn-1", original.clone(), &mut st).unwrap_err(), "delegations_halted");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        st.delegation_store.set_delegation_halt("resume-libre", false, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+        let admitted = handle_locked("conn-1", original, &mut st).unwrap();
+        assert_eq!(admitted["status"], "queued");
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            1,
+            "la même clé reste libre après le refus"
+        );
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn control158_halt_statut_et_annulation_disponibles() {
+        let (mut st, config, rx, _reader) = fixture("h158-lecture");
+        let first = handle_locked("conn-1", request("lecture158"), &mut st).unwrap();
+        let task_id = first["task_id"].as_str().unwrap().to_owned();
+        st.delegation_store.set_delegation_halt("halt-lecture", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+        let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+        assert_eq!(catalogue["delegations_halted"], true);
+        let status = handle_locked("conn-1", NativeDelegationRequest::Status { task_id:task_id.clone() }, &mut st).unwrap();
+        assert_eq!(status["task_id"], first["task_id"]);
+        let cancelled = handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id }, &mut st).unwrap();
+        assert_eq!(cancelled["status"], "cancelling");
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn control158_halt_et_pause_4_combinaisons_a_l_admission() {
+        for (paused, halted, refusal) in [
+            (false, false, None),
+            (true, false, Some("referent_paused")),
+            (false, true, Some("delegations_halted")),
+            (true, true, Some("delegations_halted")),
+        ] {
+            let (mut st, config, rx, _reader) = fixture("h158-matrice");
+            if crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .paused
+                != paused
+            {
+                pauser_150(&st, paused);
+            }
+            st.delegation_store.set_delegation_halt("halt-matrice", halted, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+            let result = handle_locked("conn-1", request("matrice158"), &mut st);
+            if let Some(code) = refusal {
+                assert_eq!(result.unwrap_err(), code, "pause={paused}, arrêt={halted}");
+                assert!(st.delegation_store.tasks().unwrap().is_empty());
+            } else {
+                assert_eq!(result.unwrap()["status"], "queued");
+                assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+            }
+            let catalogue =
+                handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+            assert_eq!(catalogue["delegations_halted"], halted);
+            assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            cleanup(&config);
+
+            let mut payload = serde_json::to_value(request("ronde158")).unwrap();
+            payload["keep_alive_secs"] = json!(120);
+            let (shared, config, id, _, _) =
+                parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+            let (parent_writer, _parent) =
+                super::super::presence_tests::control_socket("h158-round-parent");
+            let (child_writer, _child) =
+                super::super::presence_tests::control_socket("h158-round-child");
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let mut before = st.delegation_store.get(&id).unwrap().unwrap();
+            before.state = "result_available".into();
+            before.result = Some("résultat de ronde 1".into());
+            before.result_sent = true;
+            before.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&before).unwrap();
+            before = st.delegation_store.get(&id).unwrap().unwrap();
+            let (tx, round_rx) = mpsc::channel();
+            st.managed_tx = tx;
+            if crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .paused
+                != paused
+            {
+                pauser_150(&st, paused);
+            }
+            st.delegation_store.set_delegation_halt("halt-ronde", halted, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+            let next = NativeDelegationRequest::Continue {
+                task_id: id.clone(),
+                request_id: "ronde-2-158".into(),
+                task: "corrige la revue".into(),
+                brief: None,
+            };
+            let result = handle_locked("conn-1", next.clone(), &mut st);
+            if let Some(code) = refusal {
+                assert_eq!(
+                    result.unwrap_err(),
+                    code,
+                    "Continue pause={paused}, arrêt={halted}"
+                );
+                assert_eq!(
+                    serde_json::to_value(st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+                    serde_json::to_value(&before).unwrap()
+                );
+            } else {
+                let admitted = result.unwrap();
+                assert_eq!(admitted["status"], "mission_pending");
+                assert_eq!(admitted["round"], 2);
+                pauser_150(&st, true);
+                st.delegation_store.set_delegation_halt("halt-rejeu-ronde", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+                let task_before = serde_json::to_value(st.delegation_store.get(&id).unwrap().unwrap()).unwrap();
+                let mut expected = admitted;
+                expected["suspended"] = json!(true); // Vue dynamique de la pause réellement posée.
+                assert_eq!(handle_locked("conn-1", next, &mut st).unwrap(), expected);
+                assert_eq!(
+                    serde_json::to_value(st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+                    task_before
+                );
+            }
+            assert!(
+                matches!(round_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "aucun nouveau lancement pour Continue"
+            );
+            drop(st);
+            drop(shared);
+            cleanup(&config);
+        }
+    }
+
+    #[test]
     fn native150_pause_refuse_nouvelle_cle() {
         let (mut st, config, rx, _reader) = fixture("n150-pause");
         pauser_150(&st, true);
         assert_eq!(handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(), "referent_paused");
         assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée");
         assert!(rx.try_recv().is_err());
+        cleanup(&config);
+    }
+
+    #[test]
+    fn mcp158_plafond_posture_omise_suit_effective() {
+        use super::native_delegation_permissions149_tests::{fixture_with_reader, codex_fact, insert_fact};
+        let (mut st, config, rx, _parent) = fixture_with_reader("scope158-omise");
+        let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
+        insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"readOnly","networkAccess":false}), "never"), None);
+        let mut original = request("omise158");
+        if let NativeDelegationRequest::Delegate {
+            posture, cwd: path, ..
+        } = &mut original
+        {
+            *posture = None;
+            *path = cwd.to_string_lossy().into_owned();
+        }
+        let view = handle_locked("conn-1", original, &mut st).unwrap();
+        let task_id = view["task_id"].as_str().unwrap().to_owned();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert!(matches!(
+            &task.request,
+            NativeDelegationRequest::Delegate { posture: None, .. }
+        ));
+        assert_eq!(task.effective_posture, Some(SpawnPosture::Discovery));
+        let shared = Arc::new(Mutex::new(st));
+        tick(&shared);
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("Start réel attendu");
+        };
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("scope158-omise-child");
+        let mut st = shared.lock().unwrap();
+        assert!(matches!(
+            handle_register_with_channel(
+                "child-conn",
+                2,
+                "native-test".into(),
+                prepared.lease.name.clone(),
+                Some(st.host.clone()),
+                Some("codex_app_server".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".into()),
+                Some(prepared.lease.instance_id.clone()),
+                None,
+                false,
+                Some(true),
+                &mut st,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        st.connections.insert("child-conn".into(), child_writer);
+        st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
+        st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+        st.managed_spawns.get_mut(&task_id).unwrap().wrapper_conn = Some("child-conn".into());
+        assert_eq!(
+            handle_locked(
+                "child-conn",
+                NativeDelegationRequest::CallerScope {},
+                &mut st
+            )
+            .unwrap(),
+            json!({"version":1,"caller_read_only":true})
+        );
+        drop(st);
+        drop(shared);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn mcp158_plafond_tache_terminale_avant_nettoyage() {
+        let mut payload = serde_json::to_value(request("scope-terminal158")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, task_id, _, message) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("scope158-terminal-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("scope158-terminal-child");
+        {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            let mut response = bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat Discovery gardé");
+            response.in_reply_to = Some(message.id);
+            assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
+        }
+        tick(&shared);
+        let mut st = shared.lock().unwrap();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert_eq!(task.state, "result_available");
+        assert!(task.terminal() && task.result_sent && !task.cleanup_done);
+        assert_eq!(
+            handle_locked(
+                "child-conn",
+                NativeDelegationRequest::CallerScope {},
+                &mut st
+            )
+            .unwrap(),
+            json!({"version":1,"caller_read_only":true})
+        );
+        drop(st);
+        drop(shared);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn mcp158_plafond_enfant_conserve_entre_rondes() {
+        let mut payload = serde_json::to_value(request("scope-rondes158")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, task_id, _, message) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("scope158-rondes-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("scope158-rondes-child");
+        let original_child = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            let mut response = bridget_core::BridgetMessage::new(&task.child, &task.owner, "ronde Discovery terminée");
+            response.in_reply_to = Some(message.id);
+            assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
+            task.child
+        };
+        tick(&shared);
+        let mut st = shared.lock().unwrap();
+        assert_eq!(handle_locked("child-conn", NativeDelegationRequest::CallerScope {}, &mut st).unwrap()["caller_read_only"], true);
+        let next = handle_locked("conn-1", NativeDelegationRequest::Continue {
+            task_id:task_id.clone(), request_id:"scope-round2-158".into(), task:"relis le résultat".into(), brief:None,
+        }, &mut st).unwrap();
+        assert_eq!(next["status"], "mission_pending");
+        assert_eq!(next["round"], 2);
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert_eq!(task.child, original_child);
+        assert!(!task.cleanup_done);
+        assert_eq!(
+            handle_locked(
+                "child-conn",
+                NativeDelegationRequest::CallerScope {},
+                &mut st
+            )
+            .unwrap(),
+            json!({"version":1,"caller_read_only":true})
+        );
+        drop(st);
+        drop(shared);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn mcp158_plafond_enfant_nettoye_retrouve_les_droits() {
+        let (shared, config, task_id, _, _) = parent_en_cours_150(request("scope-nettoye158"), 0);
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("scope158-clean-child");
+        let stop = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("child-conn".into(), child_writer);
+            assert_eq!(handle_locked("child-conn", NativeDelegationRequest::CallerScope {}, &mut st).unwrap()["caller_read_only"], true);
+            let cancelled = handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id:task_id.clone() }, &mut st).unwrap();
+            assert_eq!(cancelled["status"], "cancelling");
+            st.managed_spawns.get(&task_id).unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        done.send(()).unwrap();
+        assert_eq!(
+            observer.join().unwrap(),
+            vec![true],
+            "arrêt confirmé avant nettoyage"
+        );
+        let mut st = shared.lock().unwrap();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert_eq!(task.state, "cancelled");
+        assert!(task.cleanup_done);
+        assert_eq!(
+            live_connection_identity(&st, "child-conn"),
+            Some((task.child.clone(), task.child_instance.clone().unwrap()))
+        );
+        assert_eq!(
+            handle_locked(
+                "child-conn",
+                NativeDelegationRequest::CallerScope {},
+                &mut st
+            )
+            .unwrap(),
+            json!({"version":1,"caller_read_only":false})
+        );
+        drop(st);
+        drop(shared);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn mcp158_discovery_reponse_automatique_au_parent() {
+        use std::io::BufRead;
+        let (shared, config, task_id, _, message) =
+            parent_en_cours_150(request("scope-result158"), 0);
+        let (parent_writer, mut parent) =
+            super::super::presence_tests::control_socket("scope158-result-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("scope158-result-child");
+        parent
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let (response, stop) = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            assert_eq!(task.effective_posture, Some(SpawnPosture::Discovery));
+            assert_eq!(handle_locked("child-conn", NativeDelegationRequest::CallerScope {}, &mut st).unwrap()["caller_read_only"], true);
+            let mut response = bridget_core::BridgetMessage::new(&task.child, &task.owner, "réponse finale automatique Discovery");
+            response.in_reply_to = Some(message.id.clone());
+            (response, st.managed_spawns.get(&task_id).unwrap().stop.clone())
+        };
+        // Trame de réponse automatique prévue par le wrapper, hors outil MCP.
+        assert!(
+            matches!(handle_wrapper_message("child-conn", WrapperToDaemon::Send(response.clone()), &shared), Some(DaemonToWrapper::Ack { id, .. }) if id == response.id)
+        );
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&shared);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        let mut line = String::new();
+        parent.read_line(&mut line).unwrap();
+        let DaemonToWrapper::DeliverIdempotent {
+            message: result, ..
+        } = decode(line.trim()).unwrap()
+        else {
+            panic!("résultat automatique corrélé attendu : {line}");
+        };
+        assert_eq!(result.body, response.body);
+        assert_eq!(result.in_reply_to.as_deref(), Some(message.id.as_str()));
+        assert_eq!(result.to, OWNER);
+        let st = shared.lock().unwrap();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert_eq!(task.state, "result_available");
+        assert!(task.result_sent && task.cleanup_done);
+        drop(st);
+        drop(shared);
         cleanup(&config);
     }
 

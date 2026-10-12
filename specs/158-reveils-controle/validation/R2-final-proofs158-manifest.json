@@ -1,0 +1,24 @@
+{
+  "cache_only": true,
+  "at": "2026-10-12T10:11:17.545916+00:00",
+  "patch": "/Users/moi/.cache/bridget-converge158-20261012/R2-final-proofs158.patch",
+  "sha256": "944cc26c424e8d9e6663e2bbb572f0391b482f355188ab1dde0e0f75a7856fba",
+  "files": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/tests-158.md",
+      "before_sha256": "6958e14bdfe44991e31cf8a3d542f57ddcabe8b9e72c2f151d2b474c2ecdda0c",
+      "prepared_sha256": "2ccce4eb227ed296277e7c9507966fa05f8851783f75e9f666a77e397995db85",
+      "WT_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/adversarial-review-codex.md",
+      "before_sha256": "90352e756fa307bda13a89ebae098fe7e8d03f3a1c8e29732d3c0a247b06084d",
+      "prepared_sha256": "9c5854a53a45d2fd73b80e1a9096723d90b50b123c8061bf8ea5c169e8f49e57",
+      "WT_unchanged": true
+    }
+  ],
+  "scope": "deux documents seulement ;C1/C2/C3/provenance et statutROOT22/22",
+  "tasks_sha256": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+  "no_source_test_task_mutation": true,
+  "new_test_or_full_proposed": false
+}

@@ -10716,6 +10716,221 @@ fn control_client_actor(st: &DaemonState, conn_id: &str) -> Option<&'static str>
     })
 }
 
+/// Lecture froide : négociation/capacité contrôlées par le dispatch client.
+fn handle_delegation_overview(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    version: u16,
+    filter: &str,
+    limit: u32,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::DelegationControlRefusal as E;
+    if version != 1 {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::UnsupportedVersion };
+    }
+    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    if control_client_actor(&st, conn_id).is_none() {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::HumanActorRequired };
+    }
+    match st.delegation_store.overview_page(filter, limit) {
+        Ok(page) => serde_json::from_value(page).unwrap_or(
+            DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+        ),
+        Err(reason) => DaemonToWrapper::DelegationControlRejected { reason },
+    }
+}
+
+/// Réemploie l'annulation humaine ; le moteur travaille après le verrou.
+fn handle_delegation_cancel(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    version: u16,
+    task_id: &str,
+    request_id: &str,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::DelegationControlRefusal as E;
+    if version != 1 {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::UnsupportedVersion };
+    }
+    if crate::threads::canonical_uuid(task_id).as_deref() != Some(task_id)
+        || request_id.is_empty()
+        || request_id.len() > 128
+        || request_id.chars().any(bridget_core::is_disallowed_control)
+    {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::InvalidRequest };
+    }
+    let drive = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        if control_client_actor(&st, conn_id).is_none() {
+            return DaemonToWrapper::DelegationControlRejected { reason: E::HumanActorRequired };
+        }
+        let task = match st.delegation_store.get(task_id) {
+            Ok(Some(task)) => task,
+            Ok(None) => return DaemonToWrapper::DelegationControlRejected { reason: E::TaskUnavailable },
+            Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+        };
+        match st
+            .delegation_store
+            .human_cancel(task.root_owner(), task_id, request_id)
+        {
+            Ok((_, drive)) => drive,
+            Err(bridget_transport::protocol::HumanLineageError::TaskUnavailable) => {
+                return DaemonToWrapper::DelegationControlRejected { reason: E::TaskUnavailable };
+            }
+            Err(bridget_transport::protocol::HumanLineageError::EnvelopeMismatch) => {
+                return DaemonToWrapper::DelegationControlRejected { reason: E::InvalidRequest };
+            }
+            Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+        }
+    };
+    if drive {
+        native_delegation::tick(state);
+    }
+    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let task = match st.delegation_store.get(task_id) {
+        Ok(Some(task)) => task,
+        Ok(None) => return DaemonToWrapper::DelegationControlRejected { reason: E::TaskUnavailable },
+        Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+    };
+    let halt = match st.delegation_store.delegation_halt() {
+        Ok(halt) => halt,
+        Err(reason) => return DaemonToWrapper::DelegationControlRejected { reason },
+    };
+    let total_active = match st.delegation_store.admission_counts(&task.owner_instance) {
+        Ok((active, _, _)) => active as u32,
+        Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+    };
+    DaemonToWrapper::DelegationOverview {
+        halted: halt.halted,
+        since: halt.since,
+        by: halt.by,
+        reason: halt.reason,
+        items: vec![task.overview_row(unix_now_secs())],
+        total_active,
+    }
+}
+
+/// Snapshot O(B+n*d), n<=4096 tâches, d<=8 parents ; clé neuve seulement.
+/// Hors coûts existants de human_cancel et du tick natif.
+/// Le reçu fige les arbres visés avant l'annulation. Un crash peut laisser une
+/// annulation partielle ; le même command_id ne la relance jamais (FR-009).
+#[allow(clippy::too_many_arguments)]
+fn handle_delegation_halt_set(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    version: u16,
+    command_id: &str,
+    halted: bool,
+    reason: Option<&str>,
+    cancel_active: bool,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::DelegationControlRefusal as E;
+    if version != 1 {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::UnsupportedVersion };
+    }
+    if command_id.is_empty()
+        || command_id.len() > 128
+        || command_id.chars().any(bridget_core::is_disallowed_control)
+        || (cancel_active && !halted)
+    {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::InvalidRequest };
+    }
+    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let Some(actor) = control_client_actor(&st, conn_id) else {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::HumanActorRequired };
+    };
+    let mut targets = Vec::new();
+    let response = st.delegation_store.set_delegation_halt(
+        command_id,
+        halted,
+        actor,
+        reason,
+        || {
+            if !cancel_active {
+                return Ok(0);
+            }
+            let tasks = st
+                .delegation_store
+                .tasks()
+                .map_err(|_| E::StoreUnavailable)?;
+            if tasks.len() > crate::delegation::MAX_RETAINED_TASKS {
+                return Err(E::StoreUnavailable);
+            }
+            let by_id: HashMap<_, _> = tasks
+                .iter()
+                .map(|task| (task.task_id.as_str(), task))
+                .collect();
+            let active = crate::delegation::Task::holds_slot;
+            for task in tasks.iter().filter(|task| active(task)) {
+                let mut parent = task.parent_task_id.as_deref();
+                let mut active_ancestor = false;
+                let mut depth = 0;
+                while let Some(parent_id) = parent {
+                    depth += 1;
+                    if depth >= 8 {
+                        return Err(E::StoreUnavailable);
+                    }
+                    let ancestor = by_id.get(parent_id).ok_or(E::StoreUnavailable)?;
+                    if ancestor.root_owner() != task.root_owner() {
+                        return Err(E::StoreUnavailable);
+                    }
+                    active_ancestor |= active(ancestor);
+                    parent = ancestor.parent_task_id.as_deref();
+                }
+                if !active_ancestor {
+                    targets.push((task.root_owner().to_owned(), task.task_id.clone()));
+                }
+            }
+            Ok(targets.len() as u32)
+        },
+        unix_now_secs(),
+    );
+    let response: DaemonToWrapper = match response {
+        Ok(response) => match serde_json::from_value(response) {
+            Ok(response) => response,
+            Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+        },
+        Err(reason) => return DaemonToWrapper::DelegationControlRejected { reason },
+    };
+    let DaemonToWrapper::DelegationHaltState { replayed, cancelled, .. } = &response else {
+        return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable };
+    };
+    let mut drive = !targets.is_empty();
+    let mut failed = false;
+    if !replayed {
+        // État et reçu sont déjà committés. Le verrou garde ce snapshot stable
+        // jusqu'au dernier human_cancel ; aucune nouvelle admission ne s'intercale.
+        for (root, task_id) in &targets {
+            let request_id = format!("{command_id}:{task_id}");
+            match st.delegation_store.human_cancel(root, task_id, &request_id) {
+                Ok((_, run)) => drive |= run,
+                Err(error) => {
+                    warn!("arrêt des délégations : reçu committé, annulation refusée : {error:?}");
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        info!(
+            "{}",
+            serde_json::json!({
+                "event":"delegations_halt_set", "actor":actor,
+                "reason":reason.map(|text| text.chars().take(crate::referent_control::MAX_REASON_CHARS).collect::<String>()),
+                "targeted_trees":*cancelled, "halted":halted,
+            })
+        );
+    }
+    drop(st);
+    if drive {
+        native_delegation::tick(state);
+    }
+    if failed {
+        DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable }
+    } else {
+        response
+    }
+}
+
 fn human_channel_config() -> Option<crate::human_inbox::HumanChannelConfig> {
     let path = crate::human_inbox::default_channel_config_path()?;
     match crate::human_inbox::load_channel_config(&path) {
@@ -15839,6 +16054,9 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::Domain { .. }
                 | WrapperToDaemon::Availability { .. }
                 | WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::DelegationOverviewRead { .. }
+                | WrapperToDaemon::DelegationHaltSet { .. }
+                | WrapperToDaemon::DelegationCancel { .. }
                 | WrapperToDaemon::ControlFocusRead { .. }
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
@@ -15899,6 +16117,9 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
                 | WrapperToDaemon::HumanInboxResolve { .. }
+                | WrapperToDaemon::DelegationOverviewRead { .. }
+                | WrapperToDaemon::DelegationHaltSet { .. }
+                | WrapperToDaemon::DelegationCancel { .. }
                     if !st.client_negotiations.contains_key(conn_id) =>
                 {
                     Some(ClientRefusal::NegotiationRequired)
@@ -15918,6 +16139,9 @@ fn handle_wrapper_message_with_peer(
                 WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
                 | WrapperToDaemon::HumanInboxResolve { .. }
+                | WrapperToDaemon::DelegationOverviewRead { .. }
+                | WrapperToDaemon::DelegationHaltSet { .. }
+                | WrapperToDaemon::DelegationCancel { .. }
                     if st.client_negotiations.get(conn_id).is_some_and(|negotiated| {
                         negotiated.version != CLIENT_CONTRACT_VERSION
                             || !negotiated
@@ -15932,7 +16156,10 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
-                | WrapperToDaemon::HumanInboxResolve { .. } => None,
+                | WrapperToDaemon::HumanInboxResolve { .. }
+                | WrapperToDaemon::DelegationOverviewRead { .. }
+                | WrapperToDaemon::DelegationHaltSet { .. }
+                | WrapperToDaemon::DelegationCancel { .. } => None,
                 WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::ControlExecution { .. }
@@ -16124,6 +16351,9 @@ fn handle_wrapper_message_with_peer(
                         | WrapperToDaemon::ControlStateSet { .. }
                         | WrapperToDaemon::HumanInboxList { .. }
                         | WrapperToDaemon::HumanInboxResolve { .. }
+                        | WrapperToDaemon::DelegationOverviewRead { .. }
+                        | WrapperToDaemon::DelegationHaltSet { .. }
+                        | WrapperToDaemon::DelegationCancel { .. }
                 ) =>
             {
                 Some(ClientRefusal::ClientRoleRequired)
@@ -16515,6 +16745,17 @@ fn handle_wrapper_message_with_peer(
             None
         }
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::DelegationOverviewRead { version, state: filter, limit } => {
+            Some(handle_delegation_overview(state, conn_id, version, &filter, limit))
+        }
+        WrapperToDaemon::DelegationCancel { version, task_id, request_id } => {
+            Some(handle_delegation_cancel(state, conn_id, version, &task_id, &request_id))
+        }
+        WrapperToDaemon::DelegationHaltSet { version, command_id, halted, reason, cancel_active } => {
+            Some(handle_delegation_halt_set(
+                state, conn_id, version, &command_id, halted, reason.as_deref(), cancel_active,
+            ))
+        }
         WrapperToDaemon::ControlStateRead { version } => {
             Some(handle_control_state_read(state, version))
         }
@@ -22036,6 +22277,513 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    // T008/T012 : neuf usages. Réemploi état/registre/SQLite et négociation
+    // publics ; aucune présence d'enfant ni aucun fournisseur lancé.
+    fn control158_state_with_tasks(
+        label: &str,
+    ) -> (Arc<Mutex<DaemonState>>, DaemonConfig, Vec<crate::delegation::Task>) {
+        let label = format!("158-{label}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let (state, config) = state_with_registered_agent(&label);
+        let ids: Vec<_> = (0..4).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+        let children: Vec<_> = (0..4).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+        let other_owner = uuid::Uuid::new_v4().to_string();
+        let now = unix_now_secs();
+        let mut tasks = Vec::new();
+        for i in 0..4 {
+            let owner = match i {
+                0 => "89000000-0000-4000-8000-000000000102",
+                1 | 2 => children[i - 1].as_str(),
+                _ => other_owner.as_str(),
+            };
+            let request_id = format!("control158-{}", ids[i]);
+            let task: crate::delegation::Task = serde_json::from_value(serde_json::json!({
+                "task_id":ids[i], "owner":owner, "owner_instance":format!("owner-{i}"),
+                "origin_owner_instance":format!("owner-{i}"),
+                "root_owner_agent_id":if i < 3 { "89000000-0000-4000-8000-000000000102" } else { other_owner.as_str() },
+                "parent_task_id":if i == 1 || i == 2 { Some(ids[i-1].clone()) } else { None },
+                "request":{"operation":"delegate","request_id":request_id,"agent_type":"claude",
+                    "model":"fixture","task":"mission privée158","cwd":"/tmp"},
+                "definition":{"command":"/bin/sh","args":[],"protocol":"acp","forbidden_env":[],
+                    "pass_env":[],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600,
+                    "mcp":{"interactive":"none","acp_session":false},"digest":"fixture-control158"},
+                "cwd":"/tmp", "child":children[i], "child_instance":null,
+                "mission":uuid::Uuid::new_v4().to_string(), "created_at":now,
+                "state":if i == 0 { "failed" } else { "queued" },
+                "result":null,"error":null,"result_sent":false,
+                "failure_sent":true,"cleanup_done":i == 0,"delivery_acked":i == 0
+            })).unwrap();
+            let canonical = serde_json::to_vec(&task.request).unwrap();
+            state
+                .delegation_store
+                .insert(&task, &request_id, &canonical)
+                .unwrap();
+            tasks.push(state.delegation_store.get(&task.task_id).unwrap().unwrap());
+        }
+        // La pause empêche le tick d'admettre une branche non visée. L'arrêt
+        // global ne doit pas lever cette pause ; cancelling reste traité.
+        crate::referent_control::set(state.store.connection(), crate::referent_control::ControlMutation {
+            command_id:"fixture158-pause", expected_generation:0, paused:Some(true),
+            auto_objectives_cap:None, reason:Some("fixture158"), actor:"cli", now,
+            agent_posture:None, auto_reassignment:None,
+        }).unwrap().unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "human158",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("human158", WrapperToDaemon::ClientHello {
+            contract_version:CLIENT_CONTRACT_VERSION,
+            issuer_scope:crate::communication::issuer_scope("bridget-control-cli"),
+            capabilities:vec![ClientCapability::ControlStateV1],
+        }, &shared), Some(DaemonToWrapper::ClientWelcome { capabilities, .. })
+            if capabilities.contains(&ClientCapability::ControlStateV1))
+        );
+        (shared, config, tasks)
+    }
+
+    #[test]
+    fn control158_overview_client_agent_negocie_refuse() {
+        use bridget_transport::protocol::DelegationControlRefusal as E;
+        let (shared, config, tasks) = control158_state_with_tasks("agent");
+        let before = {
+            let st = shared.lock().unwrap();
+            (serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
+                st.delegation_store.delegation_halt().unwrap(), st.delegation_store.wait_epoch().get())
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                "agent158",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("agent158", WrapperToDaemon::ClientHello {
+            contract_version:CLIENT_CONTRACT_VERSION,
+            issuer_scope:crate::communication::issuer_scope("instance-agent158"),
+            capabilities:vec![ClientCapability::ControlStateV1],
+        }, &shared), Some(DaemonToWrapper::ClientWelcome { capabilities, .. })
+            if capabilities.contains(&ClientCapability::ControlStateV1))
+        );
+        for request in [
+            WrapperToDaemon::DelegationOverviewRead { version:1,state:"all".into(),limit:100 },
+            WrapperToDaemon::DelegationCancel { version:1,task_id:tasks[1].task_id.clone(),request_id:"agent-cancel".into() },
+            WrapperToDaemon::DelegationHaltSet { version:1,command_id:"agent-halt".into(),halted:true,reason:None,cancel_active:true },
+        ] {
+            assert!(matches!(
+                handle_wrapper_message("agent158", request, &shared),
+                Some(DaemonToWrapper::DelegationControlRejected {
+                    reason: E::HumanActorRequired
+                })
+            ));
+        }
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            before,
+            (
+                serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
+                st.delegation_store.delegation_halt().unwrap(),
+                st.delegation_store.wait_epoch().get()
+            )
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_overview_client_non_negocie_refuse() {
+        let (shared, config, _) = control158_state_with_tasks("neg");
+        assert!(matches!(handle_wrapper_message("bare158", WrapperToDaemon::RoleHandshake {
+            role:ConnectionRole::Client,
+        }, &shared), Some(DaemonToWrapper::RoleAccepted { .. })));
+        let request = WrapperToDaemon::DelegationOverviewRead { version:1,state:"active".into(),limit:50 };
+        assert!(matches!(handle_wrapper_message("bare158",request.clone(),&shared),
+            Some(DaemonToWrapper::ClientRejected { reason:ClientRefusal::NegotiationRequired })));
+        assert!(matches!(handle_wrapper_message("bare158", WrapperToDaemon::ClientHello {
+            contract_version:CLIENT_CONTRACT_VERSION,
+            issuer_scope:crate::communication::issuer_scope("bridget-control-cli"),
+            capabilities:vec![ClientCapability::Lookup],
+        }, &shared), Some(DaemonToWrapper::ClientWelcome { .. })));
+        // Lookup ne remplace pas ControlStateV1 pour cette vue globale.
+        assert!(matches!(
+            handle_wrapper_message("bare158", request, &shared),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::CapabilityNotNegotiated
+            })
+        ));
+        assert!(
+            !shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .delegation_halt()
+                .unwrap()
+                .halted
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_overview_cancel_cascade() {
+        let (shared, config, tasks) = control158_state_with_tasks("cascade");
+        let response = handle_wrapper_message("human158", WrapperToDaemon::DelegationCancel {
+            version:1,task_id:tasks[1].task_id.clone(),request_id:"human-cascade".into(),
+        }, &shared);
+        let Some(DaemonToWrapper::DelegationOverview { items,total_active,.. }) = response else {
+            panic!("vue mise à jour attendue, reçu {response:?}");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["task_id"], tasks[1].task_id);
+        assert_eq!(items[0]["state"], "cancelled");
+        assert!(items[0].get("result").is_none() && items[0].get("task").is_none());
+        assert_eq!(total_active, 1);
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            st.delegation_store
+                .get(&tasks[1].task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&tasks[2].task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap())
+                .unwrap(),
+            serde_json::to_value(&tasks[0]).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&tasks[3].task_id).unwrap().unwrap())
+                .unwrap(),
+            serde_json::to_value(&tasks[3]).unwrap()
+        );
+        assert!(
+            crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .paused
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_halt_exige_acteur_humain() {
+        use bridget_transport::protocol::DelegationControlRefusal as E;
+        let (shared, config, _) = control158_state_with_tasks("actor");
+        let request = WrapperToDaemon::DelegationHaltSet {
+            version: 1,
+            command_id: "actor-halt".into(),
+            halted: true,
+            reason: None,
+            cancel_active: true,
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                "bare-halt158",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("bare-halt158", request.clone(), &shared),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "bare-halt158",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::communication::issuer_scope("instance-agent158"),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("bare-halt158", request.clone(), &shared),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::CapabilityNotNegotiated
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "cap-halt158",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "cap-halt158",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::communication::issuer_scope("instance-agent158-cap"),
+                    capabilities: vec![ClientCapability::ControlStateV1],
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message("cap-halt158", request, &shared),
+            Some(DaemonToWrapper::DelegationControlRejected {
+                reason: E::HumanActorRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "human158",
+                WrapperToDaemon::DelegationHaltSet {
+                    version: 1,
+                    command_id: "invalid-cancel".into(),
+                    halted: false,
+                    reason: None,
+                    cancel_active: true,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::DelegationControlRejected {
+                reason: E::InvalidRequest
+            })
+        ));
+        let st = shared.lock().unwrap();
+        assert!(!st.delegation_store.delegation_halt().unwrap().halted);
+        assert_eq!(
+            st.delegation_store
+                .test_connection()
+                .query_row(
+                    "SELECT count(*) FROM native_delegation_halt_commands",
+                    [],
+                    |row| row.get::<_, u32>(0)
+                )
+                .unwrap(),
+            0
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_halt_cancel_active_annule_les_arbres() {
+        let (shared, config, tasks) = control158_state_with_tasks("halt-cascade");
+        let response = handle_wrapper_message("human158", WrapperToDaemon::DelegationHaltSet {
+            version:1,command_id:"A-cancel".into(),halted:true,reason:Some("arrêt humain".into()),cancel_active:true,
+        }, &shared);
+        assert!(matches!(response,Some(DaemonToWrapper::DelegationHaltState {
+            halted:true,cancelled:2,replayed:false,by:Some(ref actor),reason:Some(ref reason),..
+        }) if actor == "cli" && reason == "arrêt humain")
+        );
+        let st = shared.lock().unwrap();
+        for task in &tasks[1..] {
+            assert_eq!(
+                st.delegation_store
+                    .get(&task.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "cancelled"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&tasks[0].task_id).unwrap().unwrap())
+                .unwrap(),
+            serde_json::to_value(&tasks[0]).unwrap()
+        );
+        let saved:String = st.delegation_store.test_connection().query_row(
+            "SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A-cancel'",
+            [],|row|row.get(0)).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved).unwrap()["cancelled"],
+            2
+        );
+        assert!(
+            crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .paused
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_halt_sans_cancel_active_ne_touche_rien() {
+        let (shared, config, _) = control158_state_with_tasks("halt-only");
+        let before = {
+            let st=shared.lock().unwrap();
+            (serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
+                st.delegation_store.wait_epoch().get(),crate::referent_control::read(st.store.connection()).unwrap())
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                "human158",
+                WrapperToDaemon::DelegationHaltSet {
+                    version: 1,
+                    command_id: "halt-only".into(),
+                    halted: true,
+                    reason: None,
+                    cancel_active: false,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::DelegationHaltState {
+                halted: true,
+                cancelled: 0,
+                replayed: false,
+                ..
+            })
+        ));
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            before,
+            (
+                serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
+                st.delegation_store.wait_epoch().get(),
+                crate::referent_control::read(st.store.connection()).unwrap()
+            )
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_halt_commande_rejouee() {
+        let (shared, config, _) = control158_state_with_tasks("replay");
+        let a=WrapperToDaemon::DelegationHaltSet { version:1,command_id:"replay-A".into(),halted:true,
+            reason:Some("historique A".into()),cancel_active:false };
+        assert!(matches!(handle_wrapper_message("human158",a.clone(),&shared),
+            Some(DaemonToWrapper::DelegationHaltState { halted:true,cancelled:0,replayed:false,generation:1,.. })));
+        assert!(matches!(handle_wrapper_message("human158",WrapperToDaemon::DelegationHaltSet {
+            version:1,command_id:"replay-B".into(),halted:false,reason:None,cancel_active:false,
+        },&shared),Some(DaemonToWrapper::DelegationHaltState { halted:false,generation:2,.. })));
+        assert!(matches!(handle_wrapper_message("human158",a,&shared),
+            Some(DaemonToWrapper::DelegationHaltState { halted:true,cancelled:0,replayed:true,generation:1,
+                reason:Some(ref reason),.. }) if reason == "historique A"));
+        assert!(
+            !shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .delegation_halt()
+                .unwrap()
+                .halted
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_halt_a_b_c_rejeu_a_ne_touche_pas_c() {
+        let (shared, config, tasks)=control158_state_with_tasks("abc");
+        let a=WrapperToDaemon::DelegationHaltSet { version:1,command_id:"abc-A".into(),halted:true,
+            reason:Some("A".into()),cancel_active:true };
+        assert!(matches!(handle_wrapper_message("human158",a.clone(),&shared),
+            Some(DaemonToWrapper::DelegationHaltState { cancelled:2,replayed:false,.. })));
+        assert!(matches!(handle_wrapper_message("human158",WrapperToDaemon::DelegationHaltSet {
+            version:1,command_id:"abc-B".into(),halted:false,reason:None,cancel_active:false,
+        },&shared),Some(DaemonToWrapper::DelegationHaltState { halted:false,.. })));
+        let (c,before,epoch)={
+            let st=shared.lock().unwrap();
+            let mut c=tasks[3].clone();
+            c.task_id=uuid::Uuid::new_v4().to_string(); c.child=uuid::Uuid::new_v4().to_string();
+            c.mission=uuid::Uuid::new_v4().to_string();
+            st.delegation_store.insert(&c,"abc-C",b"abc-C").unwrap();
+            let before=serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap();
+            // Un payload illisible prouve que le rejeu connu ne relit aucune tâche.
+            st.delegation_store.test_connection().execute(
+                "UPDATE native_delegations SET payload='{}' WHERE task_id=?1",[&tasks[0].task_id]).unwrap();
+            (c,before,st.delegation_store.wait_epoch().get())
+        };
+        assert!(matches!(
+            handle_wrapper_message("human158", a, &shared),
+            Some(DaemonToWrapper::DelegationHaltState {
+                halted: true,
+                cancelled: 2,
+                replayed: true,
+                ..
+            })
+        ));
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            before,
+            serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap()
+        );
+        assert_eq!(epoch, st.delegation_store.wait_epoch().get());
+        assert!(!st.delegation_store.delegation_halt().unwrap().halted);
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn control158_halt_a_b_c_rejeu_a_apres_redemarrage() {
+        let (shared, config, tasks)=control158_state_with_tasks("abc-reopen");
+        let a=WrapperToDaemon::DelegationHaltSet { version:1,command_id:"reopen-A".into(),halted:true,
+            reason:Some("A durable".into()),cancel_active:true };
+        assert!(matches!(handle_wrapper_message("human158",a.clone(),&shared),
+            Some(DaemonToWrapper::DelegationHaltState { cancelled:2,replayed:false,.. })));
+        assert!(matches!(handle_wrapper_message("human158",WrapperToDaemon::DelegationHaltSet {
+            version:1,command_id:"reopen-B".into(),halted:false,reason:None,cancel_active:false,
+        },&shared),Some(DaemonToWrapper::DelegationHaltState { halted:false,.. })));
+        let (c,before)={
+            let mut st=shared.lock().unwrap();
+            let mut c=tasks[3].clone();
+            c.task_id=uuid::Uuid::new_v4().to_string(); c.child=uuid::Uuid::new_v4().to_string();
+            c.mission=uuid::Uuid::new_v4().to_string();
+            st.delegation_store.insert(&c,"reopen-C",b"reopen-C").unwrap();
+            let before=serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap();
+            // Fermer/reouvrir le magasin disque, sans service ni processus neuf.
+            st.delegation_store =
+                crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+            (c, before)
+        };
+        assert!(matches!(handle_wrapper_message("human158",a,&shared),
+            Some(DaemonToWrapper::DelegationHaltState { halted:true,cancelled:2,replayed:true,
+                reason:Some(ref reason),.. }) if reason == "A durable"));
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            before,
+            serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap()
+        );
+        assert!(!st.delegation_store.delegation_halt().unwrap().halted);
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]

@@ -1,0 +1,50 @@
+{
+  "at": "2026-10-12T08:59:33.093945+00:00",
+  "patch_sha256": "e074372fe95519909d06e2cdb8457dde52ba0532429675763d08703b7cc4d697",
+  "files": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/spec.md",
+      "before_sha256": "2b86ec53c5abf3c7b5c7ac29c1b62d34aab3123f68c3b0234785b89043ffbc87",
+      "candidate_sha256": "b958c6be761e117a5c17a391f1c6539a1a8d9a1eaf60dd5c881f13ab8eb594cb"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/data-model.md",
+      "before_sha256": "36c1b29c6467bc8cce2cddeff202cd1e61c0b9d8ba52a37e87ba157f620629e8",
+      "candidate_sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/contracts/control158.md",
+      "before_sha256": "cafeee40c1bfbf930ad539c5c7707ee066d2a074ba2bcad3c5cfa2d283bfcf51",
+      "candidate_sha256": "208f46803f9333ca31c2be7f18293b32efaaf2c7856a28a25697c28656c84563"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/tasks.md",
+      "before_sha256": "11b18c5ce1f5d689e7f8b865166ebf6a0aa8c9b7899e4d3f34d0960b612a05a1",
+      "candidate_sha256": "53fa89220637330f4e0844b2d2dae712efdc95ec97ca2d2eb9e340ee563fc496"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/plan.md",
+      "before_sha256": "819c74d8a6ed8dd7fa3e8a92cd87ed23ac49122e961a9b3b50f960d88ef26d68",
+      "candidate_sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/research.md",
+      "before_sha256": "183380b7691f241c6047f7377737558d291b91d87f50b885cda39577c3c9f704",
+      "candidate_sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50"
+    }
+  ],
+  "task_ids_unchanged": true,
+  "test_names_unchanged": true,
+  "section158B_unchanged": true,
+  "no_wt_edits": true,
+  "authority": "Explicit root counterreview decisions",
+  "source_guard_current": {
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/spec.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/data-model.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/contracts/control158.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/tasks.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/plan.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/research.md": true
+  },
+  "root_T001_checkbox_current": true
+}

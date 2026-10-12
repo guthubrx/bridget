@@ -1,0 +1,56 @@
+{
+  "review": "SPEC158A adverse readonly r2",
+  "verdict": "APPROVE_WITH_CHANGES",
+  "writes": [
+    "/Users/moi/.cache/bridget-review158A-20261012-r2/rapport.md",
+    "/Users/moi/.cache/bridget-review158A-20261012-r2/read_manifest.json"
+  ],
+  "no_cargo_or_tests": true,
+  "no_source_modification": true,
+  "no_git": true,
+  "sha_verified": {
+    "scope-files.json": "79f34885e1336f205523f4d9f1905287b4ad192a3c090b5535f86da31a541197",
+    "diff158A-final.patch": "67001c94315d17eeac8968df0ce7c48d653792df149b5d9e93ac6e4d748dfe76",
+    "scope_files_27_match_worktree": true,
+    "patches_sha": {
+      "combinedchildproof-preview.patch": "b3855e9818742d0453ce646d8943138fc1c3d382997e7d695857b37c859e438c",
+      "v2cli-docs-preview.patch": "c9d639b59797d71685e25fd937756e5524f4f6796d9dad36d12a2b491113a9b4",
+      "01-core_089_concurrency_test-fixture.patch": "53c623db0b95fc9a9b2b42ae6773fc985f6ef8f62a3cc984340753febd108e91",
+      "02-core_089_security_test-fixture.patch": "b976a4fb8a33ddf48739f4bf18e88f11fe4541034aefa70e4d72124d0eec845c",
+      "03-native_delegation_e2e-fixture.patch": "83b4c51c6ab9d633ae32e508afe1c3602351e7ea9388f56f3020f8cf30b1bc2b"
+    },
+    "worktree_after": {
+      "crates/bridget-daemon/src/mcp.rs": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "crates/bridget-daemon/src/cli.rs": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+      "crates/bridget-daemon/tests/core_089_concurrency_test.rs": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "crates/bridget-daemon/tests/core_089_security_test.rs": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4"
+    }
+  },
+  "provenance": {
+    "r1_capture": "scope 5081979d... diff 590c8bbb... 137 hunks (superseded)",
+    "final_capture": "scope 79f34885... diff 67001c94... 152 hunks, 5093 lines",
+    "full_T021_started_utc": "2026-10-12T09:32:35Z (before fixes; rc 101)",
+    "replay_logs": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-*.json",
+    "mtime_mcp_cli_local": "11:49:16 CEST (09:49:16 UTC)"
+  },
+  "findings": [
+    {"id": "C1", "severity": "LOW", "file": "crates/bridget-daemon/src/cli.rs", "line": "6310-6315", "summary": "Message store_unavailable applique aussi a resume-delegations (cancel_active false)"},
+    {"id": "C2", "severity": "LOW", "file": "/Users/moi/.cache/bridget-fix158-review-20261012/combinedchildproof-preview-report.md", "line": "1-3", "summary": "Claim test156 byte-identique inexact : seule la section ChildProof est restauree ; reply_caller_scope reste en section positive (mcp.rs:2763)"},
+    {"id": "C3", "severity": "LOW", "file": "crates/bridget-daemon/src/cli.rs", "line": "6310-6315", "summary": "Pas de test pour le message CLI ; oracle de ronde 1 non implemente"}
+  ],
+  "objections_status": {
+    "F1": "resolu CLI+docs, residu C1/C3",
+    "F2": "documente ; chemin normal de purge non atteint (tree_settled non lu)",
+    "F3": "documente, code inchange",
+    "F4": "resolu, oracle suspended precis et contrat vue courante",
+    "TEST001": "resolu, garde avant connexion et oracle de base"
+  },
+  "limits": [
+    "FULL final non relance ; FULL 2440/12F anterieur aux correctifs",
+    "rejeux T021 ciblés rc0, non reproduits ici",
+    "compilation et tests non executes (interdit)",
+    "tree_settled et set_delegation_halt non lus",
+    "statut de test inféré du format [statut, passes, echoues, ignores]"
+  ]
+}

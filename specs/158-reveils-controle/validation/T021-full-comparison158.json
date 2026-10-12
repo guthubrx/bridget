@@ -1,0 +1,3328 @@
+{
+  "full_rc": 101,
+  "seconds": 804.17,
+  "sources_stable": true,
+  "log_sha256": "70483926b59f67a005733b5a37aba4104e86d5e1af9079cd52c117d0cb97e3e0",
+  "cargo_targets": 95,
+  "cargo_counts": [
+    2440,
+    12,
+    74
+  ],
+  "baseline_exact_names": 255,
+  "baseline_identical": 255,
+  "baseline_comparison": {
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_catalogue_parent_lecteur_et_confinement_refuses_par_nom": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_developpement_d_un_parent_lecteur_refuse_sans_tache_ni_invitation": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_e2_enfant_en_file_au_proprietaire_perdu_echoue_et_la_racine_livre_son_vrai_resultat_une_fois": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l_enfant": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_e2_proprietaire_hors_ligne_garde_le_resultat_puis_livre_une_fois_a_la_reconnexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_autorite_retenue_recoupe_chaque_champ_du_resultat": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_cas_d_execution_refuse_un_instantane_perime": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_descendant_perdu_en_running_est_ferme_puis_la_racine_livre_son_vrai_resultat_une_fois": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_execution_d_un_autre_agent_est_refusee_sans_etre_modifiee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_execution_terminale_n_est_jamais_rouverte_au_redemarrage": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_ligne_de_reprise_d_une_mission_native_perdue_ne_bloque_pas_la_racine": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_message_externe_au_meme_format_ne_recoit_aucune_capacite_privee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_reste_intact": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_proprietaire_hors_ligne_garde_le_resultat_en_attente_puis_livre_une_seule_fois": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_reponse_reelle_capturee_survit_au_redemarrage_et_au_descendant_perdu": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_annulation_et_execution_active_sont_fermees_une_fois_au_redemarrage": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_cancel_tree_ferme_l_execution_exacte_avant_de_publier_cancelled": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_execution_d_un_autre_agent_refuse_la_fermeture_d_une_tache_annulee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_execution_terminale_d_une_tache_annulee_n_est_jamais_rouverte": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_une_tache_annulee_a_execution_interrompue_ne_bloque_pas_la_racine": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_aucune_escalade_native_marqueur_conserve_et_wrapper_vivant_apres_la_grace": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_groupe_ordinaire_garde_sigterm_puis_sigkill_apres_sa_moitie_de_delai": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_identite_native_incoherente_refuse_avant_tout_signal_meme_pour_un_autre_groupe": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_la_grace_est_commune_tous_les_wrappers_natifs_recoivent_sigterm_avant_l_attente": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_les_identites_de_demarrage_viennent_de_la_saga_et_pilotent_l_arret_cooperatif": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_lot_mixte_garde_la_grace_native_et_l_escalade_ordinaire": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_naissance_differente_ou_groupe_disparu_ne_recoit_aucun_signal": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_wrapper_natif_recoit_sigterm_et_sort_de_lui_meme_sans_sigkill": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_posture_omise_resout_le_developpement_effectif_du_fait": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_revocation_de_la_racine_coupe_enfant_et_petit_enfant": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_sans_fait_le_v1_est_refuse_et_les_lectures_survivent_au_tombstone": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_spawn_refuse_les_entrees_gelees_changees_sans_lancement": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::native_delegation_permissions149_tests::native149_un_fait_d_autre_demande_ne_donne_aucun_droit": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_agent_revocation_survives_a_new_instance_until_explicit_grant": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_attested_git_discovery_accepts_repo_and_external_worktree_only": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_cancel_stops_native_descendants_before_parent": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_capture_database_failure_never_acks_or_delivers_directly": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_completed_without_reply_expires_at_its_frozen_mission_deadline": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_cut_after_admission_retains_exact_ids_and_frozen_model": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_cwd_and_development_grants_are_closed": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_failed_cleanup_does_not_require_a_live_proved_parent": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_glm_catalogue_uses_native_registry_and_discovery_permissions": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_live_original_owner_blocks_replay_status_and_cancel": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_mission_replay_and_result_wait_for_children_without_t3": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_only_human_can_grant": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_other_project_is_refused_before_admission": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_parent_and_model_refusals_have_no_effect": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_reincarnated_parent_requires_proof_and_reuses_the_same_task": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_replay_precedes_grant_revocation_and_definition_change": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_retry_ten_times_one_task_and_one_spawn": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_status_cancel_are_owner_scoped_and_repeatable": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native148_turn_completed_alone_never_makes_result_available": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_admission_apres_5000_terminees": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_admission_limites_actives_inchangees": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_admission_purge_de_borne_plus_ancien_d_abord": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_admission_saturation_sans_purgeable": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_applique_echeance_et_suivi": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_bornes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_enfant_explicite_parent_sans_echeance": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_enfant_explicite_trop_long": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_enfant_implicite_inchange": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_rejeu_autre_valeur_envelope_mismatch": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_suivi_aligne_sur_admission_apres_lancement_retarde": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_delai_suivi_realigne_apres_echec_d_ecriture": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_entretien_borne_et_age_cumulent_au_plus_128": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_entretien_purge_de_borne_sans_admission": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_cle_libre_apres_levee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_etat_illisible_refus_ferme": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_precede_refus_de_droits": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_refus_par_le_gestionnaire_complet_ne_fait_rien_avancer": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_refuse_nouvelle_cle": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_rejeu_cle_admise_rend_la_tache": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_pause_statut_et_annulation_disponibles": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_129_accuses_expires_tous_recopies": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_accuse_recopie": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_agent_route_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_arbre_volumineux_une_ecriture_de_flotte": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_decommission_en_cours_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_echec_recopie_suspend_purge_des_envois": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_enfant_present_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_entree_stopped_decommissionnee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_lancement_en_cours_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_outcome_unknown_puis_remise_effacee_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_pierre_expiree_libere_la_cle": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_purge_rejeu_cle_purgee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_delegation::tests::native150_statut_tache_purgee_rend_task_unavailable": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_cancel_recu_rejeu_et_mismatch_via_flux": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_gardes_client_et_authorite": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_list_show_journal_et_disponibilite_journal": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_marqueur_projection_ferme_et_exclut": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_page_journal_bornes_permissions_et_fermeture": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_snapshot_v2_exclut_le_filtre_avant_normalisation": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_validate_ferme_les_formes_ouvertes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_watch_ready_changed_silence_resync_et_invalidation": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native149_watch_refuse_sans_socket_ou_sans_capacite": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native150_pause_annulation_humaine_disponible": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native150_purge_entretien_signale_resync": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::native_lineage::native_lineage_tests::native150_purge_ouverture_du_daemon_ne_purge_rien": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_levee_de_pause_agent_absent_reprend_a_la_reconnexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_levee_de_pause_agent_occupe_ne_relance_pas": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_levee_de_pause_relance_l_execution_interrompue": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_origine_humaine_fabriquee_par_le_daemon_et_refusee_aux_agents": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_pause_differe_la_continuation_de_reprise": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_pause_differe_les_relances_mais_pas_le_palier_trois": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_pause_interrompt_le_tour_en_cours": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_pause_survit_a_la_reconstruction_de_l_etat": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_reprise_d_une_route_humaine_vivante_est_signalee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "daemon::presence_tests::spec_087_un_agent_par_ses_outils_declares_ne_mute_rien": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_cancel_rejeu_mismatch_etats_et_plafond": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_conflits_insertion_rollback": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_entree_titre_erreur_etats_fermes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_insert_seq_signal_durable_et_horodatages": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_lectures_silencieuses_et_save_inchange": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_migration_148_derive_racine_parent_et_horodatages": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_migration_fermee_cycle_profondeur_et_volume": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_page_bornes_ordre_pagination_budget_et_curseur": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_parent_lineage_profondeur_et_descendants": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::delegation149_show_bornes_offset_utf8_et_fenetres": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_champs_absents_relus_par_defaut_et_accuse_silencieux": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_ouverture_10000_lignes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_annule_sans_remise_purge": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_arbre_recent_conserve_hors_pression": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_arbre_termine_et_accuse_purge": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_borne_par_passage_et_plus_ancien_d_abord": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_deux_arbres_du_meme_proprietaire_sont_independants": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_echec_sans_avis_envoye_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_le_garde_de_vivacite_peut_refuser_un_arbre": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_nettoyage_inacheve_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_resultat_non_accuse_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation::lineage::delegation_lineage_tests::native150_purge_tache_active_dans_l_arbre_le_conserve": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "delegation_mcp::tests::native150_delai_schema_liste_blanche_et_forme": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "execution_store::focus_priority_tests::spec_087_une_remise_de_focus_passe_devant_le_travail_ordinaire": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "idempotency::tests::native150_purge_phase_de_remise_cinq_cas": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "lifecycle::tests::native148_child_never_inherits_t3_session_credentials": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_dupliquer": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::connexion_non_bloquante_refuse_un_budget_expire_avant_toute_attente": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::coupure_apres_depot_mcp_reste_outcome_unknown_sans_succes_invente": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identique": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::daemon_coupe_est_un_is_error_technique_immediat": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::delegate_mcp_transporte_atomiquement_la_cible_de_revue_en_v2": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::deux_appels_outil_ne_partagent_pas_l_identite_resolue": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::dto_ledger_respectent_le_contrat_outil": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::guidance156_mcp_intent_inconnue_refusee": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::guidance156_mcp_interrupt_pose_interrupt_and_start": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::guidance156_mcp_queue_egal_absent": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::guidance156_mcp_queue_schema": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::guidance156_mcp_schema_intent": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::guidance156_mcp_steer_pose_steer_current": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::huit_connexions_simultanees_gardent_le_principal_resolu_et_la_neuvieme_est_busy": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::identite_mcp_ascii_declenche_exactement_une_execution": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::identite_mcp_unicode_est_refusee_avant_toute_execution": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::issues_idempotentes_deterministes_restent_metier_et_inconnues_sont_preservees": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::la_coupure_apres_ecriture_rend_les_cles_de_rejeu_et_les_trois_invariants": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::la_remise_en_vol_et_le_sort_inconnu_ne_partagent_pas_leur_statut": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::le_statut_mcp_et_le_depot_du_binaire_ne_peuvent_pas_se_contredire": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::lecture_de_contenu_refuse_l_elargissement_de_portee_avant_connexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::ledger_requests_scope_mine_par_defaut_et_all_accepte": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::limite_d_appels_simultanes_refuse_avant_toute_connexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::matrice_fr009_couvre_les_quinze_cas": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::mutation_mcp_declare_l_identite_une_fois_et_ne_vend_pas_queued_comme_un_effet": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::mutation_mcp_refuse_toute_seconde_source_de_principal_ou_de_registre": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_ack_facade_ancien_daemon_sans_trame_nouvelle": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_ack_facade_schema_ferme_bornes_et_annotations": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_ack_facade_trame_ordonne_refus_et_quota_nonwait": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_annulation_apres": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_annulation_avant_enregistrement": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_annulation_pendant": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_annulation_sonde_et_authentification_reelles": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_attentes_transmettent_et_rendent_les_contrats": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_enregistrement_apres_eof_refuse": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_eof_attente_et_statut_bloque": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_eof_ferme_les_attentes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_eof_preserve_nonwait_rapide": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_notification_nonwait_preserve_connexion_auth_et_operation": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_quatre_attentes_gardent_les_controles": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native151_facade_request_wait_schema_et_bornes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::native153_mcp_continue_catalogue_et_champs_fermes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::publication_d_artefact_refuse_les_champs_non_contractuels_avant_connexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::publication_d_artefact_transporte_un_contrat_canonique_et_un_recu_atteste": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::publication_html_est_annoncee_comme_un_contenu_inerte": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::request_status_relit_les_identifiants_terminaux_du_maitre": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::resultat_mcp_duplique_le_payload_dans_textcontent": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::resultats_metier_conservent_les_categories_de_refus_fermees": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::retry_rejoue_scope_et_horodatage_malgre_rename": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::schema_send_expose_in_reply_to_non_vide": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::send_transmet_in_reply_to_dans_l_enveloppe_idempotente": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::seul_le_diagnostic_de_remise_en_vol_atteste_quelque_chose": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec094_catalogue_expose_les_six_outils_sans_cible_libre": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec094_inventaire_documente_toutes_les_commandes_du_repartiteur": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec094_parametres_invalides_sont_refuses_avant_connexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec100_mcp_shares_exact_excerpt_with_reply_and_closed_events_contract": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec102_v33_bridget_thread_transmet_le_contrat_et_refuse_les_champs_inconnus": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec133_identite_deleguee_limite_les_outils_avant_execution": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec133_send_signe_par_le_parent_et_transporte_la_provenance": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_invalid_reasons_and_scope_are_rejected_before_transport": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_old_server_without_capability_receives_no_message": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_real_agent_loop_cli_daemon_scoped_replay": {
+      "baseline": [
+        "ignored"
+      ],
+      "full": [
+        "ignored"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_real_daemon_mcp_directory_and_cross_project_send_share_guard": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_send_returns_structured_warning_outside_exact_body": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_valid_send_reason_reaches_transport_without_rewriting_body": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec138_who_inherits_project_and_defaults_to_local_directory": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec147_thread_catalogue_explains_ack_then_same_read": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::spec147_uuid_mcp_facade_ipc_and_business_replay_case": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::statut_orphelin_distinct_de_in_flight_et_outcome_unknown": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::stdout_ne_contient_que_des_reponses_json_rpc": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::tools_call_resout_l_identite_a_chaque_appel": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::un_sort_indetermine_ne_promet_pas_une_remise": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "mcp::tests::une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native148_parent_codex_fixture_delegates_once_to_real_glm": {
+      "baseline": [
+        "ignored"
+      ],
+      "full": [
+        "ignored"
+      ],
+      "unchanged": true
+    },
+    "native148_real_fixture_auth_requires_explicit_unique_private_route": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native148_real_fixture_mcp_cleanup_after_eof": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native148_real_fixture_mcp_cleanup_during_unwind": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native148_sans_t3_retry_reponse_correllee_annulation_et_reprise_durable": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native149_eof_du_daemon_arrete_le_wrapper_natif_et_son_fournisseur": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native149_fournisseur_natif_tue_n_est_jamais_relance": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native149_sigterm_du_wrapper_natif_arrete_le_fournisseur_sans_reconnexion": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native149_temoin_fournisseur_ordinaire_tue_est_relance": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native149_temoin_ordinaire_eof_se_reconnecte_et_garde_son_fournisseur": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native149_temoin_ordinaire_sigterm_garde_la_disposition_par_defaut": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_acquittement_negatif_bloque_le_hook_par_nom": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_cycle_de_vie_fichiers_prives_et_nettoyage_raii": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_delegation_sans_request_id_est_refusee_sans_fait": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_fait_capacities_est_informationnel_et_corrige": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_fait_publie_acquitte_le_hook_avant_sa_reprise": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_lancement_refuse_un_settings_preexistant_sans_trace": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_liaison_d_un_pid_mort_est_refusee_et_ne_recupere_jamais": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_nonce_inconnu_et_pair_etranger_restant_silencieux": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_overlay_modifie_est_refuse_par_un_refus_nomme": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permission_observer::native_permission_observer149_tests::native149_session_attendue_filtre_les_demandes_hors_session": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_capture_refuse_les_sources_opaques_et_garde_les_inline": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_claude_meme_famille_exige_contexte_vivant_et_meme_racine": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_claude_vers_codex_allowlist_et_inventaire_vide_ne_devienne_jamais_complet": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_claude_vers_codex_exige_lire_ou_complet_sans_regles": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_codex_complet_devise_bypass_sans_yolo": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_codex_lecteur_refuse_le_developpement_et_reduit_en_decouverte": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_decouverte_reduit_et_conserve_les_refus_existant": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_entrees_claude_sans_regles_sont_classees": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_fait_observe_atteste_la_session_et_le_canal_natif": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_mode_runtime_suit_la_politique_reelle": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_recheck_detecte_la_mutation_du_settings_utilisateur": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_snapshot_fige_et_deduplique_les_contextes": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "native_permissions::native_permissions149_tests::native149_workspace_codex_vers_claude_refuse_le_confinement": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "wrapper::prompt_tests::native148_mission_context_is_retained_until_success_and_preserves_envelope": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "wrapper::prompt_tests::native148_mission_context_requires_its_exact_managed_instance": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    },
+    "wrapper::reconnect_tests::native148_claude_allows_native_delegation_without_global_mcp_approval": {
+      "baseline": [
+        "ok"
+      ],
+      "full": [
+        "ok"
+      ],
+      "unchanged": true
+    }
+  },
+  "prescribed_158": {
+    "cli::guidance156_tests::control158_delegations_cli_parse": [
+      "ok"
+    ],
+    "cli::guidance156_tests::control158_halt_aucun_outil_mcp": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::control158_halt_cle_libre_apres_levee": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::control158_halt_et_pause_4_combinaisons_a_l_admission": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::control158_halt_refuse_nouvelle_cle": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::control158_halt_rejeu_cle_admise_rend_la_tache": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::control158_halt_statut_et_annulation_disponibles": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::mcp158_discovery_reponse_automatique_au_parent": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::mcp158_plafond_enfant_conserve_entre_rondes": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::mcp158_plafond_enfant_nettoye_retrouve_les_droits": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::mcp158_plafond_posture_omise_suit_effective": [
+      "ok"
+    ],
+    "daemon::native_delegation::tests::mcp158_plafond_tache_terminale_avant_nettoyage": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_halt_a_b_c_rejeu_a_apres_redemarrage": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_halt_a_b_c_rejeu_a_ne_touche_pas_c": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_halt_cancel_active_annule_les_arbres": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_halt_commande_rejouee": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_halt_exige_acteur_humain": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_halt_sans_cancel_active_ne_touche_rien": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_overview_cancel_cascade": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_overview_client_agent_negocie_refuse": [
+      "ok"
+    ],
+    "daemon::presence_tests::control158_overview_client_non_negocie_refuse": [
+      "ok"
+    ],
+    "delegation::tests::control158_halt_store_a_b_rejeu_a": [
+      "ok"
+    ],
+    "delegation::tests::control158_halt_store_a_b_rejeu_a_apres_redemarrage": [
+      "ok"
+    ],
+    "delegation::tests::control158_halt_store_motif_borne": [
+      "ok"
+    ],
+    "delegation::tests::control158_halt_store_pose_levee": [
+      "ok"
+    ],
+    "delegation::tests::control158_halt_store_recu_porte_la_reponse": [
+      "ok"
+    ],
+    "delegation::tests::control158_halt_store_recus_bornes": [
+      "ok"
+    ],
+    "delegation::tests::control158_overview_filtre_actif": [
+      "ok"
+    ],
+    "delegation::tests::control158_overview_limite_100": [
+      "ok"
+    ],
+    "delegation::tests::control158_overview_sans_corps_ni_resultat": [
+      "ok"
+    ],
+    "delegation::tests::control158_overview_trois_proprietaires": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_chaque_action_de_fil": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_events_sub_unsub_permis": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_journal_avec_et_sans_to": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_lecture_ack_page_suivante": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_lecture_artefact_permise": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_partage_journal_refuse_sans_effet": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_discovery_publication_artefact_refusee_sans_effet": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_plafond_aucun_effet_de_bord_au_refus": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_plafond_enfant_discovery_refuse_ecriture": [
+      "ok"
+    ],
+    "mcp::tests::mcp158_plafond_parent_garde_tous_les_outils": [
+      "ok"
+    ],
+    "mcp_scopes::tests::mcp158_journal_read_only_hint_faux": [
+      "ok"
+    ],
+    "mcp_scopes::tests::mcp158_outil_sans_portee_echoue": [
+      "ok"
+    ],
+    "mcp_scopes::tests::mcp158_read_only_hint_correspond_a_la_base": [
+      "ok"
+    ],
+    "mcp_scopes::tests::mcp158_scopes_couvrent_tous_les_outils": [
+      "ok"
+    ],
+    "referent_control::tests::control158_halt_admission_4_combinaisons": [
+      "ok"
+    ],
+    "protocol::spec104_search_contract_tests::control158_transport_six_variantes_aller_retour": [
+      "ok"
+    ]
+  },
+  "prescribed_158_pass": 47,
+  "new_failures": [
+    "mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket",
+    "mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari",
+    "native152_rouge_panne_mission_working",
+    "spec103_s02_apercu_sans_daemon_ni_socket_ni_identifiant"
+  ],
+  "legacy_failures": [
+    "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+    "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+    "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+    "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+    "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+    "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+    "spec094_mcp_modifie_uniquement_sa_propre_presence",
+    "spec098_pont_expose_remet_repond_renouvelle_et_retire"
+  ],
+  "targets": [
+    {
+      "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_core-ee95a898191b90c7)",
+      "result": [
+        "ok",
+        45,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "result": [
+        "ok",
+        1716,
+        0,
+        15
+      ]
+    },
+    {
+      "header": "Running unittests src/main.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget-e28ab0ef1375e70c)",
+      "result": [
+        "ok",
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running unittests src/bin/bridget-greffe-policy-refresh.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_greffe_policy_refresh-d111d5e2d97171a6)",
+      "result": [
+        "ok",
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/agent_graph_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/agent_graph_test-b4a88fe133fe1403)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/artifact_lifecycle_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_lifecycle_test-1cb838f9a57e596d)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/artifact_policy_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_policy_test-3fd00776f4dfcd0d)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/artifact_publication_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_publication_test-5b4702d4a8e44ca3)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/artifact_service_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_service_test-f777bba7d2425e9f)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/artifact_store_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_store_test-f93907f8781a6257)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/attach_journal_attestation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/attach_journal_attestation_test-ab8e9c84fee358ad)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/build_id_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/build_id_integration_test-c3e85c7d8bab32fb)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/capabilities_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/capabilities_integration_test-21be0372e4be3000)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/channel_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/channel_observation_test-c8090d8e09e8beb5)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/claude_interactive_097_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/claude_interactive_097_test-a04688e62da4f14f)",
+      "result": [
+        "ok",
+        8,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/claude_native_permissions_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/claude_native_permissions_test-d3c9579ef83bb3a0)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/cli_arguments_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/cli_arguments_integration_test-1638681b20b4ad51)",
+      "result": [
+        "ok",
+        18,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/codex_interactive_090_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/codex_interactive_090_test-e530aa51a6356db2)",
+      "result": [
+        "ok",
+        1,
+        0,
+        15
+      ]
+    },
+    {
+      "header": "Running tests/coordination_events_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/coordination_events_test-3147641b194c347d)",
+      "result": [
+        "ok",
+        6,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/core_089_attach_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_attach_test-3c706e2e2706012d)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_concurrency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_concurrency_test-23c741dda04db4b0)",
+      "result": [
+        "FAILED",
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_content_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_content_test-3e807681533e0d7f)",
+      "result": [
+        "ok",
+        7,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)",
+      "result": [
+        "FAILED",
+        1,
+        2,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)",
+      "result": [
+        "FAILED",
+        11,
+        1,
+        2
+      ]
+    },
+    {
+      "header": "Running tests/core_089_dependency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_dependency_test-08d5d0d3cc73b29a)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_federation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_federation_test-f951d52fa2ca4045)",
+      "result": [
+        "ok",
+        0,
+        0,
+        5
+      ]
+    },
+    {
+      "header": "Running tests/core_089_host_session_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_host_session_test-124f3cf257c6d9fa)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+      "result": [
+        "FAILED",
+        1,
+        3,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_isolation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_isolation_test-04d97126b11b43c9)",
+      "result": [
+        "ok",
+        8,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_ledger_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_ledger_test-fce84ffa075b44f7)",
+      "result": [
+        "ok",
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_migration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_migration_test-22990b6a6f5f986f)",
+      "result": [
+        "ok",
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_native_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_native_test-21f4f5e052a21f5d)",
+      "result": [
+        "ok",
+        2,
+        0,
+        3
+      ]
+    },
+    {
+      "header": "Running tests/core_089_removed_surface_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_removed_surface_test-5b73d63261df8516)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/core_089_reply_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_reply_test-0f9d08e31efe6482)",
+      "result": [
+        "FAILED",
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_retired_runtime_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_retired_runtime_test-efbb4eb1c8324ff8)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/core_089_security_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_security_test-840f80620c4ca9bf)",
+      "result": [
+        "FAILED",
+        4,
+        1,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_service_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_service_test-bbd0a39927596d22)",
+      "result": [
+        "ok",
+        7,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/core_089_skill_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_skill_test-e129e3078774130d)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_status_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_status_test-60969aafbfc9c4ad)",
+      "result": [
+        "ok",
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_storage_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_storage_test-254ad878c3f99728)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/daemon_shutdown_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/daemon_shutdown_test-5533d58ee1548c9e)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/execution_budget_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_budget_test-921c85e05e947acb)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/execution_lifecycle_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_lifecycle_test-91d7eab2078821bf)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/execution_observability_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_observability_test-6d15465b944c0cdd)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/execution_resume_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_resume_test-61bc2eb960aa2232)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/execution_scale_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_scale_test-0e63759cc90cae63)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/execution_store_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_store_test-679a8b80a38c30a8)",
+      "result": [
+        "ok",
+        17,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/federate_096_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/federate_096_test-18df7f3799ba17bb)",
+      "result": [
+        "ok",
+        5,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/greffe_policy_refresh_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/greffe_policy_refresh_test-5b81e4272d0f31ee)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/guidance156_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/guidance156_e2e-c0817decaa777735)",
+      "result": [
+        "ok",
+        3,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/handoff_103_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/handoff_103_test-a755e3407e5655e8)",
+      "result": [
+        "FAILED",
+        4,
+        1,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/idempotency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/idempotency_test-39963ec1be26c24a)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/identity_migration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/identity_migration_test-09ef870975a898fe)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/identity_probe_timeout_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/identity_probe_timeout_test-27692f1e00df992f)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/integration_test-aadd913ed198d05c)",
+      "result": [
+        "ok",
+        7,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/lineage_cli_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/lineage_cli_test-bd8f2e59d6afba7c)",
+      "result": [
+        "ok",
+        3,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/managed_parity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/managed_parity_test-3acf1b44c226fa07)",
+      "result": [
+        "ok",
+        7,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/managed_wrapper_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/managed_wrapper_test-1bfed8a33485508f)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/mcp_cancel_091_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mcp_cancel_091_test-f5484133b5b25f8e)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/mcp_injection_smoke_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mcp_injection_smoke_test-cb5548fbd6251441)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/mission_boundary_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mission_boundary_test-a29800a4bc1b9c0f)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/native_delegation_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_delegation_e2e-4a977dc8ac454336)",
+      "result": [
+        "FAILED",
+        10,
+        1,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/native_delegation_real_glm.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_delegation_real_glm-44a449f4ab54ce38)",
+      "result": [
+        "ok",
+        3,
+        0,
+        2
+      ]
+    },
+    {
+      "header": "Running tests/native_provider_death149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_provider_death149_test-198c1e02c0a13ec6)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/native_wrapper_stop149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_wrapper_stop149_test-7c650553428dc1d7)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/project_binding_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_binding_integration_test-f43c0ec846805dd6)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/project_profile_surface_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_profile_surface_test-1f839fb7fc88f407)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/runtime_selection_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/runtime_selection_integration_test-865b5aaa078f01d4)",
+      "result": [
+        "ok",
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/sc005_attach_budget.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/sc005_attach_budget-9d375ecbd0041ade)",
+      "result": [
+        "ok",
+        3,
+        0,
+        3
+      ]
+    },
+    {
+      "header": "Running tests/search_104_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/search_104_test-0adb32476ff90329)",
+      "result": [
+        "ok",
+        23,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/service_file_limit149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/service_file_limit149_test-229225b4a3c6728b)",
+      "result": [
+        "ok",
+        4,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/spawn_refusal_hosts_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spawn_refusal_hosts_test-58900cf4a0dc3936)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/spec101_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec101_observation_test-f8c7b03489a6f18a)",
+      "result": [
+        "ok",
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "result": [
+        "ok",
+        44,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/spec138_project_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec138_project_test-a30fc75be4e84903)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/spec145_human_cli.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec145_human_cli-239eff3fc089ff89)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/spec146_recent_human_cli.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec146_recent_human_cli-10fb9d0051f105b7)",
+      "result": [
+        "ok",
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/t3_session_identity_env.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3_session_identity_env-40370aa199d20e10)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/t3code_098_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_098_test-291f5efdcba34642)",
+      "result": [
+        "FAILED",
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/t3code_opaque_identifiers149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_opaque_identifiers149_test-4e740ff6ffc56eb4)",
+      "result": [
+        "ok",
+        6,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/work_submission_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/work_submission_test-9b18a7e7a5a4a22a)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_transport-e9cc60d766c3fd62)",
+      "result": [
+        "ok",
+        325,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/core_089_wire_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_wire_test-08532ce3c3ce6cba)",
+      "result": [
+        "ok",
+        1,
+        0,
+        1
+      ]
+    },
+    {
+      "header": "Running tests/lineage_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/lineage_contract_test-47dd9f5dd68de08a)",
+      "result": [
+        "ok",
+        6,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/native_alias149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_alias149_test-4a066ac964725598)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/native_permissions149_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_permissions149_e2e-8f0bfca971fb5c2a)",
+      "result": [
+        "ok",
+        5,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/native_permissions149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_permissions149_test-7214d262c52a3686)",
+      "result": [
+        "ok",
+        8,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/native_stop149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_stop149_test-86cb085afe3e4a62)",
+      "result": [
+        "ok",
+        5,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/permission_source_revision_vectors149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/permission_source_revision_vectors149_test-adda0765ea446456)",
+      "result": [
+        "ok",
+        3,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/project_runtime_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_runtime_contract_test-23e090918ba95a4e)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Running tests/provider_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/provider_contract_test-052b36e5d4131f4d)",
+      "result": [
+        "ok",
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Doc-tests bridget_core",
+      "result": [
+        "ok",
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Doc-tests bridget_daemon",
+      "result": [
+        "ok",
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "header": "Doc-tests bridget_transport",
+      "result": [
+        "ok",
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}

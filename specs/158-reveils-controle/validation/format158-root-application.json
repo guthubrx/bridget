@@ -1,0 +1,8 @@
+{
+  "patch_sha256": "53cfe4458f3f0437d68a8b1dc51eca3a5ac062e4b4aa5178e180ab5ec7ac68bc",
+  "manifest_sha256": "815f041319e19d3dc59e7e54dc3381d32c61a750b997b867cefdd4c9859f1e78",
+  "all_10_source_preconditions_verified": true,
+  "all_10_non_whitespace_equal": true,
+  "all_10_final_sha_verified": true,
+  "diff_check_rc": 0
+}

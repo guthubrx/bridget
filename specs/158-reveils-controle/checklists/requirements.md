@@ -14,10 +14,10 @@
 ## Requirement Completeness
 
 - [x] Aucun marqueur [NEEDS CLARIFICATION] (3 questions posées avec défaut)
-- [x] Exigences testables (FR-001 à FR-028, budget de tours retiré)
+- [x] Exigences testables (FR-001–012 et FR-020–029, budget de tours retiré)
 - [x] Critères de succès mesurables (SC-001 à SC-008)
 - [x] Critères de succès sans détail d'implémentation (sauf noms de refus publics)
-- [x] Scénarios d'acceptation définis (US1 à US4 en 158a ; US5 à US8 en 158b)
+- [x] Scénarios d'acceptation définis (US1 à US3 en 158a ; US5 à US8 en 158b)
 - [x] Cas limites identifiés (client agent négocié, A-B-rejeu de l'arrêt, arrêt + pause, rejeu pendant l'arrêt, outil ajouté par 151 à 157)
 - [x] Périmètre borné (liste « Hors périmètre », webhook justifié)
 - [x] Dépendances et hypothèses identifiées (150, 151, ADR 027, ADR 011)
@@ -35,4 +35,4 @@
 - Le webhook HTTP est déclaré hors périmètre avec justification (règle socket Unix seulement).
 - La demande de secret est spécifiée et reportée : aucun consommateur Bridget n'existe (question 3).
 - Budget de tours retiré après la contre-revue (compteur non attesté pour Codex) : question 3.
-- Les lignes de code citées viennent du checkout principal. Elles sont à relire après 150 et 151.
+- Les lignes de code citées viennent du checkout principal. Elles sont historiques et à revalider sur la livraison157 vérifiée ; les cases ci-dessus ne valent pas un gate frais158.

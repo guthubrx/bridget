@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-12T08:48:34.808636+00:00",
+  "rows": 4096,
+  "task_body_chars": 8192,
+  "lookup": "SELECT payload FROM native_delegations WHERE json_extract(payload,'$.child')=?1",
+  "existing_index": "native_delegations_child",
+  "index_source": "crates/bridget-daemon/src/delegation_lineage.rs:126",
+  "explain": {
+    "child-4095": [
+      [
+        3,
+        0,
+        39,
+        "SEARCH native_delegations USING INDEX native_delegations_child (<expr>=?)"
+      ]
+    ],
+    "parent-absent": [
+      [
+        3,
+        0,
+        39,
+        "SEARCH native_delegations USING INDEX native_delegations_child (<expr>=?)"
+      ]
+    ]
+  },
+  "samples": {
+    "child-4095": {
+      "count": 500,
+      "p50_ms": 0.030625,
+      "p95_ms": 0.037042,
+      "max_ms": 0.637584
+    },
+    "parent-absent": {
+      "count": 500,
+      "p50_ms": 0.008625,
+      "p95_ms": 0.009542,
+      "max_ms": 0.017
+    }
+  },
+  "namespace": "/private/tmp/b.m_0ni4f8",
+  "limitations": [
+    "SQLite Python et json.loads priv\u00e9s, pas Rust serde complet ni ouverture par appel ni r\u00e9seau/socket",
+    "Mesure \u00e0 deux processus Cargo jobs mais aucune donn\u00e9e de production",
+    "Index d\u00e9j\u00e0 pr\u00e9sent depuis149, aucun nouvel index/cache n\u00e9cessaire"
+  ],
+  "source_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3"
+}

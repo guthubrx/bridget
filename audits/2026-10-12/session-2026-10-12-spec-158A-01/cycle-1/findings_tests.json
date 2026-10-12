@@ -1,0 +1,383 @@
+{
+  "module": "06",
+  "audit_mode": "readonly",
+  "scope_sha256": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+  "diff_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+  "findings": [
+    {
+      "id": "TEST-001",
+      "category": "tests",
+      "subcategory": "regression_oracle_weakened",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 2678,
+      "title": "L’oracle ChildProof accepte désormais une connexion avant le refus",
+      "description": "L’ancien scénario guidance156_mcp_queue_schema devait refuser ChildProof avant toute connexion (156 T024/T026). L’adaptation158 crée un credential fictif et sert CallerScope avant de vérifier l’absence de connexion suivante. Elle masque la régression : execute_tool_at_with_identity ouvre registered_connection à632 avant la garde ChildProof d’execute_queue à1140. Le refus final reste fermé et aucune lecture de file n’est démontrée ; c’est l’invariant de refus préconnexion qui est perdu.",
+      "evidence": "        let socket = test_socket(\"g156-childproof\");\n        let listener = UnixListener::bind(&socket).unwrap();\n        crate::mcp_identity::mock_private_identity(&socket, \"89000000-0000-4000-8000-000000000156\", \"guidance156-childproof\");\n        let server = thread::spawn(move || {\n            reply_caller_scope(&listener, json!({\"version\":1,\"caller_read_only\":false}));\n            listener.set_nonblocking(true).unwrap();\n            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Exécuter le scénario existant guidance156_mcp_queue_schema avec ResolvedIdentity.delegated_origin=Some(ChildProof) et bridget_queue. Le corps actuel exige un RegisterAuxiliary et un CallerScope dans reply_caller_scope avant d’accepter delegated_tool_forbidden. Le scénario peut ainsi être vert avec un RPC pré-refus. La version livrée156 gardait directement le listener non bloquant et vérifiait zéro accept ; le diff158 retire cette preuve. Aucun test lancé par cet auditeur.",
+      "impact": "La validation de non-régression ne détecte plus le RPC et la lecture de credential avant un refus qui devait précéder toute connexion. Les 47 nouveaux tests158 ne corrigent pas cette perte de preuve historique.",
+      "path_type": "cold",
+      "remediation": "Refuser bridget_queue avec delegated_origin au début de execute_tool_at_with_identity, avant registered_connection. Restaurer le même scénario156 avec listener non bloquant dès son ouverture et sans mock de credential ni serveur CallerScope. Un correctif cache est préparé par protocole154 ; il n’est pas appliqué sur le snapshot audité.",
+      "remediation_code": "if name == \"bridget_queue\" && identity.delegated_origin.is_some() {\n    return Err(ToolError::Technical {\n        code: \"delegated_tool_forbidden\",\n        message: \"une preuve enfant ne peut pas consulter la file\".into(),\n    });\n}",
+      "verification": "Rejouer uniquement guidance156_mcp_queue_schema restauré après la FULL en cours : delegated_tool_forbidden et listener.accept()=WouldBlock dès le premier échange. Aucun credential fictif, aucun CallerScope, aucun nouveau scénario.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "open",
+      "resolution": "pending_external_owner_patch",
+      "references": [
+        "specs/156-guidage-file/tasks.md:62",
+        "specs/156-guidage-file/tasks.md:64",
+        "diff158A-final.patch:2233"
+      ],
+      "fingerprint": "368872d4118c"
+    }
+  ],
+  "positive_findings": [
+    {
+      "title": "Rejeu historique durable sans nouveau parcours",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 22727,
+      "description": "Les tests A/B/C utilisent un payload illisible pour prouver l’absence de relecture des tâches sur rejeu. Les tests Store utilisent un callback qui panique s’il est appelé et rouvrent le magasin disque."
+    },
+    {
+      "title": "Plafond strict et cycle de vie natif observés",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 5515,
+      "description": "Les réponses RPC absente, non booléenne, mauvaise version et avec clé étrangère sont refusées. Cinq oracles distincts utilisent de vraies tâches, inscriptions et transitions natives ; leur plafond n’est pas un booléen injecté."
+    },
+    {
+      "title": "Lecture de trois pages et ACK vérifiés sur SQLite",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 5828,
+      "description": "L’oracle crée réellement six entrées, lit trois pages de deux, accuse chaque receipt et vérifie l’unicité des séquences et des reçus."
+    }
+  ],
+  "warnings": [
+    "Audit ciblé en lecture seule ; aucun test, Cargo, build, scanner, service, DB runtime ou fournisseur exécuté. Les résultats sont les reçus ROOT, pas une exécution de l’auditeur.",
+    "47 nouveaux corps de tests relus, 215 sites de macros assert/eq/ne dénombrés statiquement. Ce chiffre n’est ni une couverture instrumentée ni un nombre d’assertions runtime indépendantes.",
+    "Baseline T001 : 253 PASS / 0 FAIL / 2 ignored. Ciblé daemon : 49 PASS dont46 nouveaux158 et3 régressions156 ; transport :1 nouveau158 PASS. Aucun GREEN global revendiqué. JSON FULL absent à la dernière lecture ; résultat global encore ouvert.",
+    "Parent-all-tools : entrée atteinte dans les validateurs des30 outils avec arguments invalides, pas30 opérations métier réussies.",
+    "Mesure plafond p95 : recherche SQLite et décodage seulement ; aucune latence RPC/MCP ou ouverture Rust mesurée.",
+    "Le scénario de réponse automatique injecte la trame Send prévue par le wrapper puis observe sa réception/remise native ; il n’exécute pas le générateur privé du wrapper. Son oracle spec105 existant et sa branche de génération ont été relus séparément ; aucun fournisseur réel exécuté.",
+    "Pas de nouvelle mesure de couverture, de panne RPC/SQL runtime ou de crash entre commit et annulation. Les chemins propagent les erreurs et les limites de perte partielle/crédits256 sont documentées ; aucune preuve dynamique supplémentaire inventée.",
+    "10 fichiers Rust du scope touchés par lecture partielle ; 3 documents du scope lus. Les11 autres documents ne sont pas relus sémantiquement par ce module. Ne pas attribuer une lecture complète des gros fichiers CLI/daemon/MCP/native à cette couverture."
+  ],
+  "read_manifest": [
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "ranges": [
+        [
+          1,
+          89
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:36:00.610911+00:00"
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/tests-158.md",
+      "sha256": "fc5bd7e8916d69b8c749bec953f473f554832edd311851b63488425cffa10f56",
+      "ranges": [
+        [
+          1,
+          160
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:36:00.702035+00:00"
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "ranges": [
+        [
+          1,
+          136
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:36:00.797331+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:36:00.892380+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "ranges": [
+        [
+          330,
+          555
+        ],
+        [
+          1790,
+          2125
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:36:18.861103+00:00"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "ranges": [
+        [
+          1260,
+          1282
+        ],
+        [
+          3634,
+          3663
+        ],
+        [
+          4496,
+          4526
+        ],
+        [
+          8474,
+          8535
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:36:18.998749+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "ranges": [
+        [
+          618,
+          674
+        ],
+        [
+          1130,
+          1150
+        ],
+        [
+          2670,
+          2728
+        ],
+        [
+          5435,
+          5881
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:40:11.470143+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "ranges": [
+        [
+          10685,
+          10938
+        ],
+        [
+          16035,
+          16185
+        ],
+        [
+          16330,
+          16390
+        ],
+        [
+          16730,
+          16780
+        ],
+        [
+          22279,
+          22792
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:38:36.431953+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "ranges": [
+        [
+          1055,
+          1105
+        ],
+        [
+          1447,
+          1474
+        ],
+        [
+          1788,
+          1826
+        ],
+        [
+          10120,
+          10555
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:37:00.769067+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "ranges": [
+        [
+          26,
+          37
+        ],
+        [
+          145,
+          160
+        ],
+        [
+          889,
+          916
+        ],
+        [
+          940,
+          959
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:38:36.263795+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "ranges": [
+        [
+          6093,
+          6335
+        ],
+        [
+          10343,
+          10388
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:37:30.837493+00:00"
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plafond-recherche.md",
+      "sha256": "e57e60a341c606bf806068ef80872f96d62427be225cc166bfeb3fe112456258",
+      "ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:37:31.072296+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "ranges": [
+        [
+          6615,
+          6640
+        ],
+        [
+          7665,
+          7755
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:38:02.911366+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/communication/client.rs",
+      "sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "ranges": [
+        [
+          1,
+          145
+        ],
+        [
+          973,
+          1110
+        ],
+        [
+          1138,
+          1209
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:39:19.700318+00:00"
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "ranges": [
+        [
+          1,
+          80
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:38:36.345199+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "ranges": [
+        [
+          1,
+          115
+        ],
+        [
+          660,
+          688
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:39:19.815226+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "ranges": [
+        [
+          1,
+          68
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:39:19.931967+00:00"
+    },
+    {
+      "file": "specs/156-guidage-file/tasks.md",
+      "sha256": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+      "ranges": [
+        [
+          45,
+          72
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:40:11.562411+00:00"
+    }
+  ],
+  "execution_metrics": {
+    "framework": "Rust cargo test / libtest",
+    "new_test_bodies_reviewed": 47,
+    "static_assert_macro_sites": 215,
+    "zero_assert_new_test_bodies": 0,
+    "sources_verified_against_capture": 24,
+    "source_scope_files": 24,
+    "read_mode": "fresh_post_fix",
+    "full_result": "pending",
+    "tests_executed_by_auditor": 0
+  }
+}

@@ -1,0 +1,225 @@
+{
+  "scope_sha256": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+  "diff_sha256": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+  "grade": "A",
+  "numeric": 100,
+  "coverage": {
+    "denominator": "hunks du delta final",
+    "scope_files": 27,
+    "scope_rust_files": 13,
+    "scope_hunks": 151,
+    "covered_hunks_lower_bound": 129,
+    "coverage_percent": 85.43,
+    "fresh_delta_files": 9,
+    "fresh_current_source_hunks": 32,
+    "historical_textually_compatible_hunks": 102,
+    "complete_repository_read": false,
+    "historical_and_fresh_distinct": true,
+    "instrumented_test_coverage_percent": null,
+    "definition": "Union de plages actuelles, SHA identiques, et hunks initialement lus dont le corps de diff est identique ; nouvelles lectures du delta final. Aucune couverture globale ni sept réaudits frais."
+  },
+  "C1_summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 0,
+    "total": 1,
+    "by_category": {
+      "tests": 1
+    }
+  },
+  "final_summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "total": 0,
+    "by_category": {}
+  },
+  "review_signals": [
+    {
+      "id": "R2-C1",
+      "severity": "LOW",
+      "status": "resolved_by_root_text",
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "line": 6316,
+      "proof": "Littéral neutre relu, indique un changement possible de contrôle ; ne promet pas une annulation sur resume."
+    },
+    {
+      "id": "R2-C2",
+      "severity": "LOW",
+      "status": "documentation_claim_corrected",
+      "proof": "closure158A-root.json précise section ChildProof seule identique ; partie positive contient reply_caller_scope."
+    },
+    {
+      "id": "R2-C3",
+      "severity": "LOW",
+      "status": "contested_nonblocking_limitation",
+      "proof": "Pas de test dédié au texte, changement d’un littéral sans nouvelle logique ; tests nouveaux interdits par instruction utilisateur. Lecture fraîche seulement.",
+      "dedicated_text_test": false
+    }
+  ],
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "exists": false,
+    "entries": 0,
+    "modified": false
+  },
+  "source_hash_guard": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "match": true
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "match": true
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "sha256": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+      "match": true
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "sha256": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+      "match": true
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "sha256": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/analyze-report.md",
+      "sha256": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/quickstart.md",
+      "sha256": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/research.md",
+      "sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+      "match": true
+    }
+  ],
+  "ROOT_closure_receipt": {
+    "at": "2026-10-12T10:09:13.452591+00:00",
+    "C1_cli_text_only": {
+      "before": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+      "after": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "message": "contrôle indisponible : l’état du contrôle des délégations a pu changer. Vérifiez avec bridget control delegations ; utilisez delegations cancel pour les tâches restantes si nécessaire.",
+      "logic_unchanged": true
+    },
+    "T021_T022_cochage": {
+      "before": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "after": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+      "tasks_done": 22,
+      "tasks_total": 22,
+      "proof": "FULL unique +255comparaison +47prescritsPASS +22lib +4replays exactsPASS ; T022152hunks lus, impl/docdiffarchivé"
+    },
+    "C2_byte_identical_claim": "ChildProof section seulement ; partiepositive ajoute1reply_caller_scope",
+    "C3_message_test": "lecture seule du texte, pas nouveau scénario ; releasebuild à suivre"
+  },
+  "ROOT_closure_receipt_sha256": "4e7125759a359dedd8b5c8915c296107ffb455bd6bb58c6f0e97735edc3dad52",
+  "validation": "pending"
+}

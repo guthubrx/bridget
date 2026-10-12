@@ -246,96 +246,107 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
         );
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(10);
-            let stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline);
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            };
-            stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut client = Client {
-                reader: BufReader::new(stream.try_clone().unwrap()),
-                writer: BufWriter::new(stream),
-                owner: None,
-            };
-            // Client est ici côté serveur : décodage des requêtes indépendant.
-            for stage in 0..4 {
-                let mut line = String::new();
-                client.reader.read_line(&mut line).unwrap();
-                let command: WrapperToDaemon =
-                    bridget_transport::protocol::decode(line.trim_end()).unwrap();
-                let response = match (stage, command) {
-                    (0, WrapperToDaemon::RoleHandshake { role }) => {
-                        DaemonToWrapper::RoleAccepted { role }
-                    }
-                    (2, WrapperToDaemon::ClientHello { capabilities, .. }) => {
-                        DaemonToWrapper::ClientWelcome {
-                            version: 1,
-                            build_id: "unknown".into(),
-                            horizon_secs: 604800,
-                            issued_at_tolerance_secs: 300,
-                            capabilities,
+            // Le premier échange est une lecture authentifiée de plafond.
+            // Seul le second échange reçoit la réponse métier malformée.
+            for scope_read in [true, false] {
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline);
+                            std::thread::sleep(Duration::from_millis(1));
                         }
+                        Err(error) => panic!("{error}"),
                     }
-                    (
-                        1,
-                        WrapperToDaemon::RegisterAuxiliary {
-                            agent_id,
-                            instance_id,
-                            credential: received,
-                        },
-                    ) => {
-                        assert_eq!(agent_id, ACTOR);
-                        assert_eq!(instance_id, "security-instance");
-                        assert_eq!(received, credential);
-                        DaemonToWrapper::Registered {
-                            agent_id,
-                            credential: None,
-                        }
-                    }
-                    (3, WrapperToDaemon::SendIdempotent { message_id, .. }) => {
-                        let reply = match fault {
-                            "mauvaise-trame" => json!({"type":"Ack","id":"CANARI_SECRET_089"}),
-                            "mauvais-id" | "mauvaise-operation" => json!({
-                                "type":"IdempotencyResult",
-                                "operation_kind":if fault == "mauvaise-operation" { "spawn" } else { "send" },
-                                "idempotency_key":if fault == "mauvais-id" { "CANARI_SECRET_089" } else { &message_id },
-                                "issue":{"kind":"accepted","expires_at":1900000000}
-                            }),
-                            _ => json!({"type":"inconnu","secret":"CANARI_SECRET_089"}),
-                        };
-                        if matches!(fault, "mauvais-id" | "mauvaise-operation") {
-                            assert!(matches!(
-                                serde_json::from_value::<DaemonToWrapper>(reply.clone()).unwrap(),
-                                DaemonToWrapper::IdempotencyResult { .. }
-                            ));
-                        }
-                        client
-                            .writer
-                            .write_all(reply.to_string().as_bytes())
-                            .unwrap();
-                        if fault != "sans-lf" {
-                            client.writer.write_all(b"\n").unwrap();
-                        }
-                        client.writer.flush().unwrap();
-                        break;
-                    }
-                    (_, other) => panic!("étape {stage}: {other:?}"),
                 };
-                writeln!(
-                    client.writer,
-                    "{}",
-                    bridget_transport::protocol::encode(&response).unwrap()
-                )
-                .unwrap();
-                client.writer.flush().unwrap();
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut client = Client {
+                    reader: BufReader::new(stream.try_clone().unwrap()),
+                    writer: BufWriter::new(stream),
+                    owner: None,
+                };
+                // Client est ici côté serveur : décodage des requêtes indépendant.
+                for stage in 0..if scope_read { 2 } else { 4 } {
+                    let mut line = String::new();
+                    client.reader.read_line(&mut line).unwrap();
+                    let command: WrapperToDaemon =
+                        bridget_transport::protocol::decode(line.trim_end()).unwrap();
+                    let response = match (scope_read, stage, command) {
+                        (false, 0, WrapperToDaemon::RoleHandshake { role }) => {
+                            DaemonToWrapper::RoleAccepted { role }
+                        }
+                        (false, 2, WrapperToDaemon::ClientHello { capabilities, .. }) => {
+                            DaemonToWrapper::ClientWelcome {
+                                version: 1,
+                                build_id: "unknown".into(),
+                                horizon_secs: 604800,
+                                issued_at_tolerance_secs: 300,
+                                capabilities,
+                            }
+                        }
+                        (true, 0, WrapperToDaemon::RegisterAuxiliary {
+                            agent_id, instance_id, credential: received,
+                        }) | (
+                            false, 1,
+                            WrapperToDaemon::RegisterAuxiliary {
+                                agent_id,
+                                instance_id,
+                                credential: received,
+                            },
+                        ) => {
+                            assert_eq!(agent_id, ACTOR);
+                            assert_eq!(instance_id, "security-instance");
+                            assert_eq!(received, credential);
+                            DaemonToWrapper::Registered {
+                                agent_id,
+                                credential: None,
+                            }
+                        }
+                        (true, 1, WrapperToDaemon::NativeDelegation {
+                            request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+                        }) => DaemonToWrapper::NativeDelegationResult {
+                            result: json!({"version":1,"caller_read_only":false}),
+                        },
+                        (false, 3, WrapperToDaemon::SendIdempotent { message_id, .. }) => {
+                            let reply = match fault {
+                                "mauvaise-trame" => json!({"type":"Ack","id":"CANARI_SECRET_089"}),
+                                "mauvais-id" | "mauvaise-operation" => json!({
+                                    "type":"IdempotencyResult",
+                                    "operation_kind":if fault == "mauvaise-operation" { "spawn" } else { "send" },
+                                    "idempotency_key":if fault == "mauvais-id" { "CANARI_SECRET_089" } else { &message_id },
+                                    "issue":{"kind":"accepted","expires_at":1900000000}
+                                }),
+                                _ => json!({"type":"inconnu","secret":"CANARI_SECRET_089"}),
+                            };
+                            if matches!(fault, "mauvais-id" | "mauvaise-operation") {
+                                assert!(matches!(
+                                    serde_json::from_value::<DaemonToWrapper>(reply.clone()).unwrap(),
+                                    DaemonToWrapper::IdempotencyResult { .. }
+                                ));
+                            }
+                            client
+                                .writer
+                                .write_all(reply.to_string().as_bytes())
+                                .unwrap();
+                            if fault != "sans-lf" {
+                                client.writer.write_all(b"\n").unwrap();
+                            }
+                            client.writer.flush().unwrap();
+                            break;
+                        }
+                        (_, _, other) => panic!("plafond={scope_read}, étape {stage}: {other:?}"),
+                    };
+                    writeln!(
+                        client.writer,
+                        "{}",
+                        bridget_transport::protocol::encode(&response).unwrap()
+                    )
+                    .unwrap();
+                    client.writer.flush().unwrap();
+                }
             }
         });
         let mut mcp = McpProcess::start(&root, ACTOR, "security-instance");

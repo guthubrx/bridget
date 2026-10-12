@@ -44,6 +44,31 @@ liste et la substitution exactes. Aucune bascule après admission ou reprise
 quota157 ; report160. La référence des commandes précise les motifs fermés,
 refus précoces, detail.resets_at/detail.tried et la limite auth:false.
 
+### Arrêt des délégations et plafond discovery (158A)
+
+Lire delegations_halted dans le catalogue. Une nouvelle délégation pendant
+l’arrêt rend ce refus, sans tâche ni clé consommée. Un rejeu admis conserve
+sa tâche ;status, catalogue et annulations restent disponibles. Arrêt et pause
+sont indépendants, l’arrêt est prioritaire. Un agent ne pose ni ne lève l’arrêt.
+La vue globale control delegations et ses mutations appartiennent à l’humain
+attesté ; négocier ControlStateV1 ou déclarer from=humain ne donne pas ses droits.
+La référence des commandes décrit les gestes CLI et la borne ADR011.
+
+Pour son enfant discovery, autoriser seulement lecture et état propre jusqu’à
+cleanup_done, même après résultat ou entre rondes. Employer read puis ack avant
+chaque page de fil suivante ;read sans ack rejoue la même page. Lecture
+bridget_read_artifact et réponse finale automatique au parent restent permises.
+Refus capability_denied sans effet pour post/create/add_members/close de fil,
+journal avec to, publication d’artefact, send/cancel, handoff en envoi et toute
+délégation. La posture effective prime si la posture demandée est omise. Ne pas
+contourner ce plafond par la CLI, une identité différente ou un autre outil.
+Un parent sans tâche discovery garde sa surface, avec ses autres gardes.
+
+Les portées sont garanties par le test exhaustif de CI, pas par le compilateur.
+158A ne borne ni tours ni tokens ; le délai150 reste. 158B (réveils, faits manqués,
+secrets) reste spécifiée seulement. Vérifier le catalogue et le binaire chargés ;
+ce texte ne prouve ni activation, tests158 terminés ni livraison.
+
 ### Déléguer une nouvelle mission
 
 Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts
@@ -98,8 +123,9 @@ en argument, emprunter celle d'un autre fil ou contourner ce refus par la CLI.
 
 Les comportements 149 (héritage, posture facultative) exigent le binaire et les
 processus chargés en version 149. Leur présence dans les sources ne prouve pas leur
-activation dans la session. Le suivi humain passe par `bridget lineage` dans un
-terminal, avec `--t3-thread` et `--project-root` ; ce n'est pas un outil MCP.
+activation dans la session. Le suivi149 ciblé passe par `bridget lineage` dans un terminal, avec
+`--t3-thread` et `--project-root`.158A ajoute la vue globale humaine
+`bridget control delegations`, sans ces paramètres ; ce n’est pas un outil MCP.
 
 ### Demandes de l’enfant — contrat155
 

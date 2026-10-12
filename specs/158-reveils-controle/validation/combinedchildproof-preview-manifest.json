@@ -1,0 +1,41 @@
+{
+  "scope": "CACHE only mcp.rs combined fix; no WT/build/test/runtime/Git mutation",
+  "supersedes_for_application": "/Users/moi/.cache/bridget-fix158-review-20261012/childproof-preconnection.patch",
+  "base_commit": "bd37e927eee0b28f058df9d6a6992e38665a6ad0",
+  "source_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+  "source_before_sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+  "candidate_after_sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+  "patch_path": "/Users/moi/.cache/bridget-fix158-review-20261012/combinedchildproof-preview.patch",
+  "patch_sha256": "b3855e9818742d0453ce646d8943138fc1c3d382997e7d695857b37c859e438c",
+  "production_new_lines": 17,
+  "test156_body_sha256": "a3f7bb165d74f72f3dfe4b05076034493211f909df9b410eed4ff564a24a3d0c",
+  "test156_body_restored_byte_identical": true,
+  "test103_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/tests/handoff_103_test.rs",
+  "test103_file_sha256": "c3fa1d47c728866e7e4e43073403346789cffe6ae0c4ec01b4ee19c5a7b89293",
+  "test103_file_matches_base_and_unchanged": true,
+  "tests": [
+    "guidance156_mcp_queue_schema",
+    "spec103_s02_apercu_sans_daemon_ni_socket_ni_identifiant"
+  ],
+  "ordering": "scope_of unknown local deny → ChildProof queue guard → handoff preview Reads strict pure parser return if transportNone → genuine CallerScope for all other known calls",
+  "reuse": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/handoff.rs",
+      "lines": "547–588",
+      "responsibility": "strict complete parse+render: Preview rejects ANY transport field and returns None"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/handoff.rs",
+      "lines": "653–662",
+      "responsibility": "pure preview_result, no id/issued_at/transport"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "lines": "718–725 and1135–1146",
+      "responsibility": "existing handoff parser/preview and direct CLI queue guard"
+    }
+  ],
+  "duplication_justification": "Two entry paths for queue refusal. Shared existing handoff parser invoked at early preview boundary and unchanged send handler; each valid preview parses once and returns immediately, each send parses once after scope. No helper/type/module/option new.",
+  "read_review": "Entire U3 combined patch read; no unrelated production/test deltas. Only legacy156test restored,103 remains unchanged.",
+  "limits": "No tests executed by agent. Exception only validated pure handoff preview, not other Reads or runtime/test bypass. ROOT will apply after FULL and replay existing targeted tests; docs FR024 exception handled by ROOT artifacts owner."
+}

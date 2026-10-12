@@ -55,7 +55,8 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
     let server = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut connections = Vec::new();
-        for _ in 0..8 {
+        let mut scope_reads = 0;
+        while connections.len() < 8 {
             let stream = loop {
                 match listener.accept() {
                     Ok((stream, _)) => break stream,
@@ -98,8 +99,20 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
             writer.flush().unwrap();
             line.clear();
             reader.read_line(&mut line).unwrap();
+            let next = decode::<WrapperToDaemon>(line.trim_end()).unwrap();
+            if matches!(&next, WrapperToDaemon::NativeDelegation {
+                request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+            }) {
+                scope_reads += 1;
+                writeln!(writer, "{}", encode(&DaemonToWrapper::NativeDelegationResult {
+                    result: json!({"version":1,"caller_read_only":false}),
+                }).unwrap()).unwrap();
+                writer.flush().unwrap();
+                // Cette lecture ne retient aucun des huit échanges métier.
+                continue;
+            }
             assert!(matches!(
-                decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                next,
                 WrapperToDaemon::ClientHello { contract_version, capabilities, .. }
                     if contract_version == CLIENT_CONTRACT_VERSION
                         && capabilities == vec![ClientCapability::CommunicationProjectsV1]
@@ -128,6 +141,7 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
             ));
             connections.push((reader, writer));
         }
+        assert_eq!(scope_reads, 8, "une décision de plafond par appel réel");
         // Les HUIT sockets restent ouvertes et leurs commandes attendent :
         // aucune réponse anticipée ne libère un emplacement de concurrence.
         ready_tx.send(()).unwrap();

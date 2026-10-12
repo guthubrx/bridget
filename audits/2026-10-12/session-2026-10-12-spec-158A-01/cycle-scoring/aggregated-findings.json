@@ -1,0 +1,716 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T10:15:53.609977+00:00",
+    "start_timestamp": "2026-10-12T10:01:24Z",
+    "end_timestamp": "2026-10-12T10:15:53.609977+00:00",
+    "duration_ms": 869609,
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle",
+    "audit_mode": "fix",
+    "audit_grid": "all",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "release_blocked": false,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "performance": "A",
+      "complexity": "A",
+      "quality": "A",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "ux": "N/A"
+    },
+    "scope_sha256": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+    "diff_sha256": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+    "coverage_percent": 85.43,
+    "cycle_scoring_review_kind": "fresh_global_delta_review_with_historical_modules"
+  },
+  "execution_metrics": {
+    "files_scanned": 24,
+    "files_total": 27,
+    "lines_analyzed": 5872,
+    "tools_used": [
+      "read-only source/diff review",
+      "fingerprint.py --batch",
+      "validate_session.py"
+    ],
+    "coverage_estimate_percent": 85.43,
+    "sampling_method": "coverage_lower_bound_hunks",
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "warnings": [
+      "Note établie sur une couverture partielle de 85.43% des hunks du delta final ; corpus historique et nouvelles lectures distingués. Les sept modules C1 ne sont pas présentés comme sept réaudits frais.",
+      "Lecteurs05/07/12 impliqués dans certaines préparations : limites d’auto-revue conservées. Revue R2 indépendante annoncée terminée APPROVE_WITH_CHANGES par ROOT ; trois remarques non bloquantes tracées.",
+      "FULL unique historique :2440PASS/12FAIL/74ignored,95cibles,RC101 ; huit échecs hérités restent. Les quatre régressions nouvelles ont chacune un replay cibléPASS. Aucun GREEN global ni deuxième FULL prétendu.",
+      "Preuve22PASS et quatre replays portent sur la version avant le dernier littéral CLI et le cochage T021/T022. Dernier delta : texte seul et métadonnées, lus après gel ; build final pas encore exécuté au moment de cet audit.",
+      "R2-C3 LOW contesté : aucun test dédié au nouveau texte CLI. Limite non contractuelle acceptée sous instruction explicite tests prévus seulement ; lecture du littéral, aucun test de confort. Couverture instrumentée inconnue (null), pas zéro risque prétendu.",
+      "ChildProof : seule la section de refus préconnexion est restaurée ; la partie positive garde l’appel nécessaire reply_caller_scope. Aucune affirmation que la fonction156 entière est byte-identique.",
+      "Aucune mesure de performance Rust/MCP bout en bout ni de production. Le p95 de plafond mesure uniquement SQLite Python/json.loads privés ; aucune DB/runtime/service/fournisseur lancé par le reporter.",
+      "Rétention256 et annulation partielle après commit/crash sont documentées. Les corps des monolithes hors plages et les fichiers hors delta ne sont pas audités intégralement."
+    ],
+    "instrumented_test_coverage_percent": null,
+    "mutation_coverage_percent": null,
+    "production_p95_ms": null
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "total": 0,
+    "by_category": {}
+  },
+  "findings": [],
+  "suppressed": [],
+  "positive_findings": [
+    "mcp.rs:626-665 + mcp_scopes.rs:57-72 : portée résolue avant toute inscription ou échange métier ; outil inconnu refusé (InvalidParams) ; réponse CallerScope exigée exactement {version:1, caller_read_only:bool} (2 champs) ; RPC absent, invalide ou refusé => erreur fermée, aucun repli standard.",
+    "native_delegation.rs:1451-1462 : CallerScope lit for_child(owner) sur l'index UNIQUE native_delegations_child (delegation_lineage.rs:126) après live_connection_identity (credential + instance + route vivante + connexion auxiliaire reconnue) ; plafond = effective_posture.or(posture demandée)==Discovery et !cleanup_done ; cleanup_done posé seulement après arrêts confirmés (native_delegation.rs:3432-3443).",
+    "Classification des 30 outils vérifiée contre les gestionnaires : handoff preview rejette tous les champs de transport (handoff.rs:573-582) ; journal `to` absent/null <=> JournalRequest.to==None (attach.rs:140-150) ; thread/events à tag serde `action` + deny_unknown_fields ; rename/dnd/domain/runtime n'agissent que sur l'identité appelante ; ledger/queue/who/status/read_artifact/task_status/task_wait sans écriture observée. Aucun outil MCP ne pose l'arrêt (test cli.rs control158_halt_aucun_outil_mcp).",
+    "crates/bridget-daemon/src/daemon.rs:10859 — Snapshot d’arrêt : HashMap par task_id, parcours des ancêtres borné à huit ; aucune recherche linéaire répétée pour chaque parent.",
+    "crates/bridget-daemon/src/delegation.rs:455 — Le rejeu retourne le reçu avant le callback FnOnce : aucun tasks() ni snapshot d’annulation recomputé pour une clé déjà retenue.",
+    "crates/bridget-daemon/src/mcp_scopes.rs:55 — Classification par table et listes statiques, bornes explicites ; les recherches imbriquées de tools() portent sur un catalogue fixe documenté.",
+    "crates/bridget-daemon/src/delegation.rs:294 — overview_page et Cancel utilisent Task::overview_row ; corps, résultat et cwd sont absents de cette projection.",
+    "crates/bridget-daemon/src/delegation.rs:432 — La transaction Immediate lit le reçu avant le callback ; réponse typée et limite256, erreurs fermées et aucun parcours de tâche au rejeu.",
+    "crates/bridget-daemon/src/mcp.rs:629 — Delta ROOT relu : la file refuse la preuve enfant avant connexion ; handoff preview réemploie son parseur strict et son rendu local. Résultat runtime correctif non déduit.",
+    "crates/bridget-daemon/src/daemon.rs:22727 — Les tests A/B/C utilisent un payload illisible pour prouver l’absence de relecture des tâches sur rejeu. Les tests Store utilisent un callback qui panique s’il est appelé et rouvrent le magasin disque.",
+    "crates/bridget-daemon/src/mcp.rs:5515 — Les réponses RPC absente, non booléenne, mauvaise version et avec clé étrangère sont refusées. Cinq oracles distincts utilisent de vraies tâches, inscriptions et transitions natives ; leur plafond n’est pas un booléen injecté.",
+    "crates/bridget-daemon/src/mcp.rs:5828 — L’oracle crée réellement six entrées, lit trois pages de deux, accuse chaque receipt et vérifie l’unicité des séquences et des reçus.",
+    "crates/bridget-daemon/src/mcp_scopes.rs:23 — TOOL_SCOPES alimente scope_of et tools.readOnlyHint ; l’inventaire est vérifié dans les deux sens par les tests existants158.",
+    "crates/bridget-daemon/src/referent_control.rs:147 — Les deux puits réemploient admit_native_delegation et la gardeADR027 ; pause/arrêt ne sont pas réimplémentés indépendamment.",
+    "crates/bridget-daemon/src/mcp.rs:5472 — reply_caller_scope centralise le handshake auxiliaire et sa réponse ; la forêt daemon reste dans une fixture privée utilisée neuf fois. Ce dernier montage est issu de ce lecteur, donc non approuvé indépendamment ici.",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs:1451 — CallerScope arrive avant catalogue/faits/quota/préflight et réemploie for_child ; index149 unique child observé au puits et dans le reçu EXPLAIN.",
+    "crates/bridget-daemon/src/delegation.rs:498 — Reçus d’arrêt conservés à256 après transaction ; projection globale limite1..100 et champs métadonnées, sans corps/résultats/cwd sur le fil.",
+    "crates/bridget-daemon/src/communication/client.rs:1185 — La nouvelle connexion de plafond reprend le budget total existant10s ; écriture/lecture avec délai absolu et vérifications d’annulation, fermeture explicite après réponse.",
+    "crates/bridget-daemon/src/delegation.rs:447 — Deux tables seulement : état unique et reçu historique borné256. Le reçu est lu avant le callback et enregistré avec l’état dans la transaction existante. Le rejeu ne lance aucun parcours. Besoin FR009/FR010, sans système de reprise ou Saga.",
+    "crates/bridget-daemon/src/mcp_scopes.rs:22 — Un seul module nouveau, crate-private : 30 entrées statiques et6 portées, sans contrôle humain. Classification d’exécution et annotations réemploient la même table. CallerScope réemploie le RPC natif et rend une décision calculée, sans cache ou DB cliente. Besoin FR020–FR025/FR029.",
+    "crates/bridget-daemon/src/delegation.rs:294 — Projection privée de7 champs calculés, sans état dérivé persisté. overview_row a2 consommateurs métier réels (vue et Cancel) avec contrainte écrite de confidentialité commune. Le helper CLI de ligne d’arrêt a3 consommateurs. Les fixtures réemploient SQLite/IPC/Directory existants et ne créent aucun framework."
+  ],
+  "resolved_findings": [
+    {
+      "id": "TEST-001",
+      "status": "fixed",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 631,
+      "source_sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "evidence": "    if name == \"bridget_queue\" && identity.delegated_origin.is_some() {\n        return Err(ToolError::Technical {\n            code: \"delegated_tool_forbidden\",",
+      "oracle_ranges": [
+        [
+          2690,
+          2730
+        ]
+      ],
+      "proof_receipt": {
+        "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.json",
+        "sha256": "d321701384d000f3c696d214ee33fc4c7f74fbcae369797f3eb767b01bf9d50c",
+        "rc": 0,
+        "seconds": 16.63,
+        "log_sha256": "cbdb3bc3ba4a4801a8540edada180445cd3664d96ef9caa10aaff82f85c5e630",
+        "source_stable": true,
+        "test_results": [
+          [
+            "ok",
+            "22",
+            "0",
+            "0"
+          ]
+        ]
+      },
+      "section_only_identical": true
+    }
+  ],
+  "review_signals": [
+    {
+      "id": "R2-C1",
+      "severity": "LOW",
+      "status": "resolved_by_root_text",
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "line": 6316,
+      "proof": "Littéral neutre relu, indique un changement possible de contrôle ; ne promet pas une annulation sur resume."
+    },
+    {
+      "id": "R2-C2",
+      "severity": "LOW",
+      "status": "documentation_claim_corrected",
+      "proof": "closure158A-root.json précise section ChildProof seule identique ; partie positive contient reply_caller_scope."
+    },
+    {
+      "id": "R2-C3",
+      "severity": "LOW",
+      "status": "contested_nonblocking_limitation",
+      "proof": "Pas de test dédié au texte, changement d’un littéral sans nouvelle logique ; tests nouveaux interdits par instruction utilisateur. Lecture fraîche seulement.",
+      "dedicated_text_test": false
+    }
+  ],
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "exists": false,
+    "entries": 0,
+    "modified": false
+  },
+  "coverage": {
+    "denominator": "hunks du delta final",
+    "scope_files": 27,
+    "scope_rust_files": 13,
+    "scope_hunks": 151,
+    "covered_hunks_lower_bound": 129,
+    "coverage_percent": 85.43,
+    "fresh_delta_files": 9,
+    "fresh_current_source_hunks": 32,
+    "historical_textually_compatible_hunks": 102,
+    "complete_repository_read": false,
+    "historical_and_fresh_distinct": true,
+    "instrumented_test_coverage_percent": null,
+    "definition": "Union de plages actuelles, SHA identiques, et hunks initialement lus dont le corps de diff est identique ; nouvelles lectures du delta final. Aucune couverture globale ni sept réaudits frais."
+  },
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "ranges": [
+        [
+          6290,
+          6330
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/handoff.rs",
+      "sha256": "7ca9284f63c55f6da590145df8fc0ec51f2168ab5be43ce6a1910f0883372957",
+      "ranges": [
+        [
+          537,
+          595
+        ],
+        [
+          653,
+          668
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "caller_context_outside_diff",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "ranges": [
+        [
+          618,
+          701
+        ],
+        [
+          2690,
+          2750
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "ranges": [
+        [
+          55,
+          62
+        ],
+        [
+          99,
+          118
+        ],
+        [
+          141,
+          147
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "ranges": [
+        [
+          246,
+          352
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4",
+      "ranges": [
+        [
+          135,
+          147
+        ],
+        [
+          159,
+          165
+        ],
+        [
+          167,
+          173
+        ],
+        [
+          197,
+          211
+        ],
+        [
+          528,
+          534
+        ],
+        [
+          555,
+          572
+        ],
+        [
+          610,
+          616
+        ],
+        [
+          750,
+          799
+        ],
+        [
+          810,
+          817
+        ],
+        [
+          820,
+          836
+        ],
+        [
+          862,
+          869
+        ],
+        [
+          1125,
+          1131
+        ],
+        [
+          1394,
+          1400
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "ranges": [
+        [
+          1,
+          125
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "ranges": [
+        [
+          1,
+          155
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "ranges": [
+        [
+          1,
+          246
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+      "ranges": [
+        [
+          53,
+          59
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    }
+  ],
+  "historical_raw_modules": [
+    {
+      "module": "03",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_securite.json",
+      "sha256": "feb90ddb5bf8dd5b33aedd9b8270c38df5d6f85f286bcd08963db4c469a72860"
+    },
+    {
+      "module": "04",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_complexite.json",
+      "sha256": "ba89face4443b60f234728567b3a12f541b614487b05cd91933eabc8e6807c81"
+    },
+    {
+      "module": "05",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_qualite.json",
+      "sha256": "6ebce7852a908d71ab45e10514d01b0d14134ead13a7a946a5ba64109d486862"
+    },
+    {
+      "module": "06",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_tests.json",
+      "sha256": "6d02e81d2b27a5b85d2eed80b3e8ac71d869a10dedf04fccc54eab6791366616"
+    },
+    {
+      "module": "07",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_duplication.json",
+      "sha256": "0ac4a42640bc707f6104a92085ced6a8aa8a7a0d2199d259f24c44ddeeb3cec1"
+    },
+    {
+      "module": "08",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_performance.json",
+      "sha256": "ff7f76d787b4f9170cdb437b615d47d1274705800c93307f835cbfeeca8920aa"
+    },
+    {
+      "module": "12",
+      "file": "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_minimalisme.json",
+      "sha256": "47ae6a3e4019542a7b6e7eece0f419df262418640ac43aba8cb9d93200216911"
+    }
+  ],
+  "source_hash_guard": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4",
+      "match": true
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "match": true
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "match": true
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "sha256": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+      "match": true
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "sha256": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+      "match": true
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "sha256": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/analyze-report.md",
+      "sha256": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/quickstart.md",
+      "sha256": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/research.md",
+      "sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "match": true
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+      "match": true
+    }
+  ],
+  "test_receipts": {
+    "T021-FULL158-final.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-FULL158-final.json",
+      "sha256": "2532508491a1e34f575c3217e02bb4704c97d93dc48d203b757f437bfa170b88",
+      "rc": 101,
+      "seconds": 804.17,
+      "log_sha256": "70483926b59f67a005733b5a37aba4104e86d5e1af9079cd52c117d0cb97e3e0",
+      "source_stable": true,
+      "test_results": null
+    },
+    "T021-full-comparison158.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-full-comparison158.json",
+      "sha256": "50ad3e3462987ef9c8f83e57523eadc2a1afdb30243421ae1ebb61fadabb230d",
+      "rc": 101,
+      "seconds": 804.17,
+      "log_sha256": "70483926b59f67a005733b5a37aba4104e86d5e1af9079cd52c117d0cb97e3e0",
+      "source_stable": true,
+      "test_results": null
+    },
+    "T021-review-fixes158-lib.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.json",
+      "sha256": "d321701384d000f3c696d214ee33fc4c7f74fbcae369797f3eb767b01bf9d50c",
+      "rc": 0,
+      "seconds": 16.63,
+      "log_sha256": "cbdb3bc3ba4a4801a8540edada180445cd3664d96ef9caa10aaff82f85c5e630",
+      "source_stable": true,
+      "test_results": [
+        [
+          "ok",
+          "22",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "T021-preview103-replay.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-preview103-replay.json",
+      "sha256": "6057e9e2dec533af13d4a6bda4a78141a5a596c6be4e2bb45d285029317678eb",
+      "rc": 0,
+      "seconds": 9.24,
+      "log_sha256": "04aad2ef396a1c5805f165b8caab5f24c2dceb679aef80a1e5cabaacf828e303",
+      "source_stable": true,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "T021-concurrency089-replay.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-concurrency089-replay.json",
+      "sha256": "e917a6f14afcd0faeaae18b43cda8d80c67a6e42135b4739675a08bd6f76e9d9",
+      "rc": 0,
+      "seconds": 7.26,
+      "log_sha256": "a41722b2c1e1fd9d2d190dc2295253573efc45bfaef244f0243fa7d8af87645a",
+      "source_stable": true,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "T021-security089-replay.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-security089-replay.json",
+      "sha256": "9ae57615a5d1bb24e5ea1f4724f103c7c659213c4a1c774ac31f969848d60e9e",
+      "rc": 0,
+      "seconds": 7.65,
+      "log_sha256": "3f9e193452124a7c62837477206d9fee56ad0766305d30fffb6b01b67bf045ba",
+      "source_stable": true,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    "T021-native152-replay.json": {
+      "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-native152-replay.json",
+      "sha256": "071627be854d0a4314403d0b8ee49050870b141de49a01609c23ed8917bed875",
+      "rc": 0,
+      "seconds": 9.29,
+      "log_sha256": "5a45fa4e827c9d28e0752808384f3a6ca8f653424fd79131dffc73137904f3e7",
+      "source_stable": true,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ]
+    }
+  },
+  "test_summary": {
+    "FULL": [
+      2440,
+      12,
+      74
+    ],
+    "cargo_targets": 95,
+    "baseline_exact_names": 255,
+    "baseline_identical": 255,
+    "prescribed_158_pass": 47,
+    "legacy_failures": [
+      "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+      "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+      "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+      "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+      "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+      "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+      "spec094_mcp_modifie_uniquement_sa_propre_presence",
+      "spec098_pont_expose_remet_repond_renouvelle_et_retire"
+    ],
+    "new_failures_replayed_PASS": [
+      "mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket",
+      "mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari",
+      "native152_rouge_panne_mission_working",
+      "spec103_s02_apercu_sans_daemon_ni_socket_ni_identifiant"
+    ],
+    "global_green": false,
+    "second_FULL_executed": false,
+    "final_build_executed": false
+  },
+  "roadmap": {
+    "immediate": [],
+    "short_term": [],
+    "medium_term": [],
+    "long_term": []
+  }
+}

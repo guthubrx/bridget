@@ -142,6 +142,19 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
     }
 }
 
+/// Admission native158 : arrêt prioritaire, sinon garde de pause ADR027 existante.
+/// O(1), aucune lecture/écriture ; le puits fournit les deux états courants.
+pub(crate) fn admit_native_delegation(
+    control: &ControlStateFrame,
+    halt: &crate::delegation::HaltState,
+) -> Admission {
+    if halt.halted {
+        Admission::Deferred { motif: "delegations_halted" }
+    } else {
+        admit_autonomous_effect(AutonomousEffect::NativeDelegation, control)
+    }
+}
+
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     // Acquérir le droit d'écriture AVANT la première lecture de schéma.
     // Une transaction deferred lecture→ALTER peut échouer immédiatement par
@@ -873,6 +886,27 @@ mod tests {
                     Admission::Admitted
                 }
             );
+        }
+    }
+
+    #[test]
+    fn control158_halt_admission_4_combinaisons() {
+        let mut control = read(&conn()).unwrap();
+        for (paused, halted, expected) in [
+            (false, false, Admission::Admitted),
+            (true, false, Admission::Deferred { motif:"pause" }),
+            (false, true, Admission::Deferred { motif:"delegations_halted" }),
+            (true, true, Admission::Deferred { motif:"delegations_halted" }),
+        ] {
+            control.paused = paused;
+            let halt = crate::delegation::HaltState {
+                halted,
+                since: None,
+                by: None,
+                reason: None,
+                generation: 0,
+            };
+            assert_eq!(admit_native_delegation(&control, &halt), expected);
         }
     }
 

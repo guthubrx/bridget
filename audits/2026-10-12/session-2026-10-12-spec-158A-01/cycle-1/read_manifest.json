@@ -1,0 +1,1092 @@
+{
+  "module_id": "12",
+  "capture_timestamp": "2026-10-12T09:32:51.474301+00:00",
+  "scope_sha256": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+  "diff_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+  "read_interval": [
+    "2026-10-12T09:35:45+00:00",
+    "2026-10-12T09:43:37.338735+00:00"
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "ranges": [
+        [
+          6085,
+          6335
+        ],
+        [
+          10340,
+          10388
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -6093,8 +6093,103 @@ fn parse_control_posture(",
+          "new_range": [
+            6093,
+            6195
+          ],
+          "sha256": "b2b93480a90c2bffbf9598e65e621cb02335db5180cbb1f0679908402aa5236b"
+        },
+        {
+          "header": "@@ -6102,6 +6197,33 @@ fn cmd_control(args: &[String]) {",
+          "new_range": [
+            6197,
+            6229
+          ],
+          "sha256": "5cf7fa6ef2d7f34a6834564a47c10ba4dc3acdd133b4c6aae919ac8b967a6013"
+        },
+        {
+          "header": "@@ -6132,6 +6254,75 @@ fn cmd_control(args: &[String]) {",
+          "new_range": [
+            6254,
+            6328
+          ],
+          "sha256": "6efd795fb18e1af5ef935908c575de7be62f4e7fad9cceec2c7e92fc360c1c17"
+        },
+        {
+          "header": "@@ -10149,4 +10343,46 @@ mod guidance156_tests {",
+          "new_range": [
+            10343,
+            10388
+          ],
+          "sha256": "38d272694f8ee437505168070fce3bd063a4ca8a6455d40ceb9ddecf61992e03"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "ranges": [
+        [
+          10710,
+          10950
+        ],
+        [
+          16045,
+          16182
+        ],
+        [
+          16345,
+          16375
+        ],
+        [
+          16738,
+          16775
+        ],
+        [
+          22280,
+          22365
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -10716,6 +10716,221 @@ fn control_client_actor(st: &DaemonState, conn_id: &str) -> Option<&'static str>",
+          "new_range": [
+            10716,
+            10936
+          ],
+          "sha256": "46cb47d2d1f0f63825d6479313582336da1fde382ea0df4c32a82109b7d0902a"
+        },
+        {
+          "header": "@@ -15839,6 +16054,9 @@ fn handle_wrapper_message_with_peer(",
+          "new_range": [
+            16054,
+            16062
+          ],
+          "sha256": "5fb02198262a2e6faad3ba7dd11385527041a4fe2c56c41e97f64f5d14122770"
+        },
+        {
+          "header": "@@ -15899,6 +16117,9 @@ fn handle_wrapper_message_with_peer(",
+          "new_range": [
+            16117,
+            16125
+          ],
+          "sha256": "db6bacfb2c74bb855afe5d3cd7052d4a755d119110e306a58f2d246578d95bf8"
+        },
+        {
+          "header": "@@ -15918,6 +16139,9 @@ fn handle_wrapper_message_with_peer(",
+          "new_range": [
+            16139,
+            16147
+          ],
+          "sha256": "4acbb102f56cd576481b5261ff55211938278fb2a526823466cb4108f9500829"
+        },
+        {
+          "header": "@@ -15932,7 +16156,10 @@ fn handle_wrapper_message_with_peer(",
+          "new_range": [
+            16156,
+            16165
+          ],
+          "sha256": "895b89d093ac71d27e9d236434876f9fbcb8140ef198c127cc45d0e06338bfb1"
+        },
+        {
+          "header": "@@ -16124,6 +16351,9 @@ fn handle_wrapper_message_with_peer(",
+          "new_range": [
+            16351,
+            16359
+          ],
+          "sha256": "875027d4a3c535624222c90b2381ebf65d67a10bc77a5317cbd8992db4fdf2b9"
+        },
+        {
+          "header": "@@ -16515,6 +16745,17 @@ fn handle_wrapper_message_with_peer(",
+          "new_range": [
+            16745,
+            16761
+          ],
+          "sha256": "c2e977d7bfda03b3802cbbd6dcd18bd49826354428fb0a291b563a1eb02d1447"
+        }
+      ],
+      "partially_read_hunks": [
+        "@@ -22038,6 +22279,513 @@ mod presence_tests {"
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "ranges": [
+        [
+          1045,
+          1100
+        ],
+        [
+          1437,
+          1485
+        ],
+        [
+          1528,
+          1545
+        ],
+        [
+          1788,
+          1828
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -1069,14 +1069,19 @@ fn admit_delegate(",
+          "new_range": [
+            1069,
+            1087
+          ],
+          "sha256": "1aa5d8929f8f9cb70a5fe054377b8eb8dc07f9f94a78846f749d15711436e63e"
+        },
+        {
+          "header": "@@ -1442,9 +1447,23 @@ fn handle_locked_with_project(",
+          "new_range": [
+            1447,
+            1469
+          ],
+          "sha256": "ae934841ebff693f7b3af1d92c2467b367e080d0a4b49413599bc0e05800eb41"
+        },
+        {
+          "header": "@@ -1517,7 +1536,7 @@ fn handle_locked_with_project(",
+          "new_range": [
+            1536,
+            1542
+          ],
+          "sha256": "537738ef5bc207692f8f9d7f3f01c73860888c0a85540bcd4e8b45b097fa66f2"
+        },
+        {
+          "header": "@@ -1777,14 +1796,19 @@ fn handle_locked_with_project(",
+          "new_range": [
+            1796,
+            1814
+          ],
+          "sha256": "87a9c9106c35d3f4e502abae2900bfeedf41719541f600e016344a47a7a5816f"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "ranges": [
+        [
+          105,
+          135
+        ],
+        [
+          275,
+          320
+        ],
+        [
+          345,
+          540
+        ],
+        [
+          1790,
+          2125
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -113,6 +113,16 @@ impl ChildRequest {",
+          "new_range": [
+            113,
+            128
+          ],
+          "sha256": "a1a50b273677aeb2e3f8f3902e310dd7d8a86da71d1a3446ee14335591775230"
+        },
+        {
+          "header": "@@ -279,7 +289,17 @@ impl Task {",
+          "new_range": [
+            289,
+            305
+          ],
+          "sha256": "2f1eff2222a6876b692b09b36c3ef16a9fd85e08ec5b2da62a46285bba9d2b4d"
+        },
+        {
+          "header": "@@ -348,7 +368,22 @@ CREATE TABLE IF NOT EXISTS native_child_requests(",
+          "new_range": [
+            368,
+            389
+          ],
+          "sha256": "a9758fd0654d0fbc810babe98866ef7cc736a87a9fb8e7a82b7b1a1a604dacdd"
+        },
+        {
+          "header": "@@ -379,6 +414,120 @@ CREATE INDEX IF NOT EXISTS native_child_requests_inbox ON native_child_requests(",
+          "new_range": [
+            414,
+            533
+          ],
+          "sha256": "8ebdaffef5d40506aff67afdcef2842ce74a679805fca2b6b241f5c2fcf22ca5"
+        }
+      ],
+      "partially_read_hunks": [
+        "@@ -1638,4 +1787,339 @@ mod tests {"
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "ranges": [
+        [
+          25,
+          52
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -39,6 +39,7 @@ pub use managed_supervisor::{",
+          "new_range": [
+            39,
+            45
+          ],
+          "sha256": "cab31ccd13cfba053ae60d7843638f11af4f6fd8c79c0427966bf68ad1862cf9"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "ranges": [
+        [
+          610,
+          680
+        ],
+        [
+          2620,
+          2665
+        ],
+        [
+          4558,
+          4590
+        ],
+        [
+          5430,
+          5890
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -623,6 +623,47 @@ fn execute_tool_at_with_identity(",
+          "new_range": [
+            623,
+            669
+          ],
+          "sha256": "4cd910ccdbbb352dff69e927f63f9b0b4d2d3d9e33c4558271769f3c4fc419b0"
+        },
+        {
+          "header": "@@ -2595,6 +2636,22 @@ pub(crate) fn tools() -> Vec<Value> {",
+          "new_range": [
+            2636,
+            2657
+          ],
+          "sha256": "3338bfb450b404a14e9dae7f6e887c7ffe74e2c492ebe9142b96e828faa696c1"
+        },
+        {
+          "header": "@@ -5323,6 +5435,446 @@ mod tests {",
+          "new_range": [
+            5435,
+            5880
+          ],
+          "sha256": "9c2928349a373c024be097a3fb447d7ec94d37afca7346bd5229ce4598ceff4d"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -0,0 +1,134 @@",
+          "new_range": [
+            1,
+            134
+          ],
+          "sha256": "ac4239a7963e3e04939281a3ab01cdc0e8a18c8b1ba4645fd439a6c36a847e96"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "ranges": [
+        [
+          125,
+          163
+        ],
+        [
+          889,
+          917
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -142,6 +142,19 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra",
+          "new_range": [
+            142,
+            160
+          ],
+          "sha256": "e153d39bb8e71caffa2b8e3afdc062ae7e08ed57b4a3b8b75442f5a9a1b24d14"
+        },
+        {
+          "header": "@@ -876,6 +889,27 @@ mod tests {",
+          "new_range": [
+            889,
+            915
+          ],
+          "sha256": "f90cba68d23d8b205983d46419c19a823169d7221b8b1f82c13002d12090516b"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "ranges": [
+        [
+          1255,
+          1282
+        ],
+        [
+          2118,
+          2145
+        ],
+        [
+          3627,
+          3675
+        ],
+        [
+          4490,
+          4537
+        ],
+        [
+          8470,
+          8535
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -1260,6 +1260,19 @@ pub enum ControlStateRefusal {",
+          "new_range": [
+            1260,
+            1278
+          ],
+          "sha256": "4dc351642391f8a42edcd8338ad3069a3d70575cbaf26cefc54bb783791bf2e7"
+        },
+        {
+          "header": "@@ -2118,6 +2131,8 @@ pub struct FallbackTarget {",
+          "new_range": [
+            2131,
+            2138
+          ],
+          "sha256": "99cda497dae87cbf51f34b962ea35dc3aec0a38772a7921d39fbed6418008f81"
+        },
+        {
+          "header": "@@ -3619,6 +3634,28 @@ pub enum WrapperToDaemon {",
+          "new_range": [
+            3634,
+            3661
+          ],
+          "sha256": "4b88853d3f5d3714b1abb85b66f02a5bb0e4fbca7f10358ee0449e0d2335b9dc"
+        },
+        {
+          "header": "@@ -4459,6 +4496,29 @@ pub enum DaemonToWrapper {",
+          "new_range": [
+            4496,
+            4524
+          ],
+          "sha256": "39749b6eb639e7c4b60a09a39ee26afc5e6b5f6c407c1e8657124f08c27f5328"
+        },
+        {
+          "header": "@@ -8414,4 +8474,62 @@ mod spec104_search_contract_tests {",
+          "new_range": [
+            8474,
+            8535
+          ],
+          "sha256": "500261b173c2727d4ea776031eee3bd4a1125ff76c0360f5aad8cb09f1ad7e6e"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+      "ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -0,0 +1,107 @@",
+          "new_range": [
+            1,
+            107
+          ],
+          "sha256": "2e8ae9d2fba785c4b73302418f46448c4a23e51bc1392ce72d9e5079e636c8dd"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "sha256": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+      "ranges": [
+        [
+          138,
+          229
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -138,6 +138,88 @@ La vue courante donne `resume_attempts`, le nombre de décisions de reprise apr",
+          "new_range": [
+            138,
+            225
+          ],
+          "sha256": "19520b2a0b074982b21161d8cf68c2da9efe8d93143e68e28b365fda79861358"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "sha256": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+      "ranges": [
+        [
+          44,
+          82
+        ],
+        [
+          118,
+          136
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -44,6 +44,31 @@ liste et la substitution exactes. Aucune bascule après admission ou reprise",
+          "new_range": [
+            44,
+            74
+          ],
+          "sha256": "7c2b0480ee02648b5161497e59fe43ad01565a84eb122d59331778428c5fc38e"
+        },
+        {
+          "header": "@@ -98,8 +123,9 @@ en argument, emprunter celle d'un autre fil ou contourner ce refus par la CLI.",
+          "new_range": [
+            123,
+            131
+          ],
+          "sha256": "5b235608c48b686b6beffcf8edcb053cad85b7068dd90e5ba77b1925fb828594"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "sha256": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+      "ranges": [
+        [
+          200,
+          287
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -203,6 +203,78 @@ pas de remplacement et octets canoniques anciens. Aucune CLI ni outil nouveau,",
+          "new_range": [
+            203,
+            280
+          ],
+          "sha256": "99b4b705b767a358e897aec5dd0105088abee9018fb44f3a03320aaf3a217183"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "ranges": [
+        [
+          1,
+          136
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -1,8 +1,11 @@",
+          "new_range": [
+            1,
+            11
+          ],
+          "sha256": "2b941f95b5157e41706d6b692dde7aa4d4488d893a28fb3a01c5376dfc96ce6a"
+        },
+        {
+          "header": "@@ -11,10 +14,12 @@ comportement qu'en 150.",
+          "new_range": [
+            14,
+            25
+          ],
+          "sha256": "61e728d190f324c8f49ac44ff4763fd5feb7e0ffedbc1c2841d0f0131952b662"
+        },
+        {
+          "header": "@@ -27,12 +32,16 @@ Un rejeu d'une clé existante pendant l'arrêt rend la tâche existante.",
+          "new_range": [
+            32,
+            47
+          ],
+          "sha256": "b7b79f78f86507d294fe1f6d04ad6eaef1685d0c4ec85c5217385c33bb774c34"
+        },
+        {
+          "header": "@@ -44,6 +53,24 @@ réponse enregistrée est rendue (`replayed: true`), sans réécriture et sans a",
+          "new_range": [
+            53,
+            76
+          ],
+          "sha256": "6a4d7285c59b4da334983519a0876d5d23d04030ae5399071bf482d19e77d34f"
+        },
+        {
+          "header": "@@ -91,3 +118,19 @@ passe pas par un outil MCP.",
+          "new_range": [
+            118,
+            136
+          ],
+          "sha256": "427880a9004d647c397b5b6c1b1f0647256b7fdfb3c8f32415cd026febaf9071"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "ranges": [
+        [
+          1,
+          80
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(",
+          "new_range": [
+            24,
+            31
+          ],
+          "sha256": "c7292be268e5b2a94e5dc457841921878ac6876a31a6ce0888a817b2a16479ce"
+        },
+        {
+          "header": "@@ -53,6 +54,8 @@ Le rejeu d'une clé admise précède cette décision (ordre de 150).",
+          "new_range": [
+            54,
+            61
+          ],
+          "sha256": "d8f12718d4bc2bcc79af84ca529e22b28533068ea254ee9a429d5d77b7109ea9"
+        },
+        {
+          "header": "@@ -71,3 +74,7 @@ ToolScope { tool, base: Scope, read_actions: &[&str], own_state_actions: &[&str]",
+          "new_range": [
+            74,
+            80
+          ],
+          "sha256": "922d9ca64810092156a4e16fb792ca55280d54a5a40945cb628cc2f8e8cb2efe"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "ranges": [
+        [
+          1,
+          127
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -1,13 +1,13 @@",
+          "new_range": [
+            1,
+            13
+          ],
+          "sha256": "a19e850f4426b5112c70c9c2142970d0aa3ed8fd442a84e1bbf21c69908269c0"
+        },
+        {
+          "header": "@@ -43,7 +43,7 @@ Trois ajouts, sans changer le contrat d'appel 150 :",
+          "new_range": [
+            43,
+            49
+          ],
+          "sha256": "8feafcba2fa07d17fdb8fa1c67e7c46d9939883b192e85e8a507e11fd61cdd73"
+        },
+        {
+          "header": "@@ -97,7 +97,7 @@ de tours (champ, requête récursive, dépôt boîte, schéma, tests).",
+          "new_range": [
+            97,
+            103
+          ],
+          "sha256": "80bd036c19edc14d275d4caac6e171a2b020ca511544a9a8f3aa25e31dd3fa22"
+        },
+        {
+          "header": "@@ -111,5 +111,17 @@ portée dépendante de la cible, CLI `bridget wake`, table `observation_missed`.",
+          "new_range": [
+            111,
+            127
+          ],
+          "sha256": "2a74113fe81e1b7e55128dab10bebb4b1b3a1027054f4474d271189dfecad2dd"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "specs/158-reveils-controle/research.md",
+      "sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+      "ranges": [
+        [
+          78,
+          125
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -74,3 +78,48 @@ Aucun dépôt de 158a. Le genre `budget_reached` (`protocol.rs:1272`) reste libr",
+          "new_range": [
+            78,
+            125
+          ],
+          "sha256": "1c3e4ff0364d14a1b9644ea23febebb070ad6a647d1bb20e8e62ec7c0744c8bc"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "ranges": [
+        [
+          1,
+          143
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -2,9 +2,10 @@",
+          "new_range": [
+            2,
+            11
+          ],
+          "sha256": "bb90b89ec92ee6caf540f70f2660afe04d69f0d9b691573597f7b7d4b2f3f7ae"
+        },
+        {
+          "header": "@@ -57,7 +58,7 @@ compteur existant n'est pas réutilisable en l'état. Aucune duplication.",
+          "new_range": [
+            58,
+            64
+          ],
+          "sha256": "bf47ad5ead0b59290441662e554651b54606fda9e0e7565a806ae8a3fa364bca"
+        },
+        {
+          "header": "@@ -95,3 +96,48 @@ compteur existant n'est pas réutilisable en l'état. Aucune duplication.",
+          "new_range": [
+            96,
+            143
+          ],
+          "sha256": "0e936e955055e3280fd62dbf0ff5b37639500135005d85ba2c06ea145a68f990"
+        }
+      ],
+      "partially_read_hunks": []
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+      "ranges": [
+        [
+          25,
+          175
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -30,9 +30,11 @@ Fichiers:",
+          "new_range": [
+            30,
+            40
+          ],
+          "sha256": "2203ba5aeab9598f92b1fca8a49549b3eceae34e0e13b55ae0b22d3c4b83dcfb"
+        },
+        {
+          "header": "@@ -100,7 +102,7 @@ plafond est refusé avec `capability_denied`, sans effet de bord.",
+          "new_range": [
+            102,
+            108
+          ],
+          "sha256": "ae72991be529e8e49536fe01dca5d326b7c565b2474c14da661a8dc40fe286c5"
+        },
+        {
+          "header": "@@ -108,9 +110,9 @@ plafond est refusé avec `capability_denied`, sans effet de bord.",
+          "new_range": [
+            110,
+            118
+          ],
+          "sha256": "d2e3ccdf1d383a6da329f8ca2dfdea9a98dc2aa263c2f746d4a087bbcb530fd8"
+        },
+        {
+          "header": "@@ -120,26 +122,26 @@ plafond est refusé avec `capability_denied`, sans effet de bord.",
+          "new_range": [
+            122,
+            147
+          ],
+          "sha256": "84508545970c80f48c4f08048e21e15d3f652ace0d235371f0f1a09d6764eba8"
+        },
+        {
+          "header": "@@ -151,7 +153,7 @@ plafond est refusé avec `capability_denied`, sans effet de bord.",
+          "new_range": [
+            153,
+            159
+          ],
+          "sha256": "9d864ec00b3505e1cb750e0ba312457b82a5144ca3e1f34cc2b3aff361a2a820"
+        }
+      ],
+      "partially_read_hunks": [
+        "@@ -21,7 +21,7 @@ Fichiers:",
+        "@@ -168,6 +170,11 @@ plafond est refusé avec `capability_denied`, sans effet de bord."
+      ]
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "ranges": [
+        [
+          1,
+          89
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:35:45+00:00",
+      "read_interval_end_utc": "2026-10-12T09:43:37.338735+00:00",
+      "context_only": false,
+      "fully_read_hunks": [
+        {
+          "header": "@@ -2,10 +2,10 @@",
+          "new_range": [
+            2,
+            11
+          ],
+          "sha256": "227a1e2e6ba9471f39f69f3c5dfa6607e67a786f3cb94e6299914b0887f83b2e"
+        },
+        {
+          "header": "@@ -13,47 +13,47 @@ Règle : une tâche n'est cochée qu'après son test vert. Les tests marqués",
+          "new_range": [
+            13,
+            59
+          ],
+          "sha256": "852741486fe77a42d0f21f2b0bc18b9b499cee590fae581b1f37be1747949250"
+        },
+        {
+          "header": "@@ -61,7 +61,7 @@ Règle : une tâche n'est cochée qu'après son test vert. Les tests marqués",
+          "new_range": [
+            61,
+            67
+          ],
+          "sha256": "d233f6e973757c14f2d48296cd71ba0ea2c6caeeef56e86240cce6479dba0fb9"
+        },
+        {
+          "header": "@@ -83,3 +83,7 @@ buildable et testable.",
+          "new_range": [
+            83,
+            89
+          ],
+          "sha256": "f2f77fbe65df8a8c4c829b3f2a3f6029cf958880b1388b8671b0b04885c757f7"
+        }
+      ],
+      "partially_read_hunks": []
+    }
+  ],
+  "source_hash_guard": {
+    "verified_at_utc": "2026-10-12T09:43:37.338735+00:00",
+    "files_checked": 24,
+    "changed_files": [],
+    "files": [
+      {
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "sha256_before": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+        "sha256_after": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256_before": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+        "sha256_after": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "sha256_before": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+        "sha256_after": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+        "sha256_before": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+        "sha256_after": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/delegation.rs",
+        "sha256_before": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "sha256_after": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/lib.rs",
+        "sha256_before": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+        "sha256_after": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "sha256_before": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+        "sha256_after": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "sha256_before": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+        "sha256_after": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/referent_control.rs",
+        "sha256_before": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+        "sha256_after": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+        "unchanged": true
+      },
+      {
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256_before": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+        "sha256_after": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+        "unchanged": true
+      },
+      {
+        "file": "docs/decisions/158-controle-global-portees.md",
+        "sha256_before": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+        "sha256_after": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+        "unchanged": true
+      },
+      {
+        "file": "docs/delegation-native.md",
+        "sha256_before": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+        "sha256_after": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+        "unchanged": true
+      },
+      {
+        "file": "skills/bridget/SKILL.md",
+        "sha256_before": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+        "sha256_after": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+        "unchanged": true
+      },
+      {
+        "file": "skills/bridget/references/commandes.md",
+        "sha256_before": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+        "sha256_after": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/analyze-report.md",
+        "sha256_before": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+        "sha256_after": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/checklists/requirements.md",
+        "sha256_before": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+        "sha256_after": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/contracts/control158.md",
+        "sha256_before": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+        "sha256_after": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/data-model.md",
+        "sha256_before": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+        "sha256_after": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/plan.md",
+        "sha256_before": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+        "sha256_after": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/quickstart.md",
+        "sha256_before": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+        "sha256_after": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/research.md",
+        "sha256_before": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+        "sha256_after": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/reuse-audit.md",
+        "sha256_before": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+        "sha256_after": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/spec.md",
+        "sha256_before": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+        "sha256_after": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+        "unchanged": true
+      },
+      {
+        "file": "specs/158-reveils-controle/tasks.md",
+        "sha256_before": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+        "sha256_after": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+        "unchanged": true
+      }
+    ]
+  },
+  "coverage": {
+    "scope_files_total": 24,
+    "scope_hunks_total": 137,
+    "files_with_semantic_ranges": 20,
+    "hunks_fully_read": 61,
+    "percent_fully_read_hunks": 44.53,
+    "method": "Enveloppe entière du hunk incluse dans une plage sémantiquement lue. Les hunks partiels ne comptent pas. Recherches de noms et inventaire exclus.",
+    "unread_files": [
+      "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "specs/158-reveils-controle/analyze-report.md",
+      "specs/158-reveils-controle/checklists/requirements.md",
+      "specs/158-reveils-controle/quickstart.md"
+    ]
+  }
+}

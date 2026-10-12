@@ -1,0 +1,412 @@
+{
+  "audit_version": "v14.0",
+  "timestamp": "2026-10-12T09:32:51.474301+00:00",
+  "preparation_only": false,
+  "source_frozen": true,
+  "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle",
+  "spec_scope": "158A-reveils-controle",
+  "diff_base": "bd37e927eee0b28f058df9d6a6992e38665a6ad0",
+  "diff_source": "/Users/moi/.cache/bridget-audit158-20261012-r1/diff158A-final.patch",
+  "diff_source_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+  "files_total": 24,
+  "rust_files_count": 10,
+  "documentation_files_count": 14,
+  "patch_hunks_count": 137,
+  "files": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "bytes": 393356,
+      "lines": 10388,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "bytes": 1571572,
+      "lines": 39916,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "bytes": 505787,
+      "lines": 11005,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "bytes": 210076,
+      "lines": 4793,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "bytes": 91427,
+      "lines": 2125,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "bytes": 1618,
+      "lines": 68,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "bytes": 344036,
+      "lines": 7992,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "bytes": 6786,
+      "lines": 134,
+      "status": "untracked_new",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "bytes": 36631,
+      "lines": 1012,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "bytes": 318008,
+      "lines": 8535,
+      "status": "tracked_modified_vs_base",
+      "kind": "source",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/decisions/158-controle-global-portees.md",
+      "sha256": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+      "bytes": 7452,
+      "lines": 107,
+      "status": "untracked_new",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/delegation-native.md",
+      "sha256": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+      "bytes": 56318,
+      "lines": 940,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/skills/bridget/SKILL.md",
+      "sha256": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+      "bytes": 63082,
+      "lines": 954,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/skills/bridget/references/commandes.md",
+      "sha256": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+      "bytes": 93818,
+      "lines": 1392,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/analyze-report.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/analyze-report.md",
+      "sha256": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+      "bytes": 5354,
+      "lines": 85,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/checklists/requirements.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+      "bytes": 2159,
+      "lines": 38,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "bytes": 8065,
+      "lines": 136,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "bytes": 5342,
+      "lines": 80,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/plan.md",
+      "sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "bytes": 9607,
+      "lines": 127,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/quickstart.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/quickstart.md",
+      "sha256": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+      "bytes": 2484,
+      "lines": 46,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/research.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/research.md",
+      "sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+      "bytes": 13354,
+      "lines": 125,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "bytes": 10435,
+      "lines": 143,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+      "bytes": 20320,
+      "lines": 246,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/tasks.md",
+      "sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "bytes": 13857,
+      "lines": 89,
+      "status": "tracked_modified_vs_base",
+      "kind": "document",
+      "read_stage": "inventory_only",
+      "semantic_read": false
+    }
+  ],
+  "excluded_validation_receipts": [
+    {
+      "file": "specs/158-reveils-controle/validation/GO-plan158A.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/GO-plan158A.md",
+      "sha256": "c95c6f59f1784d71fb06bb43889a204b68d80311fe0fcb734dcdf2046a6b3a56",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/T001-baseline158.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/T001-baseline158.json",
+      "sha256": "971f156c0b534fb1a510ebf6c4d0c6003bcb97e1dc11f0fa0e66fedca83a8b31",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/T002-T006-T010-T014-RED-batch1-compile-fixed.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/T002-T006-T010-T014-RED-batch1-compile-fixed.json",
+      "sha256": "63f5360684fe3c457eef3c893357094090f7c8dd73d93cfda78d061ee42561d6",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/T002-T018-GREEN-batch4-fixtures-fixed.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/T002-T018-GREEN-batch4-fixtures-fixed.json",
+      "sha256": "12f5086cb2358989078b650976e97ea84c491208c8ecac3b53a89bc2374ea80b",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/T002-transport-GREEN.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/T002-transport-GREEN.json",
+      "sha256": "bbaf3ad048ae41aa8550402f00cea0bb0435c7bf607c654d3eb59eb332468428",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/T008-T017-RED-batch2.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/T008-T017-RED-batch2.json",
+      "sha256": "bf306a2c756822150f34824ebb397fca2c7d438d4959ca40bf03012a8344c2b7",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/analyze-fresh.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/analyze-fresh.md",
+      "sha256": "0816872864d15cf3eec1b64b5cf1d5842ca3bc797c26ac5701c29c00242f9e49",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/baseline.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/baseline.md",
+      "sha256": "87f99117049fc4485d75cbbf2935bc304691d2efa337853d1a4ba0d62a38940f",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/clarifications-root-review-manifest.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/clarifications-root-review-manifest.json",
+      "sha256": "40ea54c6108b45c93d0845bd54142cc9a355d86a542464c30b05456196ad81ae",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/patches-batch2-preparation.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/patches-batch2-preparation.json",
+      "sha256": "bc4d874ab048f58bff57cea9de853d0e5e0de4f5a806d6d618218cb3d1376559",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/patches-red-batch1.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/patches-red-batch1.json",
+      "sha256": "bd39b278ff9c4f3e993fc8a208c7940bbb67fe5182296d97621b2f98324a9fa5",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plafond-recherche.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/plafond-recherche.json",
+      "sha256": "8afefe7a8c973382115974391584ef226a773abe224d78923f58da3717852658",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plafond-recherche.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/plafond-recherche.md",
+      "sha256": "e57e60a341c606bf806068ef80872f96d62427be225cc166bfeb3fe112456258",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plan-review158A-r1.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/plan-review158A-r1.json",
+      "sha256": "d581ee1ae565b6597fe4f44b446864568fd1e4ca67731bfe528714950f80637a",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plan-review158A-r1.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/plan-review158A-r1.md",
+      "sha256": "e08b01766944a3a5931c429550c7486d9bdcb1a1f042d6672a04b9a38f2ece43",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/prerequisites158.json",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/prerequisites158.json",
+      "sha256": "4fbc141a0e309024affb49e2574178e4672a2259db928ca1ce1f62eefa351849",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/reuse-audit-fresh.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/reuse-audit-fresh.md",
+      "sha256": "58ee1abca656a5f614c9955be1947e29d48aaf80593a0172acf575351fa88ac3",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/tests-158.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/tests-158.md",
+      "sha256": "fc5bd7e8916d69b8c749bec953f473f554832edd311851b63488425cffa10f56",
+      "stage_class": "validation_receipt",
+      "included_in_semantic_diff": false
+    }
+  ],
+  "refresh_required_by": "ROOT after selective format and Converge",
+  "semantic_read_files": 0,
+  "semantic_read_hunks": 0
+}

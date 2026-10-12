@@ -1260,6 +1260,19 @@ pub enum ControlStateRefusal {
     CapabilityRequired,
 }
 
+/// Refus fermé du contrôle humain des délégations (session158A).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationControlRefusal {
+    UnsupportedVersion,
+    InvalidRequest,
+    NegotiationRequired,
+    CapabilityNotNegotiated,
+    HumanActorRequired,
+    TaskUnavailable,
+    StoreUnavailable,
+}
+
 /// Type fermé d'un item de la boîte de réception humaine.
 ///
 /// Le libellé SQL est dérivé du nom de fil par serde : une seule source pour
@@ -2118,6 +2131,8 @@ pub struct FallbackTarget {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NativeDelegationRequest {
     Catalogue,
+    /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil.
+    CallerScope {},
     Delegate {
         request_id: String,
         agent_type: String,
@@ -3619,6 +3634,28 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         until_secs: Option<u64>,
     },
+    /// Métadonnées globales : négociation puis acteur humain requis.
+    #[serde(rename = "delegation_overview_read")]
+    DelegationOverviewRead {
+        version: u16,
+        state: String,
+        limit: u32,
+    },
+    #[serde(rename = "delegation_halt_set")]
+    DelegationHaltSet {
+        version: u16,
+        command_id: String,
+        halted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        cancel_active: bool,
+    },
+    #[serde(rename = "delegation_cancel")]
+    DelegationCancel {
+        version: u16,
+        task_id: String,
+        request_id: String,
+    },
     /// Lire l'état de contrôle du référent (rôle client, SPEC-087).
     #[serde(rename = "control_state_read")]
     ControlStateRead {
@@ -4458,6 +4495,29 @@ pub enum DaemonToWrapper {
     #[serde(rename = "ledger_read_result")]
     LedgerReadResult {
         outcome: LedgerReadOutcomeV1,
+    },
+    #[serde(rename = "delegation_overview")]
+    DelegationOverview {
+        halted: bool,
+        since: Option<i64>,
+        by: Option<String>,
+        reason: Option<String>,
+        items: Vec<serde_json::Value>,
+        total_active: u32,
+    },
+    #[serde(rename = "delegation_halt_state")]
+    DelegationHaltState {
+        halted: bool,
+        since: Option<i64>,
+        by: Option<String>,
+        reason: Option<String>,
+        generation: u64,
+        cancelled: u32,
+        replayed: bool,
+    },
+    #[serde(rename = "delegation_control_rejected")]
+    DelegationControlRejected {
+        reason: DelegationControlRefusal,
     },
     /// État de contrôle courant (SPEC-087), avec le nombre d'items ouverts de
     /// la boîte humaine : un compte, jamais leur contenu.
@@ -8413,5 +8473,63 @@ mod spec104_search_contract_tests {
             let decoded: NativeDelegationRequest = serde_json::from_str(wire).unwrap();
             assert_eq!(serde_json::to_string(&decoded).unwrap(), wire);
         }
+    }
+
+    #[test]
+    fn control158_transport_six_variantes_aller_retour() {
+        for request in [
+            WrapperToDaemon::DelegationOverviewRead { version:1, state:"active".into(), limit:50 },
+            WrapperToDaemon::DelegationHaltSet { version:1, command_id:"halt158".into(), halted:true,
+                reason:Some("essai".into()), cancel_active:false },
+            WrapperToDaemon::DelegationCancel { version:1, task_id:"task158".into(), request_id:"cancel158".into() },
+        ] {
+            let value = serde_json::to_value(&request).unwrap();
+            let reread: WrapperToDaemon = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(reread).unwrap(), value);
+        }
+        for response in [
+            DaemonToWrapper::DelegationOverview {
+                halted: false,
+                since: None,
+                by: None,
+                reason: None,
+                items: vec![serde_json::json!({
+                "task_id":"task158","owner":"parent158","child":"child158","state":"working",
+                "age_secs":10,"deadline_in_secs":590,"parent_task_id":null })], total_active:1 },
+            DaemonToWrapper::DelegationHaltState { halted:true, since:Some(100), by:Some("cli".into()),
+                reason:Some("essai".into()), generation:1, cancelled:0, replayed:false },
+            DaemonToWrapper::DelegationControlRejected { reason:DelegationControlRefusal::HumanActorRequired },
+        ] {
+            let value = serde_json::to_value(&response).unwrap();
+            let reread: DaemonToWrapper = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(reread).unwrap(), value);
+        }
+        for (reason, code) in [
+            (DelegationControlRefusal::UnsupportedVersion, "unsupported_version"),
+            (DelegationControlRefusal::InvalidRequest, "invalid_request"),
+            (DelegationControlRefusal::NegotiationRequired, "negotiation_required"),
+            (DelegationControlRefusal::CapabilityNotNegotiated, "capability_not_negotiated"),
+            (DelegationControlRefusal::HumanActorRequired, "human_actor_required"),
+            (DelegationControlRefusal::TaskUnavailable, "task_unavailable"),
+            (DelegationControlRefusal::StoreUnavailable, "store_unavailable"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(&reason).unwrap(),
+                serde_json::json!(code)
+            );
+            assert_eq!(
+                serde_json::from_value::<DelegationControlRefusal>(serde_json::json!(code))
+                    .unwrap(),
+                reason
+            );
+        }
+        assert!(
+            serde_json::from_value::<DelegationControlRefusal>(serde_json::json!("foreign_reason"))
+                .is_err()
+        );
+        // L'oracle canonique existant est répété ici sans modifier Delegate157.
+        let historical = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
+        let request: NativeDelegationRequest = serde_json::from_slice(historical).unwrap();
+        assert_eq!(serde_json::to_vec(&request).unwrap(), historical);
     }
 }

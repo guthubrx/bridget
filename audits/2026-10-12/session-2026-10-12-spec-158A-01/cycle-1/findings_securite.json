@@ -1,0 +1,19 @@
+{
+  "module": "03",
+  "findings": [],
+  "positive_findings": [
+    "mcp.rs:626-665 + mcp_scopes.rs:57-72 : portée résolue avant toute inscription ou échange métier ; outil inconnu refusé (InvalidParams) ; réponse CallerScope exigée exactement {version:1, caller_read_only:bool} (2 champs) ; RPC absent, invalide ou refusé => erreur fermée, aucun repli standard.",
+    "native_delegation.rs:1451-1462 : CallerScope lit for_child(owner) sur l'index UNIQUE native_delegations_child (delegation_lineage.rs:126) après live_connection_identity (credential + instance + route vivante + connexion auxiliaire reconnue) ; plafond = effective_posture.or(posture demandée)==Discovery et !cleanup_done ; cleanup_done posé seulement après arrêts confirmés (native_delegation.rs:3432-3443).",
+    "Classification des 30 outils vérifiée contre les gestionnaires : handoff preview rejette tous les champs de transport (handoff.rs:573-582) ; journal `to` absent/null <=> JournalRequest.to==None (attach.rs:140-150) ; thread/events à tag serde `action` + deny_unknown_fields ; rename/dnd/domain/runtime n'agissent que sur l'identité appelante ; ledger/queue/who/status/read_artifact/task_status/task_wait sans écriture observée. Aucun outil MCP ne pose l'arrêt (test cli.rs control158_halt_aucun_outil_mcp).",
+    "Garde d'arrêt : admit_native_delegation appelée après le contrôle de rejeu dans Delegate (toutes les passes, y compris Commit worktree) et Continue ; relecture fermée (control_state_unavailable) ; refus delegations_halted non enregistré par record_refusal (liste fermée delegation.rs:806-813) donc clé libre.",
+    "Contrôle humain : variantes Delegation* refusées par la matrice Service (daemon.rs:16057-16066), la matrice fermée Attach (protocol.rs attach_refusal, `_ => MessageOutsideAttachRole`), Wrapper/None (ClientRoleRequired) ; rôle Client : négociation -> ControlStateV1 -> control_client_actor, dans cet ordre.",
+    "set_delegation_halt (delegation.rs:432-505) : transaction IMMEDIATE, reçu lu avant tout calcul, rejeu typé sans mutation ni callback, état+reçu committés ensemble, 256 reçus gardés (tri applied_at DESC, rowid DESC), requêtes paramétrées ; vue globale limitée à 7 champs sans corps, résultat ni cwd, limit 1..=100."
+  ],
+  "counters": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "total": 0
+  }
+}

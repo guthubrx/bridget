@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-12T10:09:13.452591+00:00",
+  "C1_cli_text_only": {
+    "before": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+    "after": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+    "message": "contrôle indisponible : l’état du contrôle des délégations a pu changer. Vérifiez avec bridget control delegations ; utilisez delegations cancel pour les tâches restantes si nécessaire.",
+    "logic_unchanged": true
+  },
+  "T021_T022_cochage": {
+    "before": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+    "after": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+    "tasks_done": 22,
+    "tasks_total": 22,
+    "proof": "FULL unique +255comparaison +47prescritsPASS +22lib +4replays exactsPASS ; T022152hunks lus, impl/docdiffarchivé"
+  },
+  "C2_byte_identical_claim": "ChildProof section seulement ; partiepositive ajoute1reply_caller_scope",
+  "C3_message_test": "lecture seule du texte, pas nouveau scénario ; releasebuild à suivre"
+}

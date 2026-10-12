@@ -1,0 +1,26 @@
+[
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/foundations-preparation/overview-preparation/green-implementation.patch",
+    "sha256": "575bebf21e651a3c134d2f26a6090d7a5aa092b37b2799b7101de83286df6d53"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/native-preparation/T011-green.patch",
+    "sha256": "24b81cb26c42541f8c0a3794d9035ebd0ce63187d544177b0c4bb844df3a1faa"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/scopes-preparation/02-T015-T016-scopes-green.patch",
+    "sha256": "3680caf84f5150ff69520f0a3656daf94b50b625f57ce25ae982e90dcc61774c"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/scopes-preparation/03-T017-CallerScope-rpc-prerequisite.patch",
+    "sha256": "496d8de86c91196f549b0b0fa673e71529135c5acfa39389a959df49b5d2b9c8"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/mcp-preparation/T017-T018-native-tests-red.patch",
+    "sha256": "e999951121e60fa1c357e1dcd893a67f8ee79b22091c6220b54bdf2d0fe5258e"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-cli-preparation-20261012/T009-T013-cli158.patch",
+    "sha256": "9b6b0eadd5d0671eaef8607d8862f813d5068e62b09cc108ec8f8821e7f2cb2f"
+  }
+]

@@ -1,0 +1,80 @@
+{
+  "at": "2026-10-12T09:45:58.474078+00:00",
+  "version": 2,
+  "cache_only": true,
+  "patch": "/Users/moi/.cache/bridget-fix158-review-20261012/v2cli-docs-preview.patch",
+  "patch_sha256": "c9d639b59797d71685e25fd937756e5524f4f6796d9dad36d12a2b491113a9b4",
+  "supersedes_combined_v1": "/Users/moi/.cache/bridget-fix158-review-20261012/cli-docs.patch",
+  "v1_sha256": "7c8f1c2c77e5282f594efdab5d2ba5d58a7adfae4212d4128e26d06b01122861",
+  "checks": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "before_sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "prepared_sha256": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+      "hunks_base_exact": true,
+      "WT_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/spec.md",
+      "before_sha256": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+      "prepared_sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "hunks_base_exact": true,
+      "WT_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/contracts/control158.md",
+      "before_sha256": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "prepared_sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "hunks_base_exact": true,
+      "WT_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/decisions/158-controle-global-portees.md",
+      "before_sha256": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+      "prepared_sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "hunks_base_exact": true,
+      "WT_unchanged": true
+    }
+  ],
+  "cli_identical_to_v1": true,
+  "CLI_prepared_sha256": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+  "B_bytes": 4103,
+  "B_sha256": "0c2b1ed4cd3e86b225a1deac27fe5f2d5d8cd125f70eac89a4825a5e74c3007c",
+  "B_byte_identical": true,
+  "tasks_untouched_sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+  "decisions": [
+    "Conserve v1 F1/F3/F4 sans altération.",
+    "FR024 :seul preview strict purement local dispensé du RPC ;jamaisfallback socket indisponible.",
+    "CallerScope fermé pour effet ou lecture daemon ;aucun accès DB client."
+  ],
+  "existing_source_read": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/handoff.rs",
+      "ranges": [
+        [
+          548,
+          590
+        ],
+        [
+          648,
+          670
+        ]
+      ],
+      "sha256": "7ca9284f63c55f6da590145df8fc0ec51f2168ab5be43ce6a1910f0883372957"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "ranges": [
+        [
+          705,
+          728
+        ]
+      ],
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f"
+    }
+  ],
+  "tests_executed": false,
+  "new_tasks_tests_scenarios_tools_wire": false,
+  "runtime_or_global_GREEN_claim": false,
+  "self_review": "CLI identiquev1, partieB inchangée, exception locale strictparse/render sans sideeffect ; code transport préRPC préparé par owner distinct, pas revendiqué implémenté/testé par ce patch."
+}

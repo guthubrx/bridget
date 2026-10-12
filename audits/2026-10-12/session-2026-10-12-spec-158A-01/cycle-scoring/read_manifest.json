@@ -1,0 +1,1889 @@
+{
+  "scope_sha256": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+  "diff_sha256": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+  "fresh_read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "ranges": [
+        [
+          6290,
+          6330
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/handoff.rs",
+      "sha256": "7ca9284f63c55f6da590145df8fc0ec51f2168ab5be43ce6a1910f0883372957",
+      "ranges": [
+        [
+          537,
+          595
+        ],
+        [
+          653,
+          668
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "caller_context_outside_diff",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "ranges": [
+        [
+          618,
+          701
+        ],
+        [
+          2690,
+          2750
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "ranges": [
+        [
+          55,
+          62
+        ],
+        [
+          99,
+          118
+        ],
+        [
+          141,
+          147
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "ranges": [
+        [
+          246,
+          352
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4",
+      "ranges": [
+        [
+          135,
+          147
+        ],
+        [
+          159,
+          165
+        ],
+        [
+          167,
+          173
+        ],
+        [
+          197,
+          211
+        ],
+        [
+          528,
+          534
+        ],
+        [
+          555,
+          572
+        ],
+        [
+          610,
+          616
+        ],
+        [
+          750,
+          799
+        ],
+        [
+          810,
+          817
+        ],
+        [
+          820,
+          836
+        ],
+        [
+          862,
+          869
+        ],
+        [
+          1125,
+          1131
+        ],
+        [
+          1394,
+          1400
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "ranges": [
+        [
+          1,
+          125
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "ranges": [
+        [
+          1,
+          155
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "ranges": [
+        [
+          1,
+          246
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+      "ranges": [
+        [
+          53,
+          59
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    }
+  ],
+  "coverage": {
+    "denominator": "hunks du delta final",
+    "scope_files": 27,
+    "scope_rust_files": 13,
+    "scope_hunks": 151,
+    "covered_hunks_lower_bound": 129,
+    "coverage_percent": 85.43,
+    "fresh_delta_files": 9,
+    "fresh_current_source_hunks": 32,
+    "historical_textually_compatible_hunks": 102,
+    "complete_repository_read": false,
+    "historical_and_fresh_distinct": true,
+    "instrumented_test_coverage_percent": null,
+    "definition": "Union de plages actuelles, SHA identiques, et hunks initialement lus dont le corps de diff est identique ; nouvelles lectures du delta final. Aucune couverture globale ni sept réaudits frais."
+  },
+  "compatible_historical_hunks": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "local_index": 0,
+      "new_start": 695,
+      "new_count": 7,
+      "patch_range": [
+        5,
+        13
+      ],
+      "body_sha256": "b787a64a20e11110c9bcd39966b835ee5c4d5fa50de0810033e64cdfeb8d020f"
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "local_index": 1,
+      "new_start": 6093,
+      "new_count": 103,
+      "patch_range": [
+        14,
+        118
+      ],
+      "body_sha256": "b2b93480a90c2bffbf9598e65e621cb02335db5180cbb1f0679908402aa5236b"
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "local_index": 2,
+      "new_start": 6197,
+      "new_count": 33,
+      "patch_range": [
+        119,
+        152
+      ],
+      "body_sha256": "5cf7fa6ef2d7f34a6834564a47c10ba4dc3acdd133b4c6aae919ac8b967a6013"
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "local_index": 4,
+      "new_start": 10100,
+      "new_count": 10,
+      "patch_range": [
+        235,
+        246
+      ],
+      "body_sha256": "63a0cfc06b9f4e7aa4d0737f55dede5f9c914ae2f29bdebd6d81f1d0c82e169d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "local_index": 5,
+      "new_start": 10349,
+      "new_count": 46,
+      "patch_range": [
+        247,
+        293
+      ],
+      "body_sha256": "38d272694f8ee437505168070fce3bd063a4ca8a6455d40ceb9ddecf61992e03"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 0,
+      "new_start": 10716,
+      "new_count": 221,
+      "patch_range": [
+        298,
+        519
+      ],
+      "body_sha256": "46cb47d2d1f0f63825d6479313582336da1fde382ea0df4c32a82109b7d0902a"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 1,
+      "new_start": 16054,
+      "new_count": 9,
+      "patch_range": [
+        520,
+        529
+      ],
+      "body_sha256": "5fb02198262a2e6faad3ba7dd11385527041a4fe2c56c41e97f64f5d14122770"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 2,
+      "new_start": 16117,
+      "new_count": 9,
+      "patch_range": [
+        530,
+        539
+      ],
+      "body_sha256": "db6bacfb2c74bb855afe5d3cd7052d4a755d119110e306a58f2d246578d95bf8"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 3,
+      "new_start": 16139,
+      "new_count": 9,
+      "patch_range": [
+        540,
+        549
+      ],
+      "body_sha256": "4acbb102f56cd576481b5261ff55211938278fb2a526823466cb4108f9500829"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 4,
+      "new_start": 16156,
+      "new_count": 10,
+      "patch_range": [
+        550,
+        561
+      ],
+      "body_sha256": "895b89d093ac71d27e9d236434876f9fbcb8140ef198c127cc45d0e06338bfb1"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 5,
+      "new_start": 16351,
+      "new_count": 9,
+      "patch_range": [
+        562,
+        571
+      ],
+      "body_sha256": "875027d4a3c535624222c90b2381ebf65d67a10bc77a5317cbd8992db4fdf2b9"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 6,
+      "new_start": 16745,
+      "new_count": 17,
+      "patch_range": [
+        572,
+        589
+      ],
+      "body_sha256": "c2e977d7bfda03b3802cbbd6dcd18bd49826354428fb0a291b563a1eb02d1447"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "local_index": 7,
+      "new_start": 22279,
+      "new_count": 513,
+      "patch_range": [
+        590,
+        1103
+      ],
+      "body_sha256": "a8a305ff8992c9ad3acb3c56ba54c07d327c50573bc27e8024dbc22bfd9fc4a0"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "local_index": 0,
+      "new_start": 1069,
+      "new_count": 19,
+      "patch_range": [
+        1108,
+        1135
+      ],
+      "body_sha256": "1aa5d8929f8f9cb70a5fe054377b8eb8dc07f9f94a78846f749d15711436e63e"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "local_index": 1,
+      "new_start": 1447,
+      "new_count": 23,
+      "patch_range": [
+        1136,
+        1159
+      ],
+      "body_sha256": "ae934841ebff693f7b3af1d92c2467b367e080d0a4b49413599bc0e05800eb41"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "local_index": 2,
+      "new_start": 1536,
+      "new_count": 7,
+      "patch_range": [
+        1160,
+        1168
+      ],
+      "body_sha256": "537738ef5bc207692f8f9d7f3f01c73860888c0a85540bcd4e8b45b097fa66f2"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "local_index": 3,
+      "new_start": 1796,
+      "new_count": 19,
+      "patch_range": [
+        1169,
+        1196
+      ],
+      "body_sha256": "87a9c9106c35d3f4e502abae2900bfeedf41719541f600e016344a47a7a5816f"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "local_index": 4,
+      "new_start": 10135,
+      "new_count": 164,
+      "patch_range": [
+        1197,
+        1361
+      ],
+      "body_sha256": "81dfd59a3272b5109da5135a3ba0fbd12113ef50057a4ca3aa4ebb4faed405cb"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "local_index": 5,
+      "new_start": 10303,
+      "new_count": 252,
+      "patch_range": [
+        1362,
+        1614
+      ],
+      "body_sha256": "0df357123a6a27156e674a575e3da45195435f543071d424d907d0472ad4c405"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "local_index": 0,
+      "new_start": 669,
+      "new_count": 7,
+      "patch_range": [
+        1619,
+        1626
+      ],
+      "body_sha256": "87432e8d37ad1cea240741a14aee8e81432229575978d71e04e88d5c33fe3e79"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "local_index": 0,
+      "new_start": 113,
+      "new_count": 16,
+      "patch_range": [
+        1631,
+        1647
+      ],
+      "body_sha256": "a1a50b273677aeb2e3f8f3902e310dd7d8a86da71d1a3446ee14335591775230"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "local_index": 1,
+      "new_start": 289,
+      "new_count": 17,
+      "patch_range": [
+        1648,
+        1666
+      ],
+      "body_sha256": "2f1eff2222a6876b692b09b36c3ef16a9fd85e08ec5b2da62a46285bba9d2b4d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "local_index": 2,
+      "new_start": 368,
+      "new_count": 22,
+      "patch_range": [
+        1667,
+        1690
+      ],
+      "body_sha256": "a9758fd0654d0fbc810babe98866ef7cc736a87a9fb8e7a82b7b1a1a604dacdd"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "local_index": 3,
+      "new_start": 414,
+      "new_count": 120,
+      "patch_range": [
+        1691,
+        1811
+      ],
+      "body_sha256": "8ebdaffef5d40506aff67afdcef2842ce74a679805fca2b6b241f5c2fcf22ca5"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "local_index": 4,
+      "new_start": 1787,
+      "new_count": 339,
+      "patch_range": [
+        1812,
+        2151
+      ],
+      "body_sha256": "4e708bd5f1d2b4c7f39bc5f1d40da3b06edd385315dcaa045123a3ab2bf42f03"
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "local_index": 0,
+      "new_start": 39,
+      "new_count": 7,
+      "patch_range": [
+        2156,
+        2163
+      ],
+      "body_sha256": "cab31ccd13cfba053ae60d7843638f11af4f6fd8c79c0427966bf68ad1862cf9"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 1,
+      "new_start": 2653,
+      "new_count": 22,
+      "patch_range": [
+        2233,
+        2255
+      ],
+      "body_sha256": "3338bfb450b404a14e9dae7f6e887c7ffe74e2c492ebe9142b96e828faa696c1"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 2,
+      "new_start": 2760,
+      "new_count": 7,
+      "patch_range": [
+        2256,
+        2263
+      ],
+      "body_sha256": "993d13187129b69bb0c6deb0c0ff88f9371e492989dd557d87fd646992077c34"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 3,
+      "new_start": 2854,
+      "new_count": 7,
+      "patch_range": [
+        2264,
+        2271
+      ],
+      "body_sha256": "eaa9416c3c53a45e0ebebd8446a2af6cd3268a10ae2678133deccd425ad62898"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 4,
+      "new_start": 2907,
+      "new_count": 15,
+      "patch_range": [
+        2272,
+        2288
+      ],
+      "body_sha256": "4811687fb4fb58589a047a5b8fea08faefb3e049228a1af340caac3b4a986026"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 5,
+      "new_start": 2936,
+      "new_count": 9,
+      "patch_range": [
+        2289,
+        2303
+      ],
+      "body_sha256": "8190f5fca4d41e09bd8ee372a13d1930e9b4619f8727017aad6e74e7571534f2"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 6,
+      "new_start": 2996,
+      "new_count": 13,
+      "patch_range": [
+        2304,
+        2317
+      ],
+      "body_sha256": "177e2c807a793f585b862d45ca0d0e7d0bcd409cd4762fc37fff3fcd33320ac6"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 7,
+      "new_start": 3033,
+      "new_count": 7,
+      "patch_range": [
+        2318,
+        2326
+      ],
+      "body_sha256": "25a83e39512a51fd641708c49d9dca4374cd68c1519f2dfd0a678ef368d2c8af"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 8,
+      "new_start": 3058,
+      "new_count": 7,
+      "patch_range": [
+        2327,
+        2334
+      ],
+      "body_sha256": "ce65389ec8c5a0ac637af33768e12709a38bbe42f6aed7b17a1f64677843043d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 9,
+      "new_start": 3145,
+      "new_count": 7,
+      "patch_range": [
+        2335,
+        2342
+      ],
+      "body_sha256": "cf59971ca3f57ffdf55be3d1df8c30fb254d88a3203f6d68839fff36fd6d23c8"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 10,
+      "new_start": 3235,
+      "new_count": 7,
+      "patch_range": [
+        2343,
+        2350
+      ],
+      "body_sha256": "23db76c0a83ad2600fb25f055da4b7b80cea3b4ca0b62be4ed938cd5f04241db"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 11,
+      "new_start": 3370,
+      "new_count": 14,
+      "patch_range": [
+        2351,
+        2365
+      ],
+      "body_sha256": "c7946f4be6f6bb4d8ecdeccfb6ef390aa501b678bc9f5375e119d108fb5be2ff"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 12,
+      "new_start": 3397,
+      "new_count": 7,
+      "patch_range": [
+        2366,
+        2374
+      ],
+      "body_sha256": "343a6ace88324b58243633d20ea1588add6bc0c16c86a3097128201820087495"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 13,
+      "new_start": 3413,
+      "new_count": 12,
+      "patch_range": [
+        2375,
+        2388
+      ],
+      "body_sha256": "39e7557b09f8b000ae6a2484118bf6a284296d8819b31899d26d7f62cb1a7b67"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 14,
+      "new_start": 3656,
+      "new_count": 7,
+      "patch_range": [
+        2389,
+        2396
+      ],
+      "body_sha256": "0940bc388e52b0cfb92a351bba2c5daeb3be42f12f0a440959efddcfadef2689"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 15,
+      "new_start": 3679,
+      "new_count": 9,
+      "patch_range": [
+        2397,
+        2406
+      ],
+      "body_sha256": "2b53b234d88729737f4b6aea0252f3f5c0c89aeb35cad92ed46c2c2cdc848f4b"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 16,
+      "new_start": 3811,
+      "new_count": 7,
+      "patch_range": [
+        2407,
+        2414
+      ],
+      "body_sha256": "f79bb3c2f1cb46a8d5594acb10a723e0e8bc0134d849d001e4ce5d073ff650e3"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 17,
+      "new_start": 3944,
+      "new_count": 7,
+      "patch_range": [
+        2415,
+        2422
+      ],
+      "body_sha256": "639efad859ed5df6e9327b031a5270e827e6b075df733e46f46a6c3b9e14c85e"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 18,
+      "new_start": 4139,
+      "new_count": 7,
+      "patch_range": [
+        2423,
+        2430
+      ],
+      "body_sha256": "815322561a50b5e36e66d1a9e0362b535adf4952938e2e4fc0168c119568e428"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 19,
+      "new_start": 4253,
+      "new_count": 7,
+      "patch_range": [
+        2431,
+        2438
+      ],
+      "body_sha256": "cf1c463e4c30da7632974abe7a96007242d9cf7eaeef3d9bc532cfa714eed592"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 20,
+      "new_start": 4442,
+      "new_count": 7,
+      "patch_range": [
+        2439,
+        2446
+      ],
+      "body_sha256": "a213c55ba130a6ded669ade0c8e4ab2266ae6fbeaecd13328d1ff7dbd22b65e4"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 21,
+      "new_start": 4506,
+      "new_count": 13,
+      "patch_range": [
+        2447,
+        2460
+      ],
+      "body_sha256": "dda6c8a66b9616bd717a69a1599d4951a7a157e639f9cb7f0e18855054a6cd74"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 32,
+      "new_start": 5258,
+      "new_count": 7,
+      "patch_range": [
+        2598,
+        2605
+      ],
+      "body_sha256": "22ffe99449b3ce7508ea0ae6d06b43f8c8059398c4867100da91ae4e05cebad3"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 33,
+      "new_start": 5364,
+      "new_count": 7,
+      "patch_range": [
+        2606,
+        2613
+      ],
+      "body_sha256": "eeff7cd96e78f6c252da7194a812a49fa29424b1e61b9b9b76e130031cfc6ed6"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 34,
+      "new_start": 5398,
+      "new_count": 7,
+      "patch_range": [
+        2614,
+        2621
+      ],
+      "body_sha256": "a6364ca79477ef888d9e5482b21b931eccc30f69ba4d39a015c3e107d2c74212"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 35,
+      "new_start": 5449,
+      "new_count": 446,
+      "patch_range": [
+        2622,
+        3068
+      ],
+      "body_sha256": "9c2928349a373c024be097a3fb447d7ec94d37afca7346bd5229ce4598ceff4d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 36,
+      "new_start": 5946,
+      "new_count": 7,
+      "patch_range": [
+        3069,
+        3076
+      ],
+      "body_sha256": "206066f88cbeb60be09de288a6bfce6888d2e45fbdb7c17ecfb0a591b3b5d9af"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 37,
+      "new_start": 6024,
+      "new_count": 7,
+      "patch_range": [
+        3077,
+        3084
+      ],
+      "body_sha256": "327fa7c8eb3dd212be53cdd7ac4446a801fd7cb2ce34782edd01c1c8ef0aea68"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 38,
+      "new_start": 6083,
+      "new_count": 14,
+      "patch_range": [
+        3085,
+        3100
+      ],
+      "body_sha256": "0f108abddbaa2221e319908cba5a8074a2d69eeda84d0615425841a65465c81d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 39,
+      "new_start": 6101,
+      "new_count": 13,
+      "patch_range": [
+        3101,
+        3115
+      ],
+      "body_sha256": "e2e5112466e3d6b7cd84d7a27c6204072c3e0bca217f42f6fd7c0e89c7a13b55"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 40,
+      "new_start": 6115,
+      "new_count": 7,
+      "patch_range": [
+        3116,
+        3123
+      ],
+      "body_sha256": "530329a939efd6e65155f91443353ea44219998f98092536098a4ce2c233be5d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 41,
+      "new_start": 6170,
+      "new_count": 7,
+      "patch_range": [
+        3124,
+        3131
+      ],
+      "body_sha256": "88338badfe1d07a8b32bffd3dcdda5fee048aab73a87b8b0d989fc14dc24fb8d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 42,
+      "new_start": 6258,
+      "new_count": 13,
+      "patch_range": [
+        3132,
+        3146
+      ],
+      "body_sha256": "fc8be03e8c9129965d359f26ad5c2935e9d497e677cf9509f56b4984e65a34f1"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 43,
+      "new_start": 6274,
+      "new_count": 12,
+      "patch_range": [
+        3147,
+        3160
+      ],
+      "body_sha256": "820ab929df583a9d3814043ab2170624413021789f82bea3baa7afb1da4e45bc"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 44,
+      "new_start": 6291,
+      "new_count": 7,
+      "patch_range": [
+        3161,
+        3168
+      ],
+      "body_sha256": "a0ca6962b7b265d38297fd90d4263c8419f8e49f6a72b77946bf7f2dbd36be0a"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 45,
+      "new_start": 6369,
+      "new_count": 7,
+      "patch_range": [
+        3169,
+        3176
+      ],
+      "body_sha256": "d6aaf25e82ec0ceedb580eeba5495835f8285a20c6cb5c72add35a3a3e181f7f"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 46,
+      "new_start": 6454,
+      "new_count": 7,
+      "patch_range": [
+        3177,
+        3184
+      ],
+      "body_sha256": "84a21fbc98ff2d757c8c1220d49779269cb4f4a142920bccf01c5968f84bfda5"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 47,
+      "new_start": 6588,
+      "new_count": 7,
+      "patch_range": [
+        3185,
+        3192
+      ],
+      "body_sha256": "aea869f531a164252d5720f3a26c256672039e5eef709d2ab9da89dd365c96f2"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 48,
+      "new_start": 6865,
+      "new_count": 7,
+      "patch_range": [
+        3193,
+        3200
+      ],
+      "body_sha256": "bedd611bf2898f9786408b6d4d58f9162157902dfbc756c3bd75b1538ca8ea0b"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 49,
+      "new_start": 6900,
+      "new_count": 8,
+      "patch_range": [
+        3201,
+        3209
+      ],
+      "body_sha256": "bac0031859e0dbbcadbe6b77db4359fca095104dad799e41499e00c3045894be"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 50,
+      "new_start": 6997,
+      "new_count": 7,
+      "patch_range": [
+        3210,
+        3217
+      ],
+      "body_sha256": "309f9be96284ca13ee691d9b148ee76124968af75aaefdcc21cddd7e50ea21b2"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 51,
+      "new_start": 7097,
+      "new_count": 7,
+      "patch_range": [
+        3218,
+        3225
+      ],
+      "body_sha256": "500b064d6f13c7aeb9dc791845870f462c512cbdd36d7be8661e4236509881b1"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 52,
+      "new_start": 7408,
+      "new_count": 7,
+      "patch_range": [
+        3226,
+        3233
+      ],
+      "body_sha256": "cc25797c21cdb006f1166076137acb606229eae342fa40a89d4e3b6523e97102"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 53,
+      "new_start": 7488,
+      "new_count": 12,
+      "patch_range": [
+        3234,
+        3246
+      ],
+      "body_sha256": "3594e753549da270fc22374030eed08658d15b1d3ec00771edf047be293f3e78"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 54,
+      "new_start": 7523,
+      "new_count": 7,
+      "patch_range": [
+        3247,
+        3254
+      ],
+      "body_sha256": "09e82d75b09619fe3cd4f4fb8c31f7dc4ac8c7c78ae745472e3c48e5798b3e7e"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 55,
+      "new_start": 7531,
+      "new_count": 7,
+      "patch_range": [
+        3255,
+        3262
+      ],
+      "body_sha256": "1df3a2f797c53886a7b388dd42077828943da0c992fb70da162caca96cd227ff"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "local_index": 56,
+      "new_start": 7607,
+      "new_count": 7,
+      "patch_range": [
+        3263,
+        3270
+      ],
+      "body_sha256": "cec77c0d8f8cf4218bfd9c495e2be585680e49a174275b6ec1c687137a32862d"
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "local_index": 0,
+      "new_start": 142,
+      "new_count": 19,
+      "patch_range": [
+        3275,
+        3294
+      ],
+      "body_sha256": "e153d39bb8e71caffa2b8e3afdc062ae7e08ed57b4a3b8b75442f5a9a1b24d14"
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "local_index": 1,
+      "new_start": 889,
+      "new_count": 27,
+      "patch_range": [
+        3295,
+        3322
+      ],
+      "body_sha256": "f90cba68d23d8b205983d46419c19a823169d7221b8b1f82c13002d12090516b"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "local_index": 0,
+      "new_start": 1260,
+      "new_count": 19,
+      "patch_range": [
+        3768,
+        3787
+      ],
+      "body_sha256": "4dc351642391f8a42edcd8338ad3069a3d70575cbaf26cefc54bb783791bf2e7"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "local_index": 1,
+      "new_start": 2131,
+      "new_count": 8,
+      "patch_range": [
+        3788,
+        3796
+      ],
+      "body_sha256": "99cda497dae87cbf51f34b962ea35dc3aec0a38772a7921d39fbed6418008f81"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "local_index": 2,
+      "new_start": 3634,
+      "new_count": 28,
+      "patch_range": [
+        3797,
+        3825
+      ],
+      "body_sha256": "4b88853d3f5d3714b1abb85b66f02a5bb0e4fbca7f10358ee0449e0d2335b9dc"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "local_index": 3,
+      "new_start": 4496,
+      "new_count": 29,
+      "patch_range": [
+        3826,
+        3855
+      ],
+      "body_sha256": "39749b6eb639e7c4b60a09a39ee26afc5e6b5f6c407c1e8657124f08c27f5328"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "local_index": 4,
+      "new_start": 8474,
+      "new_count": 62,
+      "patch_range": [
+        3856,
+        3918
+      ],
+      "body_sha256": "500261b173c2727d4ea776031eee3bd4a1125ff76c0360f5aad8cb09f1ad7e6e"
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "local_index": 0,
+      "new_start": 138,
+      "new_count": 88,
+      "patch_range": [
+        3923,
+        4011
+      ],
+      "body_sha256": "19520b2a0b074982b21161d8cf68c2da9efe8d93143e68e28b365fda79861358"
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "local_index": 0,
+      "new_start": 44,
+      "new_count": 31,
+      "patch_range": [
+        4016,
+        4047
+      ],
+      "body_sha256": "7c2b0480ee02648b5161497e59fe43ad01565a84eb122d59331778428c5fc38e"
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "local_index": 1,
+      "new_start": 123,
+      "new_count": 9,
+      "patch_range": [
+        4048,
+        4059
+      ],
+      "body_sha256": "5b235608c48b686b6beffcf8edcb053cad85b7068dd90e5ba77b1925fb828594"
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "local_index": 2,
+      "new_start": 203,
+      "new_count": 78,
+      "patch_range": [
+        4083,
+        4161
+      ],
+      "body_sha256": "99b4b705b767a358e897aec5dd0105088abee9018fb44f3a03320aaf3a217183"
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "local_index": 0,
+      "new_start": 1,
+      "new_count": 11,
+      "patch_range": [
+        4206,
+        4220
+      ],
+      "body_sha256": "2b941f95b5157e41706d6b692dde7aa4d4488d893a28fb3a01c5376dfc96ce6a"
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "local_index": 2,
+      "new_start": 35,
+      "new_count": 16,
+      "patch_range": [
+        4244,
+        4263
+      ],
+      "body_sha256": "b7b79f78f86507d294fe1f6d04ad6eaef1685d0c4ec85c5217385c33bb774c34"
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "local_index": 0,
+      "new_start": 24,
+      "new_count": 8,
+      "patch_range": [
+        4336,
+        4345
+      ],
+      "body_sha256": "c7292be268e5b2a94e5dc457841921878ac6876a31a6ce0888a817b2a16479ce"
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "local_index": 1,
+      "new_start": 54,
+      "new_count": 8,
+      "patch_range": [
+        4346,
+        4354
+      ],
+      "body_sha256": "d8f12718d4bc2bcc79af84ca529e22b28533068ea254ee9a429d5d77b7109ea9"
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "local_index": 2,
+      "new_start": 74,
+      "new_count": 7,
+      "patch_range": [
+        4355,
+        4362
+      ],
+      "body_sha256": "922d9ca64810092156a4e16fb792ca55280d54a5a40945cb628cc2f8e8cb2efe"
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "local_index": 0,
+      "new_start": 1,
+      "new_count": 13,
+      "patch_range": [
+        4367,
+        4382
+      ],
+      "body_sha256": "a19e850f4426b5112c70c9c2142970d0aa3ed8fd442a84e1bbf21c69908269c0"
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "local_index": 1,
+      "new_start": 43,
+      "new_count": 7,
+      "patch_range": [
+        4383,
+        4391
+      ],
+      "body_sha256": "8feafcba2fa07d17fdb8fa1c67e7c46d9939883b192e85e8a507e11fd61cdd73"
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "local_index": 2,
+      "new_start": 97,
+      "new_count": 7,
+      "patch_range": [
+        4392,
+        4400
+      ],
+      "body_sha256": "80bd036c19edc14d275d4caac6e171a2b020ca511544a9a8f3aa25e31dd3fa22"
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "local_index": 3,
+      "new_start": 111,
+      "new_count": 17,
+      "patch_range": [
+        4401,
+        4420
+      ],
+      "body_sha256": "2a74113fe81e1b7e55128dab10bebb4b1b3a1027054f4474d271189dfecad2dd"
+    },
+    {
+      "file": "specs/158-reveils-controle/research.md",
+      "local_index": 2,
+      "new_start": 78,
+      "new_count": 48,
+      "patch_range": [
+        4493,
+        4541
+      ],
+      "body_sha256": "1c3e4ff0364d14a1b9644ea23febebb070ad6a647d1bb20e8e62ec7c0744c8bc"
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "local_index": 0,
+      "new_start": 2,
+      "new_count": 10,
+      "patch_range": [
+        4546,
+        4558
+      ],
+      "body_sha256": "bb90b89ec92ee6caf540f70f2660afe04d69f0d9b691573597f7b7d4b2f3f7ae"
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "local_index": 1,
+      "new_start": 58,
+      "new_count": 7,
+      "patch_range": [
+        4559,
+        4567
+      ],
+      "body_sha256": "bf47ad5ead0b59290441662e554651b54606fda9e0e7565a806ae8a3fa364bca"
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "local_index": 2,
+      "new_start": 96,
+      "new_count": 48,
+      "patch_range": [
+        4568,
+        4616
+      ],
+      "body_sha256": "0e936e955055e3280fd62dbf0ff5b37639500135005d85ba2c06ea145a68f990"
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "local_index": 1,
+      "new_start": 30,
+      "new_count": 11,
+      "patch_range": [
+        4630,
+        4644
+      ],
+      "body_sha256": "2203ba5aeab9598f92b1fca8a49549b3eceae34e0e13b55ae0b22d3c4b83dcfb"
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "local_index": 2,
+      "new_start": 102,
+      "new_count": 7,
+      "patch_range": [
+        4645,
+        4653
+      ],
+      "body_sha256": "ae72991be529e8e49536fe01dca5d326b7c565b2474c14da661a8dc40fe286c5"
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "local_index": 5,
+      "new_start": 153,
+      "new_count": 7,
+      "patch_range": [
+        4700,
+        4708
+      ],
+      "body_sha256": "9d864ec00b3505e1cb750e0ba312457b82a5144ca3e1f34cc2b3aff361a2a820"
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "local_index": 0,
+      "new_start": 2,
+      "new_count": 10,
+      "patch_range": [
+        4725,
+        4737
+      ],
+      "body_sha256": "227a1e2e6ba9471f39f69f3c5dfa6607e67a786f3cb94e6299914b0887f83b2e"
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "local_index": 2,
+      "new_start": 83,
+      "new_count": 7,
+      "patch_range": [
+        4817,
+        4824
+      ],
+      "body_sha256": "f2f77fbe65df8a8c4c829b3f2a3f6029cf958880b1388b8671b0b04885c757f7"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "local_index": 0,
+      "new_start": 1,
+      "new_count": 134,
+      "patch_range": [
+        4830,
+        4964
+      ],
+      "body_sha256": "ac4239a7963e3e04939281a3ab01cdc0e8a18c8b1ba4645fd439a6c36a847e96"
+    }
+  ],
+  "current_source_range_union": {
+    "crates/bridget-daemon/src/daemon.rs": [
+      [
+        10685,
+        10950
+      ],
+      [
+        16035,
+        16185
+      ],
+      [
+        16330,
+        16390
+      ],
+      [
+        16730,
+        16780
+      ],
+      [
+        22279,
+        22792
+      ]
+    ],
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": [
+      [
+        1038,
+        1105
+      ],
+      [
+        1231,
+        1268
+      ],
+      [
+        1307,
+        1344
+      ],
+      [
+        1391,
+        1485
+      ],
+      [
+        1528,
+        1545
+      ],
+      [
+        1788,
+        1828
+      ],
+      [
+        10120,
+        10555
+      ]
+    ],
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": [
+      [
+        1,
+        115
+      ],
+      [
+        660,
+        688
+      ]
+    ],
+    "crates/bridget-daemon/src/delegation.rs": [
+      [
+        105,
+        135
+      ],
+      [
+        270,
+        323
+      ],
+      [
+        330,
+        555
+      ],
+      [
+        897,
+        950
+      ],
+      [
+        1787,
+        2125
+      ]
+    ],
+    "crates/bridget-daemon/src/lib.rs": [
+      [
+        1,
+        68
+      ]
+    ],
+    "crates/bridget-daemon/src/mcp_scopes.rs": [
+      [
+        1,
+        134
+      ]
+    ],
+    "crates/bridget-daemon/src/referent_control.rs": [
+      [
+        26,
+        37
+      ],
+      [
+        125,
+        163
+      ],
+      [
+        889,
+        917
+      ],
+      [
+        940,
+        959
+      ]
+    ],
+    "crates/bridget-transport/src/protocol.rs": [
+      [
+        1255,
+        1282
+      ],
+      [
+        2118,
+        2145
+      ],
+      [
+        3627,
+        3675
+      ],
+      [
+        4490,
+        4537
+      ],
+      [
+        8470,
+        8535
+      ]
+    ],
+    "crates/bridget-daemon/src/mcp.rs": [
+      [
+        618,
+        701
+      ],
+      [
+        2653,
+        2674
+      ],
+      [
+        2690,
+        2750
+      ],
+      [
+        2760,
+        2766
+      ],
+      [
+        2854,
+        2860
+      ],
+      [
+        2907,
+        2921
+      ],
+      [
+        2936,
+        2944
+      ],
+      [
+        2996,
+        3008
+      ],
+      [
+        3033,
+        3039
+      ],
+      [
+        3058,
+        3064
+      ],
+      [
+        3145,
+        3151
+      ],
+      [
+        3235,
+        3241
+      ],
+      [
+        3370,
+        3383
+      ],
+      [
+        3397,
+        3403
+      ],
+      [
+        3413,
+        3424
+      ],
+      [
+        3656,
+        3662
+      ],
+      [
+        3679,
+        3687
+      ],
+      [
+        3811,
+        3817
+      ],
+      [
+        3944,
+        3950
+      ],
+      [
+        4139,
+        4145
+      ],
+      [
+        4253,
+        4259
+      ],
+      [
+        4442,
+        4448
+      ],
+      [
+        4506,
+        4518
+      ],
+      [
+        5258,
+        5264
+      ],
+      [
+        5364,
+        5370
+      ],
+      [
+        5398,
+        5404
+      ],
+      [
+        5449,
+        5894
+      ],
+      [
+        5946,
+        5952
+      ],
+      [
+        6024,
+        6030
+      ],
+      [
+        6083,
+        6096
+      ],
+      [
+        6101,
+        6113
+      ],
+      [
+        6115,
+        6121
+      ],
+      [
+        6170,
+        6176
+      ],
+      [
+        6258,
+        6270
+      ],
+      [
+        6274,
+        6285
+      ],
+      [
+        6291,
+        6297
+      ],
+      [
+        6369,
+        6375
+      ],
+      [
+        6454,
+        6460
+      ],
+      [
+        6588,
+        6594
+      ],
+      [
+        6865,
+        6871
+      ],
+      [
+        6900,
+        6907
+      ],
+      [
+        6997,
+        7003
+      ],
+      [
+        7097,
+        7103
+      ],
+      [
+        7408,
+        7414
+      ],
+      [
+        7488,
+        7499
+      ],
+      [
+        7523,
+        7529
+      ],
+      [
+        7531,
+        7537
+      ],
+      [
+        7607,
+        7613
+      ]
+    ],
+    "specs/158-reveils-controle/spec.md": [
+      [
+        1,
+        246
+      ]
+    ],
+    "specs/158-reveils-controle/contracts/control158.md": [
+      [
+        1,
+        155
+      ]
+    ],
+    "docs/decisions/158-controle-global-portees.md": [
+      [
+        1,
+        125
+      ]
+    ],
+    "specs/158-reveils-controle/reuse-audit.md": [
+      [
+        1,
+        143
+      ]
+    ],
+    "specs/158-reveils-controle/data-model.md": [
+      [
+        1,
+        80
+      ]
+    ],
+    "docs/delegation-native.md": [
+      [
+        138,
+        229
+      ]
+    ],
+    "skills/bridget/SKILL.md": [
+      [
+        44,
+        82
+      ],
+      [
+        118,
+        136
+      ]
+    ],
+    "skills/bridget/references/commandes.md": [
+      [
+        200,
+        287
+      ]
+    ],
+    "specs/158-reveils-controle/plan.md": [
+      [
+        1,
+        127
+      ]
+    ],
+    "specs/158-reveils-controle/research.md": [
+      [
+        78,
+        125
+      ]
+    ],
+    "crates/bridget-daemon/src/cli.rs": [
+      [
+        695,
+        701
+      ],
+      [
+        6093,
+        6195
+      ],
+      [
+        6197,
+        6229
+      ],
+      [
+        6290,
+        6330
+      ],
+      [
+        10100,
+        10109
+      ],
+      [
+        10349,
+        10394
+      ]
+    ],
+    "specs/158-reveils-controle/tasks.md": [
+      [
+        2,
+        11
+      ],
+      [
+        53,
+        59
+      ],
+      [
+        83,
+        89
+      ]
+    ],
+    "crates/bridget-daemon/tests/core_089_concurrency_test.rs": [
+      [
+        55,
+        62
+      ],
+      [
+        99,
+        118
+      ],
+      [
+        141,
+        147
+      ]
+    ],
+    "crates/bridget-daemon/tests/core_089_security_test.rs": [
+      [
+        246,
+        352
+      ]
+    ],
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+      [
+        135,
+        147
+      ],
+      [
+        159,
+        165
+      ],
+      [
+        167,
+        173
+      ],
+      [
+        197,
+        211
+      ],
+      [
+        528,
+        534
+      ],
+      [
+        555,
+        572
+      ],
+      [
+        610,
+        616
+      ],
+      [
+        750,
+        799
+      ],
+      [
+        810,
+        817
+      ],
+      [
+        820,
+        836
+      ],
+      [
+        862,
+        869
+      ],
+      [
+        1125,
+        1131
+      ],
+      [
+        1394,
+        1400
+      ]
+    ]
+  },
+  "historical_module_sha": [
+    {
+      "module": "03",
+      "sha256": "feb90ddb5bf8dd5b33aedd9b8270c38df5d6f85f286bcd08963db4c469a72860"
+    },
+    {
+      "module": "04",
+      "sha256": "ba89face4443b60f234728567b3a12f541b614487b05cd91933eabc8e6807c81"
+    },
+    {
+      "module": "05",
+      "sha256": "6ebce7852a908d71ab45e10514d01b0d14134ead13a7a946a5ba64109d486862"
+    },
+    {
+      "module": "06",
+      "sha256": "6d02e81d2b27a5b85d2eed80b3e8ac71d869a10dedf04fccc54eab6791366616"
+    },
+    {
+      "module": "07",
+      "sha256": "0ac4a42640bc707f6104a92085ced6a8aa8a7a0d2199d259f24c44ddeeb3cec1"
+    },
+    {
+      "module": "08",
+      "sha256": "ff7f76d787b4f9170cdb437b615d47d1274705800c93307f835cbfeeca8920aa"
+    },
+    {
+      "module": "12",
+      "sha256": "47ae6a3e4019542a7b6e7eece0f419df262418640ac43aba8cb9d93200216911"
+    }
+  ]
+}

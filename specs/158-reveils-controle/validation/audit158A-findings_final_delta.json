@@ -1,0 +1,279 @@
+{
+  "module": "11",
+  "review_kind": "fresh_global_delta_readonly",
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "TEST-001",
+      "status": "fixed",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 631,
+      "source_sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "evidence": "    if name == \"bridget_queue\" && identity.delegated_origin.is_some() {\n        return Err(ToolError::Technical {\n            code: \"delegated_tool_forbidden\",",
+      "oracle_ranges": [
+        [
+          2690,
+          2730
+        ]
+      ],
+      "proof_receipt": {
+        "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.json",
+        "sha256": "d321701384d000f3c696d214ee33fc4c7f74fbcae369797f3eb767b01bf9d50c",
+        "rc": 0,
+        "seconds": 16.63,
+        "log_sha256": "cbdb3bc3ba4a4801a8540edada180445cd3664d96ef9caa10aaff82f85c5e630",
+        "source_stable": true,
+        "test_results": [
+          [
+            "ok",
+            "22",
+            "0",
+            "0"
+          ]
+        ]
+      },
+      "section_only_identical": true
+    }
+  ],
+  "review_signals": [
+    {
+      "id": "R2-C1",
+      "severity": "LOW",
+      "status": "resolved_by_root_text",
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "line": 6316,
+      "proof": "Littéral neutre relu, indique un changement possible de contrôle ; ne promet pas une annulation sur resume."
+    },
+    {
+      "id": "R2-C2",
+      "severity": "LOW",
+      "status": "documentation_claim_corrected",
+      "proof": "closure158A-root.json précise section ChildProof seule identique ; partie positive contient reply_caller_scope."
+    },
+    {
+      "id": "R2-C3",
+      "severity": "LOW",
+      "status": "contested_nonblocking_limitation",
+      "proof": "Pas de test dédié au texte, changement d’un littéral sans nouvelle logique ; tests nouveaux interdits par instruction utilisateur. Lecture fraîche seulement.",
+      "dedicated_text_test": false
+    }
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "ranges": [
+        [
+          6290,
+          6330
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/handoff.rs",
+      "sha256": "7ca9284f63c55f6da590145df8fc0ec51f2168ab5be43ce6a1910f0883372957",
+      "ranges": [
+        [
+          537,
+          595
+        ],
+        [
+          653,
+          668
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "caller_context_outside_diff",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "ranges": [
+        [
+          618,
+          701
+        ],
+        [
+          2690,
+          2750
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "ranges": [
+        [
+          55,
+          62
+        ],
+        [
+          99,
+          118
+        ],
+        [
+          141,
+          147
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "ranges": [
+        [
+          246,
+          352
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4",
+      "ranges": [
+        [
+          135,
+          147
+        ],
+        [
+          159,
+          165
+        ],
+        [
+          167,
+          173
+        ],
+        [
+          197,
+          211
+        ],
+        [
+          528,
+          534
+        ],
+        [
+          555,
+          572
+        ],
+        [
+          610,
+          616
+        ],
+        [
+          750,
+          799
+        ],
+        [
+          810,
+          817
+        ],
+        [
+          820,
+          836
+        ],
+        [
+          862,
+          869
+        ],
+        [
+          1125,
+          1131
+        ],
+        [
+          1394,
+          1400
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "ranges": [
+        [
+          1,
+          125
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "ranges": [
+        [
+          1,
+          155
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "ranges": [
+        [
+          1,
+          246
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "bd382d53768f980b1bafabb27a08cd0d284a3b6206fd66f9ecaff0a6ba64b21c",
+      "ranges": [
+        [
+          53,
+          59
+        ]
+      ],
+      "read_mode": "fresh_final_delta_readonly",
+      "read_at_utc": "2026-10-12T10:12:02Z",
+      "role": "source_delta",
+      "partial_read": true
+    }
+  ],
+  "scope_sha256": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+  "diff_sha256": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+  "warnings": [
+    "Note établie sur une couverture partielle de 85.43% des hunks du delta final ; corpus historique et nouvelles lectures distingués. Les sept modules C1 ne sont pas présentés comme sept réaudits frais.",
+    "Lecteurs05/07/12 impliqués dans certaines préparations : limites d’auto-revue conservées. Revue R2 indépendante annoncée terminée APPROVE_WITH_CHANGES par ROOT ; trois remarques non bloquantes tracées.",
+    "FULL unique historique :2440PASS/12FAIL/74ignored,95cibles,RC101 ; huit échecs hérités restent. Les quatre régressions nouvelles ont chacune un replay cibléPASS. Aucun GREEN global ni deuxième FULL prétendu.",
+    "Preuve22PASS et quatre replays portent sur la version avant le dernier littéral CLI et le cochage T021/T022. Dernier delta : texte seul et métadonnées, lus après gel ; build final pas encore exécuté au moment de cet audit.",
+    "R2-C3 LOW contesté : aucun test dédié au nouveau texte CLI. Limite non contractuelle acceptée sous instruction explicite tests prévus seulement ; lecture du littéral, aucun test de confort. Couverture instrumentée inconnue (null), pas zéro risque prétendu.",
+    "ChildProof : seule la section de refus préconnexion est restaurée ; la partie positive garde l’appel nécessaire reply_caller_scope. Aucune affirmation que la fonction156 entière est byte-identique.",
+    "Aucune mesure de performance Rust/MCP bout en bout ni de production. Le p95 de plafond mesure uniquement SQLite Python/json.loads privés ; aucune DB/runtime/service/fournisseur lancé par le reporter.",
+    "Rétention256 et annulation partielle après commit/crash sont documentées. Les corps des monolithes hors plages et les fichiers hors delta ne sont pas audités intégralement."
+  ]
+}

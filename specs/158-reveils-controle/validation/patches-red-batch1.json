@@ -1,0 +1,34 @@
+[
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/foundations-preparation/v3-overview-callback/combined-review.patch",
+    "sha256": "1bddee05ab49886231e51e2c98eca2276eb7851a3a721efb9e3cde30d6febf7d"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/daemon-preparation/foundations-classification.patch",
+    "sha256": "a47680613f04d56f6767469d507c7fd7e279cb9407ff5ff5a0ace7df47bc845b"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/foundations-preparation/overview-preparation/red-tests.patch",
+    "sha256": "5dc0f6a5148bdda7c63664bd2ec0bcc1909be5e3ad5872bfb8b13d77fda17bcb"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/native-preparation/T010-red.patch",
+    "sha256": "4e3b4345d9fe1529bc5486fb72bb393886e84f10e6cdea82e25cf904c988915e"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/native-preparation/T011-tests-red.patch",
+    "sha256": "b8928271e0a621ed7633df818c555c79e7fd16ea56d2b55f9aeb95a2c5d50771"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-prelecture-20261012/native-preparation/T004-green.patch",
+    "sha256": "6a4b323ac78c22acb79e72c7accdecb637eb7ba738889f302cc71bdbbd81cd03"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/scopes-preparation/00-T005-foundation.patch",
+    "sha256": "03ae678b2524b0e5da653b95fef7b0144cc0a87f0d857402d78bd682cfa9a4af"
+  },
+  {
+    "path": "/Users/moi/.cache/bridget-plan158-20261012-r1/scopes-preparation/01-T014-T016-scopes-red.patch",
+    "sha256": "cf80aed5290d302a4106615951fd9083083210a4b628d178f32ca58eb0942542"
+  }
+]

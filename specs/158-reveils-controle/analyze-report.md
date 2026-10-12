@@ -1,6 +1,11 @@
 # Rapport d'analyse - Session158 (158a plan et tâches ; 158b spec)
 
-Date : 2026-10-11, révisé après la contre-revue Codex. Analyse non destructive
+Rapport historique du2026-10-11, révisé après la contre-revue Codex.
+Il ne vaut pas Analyze frais après157. La préparation documentaire du
+2026-10-12 conserve22tâches/44noms de tests et attend la livraison157
+vérifiée par ROOT, son reçu et ses empreintes, avant Analyze/GO158A.
+
+Date historique : 2026-10-11, révisé après la contre-revue Codex. Analyse non destructive
 de `spec.md`, `plan.md`, `tasks.md`, `data-model.md`, `contracts/control158.md`,
 `reuse-audit.md`, `adversarial-review-codex.md`.
 

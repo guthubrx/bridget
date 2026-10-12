@@ -1,0 +1,1057 @@
+{
+  "scope_sha256": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+  "diff_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "ranges": [
+        [
+          695,
+          701
+        ],
+        [
+          6093,
+          6195
+        ],
+        [
+          6197,
+          6229
+        ],
+        [
+          6254,
+          6328
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            5,
+            13
+          ],
+          "source_new_range": [
+            695,
+            701
+          ]
+        },
+        {
+          "patch_range": [
+            14,
+            118
+          ],
+          "source_new_range": [
+            6093,
+            6195
+          ]
+        },
+        {
+          "patch_range": [
+            119,
+            152
+          ],
+          "source_new_range": [
+            6197,
+            6229
+          ]
+        },
+        {
+          "patch_range": [
+            153,
+            228
+          ],
+          "source_new_range": [
+            6254,
+            6328
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/communication.rs",
+      "sha256": "446d75d95e9ea041441347d6861dbd5c39c16f153d8856f1815de298f69b9cf3",
+      "ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "caller_context_outside_diff",
+      "included_in_scope": false,
+      "hunks_read": [],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/communication/client.rs",
+      "sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "ranges": [
+        [
+          942,
+          1207
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "caller_context_outside_diff",
+      "included_in_scope": false,
+      "hunks_read": [],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "ranges": [
+        [
+          10716,
+          10936
+        ],
+        [
+          16054,
+          16062
+        ],
+        [
+          16117,
+          16125
+        ],
+        [
+          16139,
+          16147
+        ],
+        [
+          16156,
+          16165
+        ],
+        [
+          16351,
+          16359
+        ],
+        [
+          16745,
+          16761
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            292,
+            513
+          ],
+          "source_new_range": [
+            10716,
+            10936
+          ]
+        },
+        {
+          "patch_range": [
+            514,
+            523
+          ],
+          "source_new_range": [
+            16054,
+            16062
+          ]
+        },
+        {
+          "patch_range": [
+            524,
+            533
+          ],
+          "source_new_range": [
+            16117,
+            16125
+          ]
+        },
+        {
+          "patch_range": [
+            534,
+            543
+          ],
+          "source_new_range": [
+            16139,
+            16147
+          ]
+        },
+        {
+          "patch_range": [
+            544,
+            555
+          ],
+          "source_new_range": [
+            16156,
+            16165
+          ]
+        },
+        {
+          "patch_range": [
+            556,
+            565
+          ],
+          "source_new_range": [
+            16351,
+            16359
+          ]
+        },
+        {
+          "patch_range": [
+            566,
+            583
+          ],
+          "source_new_range": [
+            16745,
+            16761
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "ranges": [
+        [
+          1038,
+          1102
+        ],
+        [
+          1231,
+          1268
+        ],
+        [
+          1307,
+          1344
+        ],
+        [
+          1391,
+          1469
+        ],
+        [
+          1536,
+          1542
+        ],
+        [
+          1796,
+          1814
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            1102,
+            1129
+          ],
+          "source_new_range": [
+            1069,
+            1087
+          ]
+        },
+        {
+          "patch_range": [
+            1130,
+            1153
+          ],
+          "source_new_range": [
+            1447,
+            1469
+          ]
+        },
+        {
+          "patch_range": [
+            1154,
+            1162
+          ],
+          "source_new_range": [
+            1536,
+            1542
+          ]
+        },
+        {
+          "patch_range": [
+            1163,
+            1190
+          ],
+          "source_new_range": [
+            1796,
+            1814
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "ranges": [
+        [
+          669,
+          675
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            1613,
+            1620
+          ],
+          "source_new_range": [
+            669,
+            675
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "ranges": [
+        [
+          113,
+          128
+        ],
+        [
+          289,
+          323
+        ],
+        [
+          368,
+          389
+        ],
+        [
+          402,
+          533
+        ],
+        [
+          897,
+          950
+        ],
+        [
+          1787,
+          2125
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            1625,
+            1641
+          ],
+          "source_new_range": [
+            113,
+            128
+          ]
+        },
+        {
+          "patch_range": [
+            1642,
+            1660
+          ],
+          "source_new_range": [
+            289,
+            305
+          ]
+        },
+        {
+          "patch_range": [
+            1661,
+            1684
+          ],
+          "source_new_range": [
+            368,
+            389
+          ]
+        },
+        {
+          "patch_range": [
+            1685,
+            1805
+          ],
+          "source_new_range": [
+            414,
+            533
+          ]
+        },
+        {
+          "patch_range": [
+            1806,
+            2145
+          ],
+          "source_new_range": [
+            1787,
+            2125
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_lineage.rs",
+      "sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "ranges": [
+        [
+          20,
+          27
+        ],
+        [
+          110,
+          170
+        ],
+        [
+          458,
+          505
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "caller_context_outside_diff",
+      "included_in_scope": false,
+      "hunks_read": [],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "ranges": [
+        [
+          39,
+          45
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            2150,
+            2157
+          ],
+          "source_new_range": [
+            39,
+            45
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "ranges": [
+        [
+          1,
+          34
+        ],
+        [
+          125,
+          163
+        ],
+        [
+          605,
+          669
+        ],
+        [
+          2636,
+          2657
+        ],
+        [
+          2675,
+          2686
+        ],
+        [
+          2698,
+          2704
+        ],
+        [
+          2712,
+          2718
+        ],
+        [
+          2746,
+          2752
+        ],
+        [
+          2840,
+          2846
+        ],
+        [
+          2893,
+          2907
+        ],
+        [
+          2922,
+          2930
+        ],
+        [
+          2982,
+          2994
+        ],
+        [
+          3019,
+          3025
+        ],
+        [
+          3044,
+          3050
+        ],
+        [
+          3131,
+          3137
+        ],
+        [
+          3221,
+          3227
+        ],
+        [
+          3356,
+          3369
+        ],
+        [
+          3383,
+          3389
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            2162,
+            2209
+          ],
+          "source_new_range": [
+            623,
+            669
+          ]
+        },
+        {
+          "patch_range": [
+            2210,
+            2232
+          ],
+          "source_new_range": [
+            2636,
+            2657
+          ]
+        },
+        {
+          "patch_range": [
+            2233,
+            2246
+          ],
+          "source_new_range": [
+            2675,
+            2686
+          ]
+        },
+        {
+          "patch_range": [
+            2247,
+            2257
+          ],
+          "source_new_range": [
+            2698,
+            2704
+          ]
+        },
+        {
+          "patch_range": [
+            2258,
+            2266
+          ],
+          "source_new_range": [
+            2712,
+            2718
+          ]
+        },
+        {
+          "patch_range": [
+            2267,
+            2274
+          ],
+          "source_new_range": [
+            2746,
+            2752
+          ]
+        },
+        {
+          "patch_range": [
+            2275,
+            2282
+          ],
+          "source_new_range": [
+            2840,
+            2846
+          ]
+        },
+        {
+          "patch_range": [
+            2283,
+            2299
+          ],
+          "source_new_range": [
+            2893,
+            2907
+          ]
+        },
+        {
+          "patch_range": [
+            2300,
+            2314
+          ],
+          "source_new_range": [
+            2922,
+            2930
+          ]
+        },
+        {
+          "patch_range": [
+            2315,
+            2328
+          ],
+          "source_new_range": [
+            2982,
+            2994
+          ]
+        },
+        {
+          "patch_range": [
+            2329,
+            2337
+          ],
+          "source_new_range": [
+            3019,
+            3025
+          ]
+        },
+        {
+          "patch_range": [
+            2338,
+            2345
+          ],
+          "source_new_range": [
+            3044,
+            3050
+          ]
+        },
+        {
+          "patch_range": [
+            2346,
+            2353
+          ],
+          "source_new_range": [
+            3131,
+            3137
+          ]
+        },
+        {
+          "patch_range": [
+            2354,
+            2361
+          ],
+          "source_new_range": [
+            3221,
+            3227
+          ]
+        },
+        {
+          "patch_range": [
+            2362,
+            2376
+          ],
+          "source_new_range": [
+            3356,
+            3369
+          ]
+        },
+        {
+          "patch_range": [
+            2377,
+            2385
+          ],
+          "source_new_range": [
+            3383,
+            3389
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            3287,
+            3421
+          ],
+          "source_new_range": [
+            1,
+            134
+          ]
+        }
+      ],
+      "partial_read": false
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "ranges": [
+        [
+          142,
+          160
+        ],
+        [
+          889,
+          915
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            3426,
+            3445
+          ],
+          "source_new_range": [
+            142,
+            160
+          ]
+        },
+        {
+          "patch_range": [
+            3446,
+            3473
+          ],
+          "source_new_range": [
+            889,
+            915
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "ranges": [
+        [
+          1260,
+          1278
+        ],
+        [
+          2131,
+          2138
+        ],
+        [
+          3634,
+          3661
+        ],
+        [
+          4496,
+          4524
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            3478,
+            3497
+          ],
+          "source_new_range": [
+            1260,
+            1278
+          ]
+        },
+        {
+          "patch_range": [
+            3498,
+            3506
+          ],
+          "source_new_range": [
+            2131,
+            2138
+          ]
+        },
+        {
+          "patch_range": [
+            3507,
+            3535
+          ],
+          "source_new_range": [
+            3634,
+            3661
+          ]
+        },
+        {
+          "patch_range": [
+            3536,
+            3565
+          ],
+          "source_new_range": [
+            4496,
+            4524
+          ]
+        }
+      ],
+      "partial_read": true
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+      "ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "source",
+      "included_in_scope": true,
+      "hunks_read": [],
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plafond-recherche.json",
+      "sha256": "8afefe7a8c973382115974391584ef226a773abe224d78923f58da3717852658",
+      "ranges": [
+        [
+          1,
+          47
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "evidence_context",
+      "included_in_scope": false,
+      "hunks_read": [],
+      "partial_read": false
+    },
+    {
+      "file": "specs/158-reveils-controle/validation/plafond-recherche.md",
+      "sha256": "e57e60a341c606bf806068ef80872f96d62427be225cc166bfeb3fe112456258",
+      "ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T09:43:26Z",
+      "read_interval_utc": [
+        "2026-10-12T09:35:18Z",
+        "2026-10-12T09:43:26Z"
+      ],
+      "role": "evidence_context",
+      "included_in_scope": false,
+      "hunks_read": [],
+      "partial_read": false
+    }
+  ],
+  "coverage": {
+    "scope_files_total": 24,
+    "scope_rust_files_total": 10,
+    "scope_hunks_total": 137,
+    "files_with_semantic_read_ranges": 11,
+    "rust_files_with_read_ranges": 10,
+    "complete_diff_hunks_read": 45,
+    "complete_diff_hunks_fraction": "45/137",
+    "patch_line_ranges_read": [
+      [
+        1,
+        228
+      ],
+      [
+        292,
+        583
+      ],
+      [
+        1102,
+        1190
+      ],
+      [
+        1610,
+        2385
+      ],
+      [
+        3282,
+        3565
+      ]
+    ],
+    "patch_lines_read": 1669,
+    "patch_lines_total": 4612,
+    "all_source_files_fully_read": false,
+    "all_scope_hunks_read": false,
+    "historical_coverage_reused": false,
+    "source_file_touch_count_is_not_full_coverage": true
+  },
+  "source_hash_guard": {
+    "begin_all_ten_rust_match": true,
+    "end": [
+      {
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "expected_sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+        "current_sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "expected_sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+        "current_sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "expected_sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+        "current_sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+        "expected_sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+        "current_sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/delegation.rs",
+        "expected_sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "current_sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/lib.rs",
+        "expected_sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+        "current_sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "expected_sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+        "current_sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "expected_sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+        "current_sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-daemon/src/referent_control.rs",
+        "expected_sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+        "current_sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+        "match": true
+      },
+      {
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "expected_sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+        "current_sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+        "match": true
+      }
+    ],
+    "end_all_ten_rust_match": true
+  }
+}

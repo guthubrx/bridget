@@ -1,0 +1,843 @@
+{
+  "at": "2026-10-12T10:02:26.424574+00:00",
+  "status": "TARGETED_REPLAYS_COMPLETE_PENDING_ROOT_T021_T022",
+  "cache_only": true,
+  "patch": "/Users/moi/.cache/bridget-converge158-20261012/final-proofs158.patch",
+  "sha256": "cb5781b59f00ab36317a4e70ec86449b618cc670110454b434613b645f6c49ef",
+  "files": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/validation/tests-158.md",
+      "base_sha256": "fc5bd7e8916d69b8c749bec953f473f554832edd311851b63488425cffa10f56",
+      "prepared_sha256": "6958e14bdfe44991e31cf8a3d542f57ddcabe8b9e72c2f151d2b474c2ecdda0c",
+      "WT_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/adversarial-review-codex.md",
+      "base_sha256": "565b813b14af00f63f2d6ea714300b99718dbe94310c6a32e9fe8425fc6ee359",
+      "prepared_sha256": "90352e756fa307bda13a89ebae098fe7e8d03f3a1c8e29732d3c0a247b06084d",
+      "WT_unchanged": true
+    }
+  ],
+  "receipts": [
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-FULL158-final.json",
+      "sha256": "2532508491a1e34f575c3217e02bb4704c97d93dc48d203b757f437bfa170b88",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-FULL158-final.log",
+      "log_sha256": "70483926b59f67a005733b5a37aba4104e86d5e1af9079cd52c117d0cb97e3e0",
+      "rc": 101,
+      "seconds": 804.17,
+      "results": [
+        [
+          "ok",
+          "45",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1716",
+          "0",
+          "15"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "18",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "15"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "FAILED",
+          "2",
+          "1",
+          "1"
+        ],
+        [
+          "ok",
+          "7",
+          "0",
+          "0"
+        ],
+        [
+          "FAILED",
+          "1",
+          "2",
+          "1"
+        ],
+        [
+          "FAILED",
+          "11",
+          "1",
+          "2"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "5"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "FAILED",
+          "1",
+          "3",
+          "1"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "3"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "FAILED",
+          "0",
+          "1",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "FAILED",
+          "4",
+          "1",
+          "1"
+        ],
+        [
+          "ok",
+          "7",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "17",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "1"
+        ],
+        [
+          "FAILED",
+          "4",
+          "1",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "7",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "7",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "FAILED",
+          "10",
+          "1",
+          "1"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "2"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "3"
+        ],
+        [
+          "ok",
+          "23",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "44",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "FAILED",
+          "2",
+          "1",
+          "1"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "325",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ]
+      ],
+      "source_count": 218,
+      "sources_stable": true,
+      "names": []
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.json",
+      "sha256": "d321701384d000f3c696d214ee33fc4c7f74fbcae369797f3eb767b01bf9d50c",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.log",
+      "log_sha256": "cbdb3bc3ba4a4801a8540edada180445cd3664d96ef9caa10aaff82f85c5e630",
+      "rc": 0,
+      "seconds": 16.63,
+      "results": [
+        [
+          "ok",
+          "22",
+          "0",
+          "0"
+        ]
+      ],
+      "source_count": 218,
+      "sources_stable": true,
+      "names": [
+        [
+          "mcp::tests::guidance156_mcp_queue_schema",
+          "ok"
+        ],
+        [
+          "cli::guidance156_tests::control158_halt_aucun_outil_mcp",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_lecture_artefact_permise",
+          "ok"
+        ],
+        [
+          "mcp_scopes::tests::mcp158_journal_read_only_hint_faux",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_partage_journal_refuse_sans_effet",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_publication_artefact_refusee_sans_effet",
+          "ok"
+        ],
+        [
+          "mcp_scopes::tests::mcp158_outil_sans_portee_echoue",
+          "ok"
+        ],
+        [
+          "mcp_scopes::tests::mcp158_read_only_hint_correspond_a_la_base",
+          "ok"
+        ],
+        [
+          "mcp_scopes::tests::mcp158_scopes_couvrent_tous_les_outils",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_plafond_aucun_effet_de_bord_au_refus",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_events_sub_unsub_permis",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_journal_avec_et_sans_to",
+          "ok"
+        ],
+        [
+          "cli::guidance156_tests::control158_delegations_cli_parse",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_chaque_action_de_fil",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_plafond_enfant_discovery_refuse_ecriture",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_discovery_lecture_ack_page_suivante",
+          "ok"
+        ],
+        [
+          "mcp::tests::mcp158_plafond_parent_garde_tous_les_outils",
+          "ok"
+        ],
+        [
+          "daemon::native_delegation::tests::mcp158_discovery_reponse_automatique_au_parent",
+          "ok"
+        ],
+        [
+          "daemon::native_delegation::tests::mcp158_plafond_posture_omise_suit_effective",
+          "ok"
+        ],
+        [
+          "daemon::native_delegation::tests::mcp158_plafond_enfant_nettoye_retrouve_les_droits",
+          "ok"
+        ],
+        [
+          "daemon::native_delegation::tests::mcp158_plafond_tache_terminale_avant_nettoyage",
+          "ok"
+        ],
+        [
+          "daemon::native_delegation::tests::mcp158_plafond_enfant_conserve_entre_rondes",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-preview103-replay.json",
+      "sha256": "6057e9e2dec533af13d4a6bda4a78141a5a596c6be4e2bb45d285029317678eb",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-preview103-replay.log",
+      "log_sha256": "04aad2ef396a1c5805f165b8caab5f24c2dceb679aef80a1e5cabaacf828e303",
+      "rc": 0,
+      "seconds": 9.24,
+      "results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "source_count": 218,
+      "sources_stable": true,
+      "names": [
+        [
+          "spec103_s02_apercu_sans_daemon_ni_socket_ni_identifiant",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-concurrency089-replay.json",
+      "sha256": "e917a6f14afcd0faeaae18b43cda8d80c67a6e42135b4739675a08bd6f76e9d9",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-concurrency089-replay.log",
+      "log_sha256": "a41722b2c1e1fd9d2d190dc2295253573efc45bfaef244f0243fa7d8af87645a",
+      "rc": 0,
+      "seconds": 7.26,
+      "results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "source_count": 218,
+      "sources_stable": true,
+      "names": [
+        [
+          "mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-security089-replay.json",
+      "sha256": "9ae57615a5d1bb24e5ea1f4724f103c7c659213c4a1c774ac31f969848d60e9e",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-security089-replay.log",
+      "log_sha256": "3f9e193452124a7c62837477206d9fee56ad0766305d30fffb6b01b67bf045ba",
+      "rc": 0,
+      "seconds": 7.65,
+      "results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "source_count": 218,
+      "sources_stable": true,
+      "names": [
+        [
+          "mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-native152-replay.json",
+      "sha256": "071627be854d0a4314403d0b8ee49050870b141de49a01609c23ed8917bed875",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-native152-replay.log",
+      "log_sha256": "5a45fa4e827c9d28e0752808384f3a6ca8f653424fd79131dffc73137904f3e7",
+      "rc": 0,
+      "seconds": 9.29,
+      "results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "source_count": 218,
+      "sources_stable": true,
+      "names": [
+        [
+          "native152_rouge_panne_mission_working",
+          "ok"
+        ]
+      ]
+    }
+  ],
+  "comparison": {
+    "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-full-comparison158.json",
+    "sha256": "50ad3e3462987ef9c8f83e57523eadc2a1afdb30243421ae1ebb61fadabb230d",
+    "counts": [
+      2440,
+      12,
+      74
+    ],
+    "cargo_targets": 95,
+    "baseline_identical": 255,
+    "prescribed_158_pass": 47
+  },
+  "tasks_unchanged_sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+  "no_new_task_test_scenario_full_or_pass_claim": true,
+  "supersedes": "/Users/moi/.cache/bridget-converge158-20261012/final-proofs158-pending152.patch"
+}

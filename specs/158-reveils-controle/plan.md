@@ -1,13 +1,13 @@
 # Plan - Session158a vue globale, arrêt global, portées MCP
 
 **Spec** : `specs/158-reveils-controle/spec.md`
-**Branche** : `session-150-socle-delegation` (pipeline 150-158, un seul worktree)
+**Branche** : branche/worktree158A isolés à renseigner par ROOT après vérification de la livraison157. Les anciens chemins150 sont historiques.
 **Date** : 2026-10-11 (révisé après contre-revue Codex, verdict BLOCKED corrigé)
 **Portée** : 158a seulement. 158b reste en spec. Budget de tours retiré.
 
 ## Résumé
 
-Trois ajouts, sans changer le contrat d'appel 150 :
+Trois ajouts, en conservant le contrat d'appel de la base157 livrée, y compris les ajouts151–157 :
 
 1. vue globale par `bridget control delegations`, réservée à l'humain attesté (R1) ;
 2. arrêt global distinct de la pause, composé avec elle dans une seule décision d'admission (R2, R3) ;
@@ -43,7 +43,7 @@ Trois ajouts, sans changer le contrat d'appel 150 :
 | VII ADR | OK | ADR 158 (T020), amende la lecture de l'ADR 027 |
 | VIII Forensic | OK | défauts prouvés par lecture ; contre-revue vérifiée ; tests rouges d'abord |
 | XV Test-before-next | Adapté | pas de commit automatique en pipeline |
-| XVI Worktree | OK | worktree 150 partagé |
+| XVI Worktree | À vérifier au GO | worktree158A isolé créé par ROOT après livraison157 |
 | XVIII Complexité | OK | vue O(n log n), n ≤ 4096 ; reçus O(1) ; `scope_of` O(1) ; plafond : une recherche par appel MCP, à mesurer (T017) |
 | XIX Minimalisme | OK | voir ci-dessous |
 | XX Vertus LLM | OK | voir ci-dessous |
@@ -97,7 +97,7 @@ de tours (champ, requête récursive, dépôt boîte, schéma, tests).
 |---|---|
 | Plafond `discovery` bloque un usage existant (post, partage de journal, publication d'artefact) | politique explicite FR-029, ruptures documentées, tests de la réponse automatique et des artefacts (T018), question 2 |
 | Rejeu d'un arrêt avec annulation | reçu portant la réponse, annulation à la première application seulement, test A/B/C/rejeu (T012) |
-| Recherche de la tâche d'un appelant coûteuse | mesure en T017 avant code ; repli : cache par nom d'enfant |
+| Recherche de la tâche d'un appelant | réutiliser l'index UNIQUE child existant via CallerScope interne ; mesure T017 ; aucun cache/index supplémentaire par défaut |
 | Outils de 151 à 157 non classés | test exhaustif échoue ; T016 |
 | Annulation en cascade partielle | `human_cancel` idempotent par `request_id` ; relance possible |
 | Reçus de commande purgés (au-delà de 256) | limite documentée ; identifiants neufs par geste de CLI |
@@ -111,5 +111,17 @@ portée dépendante de la cible, CLI `bridget wake`, table `observation_missed`.
 
 ## Livraison
 
-Code sur disque dans le worktree, sans commit automatique ni relance de
-service. Diff enregistré dans `validation/diff-158.patch`.
+Code dans le worktree158A isolé. ROOT effectue la livraison Git/disque et le
+nettoyage après les gates du pipeline utilisateur. Activation Bridget seulement
+sous la condition déjà autorisée de zéro mission non terminale ; aucune relanceT3.
+Pas de commit automatique par les sous-agents. Diff enregistré dans
+`validation/diff-158.patch`. Les chemins et empreintes du reçu157 livré sont à
+renseigner avant le GO158A, puis T001 établit la baseline fraîche.
+
+## Base158A vérifiée par le principal
+
+Date : 2026-10-12. Branche : session-158-reveils-controle. Racine : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle. Base Git : bd37e927eee0b28f058df9d6a6992e38665a6ad0. Sources157 : 8f21dfd7b553e822fcabe0a0e7eabc6741a8e45b. Reçu canonique157 : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/validation/livraison157.md. SHA256 : 6ac3d08948f39d6999b0a5c425235a70a1ad7d99d433866887abbdf52a86b705. Intégration, push, activation et nettoyage157 vérifiés. Les déclarations de préparation ci-dessus restent historiques ; cette vérification lève leur prérequis de livraison.
+
+## Décisions ROOT de contre-revue fraîche158A
+
+CallerScope est une requête interne dans l'enveloppe native existante, sans outil MCP : identité inscrite, lookup indexé côté daemon, résultat booléen obligatoire et panne fermée avant tout effet. Aucune DB cliente. Halt compose Delegate et Continue seulement ; demandes ouvertes/réponses et missions déjà queued/en cours gardent leur contrat de pause. Le snapshot des plus hautes racines actives et leur count est évalué une seule fois via FnOnce avant COMMIT ; verrou daemon jusqu'à human_cancel ; cancelled compte des arbres visés. Replayhalted est historique. Overview transporte les métadonnées courantes since/by/reason Option pour status. Pas d'autre variante, tâche ou test autonome. Journal to absent/null est Reads, autre valeur Sends ; annotations dérivées des bases de la table existante. CLI hors plafond MCP, borne ADR011 conservée.

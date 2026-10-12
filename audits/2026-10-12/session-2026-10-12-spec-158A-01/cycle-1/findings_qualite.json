@@ -1,0 +1,812 @@
+{
+  "audit_version": "14.0",
+  "scope_sha256": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+  "diff_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+  "review_kind": "fresh_cycle1_targeted_author_conflict_disclosed",
+  "timestamp": "2026-10-12T09:54:56.518021+00:00",
+  "findings": [],
+  "warnings": [
+    "Lecteur producteur de la préparation daemon T008/T012 et de ses neuf tests : relecture fraîche, sans validation indépendante de cette propre contribution. ROOT/Haiku relisent indépendamment.",
+    "Scope autoritatif : 24 fichiers (10 Rust,14 documents),137 hunks ; 30 désigne les outils MCP, pas le nombre de fichiers.",
+    "JSCPD/Clippy/rustfmt, tests, Cargo, scanners, benchmarks, services et modèles non exécutés par cet auditeur. Duplication et complexité cyclomatique non mesurées.",
+    "Sorties groupées tronquées : aucun crédit sur les parties manquantes. Dix hunks MCP25..34 et une partie du grand hunk38 ne sont pas crédités entièrement.",
+    "Deux hunks de tests NativeDelegation et la fin du hunk de tests magasin restent non lus ; documents autres que les plages explicites non relus entièrement.",
+    "Les fichiers monolithiques historiques daemon.rs/mcp.rs et la CI globale ne sont pas audités entièrement. .github absent dans ce WT ; aucun défaut CI158 inventé à partir de cette absence historique.",
+    "FULL unique rapportée par ROOT :2440PASS/12FAIL/74ignored,95cibles,8legacy+4nouveaux ;47tests158PASS et255baselines identiques. Journal non relu ici ; aucun GREEN global ni résultat personnel déduit.",
+    "ROOT a modifié5fichiers à09:49 après FULL. Capture initiale historique conservée ; seuls les deux deltas b3855e…/c9d639… ont été relus sur la version suivante. Tests correctifs en cours, aucun succès post-fix déduit.",
+    "Plomberie lecture pause/arrêt et traduction du motif répétée aux deux admissions natives : décision pure partagée ; extension du motif préexistante, aucune nouvelle extraction demandée.",
+    "Tests A/B/C et plafond partagent des séquences proches mais des oracles distincts. La lecture manuelle ne justifie pas une factorisation supplémentaire de confort."
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "ranges": [
+        [
+          626,
+          648
+        ],
+        [
+          2692,
+          2698
+        ],
+        [
+          2710,
+          2718
+        ],
+        [
+          2726,
+          2732
+        ]
+      ],
+      "read_mode": "fresh_patch_delta_only",
+      "read_at_utc": "2026-10-12T09:54:56.518021+00:00",
+      "whole_file_read": false,
+      "credit": "seulement hunks des deux patches ROOT lus, sans relire les anciennes zones",
+      "range_proof": "hunks précédemment lus relocalisés textuellement dans la source courante ; aucun crédit pour un hunk non localisé"
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+      "ranges": [
+        [
+          6310,
+          6322
+        ]
+      ],
+      "read_mode": "fresh_patch_delta_only",
+      "read_at_utc": "2026-10-12T09:54:56.518021+00:00",
+      "whole_file_read": false,
+      "credit": "seulement hunks des deux patches ROOT lus, sans relire les anciennes zones",
+      "range_proof": "hunks précédemment lus relocalisés textuellement dans la source courante ; aucun crédit pour un hunk non localisé"
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "ranges": [
+        [
+          110,
+          119
+        ],
+        [
+          122,
+          128
+        ]
+      ],
+      "read_mode": "fresh_patch_delta_only",
+      "read_at_utc": "2026-10-12T09:54:56.518021+00:00",
+      "whole_file_read": false,
+      "credit": "seulement hunks des deux patches ROOT lus, sans relire les anciennes zones",
+      "range_proof": "hunks précédemment lus relocalisés textuellement dans la source courante ; aucun crédit pour un hunk non localisé"
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "ranges": [
+        [
+          22,
+          31
+        ],
+        [
+          63,
+          75
+        ],
+        [
+          93,
+          101
+        ],
+        [
+          142,
+          154
+        ]
+      ],
+      "read_mode": "fresh_patch_delta_only",
+      "read_at_utc": "2026-10-12T09:54:56.518021+00:00",
+      "whole_file_read": false,
+      "credit": "seulement hunks des deux patches ROOT lus, sans relire les anciennes zones",
+      "range_proof": "hunks précédemment lus relocalisés textuellement dans la source courante ; aucun crédit pour un hunk non localisé"
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "ranges": [
+        [
+          28,
+          47
+        ],
+        [
+          56,
+          68
+        ],
+        [
+          105,
+          117
+        ]
+      ],
+      "read_mode": "fresh_patch_delta_only",
+      "read_at_utc": "2026-10-12T09:54:56.518021+00:00",
+      "whole_file_read": false,
+      "credit": "seulement hunks des deux patches ROOT lus, sans relire les anciennes zones",
+      "range_proof": "hunks précédemment lus relocalisés textuellement dans la source courante ; aucun crédit pour un hunk non localisé"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "ranges": [
+        [
+          10708,
+          10936
+        ],
+        [
+          16054,
+          16062
+        ],
+        [
+          16107,
+          16178
+        ],
+        [
+          16351,
+          16359
+        ],
+        [
+          16745,
+          16761
+        ],
+        [
+          22279,
+          22791
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "ranges": [
+        [
+          1069,
+          1087
+        ],
+        [
+          1447,
+          1469
+        ],
+        [
+          1536,
+          1542
+        ],
+        [
+          1796,
+          1814
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "ranges": [
+        [
+          669,
+          675
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "ranges": [
+        [
+          113,
+          128
+        ],
+        [
+          270,
+          315
+        ],
+        [
+          368,
+          389
+        ],
+        [
+          414,
+          533
+        ],
+        [
+          1787,
+          1887
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "ranges": [
+        [
+          39,
+          45
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0
+      ],
+      "whole_file_read": true,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "ranges": [
+        [
+          142,
+          160
+        ],
+        [
+          889,
+          915
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "ranges": [
+        [
+          1260,
+          1278
+        ],
+        [
+          2131,
+          2138
+        ],
+        [
+          3634,
+          3661
+        ],
+        [
+          4496,
+          4524
+        ],
+        [
+          8474,
+          8535
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "ranges": [
+        [
+          115,
+          143
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "ranges": [
+        [
+          1,
+          24
+        ],
+        [
+          75,
+          89
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/communication/client.rs",
+      "sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "ranges": [
+        [
+          1180,
+          1228
+        ]
+      ],
+      "read_mode": "fresh_context_outside_diff",
+      "whole_file_read": false,
+      "read_at_utc": "2026-10-12T09:54:56.518021+00:00"
+    }
+  ],
+  "historical_read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "ranges": [
+        [
+          695,
+          701
+        ],
+        [
+          5919,
+          5975
+        ],
+        [
+          6093,
+          6195
+        ],
+        [
+          6197,
+          6229
+        ],
+        [
+          6254,
+          6328
+        ],
+        [
+          10094,
+          10103
+        ],
+        [
+          10343,
+          10388
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "ranges": [
+        [
+          1,
+          58
+        ],
+        [
+          623,
+          705
+        ],
+        [
+          2634,
+          2662
+        ],
+        [
+          2675,
+          2686
+        ],
+        [
+          2698,
+          2704
+        ],
+        [
+          2712,
+          2718
+        ],
+        [
+          2746,
+          2752
+        ],
+        [
+          2840,
+          2846
+        ],
+        [
+          2893,
+          2907
+        ],
+        [
+          2922,
+          2930
+        ],
+        [
+          2982,
+          2994
+        ],
+        [
+          3019,
+          3025
+        ],
+        [
+          3044,
+          3050
+        ],
+        [
+          3131,
+          3137
+        ],
+        [
+          3221,
+          3227
+        ],
+        [
+          3356,
+          3369
+        ],
+        [
+          3383,
+          3389
+        ],
+        [
+          3399,
+          3410
+        ],
+        [
+          3642,
+          3648
+        ],
+        [
+          3665,
+          3673
+        ],
+        [
+          3797,
+          3803
+        ],
+        [
+          3930,
+          3936
+        ],
+        [
+          4125,
+          4131
+        ],
+        [
+          4239,
+          4245
+        ],
+        [
+          4428,
+          4434
+        ],
+        [
+          4492,
+          4504
+        ],
+        [
+          5244,
+          5250
+        ],
+        [
+          5350,
+          5356
+        ],
+        [
+          5384,
+          5390
+        ],
+        [
+          5440,
+          5640
+        ],
+        [
+          5932,
+          5938
+        ],
+        [
+          6010,
+          6016
+        ],
+        [
+          6069,
+          6082
+        ],
+        [
+          6087,
+          6099
+        ],
+        [
+          6101,
+          6107
+        ],
+        [
+          6156,
+          6162
+        ],
+        [
+          6244,
+          6256
+        ],
+        [
+          6260,
+          6271
+        ],
+        [
+          6277,
+          6283
+        ],
+        [
+          6355,
+          6361
+        ],
+        [
+          6440,
+          6446
+        ],
+        [
+          6574,
+          6580
+        ],
+        [
+          6851,
+          6857
+        ],
+        [
+          6886,
+          6893
+        ],
+        [
+          6983,
+          6989
+        ],
+        [
+          7083,
+          7089
+        ],
+        [
+          7394,
+          7400
+        ],
+        [
+          7474,
+          7485
+        ],
+        [
+          7509,
+          7515
+        ],
+        [
+          7517,
+          7523
+        ],
+        [
+          7593,
+          7599
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        35,
+        36,
+        37,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+      "ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [],
+      "whole_file_read": true,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "ranges": [
+        [
+          30,
+          80
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+      "ranges": [
+        [
+          102,
+          118
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_root_fixes",
+      "read_at_utc": "2026-10-12T09:48:59Z",
+      "hunks_fully_read": [],
+      "whole_file_read": false,
+      "read_started_at_utc": "2026-10-12T09:35:20Z"
+    }
+  ],
+  "source_stability": {
+    "initial_scope_matching_at_start": 24,
+    "unchanged_at_end": 19,
+    "root_authorised_changes": [
+      "crates/bridget-daemon/src/cli.rs",
+      "crates/bridget-daemon/src/mcp.rs",
+      "docs/decisions/158-controle-global-portees.md",
+      "specs/158-reveils-controle/contracts/control158.md",
+      "specs/158-reveils-controle/spec.md"
+    ],
+    "unexplained_changes": []
+  },
+  "coverage": {
+    "scope_files_total": 24,
+    "scope_hunks_total": 137,
+    "fully_read_hunks_initial": 81,
+    "full_file_semantic_read_count_initial": 2,
+    "whole_repository_coverage_percent": null,
+    "mutation_coverage_percent": null,
+    "test_coverage_percent": null,
+    "semantic_hunks_complete": false,
+    "read_limits": "Tous hunks de production Rust158 lus. Corpus tests/documents partiel ; historique et deltas ROOT séparés, aucun 100%.",
+    "current_delta_ranges_textually_verified": true
+  },
+  "execution_metrics": {
+    "tests_executed": 0,
+    "cargo_commands": 0,
+    "scanners_executed": 0,
+    "jscpd_percentage": null,
+    "cyclomatic_complexity": null
+  },
+  "module": "05",
+  "positive_findings": [
+    {
+      "title": "Projection sept champs commune, sans données de mission",
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "line": 294,
+      "description": "overview_page et Cancel utilisent Task::overview_row ; corps, résultat et cwd sont absents de cette projection."
+    },
+    {
+      "title": "État et reçu atomiques, callback jamais rejoué",
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "line": 432,
+      "description": "La transaction Immediate lit le reçu avant le callback ; réponse typée et limite256, erreurs fermées et aucun parcours de tâche au rejeu."
+    },
+    {
+      "title": "Exception pure et refus de preuve enfant rétablis avant RPC",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 629,
+      "description": "Delta ROOT relu : la file refuse la preuve enfant avant connexion ; handoff preview réemploie son parseur strict et son rendu local. Résultat runtime correctif non déduit."
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "at": "2026-10-12T10:19:36.310722+00:00",
+  "command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/audits/2026-10-12/session-2026-10-12-spec-158A-01"
+  ],
+  "rc": 0,
+  "stdout": "\n0 erreur(s), 0 warning(s) — session conforme\n",
+  "stderr": "",
+  "source_scope_sha256": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+  "diff_sha256": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+  "grade": {
+    "grade": "A",
+    "date": "2026-10-12",
+    "spec": "158",
+    "scope": "SPEC158A contrôle global/portées MCP — delta bd37e927,27 fichiers,151 hunks",
+    "coverage_percent": 85.43,
+    "justification": "A100 sur zéro finding actif confirmé, avec couverture partielle déclarée. TEST-001 corrigé et relu ; signal R2-C3 LOW contesté visible comme limite non contractuelle. Aucun GREEN global.",
+    "metrics": {
+      "security": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 3
+      },
+      "llm_security": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "supply_chain": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "observability": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "reliability": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "tests": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "performance": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "complexity": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "quality": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "architecture": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "ai_hygiene": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "duplication": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "minimalism": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "ux": {
+        "grade": "N/A",
+        "numeric": null,
+        "findings_count": 0,
+        "weight": 1
+      }
+    },
+    "numeric": 100,
+    "release_blocked": false,
+    "global_test_green": false
+  },
+  "historical_manifest": "manifest.json initial24files137hunks conserved ; final source27 separate scope-delivery158A.json and cycle-scoring meta",
+  "scoring_bounded_at": "2026-10-12T10:18:00Z environ ; ROOT validated then froze CACHE after bounded readonly report",
+  "GLOBAL_GREEN": false
+}

@@ -138,6 +138,88 @@ La vue courante donne `resume_attempts`, le nombre de décisions de reprise apr�
 Ce compteur est sauvegardé avant la reprise. Un crash peut donc consommer une
 tentative avant son effet ; il ne permet jamais de dépasser la borne.
 
+## Contrôle humain global et plafond MCP — 158A
+
+Ce contrat158A s’applique au binaire et au catalogue effectivement chargés.
+Ce texte ne prouve pas leur activation. 158B reste spécifiée seulement :
+réveils, déclencheur local, faits manqués et secrets ne sont pas livrés ici.
+
+### Voir et arrêter sans fil T3
+
+```sh
+bridget control delegations
+bridget control delegations --state all --limit 100 --json
+bridget control delegations cancel <task_id>
+bridget control halt-delegations --reason "Revue humaine"
+bridget control halt-delegations --reason "Arrêt explicite" --cancel-active
+bridget control resume-delegations
+bridget control status
+```
+
+La liste est globale, réservée à l’humain attesté, sans --t3-thread ni
+--project-root. Défaut : active, 50 lignes ;maximum 100. Les tâches récentes
+viennent d’abord. Une ligne porte task_id, propriétaire, enfant, état, âge,
+échéance restante et parent_task_id ; aucun corps de mission ou résultat.
+Actif suit l’occupation d’un slot (holds_slot) : tâche non terminale, ou tâche
+gardée tant que cleanup_done est faux. Un résultat rendu peut donc rester actif.
+Le suivi Lineage ciblé dans T3 garde sa voie existante.
+
+ControlStateV1 et un acteur humain attesté sont requis. La capacité seule
+n’accorde pas cette autorité ; un client agent négocié reste refusé. À requête
+correctement formée, l’ordre est negotiation_required, capability_not_negotiated,
+puis human_actor_required. Un alias from=humain ne suffit pas. Les mutations
+halt, resume et cancel exigent un terminal interactif. Codes CLI : 0 succès,
+1 refus/erreur daemon, 2 usage. Cette garde conserve la borne ADR011 : elle contrôle
+les outils déclarés, pas un processus hostile du même compte.
+
+L’arrêt est persistant et indépendant de la pause. Il refuse une nouvelle clé
+bridget_delegate par delegations_halted, sans tâche ni clé consommée ; un rejeu
+admis rend sa tâche existante. Le catalogue indique delegations_halted.
+Status, catalogue et annulations restent disponibles. Arrêt et pause se
+composent : l’arrêt est prioritaire si les deux sont posés. Resume-delegations
+ne lève pas la pause ;lever la pause ne lève pas l’arrêt. Sans --cancel-active,
+les tâches existantes restent intactes.
+
+Avec --cancel-active, la première application vise les arbres actifs retenus
+à cet instant. Le champ cancelled compte ces arbres ciblés AVANT le commit
+du reçu ; il ne confirme pas l’arrêt de leurs processus. État et réponse sont
+committés ensemble, puis l’annulation utilise human_cancel au plus une fois.
+Un command_id connu rend sa réponse historique, replayed:true, sans réécrire
+l’état courant ni annuler de nouveau. A arrêt/annulation, B reprise, C nouvelle
+tâche, rejeu A : C reste intacte. Un crash après le commit peut laisser une
+annulation inachevée ; l’humain utilise delegations cancel, sans promettre une
+reprise automatique. Les 256 reçus les plus récents survivent au redémarrage.
+Un identifiant plus ancien, purgé, peut être appliqué de nouveau ; la CLI crée
+un identifiant neuf par geste. Ces reçus ne sont pas un historique d’audit.
+
+### Portées des outils et enfant discovery
+
+La table classe chaque outil par base et, au besoin, par action ou cible :
+reads, writes_own_state, sends, writes_threads, delegates, publishes. Le test
+exhaustif de CI vérifie outils→table, table→outils et readOnlyHint ; ce n’est
+pas une obligation imposée par le compilateur. readOnlyHint est vrai seulement
+pour une BASE reads. Journal a pour base sends, indice faux, même si un appel
+sans to est abaissé à reads. Aucun outil MCP ne porte un contrôle humain.
+
+Un enfant discovery peut appeler seulement reads et writes_own_state. Sa posture
+effective prime sur la posture omise. Le plafond dure jusqu’à cleanup_done,
+même si la tâche est terminale ou si l’enfant attend entre deux rondes. Un
+appelant sans cette tâche discovery conserve sa surface d’outils existante ;
+les autres droits de projet, d’identité et de portée continuent de s’appliquer.
+
+Permis : lecture d’artefact ; thread list/show/history et read puis ack avant
+la page suivante ; events types/list/sub/unsub ; handoff preview ; journal sans
+to. La réponse finale automatique au parent reste permise par le wrapper.
+Ruptures voulues :thread post/create/add_members/close, journal avec to,
+publish_artifact, send, cancel, handoff en envoi et toute délégation sont refusés
+par capability_denied, sans effet. Ne pas contourner ce plafond par la CLI ou
+une autre identité. Un besoin de publication depuis discovery demande une
+nouvelle spec ; le plafond n’est pas élargi pendant cette implémentation.
+
+158A ne borne ni tokens ni tours. Reply_timeout reste la borne de temps150.
+Les conditions de reprise d’un budget de tours sont dans l’ADR158 ; la mention
+« budgets de tokens ou de coût (session158) » de150 est levée par cette décision.
+
 ## Espace de travail — contrat 154
 
 Ce contrat exige un catalogue et des processus chargés qui annoncent

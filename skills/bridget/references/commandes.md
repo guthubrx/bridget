@@ -1,7 +1,7 @@
-# Commandes Bridget et accès 094–157
+# Commandes Bridget et accès 094–158A
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
-réponse liée de base. Elle décrit les contrats jusqu’à157 ; elle ne prouve
+réponse liée de base. Elle décrit les contrats jusqu’à158A ; elle ne prouve
 ni que le binaire installé correspond à cette version, ni qu'un serveur MCP déjà
 ouvert a rechargé son catalogue.
 
@@ -59,7 +59,7 @@ de couverture.
 | `queue` | MCP exposé (156) | `bridget_queue` | Lit les remises idempotentes dispatching visibles de target ; aucune édition, capacité QueueListV1 requise. |
 | `requests` | Équivalence MCP | `bridget_ledger` avec `view=requests` | Consulte les demandes de l'appelant, ou la projection globale autorisée ; aucun outil synonyme n'est créé. |
 | `rename` | MCP exposé | `bridget_rename` | Change seulement le nom d'affichage de l'identité propre ; UUID, instance, historique et rejeux restent liés à la même identité. |
-| `control` | Équivalence MCP pour la lecture ; CLI humain pour les mutations | `bridget_control_status` remplace `control status`; `pause`, `resume`, `budget` et `posture` restent sans MCP | Le statut est observable ; les mutations appartiennent au référent humain et ne sont pas déléguées par 094. |
+| `control` | Équivalence MCP pour control status ; CLI humain pour la vue globale et les mutations | `bridget_control_status` remplace `control status`; `pause`, `resume`, `budget`, `posture` et le contrôle global158A restent sans MCP | Le statut est observable ; les mutations appartiennent au référent humain et ne sont pas déléguées par 094. |
 | `inbox` | CLI humain | `bridget_control_status` ne donne que le compte ouvert, pas la liste ni la résolution | Liste et tranche des décisions humaines. Exposer `resolve` au modèle confondrait observation et autorité de référent. |
 | `runtime` | MCP exposé | `bridget_runtime` | Déclare le modèle/effort propres avec source `Declared`; ne sélectionne aucun modèle chez le fournisseur. |
 | `identity` | CLI humain | Aucun | `identity migrate --dry-run|--apply` planifie ou applique une migration sur chemins locaux explicites ; `--apply` exige le daemon arrêté et peut écrire des sauvegardes. |
@@ -202,6 +202,78 @@ et gardent la clé libre. Le MCP rend code puis JSON de detail. Sans fallback,
 pas de remplacement et octets canoniques anciens. Aucune CLI ni outil nouveau,
 bascule en mission ou attente quota157 ; reprise reportée160. Ne pas modifier
 permissions, reviewer ou liste de rejeu pour contourner un refus.
+
+## Contrôle global des délégations et portées — 158A
+
+Contrat158A, à vérifier sur la version chargée. La partie158B reste une spec,
+sans commande de réveil, rejeu de faits manqués ou consommation de secret
+livrés par158A. Aucune preuve d’activation n’est déduite de cette référence.
+
+| Geste CLI | Effet et borne |
+|---|---|
+| bridget control delegations [list] [--state active\|all] [--limit N] [--json] | Vue humaine globale, sans fil T3 ; active/50 par défaut, 1..100 ; plus récentes d’abord. |
+| bridget control delegations cancel <task_id> | Annulation humaine de l’arbre ciblé, terminal interactif. |
+| bridget control halt-delegations [--reason <texte>] [--cancel-active] | Arrêt persistant ;reason borné 512 caractères. Sans drapeau, aucune tâche existante touchée. |
+| bridget control resume-delegations | Lève seulement l’arrêt, jamais la pause ;terminal interactif. |
+| bridget control status | Affiche arrêt, auteur, date, motif. |
+
+Les lignes de vue donnent task_id/owner/child/state/age_secs/deadline_in_secs/
+parent_task_id, jamais corps/résultat/chemins. Le filtre active reprend holds_slot :
+non terminale ou tâche gardée sans cleanup_done. Un résultat rendu n’implique donc
+pas un slot libéré. ControlStateV1 ET control_client_actor sont requis ; la capacité
+seule est insuffisante. Requête valide : negotiation_required puis
+capability_not_negotiated puis human_actor_required. Autres refus fermés :
+unsupported_version, invalid_request, task_unavailable, store_unavailable.
+Halt/resume/cancel exigent un terminal interactif ; sorties 0/1/2 pour succès,
+refus/erreur daemon, usage. Pas outil MCP de contrôle humain. BorneADR011 :
+un processus hostile du même compte reste hors garantie.
+
+Nouvelle clé delegate pendant arrêt : delegations_halted, sans tâche ni clé
+consommée. Un rejeu admis passe avant la garde. Catalogue rend delegations_halted ;
+status/catalogue/annulations restent possibles. Arrêt prime sur pause, sans la
+modifier. Toutes les gardes héritées148–157, options154/155 et fallback157 restent.
+Les octets canoniques de delegate de la base157 ne changent pas.
+
+Cancel_active n’est admis que pour halted:true. La première application retient
+les arbres actifs, compte cancelled comme nombre d’arbres CIBLÉS avant commit,
+puis écrit état et reçu ensemble. Ce nombre n’atteste pas les arrêts. Human_cancel
+s’exécute après commit au plus une fois. Le rejeu du command_id rend la réponse
+historique replayed:true, sans nouvelle annulation ni changement d’état actuel.
+A arrêt/annulation, B reprise, C nouvelle tâche, rejeu A : C reste active, même
+après redémarrage. Crash après commit :une annulation peut rester partielle ;
+l’humain relance delegations cancel. Les reçus persistants sont bornés à 256,
+plus ancien purgé ; un identifiant purgé peut être appliqué de nouveau. Un geste
+CLI crée un identifiant neuf. Aucun historique d’audit complet n’est promis.
+
+| Portée | Plafond discovery |
+|---|---|
+| reads | Permise, sous les gardes propres de l’outil. |
+| writes_own_state | Permise pour l’état de l’appelant. |
+| sends | Refusée. |
+| writes_threads | Refusée. |
+| delegates | Refusée. |
+| publishes | Refusée. |
+
+La base est la portée la plus haute. readOnlyHint vaut vrai uniquement si cette
+BASE est reads, même si action/cible abaissent un appel. Journal a la base sends
+et l’indice faux ;sans to, sa portée est reads. Table et catalogue sont vérifiés
+dans les deux sens par test CI exhaustif ; pas de garantie du compilateur.
+
+Fils : list/show/history=reads ;read/ack=writes_own_state. Lire, ack, puis page
+suivante ;pas de lecture répétée sans ack. Events : types/list=reads,
+sub/unsub=writes_own_state. Handoff preview=reads, envoi=sends. Journal sans
+to=reads, avec to=sends. Lecture d’artefact et réponse finale automatique au
+parent restent possibles. Refusés par capability_denied sans effet :post/create/
+add_members/close de fil, partage du journal, publication d’artefact, send/cancel,
+handoff en envoi et toute délégation. Ne pas contourner ce refus par la CLI.
+
+Le plafond utilise la tâche dont child est l’appelant, cleanup_done:false et
+posture effective discovery, avec repli sur la posture demandée. Il reste même
+sur une tâche terminale avant nettoyage ou entre rondes. Un appelant sans tâche
+discovery conserve sa surface normale, sans gain d’autres droits. Les outils
+151–157 sont classés par la table effective ; aucun inventaire non testé n’est
+présenté comme déjà validé. Tours et tokens sont hors 158A ; délai reply_timeout
+conservé. L’ADR158 lève le report de budgets de tokens à158 annoncé en150.
 
 ## Catalogue MCP Bridget fermé
 

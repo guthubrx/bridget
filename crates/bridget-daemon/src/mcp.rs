@@ -623,6 +623,64 @@ fn execute_tool_at_with_identity(
 ) -> Result<Value, ToolError> {
     let principal = identity.name.as_str();
     let instance_id = identity.instance_id.as_str();
+    // Aucun nom inconnu ne déclenche d'inscription ni de requête auxiliaire.
+    let scope = crate::mcp_scopes::scope_of(name, arguments)
+        .ok_or_else(|| ToolError::InvalidParams("outil inconnu".into()))?;
+    // Contrat156 : une preuve enfant est refusée avant toute connexion.
+    // execute_queue conserve aussi sa garde pour les appels CLI/directs.
+    if name == "bridget_queue" && identity.delegated_origin.is_some() {
+        return Err(ToolError::Technical {
+            code: "delegated_tool_forbidden",
+            message: "une preuve enfant ne peut pas consulter la file".into(),
+        });
+    }
+    // Contrat103 : aperçu pur, sans daemon, identifiant ni transport.
+    // Le même parseur fermé refuse tout paramètre d'envoi, même nul.
+    if name == "bridget_handoff" && scope == crate::mcp_scopes::Scope::Reads {
+        let request = crate::handoff::parse_request(&Value::Object(arguments.clone()))
+            .map_err(|error| ToolError::InvalidParams(format!("handoff : {error}")))?;
+        if request.transport.is_none() {
+            return Ok(crate::handoff::preview_result(&request.rendered));
+        }
+    }
+    // Un échange authentifié par credential+instance lit la tâche sur le daemon.
+    // for_child utilise l'index149 mesuré en T017, sans stockage ou cache client.
+    let mut scope_connection = registered_connection(principal, instance_id, socket)?;
+    let caller_read_only = match scope_connection.exchange(&WrapperToDaemon::NativeDelegation {
+        request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {},
+    })? {
+        DaemonToWrapper::NativeDelegationResult { result }
+            if result.as_object().is_some_and(|object| object.len() == 2)
+                && result["version"].as_u64() == Some(1)
+                && result["caller_read_only"].is_boolean() =>
+        {
+            result["caller_read_only"]
+                .as_bool()
+                .expect("booléen vérifié")
+        }
+        DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
+            return Err(ToolError::Technical {
+                code: "native_delegation_refused",
+                message: result["code"].as_str().unwrap_or("refused").to_string(),
+            });
+        }
+        _ => return Err(ToolError::Technical {
+            code: "daemon_protocol",
+            message: "réponse de plafond MCP invalide".into(),
+        }),
+    };
+    drop(scope_connection);
+    if caller_read_only
+        && !matches!(
+            scope,
+            crate::mcp_scopes::Scope::Reads | crate::mcp_scopes::Scope::WritesOwnState
+        )
+    {
+        return Err(ToolError::Technical {
+            code: "capability_denied",
+            message: "outil hors du plafond de cette tâche, posture discovery".into(),
+        });
+    }
     match name {
         "bridget_capabilities"
         | "bridget_delegate"
@@ -2595,6 +2653,22 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
     ];
     catalogue.extend(crate::delegation_mcp::tools(&brief_schema));
+    // O(1) : catalogue et table statiques ; la portée de BASE fait foi,
+    // jamais un abaissement dépendant des arguments de l'appel.
+    for tool in &mut catalogue {
+        let Some(entry) = crate::mcp_scopes::TOOL_SCOPES
+            .iter()
+            .find(|entry| Some(entry.tool) == tool["name"].as_str())
+        else {
+            continue;
+        };
+        let annotations = tool
+            .as_object_mut()
+            .expect("outil objet")
+            .entry("annotations")
+            .or_insert_with(|| json!({}));
+        annotations["readOnlyHint"] = json!(entry.base == crate::mcp_scopes::Scope::Reads);
+    }
     catalogue
 }
 
@@ -2686,6 +2760,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let (stop, stopped) = mpsc::channel();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let deadline = Instant::now() + Duration::from_secs(3);
             let stream = loop {
                 match listener.accept() {
@@ -2779,6 +2854,7 @@ mod tests {
         let socket = test_socket("g156-caps");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
@@ -2831,7 +2907,15 @@ mod tests {
     fn guidance156_mcp_intent_inconnue_refusee() {
         let socket = test_socket("g156-refus");
         let listener = UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..4 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+            );
+        });
         for (intent, reply) in [
             (json!("auto"), false),
             (json!(null), false),
@@ -2852,12 +2936,9 @@ mod tests {
                     ..
                 })
             ));
-            assert!(
-                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
-                "invalid_intent précède même la résolution UUID par connexion"
-            );
+            // Le plafond précède les arguments ; aucun échange métier ni résolution UUID.
         }
-        drop(listener);
+        server.join().unwrap();
         std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
     }
 
@@ -2915,6 +2996,13 @@ mod tests {
 
     #[test]
     fn native153_mcp_continue_catalogue_et_champs_fermes() {
+        let socket = test_socket("invalid-scope158");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         let catalogue = tools();
         let handoff_schema = &catalogue
             .iter()
@@ -2945,7 +3033,7 @@ mod tests {
                     "owner",
                     name,
                     args.as_object().unwrap(),
-                    Path::new("/missing-rounds153")
+                    &socket
                 ),
                 Err(ToolError::InvalidParams(message)) if message == "champ inconnu"
             ));
@@ -2970,6 +3058,7 @@ mod tests {
         assert_eq!(duration["type"], "integer");
         assert_eq!(duration["minimum"], 60);
         assert_eq!(duration["maximum"], 7200);
+        server.join().unwrap();
     }
 
     #[test]
@@ -3056,6 +3145,7 @@ mod tests {
         let socket = test_socket("ack-old");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let mut pollfd = libc::pollfd {
                 fd: listener.as_raw_fd(),
                 events: libc::POLLIN,
@@ -3145,6 +3235,7 @@ mod tests {
             let returned = result.clone();
             let backend = thread::spawn(move || {
                 let mut frames = Vec::<Value>::new();
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 for stage in 0..2 {
                     let mut pollfd = libc::pollfd {
                         fd: listener.as_raw_fd(),
@@ -3279,6 +3370,14 @@ mod tests {
 
     #[test]
     fn native151_facade_request_wait_schema_et_bornes() {
+        let socket = test_socket("invalid-scope158");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let server = thread::spawn(move || {
+            for _ in 0..9 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         let wait = tools()
             .into_iter()
             .find(|tool| tool["name"] == "bridget_request_wait")
@@ -3298,7 +3397,7 @@ mod tests {
         for value in [json!(-1), json!(0), json!(3601)] {
             let args = json!({"request_id":"r","wait_timeout":value});
             assert!(
-                matches!(execute_tool_at_with_identity(&identity, "bridget_request_wait", args.as_object().unwrap(), Path::new("/missing")), Err(ToolError::Technical { code: "native_delegation_refused", message }) if message == "wait_timeout_out_of_range")
+                matches!(execute_tool_at_with_identity(&identity, "bridget_request_wait", args.as_object().unwrap(), &socket), Err(ToolError::Technical { code: "native_delegation_refused", message }) if message == "wait_timeout_out_of_range")
             );
         }
         for args in [
@@ -3314,11 +3413,12 @@ mod tests {
                     &identity,
                     "bridget_request_wait",
                     args.as_object().unwrap(),
-                    Path::new("/missing")
+                    &socket
                 ),
                 Err(ToolError::InvalidParams(_))
             ));
         }
+        server.join().unwrap();
     }
 
     #[test]
@@ -3556,6 +3656,7 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::channel();
         let daemon = thread::spawn(move || {
             {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(15)))
@@ -3578,6 +3679,9 @@ mod tests {
             }
             let mut blocked = Vec::new();
             for name in ["bridget_task_wait", "bridget_task_status"] {
+                if name == "bridget_task_status" {
+                    reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+                }
                 let (stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(15)))
@@ -3707,6 +3811,7 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let backend = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
@@ -3839,6 +3944,7 @@ mod tests {
             let backend_ready = ready_tx.clone();
             let backend_release = Arc::clone(&release_rx);
             let backend = thread::spawn(move || {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
@@ -4033,6 +4139,7 @@ mod tests {
             crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
             let server = thread::spawn(move || {
                 {
+                    reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                     let (stream, _) = listener.accept().unwrap();
                     let mut reader = BufReader::new(stream.try_clone().unwrap());
                     let mut writer = BufWriter::new(stream);
@@ -4146,6 +4253,7 @@ mod tests {
             let (ready_tx, ready_rx) = mpsc::channel();
             let (closed_tx, closed_rx) = mpsc::channel();
             let daemon = thread::spawn(move || {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
@@ -4334,6 +4442,7 @@ mod tests {
         bridget_transport::fsutil::write_private_file_atomic(&proof,&serde_json::to_vec(&json!({"agent_id":"alice","instance_id":"instance102","credential":IdentityCredential::new("fixture-only".into())})).unwrap()).unwrap();
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
@@ -4397,6 +4506,13 @@ mod tests {
         );
         assert_eq!(rendered["structuredContent"]["code"], "thread_unavailable");
         server.join().unwrap();
+        std::fs::remove_file(&socket).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..3 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         for invalid in [
             json!({"action":"post","thread_id":"t","body":"b","notify":[],"operation_id":"o","actor":"x"}),
             json!({"action":"summary","thread_id":"t"}),
@@ -4417,35 +4533,18 @@ mod tests {
             tool_result(json!({"status":"accepted"}))["isError"],
             Value::Null
         );
+        server.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn spec147_uuid_mcp_facade_ipc_and_business_replay_case() {
-        use crate::threads::{Directory, MemberFacts};
         use bridget_transport::protocol::IdentityCredential;
         use sha2::{Digest, Sha256};
         const A: &str = "14700000-aaaa-4aaa-8aaa-00000000000a";
         const B: &str = "14700000-bbbb-4bbb-8bbb-00000000000b";
         const CREATE: &str = "14700000-cccc-4ccc-8ccc-00000000000c";
         const POST: &str = "14700000-dddd-4ddd-8ddd-00000000000d";
-        struct FixtureDirectory;
-        impl Directory for FixtureDirectory {
-            fn known_agent(&self, id: &str) -> bool {
-                [A, B].contains(&id)
-            }
-            fn member_facts(&self, _: &str) -> MemberFacts {
-                MemberFacts::default()
-            }
-            fn communication_scope(
-                &self,
-                _: &str,
-                _: &[String],
-                _: Option<&str>,
-            ) -> Result<Vec<bridget_transport::protocol::ProjectWarning>, Value> {
-                Ok(vec![])
-            }
-        }
         let root = std::env::temp_dir().join(format!("mcp147-{}", uuid::Uuid::new_v4().simple()));
         bridget_transport::fsutil::create_private_dir(&root).unwrap();
         bridget_transport::fsutil::create_private_dir(&root.join("agent-names")).unwrap();
@@ -4462,6 +4561,7 @@ mod tests {
             let mut changed = Vec::new();
             let mut writes = Vec::new();
             for _ in 0..4 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (mut stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(6)))
@@ -4671,6 +4771,12 @@ mod tests {
     #[test]
     fn spec094_parametres_invalides_sont_refuses_avant_connexion() {
         let socket = test_socket("spec094-invalid");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..16 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         let cases = [
             (
                 "bridget_rename",
@@ -4709,6 +4815,7 @@ mod tests {
                 "{name} a dépassé sa validation locale : {arguments}"
             );
         }
+        server.join().unwrap();
     }
 
     #[test]
@@ -4787,6 +4894,7 @@ mod tests {
         let socket = test_socket("artifact-publish");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let read_stream = stream.try_clone().unwrap();
             let mut reader = BufReader::new(read_stream);
@@ -4863,6 +4971,12 @@ mod tests {
     #[test]
     fn publication_d_artefact_refuse_les_champs_non_contractuels_avant_connexion() {
         let socket = test_socket("artifact-invalid");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..1 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         let arguments = serde_json::json!({
             "idempotency_key": "fixture-artifact-v1",
             "kind": "kpi",
@@ -4881,10 +4995,18 @@ mod tests {
             ),
             Err(ToolError::InvalidParams(_))
         ));
+        server.join().unwrap();
     }
 
     #[test]
     fn lecture_de_contenu_refuse_l_elargissement_de_portee_avant_connexion() {
+        let socket = test_socket("invalid-scope158");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..7 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         let base = json!({"version":1,"artifact_ref":"artifact:1","version_ref":"artifact-version:1","kind":{"kind":"manifest"},"offset":0,"limit":1024});
         for field in ["project_id", "agent_id", "path", "source"] {
             let mut invalid = base.clone();
@@ -4894,7 +5016,7 @@ mod tests {
                     "89000000-0000-4000-8000-000000000001",
                     "bridget_read_artifact",
                     invalid.as_object().unwrap(),
-                    Path::new("/socket-inexistant-089")
+                    &socket
                 ),
                 Err(ToolError::InvalidParams(_))
             ));
@@ -4907,7 +5029,7 @@ mod tests {
                     "89000000-0000-4000-8000-000000000001",
                     "bridget_read_artifact",
                     invalid.as_object().unwrap(),
-                    Path::new("/socket-inexistant-089")
+                    &socket
                 ),
                 Err(ToolError::InvalidParams(_))
             ));
@@ -4919,10 +5041,11 @@ mod tests {
                 "89000000-0000-4000-8000-000000000001",
                 "bridget_read_artifact",
                 unknown_kind.as_object().unwrap(),
-                Path::new("/socket-inexistant-089")
+                &socket
             ),
             Err(ToolError::InvalidParams(_))
         ));
+        server.join().unwrap();
     }
 
     #[test]
@@ -5135,6 +5258,7 @@ mod tests {
         let socket = test_socket("spec100-mcp");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
@@ -5240,6 +5364,7 @@ mod tests {
                     },
                 },
             );
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
@@ -5273,6 +5398,7 @@ mod tests {
                     result: json!({"status":"subscribed"}),
                 },
             );
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
         });
         let result = execute_tool_at_with_scope(
             "alice",
@@ -5321,6 +5447,446 @@ mod tests {
     ) -> Result<Value, ToolError> {
         crate::mcp_identity::mock_private_identity(socket, identity, instance);
         super::execute_tool_at_with_scope(identity, instance, name, arguments, socket)
+    }
+
+    struct FixtureDirectory;
+    impl crate::threads::Directory for FixtureDirectory {
+        fn known_agent(&self, id: &str) -> bool {
+            ["14700000-aaaa-4aaa-8aaa-00000000000a", "14700000-bbbb-4bbb-8bbb-00000000000b"].contains(&id)
+        }
+        fn member_facts(&self, _: &str) -> crate::threads::MemberFacts {
+            crate::threads::MemberFacts::default()
+        }
+        fn communication_scope(
+            &self,
+            _: &str,
+            _: &[String],
+            _: Option<&str>,
+        ) -> Result<Vec<bridget_transport::protocol::ProjectWarning>, Value> {
+            Ok(vec![])
+        }
+    }
+
+    // Fixture IPC partagée : inscription credential+instance réelle puis réponse fermée.
+    // Plus de vingt consommateurs standard et les oracles de plafond la réemploient.
+    fn reply_caller_scope(listener: &UnixListener, result: Value) {
+        use std::os::fd::AsRawFd;
+        let mut pollfd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents:0 };
+        assert!(unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0, "requête de plafond attendue dans le budget de fixture");
+let (stream, _) = listener.accept().unwrap();
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
+                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
+                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
+                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
+        assert!(matches!(read_command(&mut reader), WrapperToDaemon::NativeDelegation { request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {} }));
+        write_command(&mut writer, DaemonToWrapper::NativeDelegationResult { result });
+    }
+
+    #[test]
+    fn mcp158_plafond_enfant_discovery_refuse_ecriture() {
+        let cases = [("bridget_delegate", json!({})), ("bridget_send", json!({"to":"parent","body":"écrit"})), ("bridget_task_respond", json!({}))];
+        let socket = test_socket("158-14bc9332");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let count = cases.len();
+        let server = thread::spawn(move || {
+            for _ in 0..count {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucun échange métier après le refus"
+            );
+        });
+        for (name, arguments) in cases {
+            assert!(
+                matches!(
+                    execute_tool_at_with_scope(
+                        "child158",
+                        "instance158",
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket
+                    ),
+                    Err(ToolError::Technical {
+                        code: "capability_denied",
+                        ..
+                    })
+                ),
+                "{name}"
+            );
+        }
+        server.join().unwrap();
+        // Une réponse absente, non booléenne ou ouverte ne rend aucun droit.
+        let socket = test_socket("mcp158-malformed-scope");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for scope_result in [json!({"version":1}), json!({"version":1,"caller_read_only":"false"}), json!({"version":2,"caller_read_only":false}), json!({"version":1,"caller_read_only":false,"grant":true})] {
+                reply_caller_scope(&listener, scope_result);
+            }
+        });
+        for _ in 0..4 {
+            assert!(matches!(
+                execute_tool_at_with_scope(
+                    "child158",
+                    "instance158",
+                    "bridget_publish_artifact",
+                    &serde_json::Map::new(),
+                    &socket
+                ),
+                Err(ToolError::Technical {
+                    code: "daemon_protocol",
+                    ..
+                })
+            ));
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_plafond_aucun_effet_de_bord_au_refus() {
+        let cases = [("bridget_thread", json!({"action":"post"})), ("bridget_cancel", json!({"id":"queued"}))];
+        let socket = test_socket("158-eae5697c");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let count = cases.len();
+        let server = thread::spawn(move || {
+            for _ in 0..count {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucun échange métier après le refus"
+            );
+        });
+        for (name, arguments) in cases {
+            assert!(
+                matches!(
+                    execute_tool_at_with_scope(
+                        "child158",
+                        "instance158",
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket
+                    ),
+                    Err(ToolError::Technical {
+                        code: "capability_denied",
+                        ..
+                    })
+                ),
+                "{name}"
+            );
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_discovery_publication_artefact_refusee_sans_effet() {
+        let cases = [("bridget_publish_artifact", json!({}))];
+        let socket = test_socket("158-09a02200");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let count = cases.len();
+        let server = thread::spawn(move || {
+            for _ in 0..count {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucun échange métier après le refus"
+            );
+        });
+        for (name, arguments) in cases {
+            assert!(
+                matches!(
+                    execute_tool_at_with_scope(
+                        "child158",
+                        "instance158",
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket
+                    ),
+                    Err(ToolError::Technical {
+                        code: "capability_denied",
+                        ..
+                    })
+                ),
+                "{name}"
+            );
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_discovery_partage_journal_refuse_sans_effet() {
+        let cases = [("bridget_journal", json!({"agent":"source","to":"parent"}))];
+        let socket = test_socket("158-439fab37");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let count = cases.len();
+        let server = thread::spawn(move || {
+            for _ in 0..count {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+            }
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucun échange métier après le refus"
+            );
+        });
+        for (name, arguments) in cases {
+            assert!(
+                matches!(
+                    execute_tool_at_with_scope(
+                        "child158",
+                        "instance158",
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket
+                    ),
+                    Err(ToolError::Technical {
+                        code: "capability_denied",
+                        ..
+                    })
+                ),
+                "{name}"
+            );
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_plafond_parent_garde_tous_les_outils() {
+        let names = tools()
+            .into_iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        let socket = test_socket("mcp158-parent");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let count = names.len();
+        let server = thread::spawn(move || {
+            for _ in 0..count {
+                let scope_result = json!({"version":1,"caller_read_only":false});
+                reply_caller_scope(&listener, scope_result);
+            }
+        });
+        for name in names {
+            let result = execute_tool_at_with_scope("parent158", "instance158", &name, json!({"forged":1}).as_object().unwrap(), &socket);
+            assert!(matches!(result, Err(ToolError::InvalidParams(_))), "{name} : {result:?}");
+        }
+        server.join().unwrap();
+        assert!(matches!(
+            execute_tool_at_with_scope(
+                "parent158",
+                "instance158",
+                "outil_inconnu",
+                &serde_json::Map::new(),
+                &socket
+            ),
+            Err(ToolError::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn mcp158_discovery_chaque_action_de_fil() {
+        use bridget_transport::protocol::ThreadResult;
+        let socket = test_socket("mcp158-fil-actions");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for action in ["list", "show", "history", "read", "ack", "create", "add_members", "post", "close"] {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+                if ["list", "show", "history", "read", "ack"].contains(&action) {
+                    let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
+                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
+                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
+                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
+                    let WrapperToDaemon::ThreadRequest { request } = read_command(&mut reader) else { panic!("requête de fil attendue") };
+                    assert_eq!(request.request.name(), action);
+                    write_command(&mut writer, DaemonToWrapper::ThreadResult { result: ThreadResult { version:1, result:json!({"status":"preuve","action":action}) } });
+                }
+            }
+        });
+        let id = "15800000-0000-4000-8000-000000000001";
+        for action in ["list", "show", "history", "read", "ack", "create", "add_members", "post", "close"] {
+            let arguments = match action {
+                "list" => json!({"action":action}),
+                "ack" => json!({"action":action,"thread_id":id,"receipt":id}),
+                _ => json!({"action":action,"thread_id":id}),
+            };
+            let result = execute_tool_at_with_scope("child158", "instance158", "bridget_thread", arguments.as_object().unwrap(), &socket);
+            if ["list", "show", "history", "read", "ack"].contains(&action) { assert_eq!(result.unwrap()["action"], action); }
+            else { assert!(matches!(result, Err(ToolError::Technical { code:"capability_denied", .. })), "{action}"); }
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_discovery_events_sub_unsub_permis() {
+        let socket = test_socket("mcp158-events");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
+                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
+                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
+                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
+                assert!(matches!(read_command(&mut reader), WrapperToDaemon::ObservationRequest { .. }));
+                write_command(&mut writer, DaemonToWrapper::ObservationResult { result:json!({"status":"ok"}) });
+            }
+        });
+        for arguments in [json!({"action":"sub","event":"turn_ended","once":true}), json!({"action":"unsub","id":"subscription158"})] {
+            assert_eq!(execute_tool_at_with_scope("child158", "instance158", "bridget_events", arguments.as_object().unwrap(), &socket).unwrap()["status"], "ok");
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_discovery_lecture_artefact_permise() {
+        use bridget_transport::protocol::ArtifactReadOutcome;
+        let socket = test_socket("mcp158-artifact-read");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let scope_result = json!({"version":1,"caller_read_only":true});
+            reply_caller_scope(&listener, scope_result);
+            let (stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
+                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
+                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
+                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
+            let WrapperToDaemon::ArtifactRead { request } = read_command(&mut reader) else { panic!("lecture d'artefact attendue") };
+            write_command(&mut writer, DaemonToWrapper::ArtifactReadResult { version:1, artifact_ref:request.artifact_ref, version_ref:request.version_ref, outcome:ArtifactReadOutcome::Chunk { bytes:b"contenu158".to_vec(), total_len:10, digest:"a".repeat(64), offset:0, next_offset:None } });
+        });
+        let result = execute_tool_at_with_scope("child158", "instance158", "bridget_read_artifact", json!({"version":1,"artifact_ref":"artifact158","version_ref":"version158","kind":{"kind":"manifest"},"offset":0,"limit":16}).as_object().unwrap(), &socket).unwrap();
+        assert_eq!(result["outcome"]["status"], "chunk");
+        assert_eq!(result["outcome"]["bytes"], json!(b"contenu158".to_vec()));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_discovery_journal_avec_et_sans_to() {
+        let socket = test_socket("mcp158-journal");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+            let scope_result = json!({"version":1,"caller_read_only":true});
+            reply_caller_scope(&listener, scope_result);
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::RoleHandshake { role:ConnectionRole::Attach }));
+            write_command(&mut writer, DaemonToWrapper::RoleAccepted { role:ConnectionRole::Attach });
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::Subscribe { .. }));
+            write_command(&mut writer, DaemonToWrapper::Subscribed { subscription_id:"s158".into() });
+            write_command(&mut writer, DaemonToWrapper::JournalFragment { subscription_id:"s158".into(),seq:7,offset:0,final_fragment:true,bytes:serde_json::to_vec(&json!({"seq":7,"text":"preuve158"})).unwrap() });
+            write_command(&mut writer, DaemonToWrapper::SnapshotCaughtUp { subscription_id:"s158".into(),through_seq:Some(7) });
+            }
+            for _ in 0..2 {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+            }
+        });
+        for arguments in [json!({"agent":"source"}), json!({"agent":"source","to":null})] {
+            let result = execute_tool_at_with_scope("child158", "instance158", "bridget_journal", arguments.as_object().unwrap(), &socket).unwrap();
+            assert_eq!(result["entries"][0]["text"], "preuve158");
+        }
+        for to in ["", "parent"] {
+            assert!(matches!(
+                execute_tool_at_with_scope(
+                    "child158",
+                    "instance158",
+                    "bridget_journal",
+                    json!({"agent":"source","to":to}).as_object().unwrap(),
+                    &socket
+                ),
+                Err(ToolError::Technical {
+                    code: "capability_denied",
+                    ..
+                })
+            ));
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mcp158_discovery_lecture_ack_page_suivante() {
+        use bridget_transport::protocol::{ThreadAction, ThreadRequest, ThreadNotify};
+        const A: &str = "14700000-aaaa-4aaa-8aaa-00000000000a";
+        const B: &str = "14700000-bbbb-4bbb-8bbb-00000000000b";
+        let socket = test_socket("mcp158-three-pages");
+        let root = socket.parent().unwrap().to_path_buf();
+        let store = crate::store::Store::open(&root.join("db158")).unwrap();
+        let create = crate::threads::handle(&store, &FixtureDirectory, A, ThreadRequest { version:1, cross_project_reason:None, request:ThreadAction::Create { title:"Trois pages158".into(),members:vec![B.into()],operation_id:uuid::Uuid::new_v4().to_string() } }, 1);
+        assert_eq!(create.result["status"], "created");
+        let thread_id = create.result["thread_id"].as_str().unwrap().to_owned();
+        for number in 1..=6 {
+            let posted = crate::threads::handle(&store, &FixtureDirectory, A, ThreadRequest { version:1,cross_project_reason:None,request:ThreadAction::Post { thread_id:thread_id.clone(),body:format!("entrée{number}"),notify:ThreadNotify::Targets(vec![]),operation_id:uuid::Uuid::new_v4().to_string(),reply_to_seq:None,ack_receipt:None,kind:None,supersedes_seq:None } }, 1);
+            assert_eq!(posted.result["status"], "posted");
+        }
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..6 {
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
+                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
+                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
+                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
+                let WrapperToDaemon::ThreadRequest { request } = read_command(&mut reader) else { panic!("read/ack existant attendu") };
+                assert!(matches!(&request.request, ThreadAction::Read { .. } | ThreadAction::Ack { .. }));
+                let result = crate::threads::handle(&store, &FixtureDirectory, B, request, 2);
+                write_command(&mut writer, DaemonToWrapper::ThreadResult { result });
+            }
+        });
+        let mut seqs = BTreeSet::new();
+        let mut receipts = BTreeSet::new();
+        for page_number in 0..3 {
+            let page = execute_tool_at_with_scope(B, "instance158", "bridget_thread", json!({"action":"read","thread_id":thread_id,"limit":2}).as_object().unwrap(), &socket).unwrap();
+            assert_eq!(page["status"], "read");
+            assert_eq!(page["has_more"], page_number < 2);
+            assert_eq!(page["entries"].as_array().unwrap().len(), 2);
+            for entry in page["entries"].as_array().unwrap() {
+                assert!(
+                    seqs.insert(entry["seq"].as_u64().unwrap()),
+                    "une page ne doit jamais revenir après ACK"
+                );
+            }
+            let receipt = page["receipt"].as_str().unwrap().to_owned();
+            assert!(receipts.insert(receipt.clone()));
+            let ack = execute_tool_at_with_scope(B, "instance158", "bridget_thread", json!({"action":"ack","thread_id":thread_id,"receipt":receipt}).as_object().unwrap(), &socket).unwrap();
+            assert_eq!(ack["status"], "acknowledged");
+        }
+        assert_eq!(seqs.into_iter().collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6]);
+        server.join().unwrap();
     }
 
     fn read_command(reader: &mut BufReader<UnixStream>) -> WrapperToDaemon {
@@ -5380,6 +5946,7 @@ mod tests {
         let expected_scope = issuer_scope("instance-greffe-1");
         let server_scope = expected_scope.clone();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -5457,6 +6024,7 @@ mod tests {
         let socket = test_socket("delegate-review-target");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -5515,8 +6083,14 @@ mod tests {
         .unwrap();
         assert_eq!(result["status"], "queued");
         server.join().unwrap();
-        std::fs::remove_file(socket).unwrap();
+        std::fs::remove_file(&socket).unwrap();
 
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         for isolated in [
             json!({ "goal": "relire", "review_ref": "origin/main" }),
             json!({ "goal": "relire", "expected_head": "a".repeat(40) }),
@@ -5527,12 +6101,13 @@ mod tests {
                     "instance-review-target",
                     "guichet_delegate",
                     isolated.as_object().unwrap(),
-                    Path::new("/socket/ne-doit-pas-etre-ouverte"),
+                    &socket,
                 ),
                 Err(ToolError::InvalidParams(reason))
                     if reason.contains("doivent être fournis ensemble")
             ));
         }
+        server.join().unwrap();
     }
 
     #[test]
@@ -5540,6 +6115,7 @@ mod tests {
         let socket = test_socket("greffe-cut");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -5594,6 +6170,7 @@ mod tests {
         let expected_scope = issuer_scope("instance-greffe-3");
         let server_scope = expected_scope.clone();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -5681,7 +6258,13 @@ mod tests {
 
     #[test]
     fn mutation_mcp_refuse_toute_seconde_source_de_principal_ou_de_registre() {
-        let socket = Path::new("/socket/inutile");
+        let socket = test_socket("invalid-scope158");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..4 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         for forbidden in ["from", "principal", "database_path", "catalogue_path"] {
             let mut arguments = json!({ "line": "kind=add id=constat-1" });
             arguments[forbidden] = json!("forged");
@@ -5691,11 +6274,12 @@ mod tests {
                     "instance-greffe-4",
                     "guichet_registre_add",
                     arguments.as_object().unwrap(),
-                    socket,
+                    &socket,
                 ),
                 Err(ToolError::InvalidParams(reason)) if reason.contains(forbidden)
             ));
         }
+        server.join().unwrap();
     }
 
     #[test]
@@ -5707,6 +6291,7 @@ mod tests {
         let server = thread::spawn({
             let expected_body = expected_body.clone();
             move || {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (stream, _) = listener.accept().unwrap();
                 let read_stream = stream.try_clone().unwrap();
                 let mut reader = BufReader::new(read_stream);
@@ -5784,6 +6369,7 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         crate::mcp_identity::mock_private_identity(&socket, "parent", "instance-parent");
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -5868,6 +6454,7 @@ mod tests {
         let socket = test_socket("send-reply");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -6001,6 +6588,7 @@ mod tests {
         let (seen_tx, seen_rx) = mpsc::channel();
         let server = thread::spawn(move || {
             for _ in 0..2 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
@@ -6277,6 +6865,7 @@ mod tests {
         let socket = test_socket("cut-after-send");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -6310,6 +6899,8 @@ mod tests {
             ));
             drop(writer);
             drop(reader);
+
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
 
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -6406,6 +6997,7 @@ mod tests {
                     expires_at: 1_700_000_060,
                 },
             ] {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
                 let (stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
@@ -6505,6 +7097,7 @@ mod tests {
         let socket = test_socket("coupure-contrat");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);
@@ -6815,6 +7408,7 @@ mod tests {
         let socket = test_socket("who");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let read_stream = stream.try_clone().unwrap();
             let mut reader = BufReader::new(read_stream);
@@ -6894,6 +7488,12 @@ mod tests {
     #[test]
     fn spec138_invalid_reasons_and_scope_are_rejected_before_transport() {
         let socket = test_socket("invalid-reason");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..8 {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            }
+        });
         for reason in [
             Value::Null,
             json!(" "),
@@ -6923,6 +7523,7 @@ mod tests {
                 Err(ToolError::InvalidParams(_))
             ));
         }
+        server.join().unwrap();
     }
 
     #[test]
@@ -6930,6 +7531,7 @@ mod tests {
         let socket = test_socket("old-server");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
@@ -7005,6 +7607,7 @@ mod tests {
         };
         let expected = warning.clone();
         let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut writer = BufWriter::new(stream);

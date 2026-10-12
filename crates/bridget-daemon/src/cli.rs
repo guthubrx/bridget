@@ -695,7 +695,7 @@ fn print_usage() {
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
-           control <OP>           Référent : status [--history] | pause [--reason <T>] | resume | budget <N> | posture discovery|complete\n  \
+           control <OP>           Référent : status [--history] | pause | resume | budget | posture | delegations [list|cancel] | halt-delegations [--reason <T>] [--cancel-active] | resume-delegations\n  \
            inbox <OP>             Référent : list [--all] | resolve <ID> <CHOIX>\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
@@ -6093,8 +6093,103 @@ fn parse_control_posture(
     }
 }
 
+// Contrôle158 : projection globale et arrêt humain par le canal087 existant.
+fn parse_delegation_control(args: &[String]) -> Result<(WrapperToDaemon, bool), String> {
+    let usage = "usage: bridget control delegations [list] [--state active|all] [--limit 1..100] [--json] | delegations cancel <UUID> | halt-delegations [--reason <texte>] [--cancel-active] | resume-delegations";
+    match args.first().map(String::as_str) {
+        Some("delegations") if args.get(1).is_some_and(|value| value == "cancel") => {
+            if args.len() != 3 {
+                return Err(usage.into());
+            }
+            let task_id = crate::threads::require_uuid(&args[2], "task_id")
+                .map_err(|_| "control delegations cancel : UUID invalide".to_string())?;
+            Ok((WrapperToDaemon::DelegationCancel {
+                version: 1, task_id, request_id: uuid::Uuid::new_v4().to_string(),
+            }, false))
+        }
+        Some("delegations") => {
+            let mut state = "active".to_string();
+            let mut limit = 50;
+            let mut json = false;
+            let mut seen_state = false;
+            let mut seen_limit = false;
+            let mut index = if args.get(1).is_some_and(|value| value == "list") {
+                2
+            } else {
+                1
+            };
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--state" if !seen_state => {
+                        index += 1;
+                        state = args
+                            .get(index)
+                            .filter(|value| matches!(value.as_str(), "active" | "all"))
+                            .ok_or_else(|| usage.to_string())?
+                            .clone();
+                        seen_state = true;
+                    }
+                    "--limit" if !seen_limit => {
+                        index += 1;
+                        limit = args
+                            .get(index)
+                            .and_then(|value| value.parse::<u32>().ok())
+                            .filter(|value| (1..=100).contains(value))
+                            .ok_or_else(|| usage.to_string())?;
+                        seen_limit = true;
+                    }
+                    "--json" if !json => json = true,
+                    _ => return Err(usage.into()),
+                }
+                index += 1;
+            }
+            Ok((WrapperToDaemon::DelegationOverviewRead { version: 1, state, limit }, json))
+        }
+        Some("halt-delegations") => {
+            let mut reason = None;
+            let mut cancel_active = false;
+            let mut index = 1;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--reason" if reason.is_none() => {
+                        index += 1;
+                        reason = Some(args.get(index).filter(|value| !value.is_empty() && !value.starts_with("--"))
+                            .ok_or_else(|| usage.to_string())?.clone());
+                    }
+                    "--cancel-active" if !cancel_active => cancel_active = true,
+                    _ => return Err(usage.into()),
+                }
+                index += 1;
+            }
+            Ok((WrapperToDaemon::DelegationHaltSet {
+                version: 1, command_id: uuid::Uuid::new_v4().to_string(),
+                halted: true, reason, cancel_active,
+            }, false))
+        }
+        Some("resume-delegations") if args.len() == 1 => Ok((WrapperToDaemon::DelegationHaltSet {
+            version: 1, command_id: uuid::Uuid::new_v4().to_string(),
+            halted: false, reason: None, cancel_active: false,
+        }, false)),
+        _ => Err(usage.into()),
+    }
+}
+
+// FR011 : même ligne dans la liste, la réponse de mutation et control status.
+fn print_delegation_halt_line(halted: bool, since: Option<i64>, by: &Option<String>, reason: &Option<String>) {
+    if halted {
+        println!(
+            "délégations arrêtées · depuis {} · par {} · motif : {}",
+            since
+                .and_then(format_local_reset)
+                .unwrap_or_else(|| "inconnu".into()),
+            by.as_deref().unwrap_or("inconnu"),
+            reason.as_deref().unwrap_or("aucun")
+        );
+    }
+}
+
 fn cmd_control(args: &[String]) {
-    let usage = "usage: bridget control status [--history] | pause [--reason <T>] | resume | budget <N> | posture discovery|complete";
+    let usage = "usage: bridget control status [--history] | pause [--reason <T>] | resume | budget <N> | posture discovery|complete | delegations [list] [--state active|all] [--limit 1..100] [--json] | delegations cancel <UUID> | halt-delegations [--reason <T>] [--cancel-active] | resume-delegations";
     match args.first().map(String::as_str) {
         Some("status") => {
             let (state, inbox_open_count) = fetch_control_state().unwrap_or_else(|error| {
@@ -6102,6 +6197,33 @@ fn cmd_control(args: &[String]) {
                 std::process::exit(1);
             });
             print_control_status(&state, inbox_open_count);
+            match send_control_request(WrapperToDaemon::DelegationOverviewRead {
+                version: 1,
+                state: "active".into(),
+                limit: 1,
+            }) {
+                Ok(DaemonToWrapper::DelegationOverview {
+                    halted,
+                    since,
+                    by,
+                    reason,
+                    ..
+                }) => {
+                    print_delegation_halt_line(halted, since, &by, &reason);
+                }
+                Ok(DaemonToWrapper::DelegationControlRejected { reason }) => {
+                    eprintln!("bridget control: refusé: {reason:?}");
+                    std::process::exit(1);
+                }
+                Ok(response) => {
+                    eprintln!("bridget control: réponse inattendue: {response:?}");
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!("bridget control: {error}");
+                    std::process::exit(1);
+                }
+            }
             if args.iter().any(|argument| argument == "--history") {
                 match send_control_request(WrapperToDaemon::ControlHistory {
                     version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
@@ -6129,6 +6251,81 @@ fn cmd_control(args: &[String]) {
                         eprintln!("bridget control: historique indisponible: {response:?}")
                     }
                     Err(error) => eprintln!("bridget control: {error}"),
+                }
+            }
+        }
+        Some("delegations" | "halt-delegations" | "resume-delegations") => {
+            let (request, json_output) =
+                parse_delegation_control(args).unwrap_or_else(|error| exit_argument_error(&error));
+            if !matches!(&request, WrapperToDaemon::DelegationOverviewRead { .. })
+                && !require_interactive_terminal(&format!("control {}", args[0]))
+            {
+                std::process::exit(2);
+            }
+            let command_id = match &request {
+                WrapperToDaemon::DelegationHaltSet { command_id, .. } => Some(command_id.clone()),
+                _ => None,
+            };
+            match send_control_request(request) {
+                Ok(DaemonToWrapper::DelegationOverview { halted, items, total_active, since, by, reason }) => {
+                    if json_output {
+                        println!(
+                            "{}",
+                            serde_json::json!({"halted":halted,"items":items,"total_active":total_active,"since":since,"by":by,"reason":reason})
+                        );
+                    } else {
+                        print_delegation_halt_line(halted, since, &by, &reason);
+                        println!(
+                            "délégations actives : {total_active} · {} affichées",
+                            items.len()
+                        );
+                        for row in items {
+                            println!(
+                                "{} · propriétaire {} · enfant {} · {} · âge {} s · échéance {} · parent {}",
+                                row["task_id"].as_str().unwrap_or("inconnu"),
+                                row["owner"].as_str().unwrap_or("inconnu"),
+                                row["child"].as_str().unwrap_or("inconnu"),
+                                row["state"].as_str().unwrap_or("inconnu"),
+                                row["age_secs"].as_i64().unwrap_or(0),
+                                row["deadline_in_secs"]
+                                    .as_i64()
+                                    .map(|value| format!("{value} s"))
+                                    .unwrap_or_else(|| "aucune".into()),
+                                row["parent_task_id"].as_str().unwrap_or("aucun")
+                            );
+                        }
+                    }
+                }
+                Ok(DaemonToWrapper::DelegationHaltState { halted, since, by, reason, generation, cancelled, replayed }) => {
+                    print_delegation_halt_line(halted, since, &by, &reason);
+                    if !halted {
+                        println!("délégations reprises");
+                    }
+                    println!(
+                        "génération : {generation} · {cancelled} arbre(s) visé(s) par l’annulation · reçu {}",
+                        if replayed { "rejoué" } else { "nouveau" }
+                    );
+                    if let Some(command_id) = command_id {
+                        println!("commande : {command_id}");
+                    }
+                }
+                Ok(DaemonToWrapper::DelegationControlRejected { reason }) => {
+                    if command_id.is_some()
+                        && matches!(reason, bridget_transport::protocol::DelegationControlRefusal::StoreUnavailable)
+                    {
+                        eprintln!("contrôle indisponible : l’état du contrôle des délégations a pu changer. Vérifiez avec bridget control delegations ; utilisez delegations cancel pour les tâches restantes si nécessaire.");
+                    } else {
+                        eprintln!("bridget control: refusé: {reason:?}");
+                    }
+                    std::process::exit(1);
+                }
+                Ok(response) => {
+                    eprintln!("bridget control: réponse inattendue: {response:?}");
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!("bridget control: {error}");
+                    std::process::exit(1);
                 }
             }
         }
@@ -9903,7 +10100,10 @@ mod guidance156_tests {
             crate::environment::ensure_private_directory(path).unwrap();
         }
         let socket = root.join("ns/bridget.sock");
-        let queue_parse_only = test == "guidance156_cli_queue_parse";
+        let queue_parse_only = matches!(
+            test,
+            "guidance156_cli_queue_parse" | "control158_delegations_cli_parse"
+        );
         let listener = UnixListener::bind(&socket).unwrap();
         listener.set_nonblocking(true).unwrap();
         if queue_parse_only {
@@ -10148,5 +10348,47 @@ mod guidance156_tests {
             assert!(String::from_utf8_lossy(&rejected.stderr).contains("queue : attendu --target"));
             assert!(wire.is_none());
         }
+    }
+
+    #[test]
+    fn control158_delegations_cli_parse() {
+        if let Ok(args) = std::env::var("BRIDGET_GUIDANCE156_CLI_ARGS") {
+            let mut command = vec!["bridget".to_string()];
+            command.extend(serde_json::from_str::<Vec<String>>(&args).unwrap());
+            run_with_args(command);
+            return;
+        }
+        let defaults = vec!["delegations".to_string()];
+        assert!(matches!(parse_delegation_control(&defaults), Ok((WrapperToDaemon::DelegationOverviewRead { version:1, ref state, limit:50 }, false)) if state == "active"));
+        let list: Vec<String> = ["delegations", "list", "--state", "all", "--limit", "100", "--json"].into_iter().map(str::to_string).collect();
+        assert!(matches!(parse_delegation_control(&list), Ok((WrapperToDaemon::DelegationOverviewRead { version:1, ref state, limit:100 }, true)) if state == "all"));
+        for args in [
+            &["control", "delegations", "--limit", "0"][..],
+            &["control", "delegations", "--limit", "101"][..],
+            &["control", "delegations", "--inconnu"][..],
+            &["control", "delegations", "cancel", "pas-un-uuid"][..],
+        ] {
+            let (output, wire) = guidance156_cli_run("control158_delegations_cli_parse", args);
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{args:?} : {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(wire.is_none(), "usage refusé avant ouverture de socket");
+        }
+    }
+
+    #[test]
+    fn control158_halt_aucun_outil_mcp() {
+        let tools = crate::mcp::tools();
+        let controls: Vec<&str> = tools.iter().filter_map(|tool| tool["name"].as_str())
+            .filter(|name| name.starts_with("bridget_control") || name.contains("halt_delegations") || name.contains("resume_delegations"))
+            .collect();
+        assert_eq!(
+            controls,
+            ["bridget_control_status"],
+            "seule la lecture du contrôle humain est exposée par MCP"
+        );
     }
 }

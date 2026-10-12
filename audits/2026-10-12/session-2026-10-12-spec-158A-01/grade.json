@@ -1,0 +1,97 @@
+{
+  "grade": "A",
+  "date": "2026-10-12",
+  "spec": "158",
+  "scope": "SPEC158A contrôle global/portées MCP — delta bd37e927,27 fichiers,151 hunks",
+  "coverage_percent": 85.43,
+  "justification": "A100 sur zéro finding actif confirmé, avec couverture partielle déclarée. TEST-001 corrigé et relu ; signal R2-C3 LOW contesté visible comme limite non contractuelle. Aucun GREEN global.",
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 3
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "ux": {
+      "grade": "N/A",
+      "numeric": null,
+      "findings_count": 0,
+      "weight": 1
+    }
+  },
+  "numeric": 100,
+  "release_blocked": false,
+  "global_test_green": false
+}

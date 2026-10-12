@@ -135,12 +135,13 @@ impl Fixture {
         Self::new_with_notify_timeout(2)
     }
     fn new_with_notify_timeout(notify_timeout_secs: u64) -> Self {
-        Self::new_with_provider(notify_timeout_secs, false, None)
+        Self::new_with_provider(notify_timeout_secs, false, None, false)
     }
     fn new_with_provider(
         notify_timeout_secs: u64,
         native_recovery152: bool,
         codex155: Option<&str>,
+        complete152: bool,
     ) -> Self {
         let root = fs::canonicalize("/tmp").unwrap().join(format!(
             "n148-{}",
@@ -158,7 +159,7 @@ impl Fixture {
             let cli = compile_provider152(&root, script, "codex");
             (cli.to_string_lossy().into_owned(), json!(["app-server"]))
         } else if native_recovery152 {
-            let script = provider_recovery152();
+            let script = provider_recovery152(complete152);
             support::private_write(&provider, &script).unwrap();
             for relative in ["bin", ".git", "provider/.claude"] {
                 support::private_dir(&root.join(relative)).unwrap();
@@ -166,7 +167,7 @@ impl Fixture {
             support::private_write(
                 &root.join("provider/.claude/settings.json"),
                 serde_json::to_vec(&json!({"permissions":{
-                    "defaultMode":"plan",
+                    "defaultMode":if complete152 { "bypassPermissions" } else { "plan" },
                     "deny":["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"]
                 }}))
                 .unwrap(),
@@ -195,6 +196,15 @@ impl Fixture {
         if native_recovery152 {
             registry["agents"]["fake-glm"]["claude_config_dir"] =
                 json!(root.join("provider/.claude"));
+        }
+        if complete152 {
+            // Parent fermé155 : ce type n'est pas lancé par la fixture.
+            // Il atteste explicitement la politique source du parent152.
+            registry["agents"]["fixture-codex-parent152"] = json!({
+                "command":"/bin/echo", "args":["app-server"], "protocol":"codex_app_server",
+                "forbidden_env":[], "capabilities":{"execution_paths":["codex_app_server"],
+                    "models":{"gpt-5.6-terra":{"efforts":["high"]}}}
+            });
         }
         if codex155.is_some() {
             let mut definition = registry["agents"]["fake-glm"].take();
@@ -518,7 +528,7 @@ int main(int argc, char **argv) {{
     cli
 }
 
-fn provider_recovery152() -> String {
+fn provider_recovery152(complete152: bool) -> String {
     let started = r#"record("started", provider="closed_fixture", model=model, effort=effort, t3_present=False)"#;
     let identity = r#"record("started", provider="closed_fixture", model=model, effort=effort, t3_present=False,
        instance_id=os.environ.get("BRIDGET_AGENT_INSTANCE_ID"),
@@ -545,6 +555,18 @@ assert set(tools).issubset({"Read", "Glob", "Grep"})
 if "--restricted" not in args:
     assert args[args.index("--permission-prompts") + 1] == "none"
     assert denied.issubset(set(args[args.index("--disallowedTools") + 1].split(",")))"#;
+    let permissions = if complete152 {
+        permissions
+            .replacen("assert mode == \"plan\"", "assert mode == (\"plan\" if \"--tools\" in args else \"bypassPermissions\")", 1)
+            .replacen("assert permissions[\"defaultMode\"] == mode", "assert permissions[\"defaultMode\"] == \"bypassPermissions\"", 1)
+            .replacen("tools = [\"Read\", \"Glob\", \"Grep\"]", "tools = [\"Read\", \"Glob\", \"Grep\", \"Bash\"]", 1)
+            .replacen("assert set(tools).issubset({\"Read\", \"Glob\", \"Grep\"})",
+                "if mode == \"plan\":\n    assert set(tools).issubset({\"Read\", \"Glob\", \"Grep\"})\nelse:\n    assert tools == [\"Read\", \"Glob\", \"Grep\", \"Bash\"]", 1)
+            .replacen("    assert denied.issubset(set(args[args.index(\"--disallowedTools\") + 1].split(\",\")))",
+                "    if mode == \"plan\":\n        assert denied.issubset(set(args[args.index(\"--disallowedTools\") + 1].split(\",\")))\n    else:\n        assert \"--disallowedTools\" not in args", 1)
+    } else {
+        permissions.to_string()
+    };
     let observed_init = r#"def emit(frame):
     if frame.get("type") == "system" and frame.get("subtype") == "init":
         frame.update(permissionMode=mode, tools=tools, cwd=os.getcwd())
@@ -588,7 +610,7 @@ if "--restricted" not in args:
         )
         .replacen(
             "assert \"--restricted\" in args\nassert args[args.index(\"--permission-mode\") + 1] == \"plan\"",
-            permissions,
+            &permissions,
             1,
         )
         .replacen(
@@ -728,15 +750,50 @@ fn assert_native_identity152(f: &Fixture, id: &str, mission: &str) -> String {
 }
 
 fn working_native152(nested: bool) -> (Fixture, support::Client, Value) {
-    let mut f = Fixture::new_with_provider(15, true, None);
-    let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
-    f.human_grant();
+    let mut f = Fixture::new_with_provider(15, true, None, nested);
+    let mut parent = if nested {
+        use bridget_transport::protocol::{PresenceMode, ProviderPermissions};
+        let mut parent = support::Client::connect(&support::socket(&f.root));
+        parent.send(WrapperToDaemon::Register {
+            agent_type:"fixture-codex-parent152".into(), identity_version:2, agent_id:PARENT.into(),
+            host:Some("t1209".into()), transport:Some("codex_app_server".into()), channel:None.into(),
+            mode:Some(PresenceMode::Acp), location:None, os:Some("test".into()),
+            instance_id:Some(INSTANCE.into()), domain:None, journal_available:None, turn_in_progress:false,
+        });
+        let DaemonToWrapper::Registered { agent_id, credential:Some(credential) } = parent.receive()
+            else { panic!("identité primaire du parent152 absente"); };
+        assert_eq!(agent_id, PARENT);
+        support::save_fixture_credential(&support::socket(&f.root), PARENT, INSTANCE, credential);
+        let observation = uuid::Uuid::new_v4().to_string();
+        parent.send(WrapperToDaemon::NativePermissionFact {
+            fact:Some(ProviderPermissions {
+                version:1, source:"native_wrapper".into(), run_id:"parent-turn152".into(),
+                provider_session_id:"parent-session152".into(), provider_instance_id:INSTANCE.into(), revision:1,
+                driver:"codex_app_server".into(), cwd:f.root.to_string_lossy().into_owned(),
+                runtime_mode:"full-access".into(), interaction_mode:"default".into(),
+                provider_policy:json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user",
+                    "sandbox_policy":{"type":"dangerFullAccess"}}),
+            }), request_id:None, observation_id:Some(observation.clone()), unavailable_code:None,
+        });
+        assert!(matches!(f.receive(&mut parent), DaemonToWrapper::NativePermissionAcknowledged {
+            observation_id, accepted:true,
+        } if observation_id == observation), "politique parentComplete152 non attestée");
+        parent
+    } else {
+        let parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
+        f.human_grant();
+        parent
+    };
     let task = if nested {
         "WAIT_CANCEL_148 NESTED_152"
     } else {
         "WAIT_CANCEL_148"
     };
-    let created = f.request(&mut parent, delegate(&f.root.clone(), "recovery-152", task));
+    let mut request = delegate(&f.root, "recovery-152", task);
+    if nested && let NativeDelegationRequest::Delegate { posture, .. } = &mut request {
+        *posture = Some(SpawnPosture::Development);
+    }
+    let created = f.request(&mut parent, request);
     let id = created["task_id"].as_str().expect("mission admise");
     f.status_until(&mut parent, id, "working");
     let saved = native_task152(&f, id);
@@ -753,6 +810,8 @@ fn native152_rouge_panne_mission_working() {
     let id = created["task_id"].as_str().unwrap();
     let mission = created["message_id"].as_str().unwrap();
     let original = native_task152(&f, id);
+    assert_eq!(original["effective_posture"], "development");
+    assert_eq!(original["permission_snapshot"]["child_policy"]["permission_mode"], "bypassPermissions");
     let mut previous_instance = original["child_instance"].as_str().unwrap().to_string();
     let mut grandchild_before = None::<Value>;
     support::private_write(&f.root.join("delegate-152"), []).unwrap();
@@ -761,7 +820,17 @@ fn native152_rouge_panne_mission_working() {
         f.crash();
         // Chaque démarrage relit les magasins réels du même daemon.
         f.start();
-        parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
+        parent = support::Client::connect(&support::socket(&f.root));
+        parent.send(WrapperToDaemon::Register {
+            agent_type:"fixture-codex-parent152".into(), identity_version:2, agent_id:PARENT.into(),
+            host:Some("t1209".into()), transport:Some("codex_app_server".into()), channel:None.into(),
+            mode:Some(bridget_transport::protocol::PresenceMode::Acp), location:None, os:Some("test".into()),
+            instance_id:Some(INSTANCE.into()), domain:None, journal_available:None, turn_in_progress:false,
+        });
+        let DaemonToWrapper::Registered { agent_id, credential:Some(credential) } = parent.receive()
+            else { panic!("reconnexion primaire du parent152 absente"); };
+        assert_eq!(agent_id, PARENT);
+        support::save_fixture_credential(&support::socket(&f.root), PARENT, INSTANCE, credential);
         let resumed = f.status_until(&mut parent, id, "working");
         assert_eq!(resumed["task_id"], id);
         assert_eq!(resumed["message_id"], mission);
@@ -793,6 +862,8 @@ fn native152_rouge_panne_mission_working() {
             .and_then(|child| child["child_instance"].as_str())
             .unwrap_or("");
         let child = wait_native_ready152(&f, child_id, previous_child_instance);
+        assert_eq!(child["effective_posture"], "discovery");
+        assert_eq!(child["permission_snapshot"]["child_policy"]["permission_mode"], "plan");
         assert_eq!(child["parent_task_id"], id);
         assert_eq!(child["root_owner_agent_id"], PARENT);
         assert_eq!(child["restart_resumes"], restart - 1);
@@ -1054,7 +1125,7 @@ for line in sys.stdin:
             json!({"type":"dangerFullAccess"})
         };
         let script = provider.replace("FIXTURE_SANDBOX155", &sandbox.to_string());
-        let mut f = Fixture::new_with_provider(15, false, Some(&script));
+        let mut f = Fixture::new_with_provider(15, false, Some(&script), false);
         let mut parent = support::Client::connect(&support::socket(&f.root));
         parent.send(WrapperToDaemon::Register {
             agent_type: "fake-codex".into(),
@@ -1323,7 +1394,7 @@ for line in sys.stdin:
 #[test]
 fn native153_e2e_trois_rondes() {
     // Réemploi152 : CLI/profil privés réellement capturés, sans T3 ni modèle.
-    let mut f = Fixture::new_with_provider(15, true, None);
+    let mut f = Fixture::new_with_provider(15, true, None, false);
     let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
     f.human_grant();
     let db = rusqlite::Connection::open_with_flags(

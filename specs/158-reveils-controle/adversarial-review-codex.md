@@ -68,3 +68,69 @@ Artefacts modifiés : `spec.md`, `plan.md`, `tasks.md` (26 vers 22 tâches),
 **Limite assumée** : l'annulation en cascade est au plus une fois. Un crash entre
 l'enregistrement du reçu et la fin de l'annulation laisse des tâches actives ;
 l'humain relance `bridget control delegations cancel`.
+
+
+## Contre-revue d’implémentation158A — Haiku R1, 2026-10-12
+
+Les rondes Codex ci-dessus restent historiques. La revue d’implémentation R1
+est distincte : verdict **APPROVE_WITH_CHANGES**, lecture seule.
+Question : cohérence des réponses, de l’idempotence, du plafond MCP et des
+preuves du diff158A. Rapport brut :
+/Users/moi/.cache/bridget-review158A-20261012-r1/rapport.md
+SHA256 fcf93c6b503a00d26afa98e3bcc803e30ab9cc8ac103a600760044ceb6dbe736.
+
+| Finding | Vérification et décision ROOT | État actuel et limite |
+|---|---|---|
+| F1 MEDIUM : refus après arrêt committé | `handle_delegation_halt_set` peut rendre StoreUnavailable après les human_cancel postcommit. Le même code couvre aussi un échec précommit. Dans cmd_control, HaltSet+StoreUnavailable affiche que l’arrêt ou les annulations ont pu être appliqués, puis recommande control delegations et delegations cancel. Exit1 conservé. Aucun champ wire ajouté. | Correctif appliqué et relu. Ne confirme ni commit ni arrêt physique. Le replay de reçu n’émet aucune annulation. Aucun nouveau scénario de panne forcée ajouté. |
+| F2 LOW à vérifier : ancêtre purgé | settled_trees ne retient que les arbres entièrement soldés ; purge_trees puis delete_tree suppriment l’arbre dans une transaction. parent_lineage refuse une profondeur d’au moins8. Aucun chemin normal démontré où la purge enlève seulement un ancêtre encore nécessaire. | Objection non retenue comme défaut de production. Une DB corrompue/lignée incohérente ferme cancel_active avant commit ; halt sans annulation reste possible si sa propre lecture/écriture est disponible. Limite ADR documentée, pas test de corruption nouveau. |
+| F3 LOW : status partiel peut sortir1 | Le bras status imprime contrôle087 puis lit l’arrêt ; échec de cette lecture fait exit1. FR011, contrat et ADR explicitent que l’affichage partiel n’est pas un succès. | Clarification appliquée. Comportement existant conservé. |
+| F4 LOW : suspended ajusté lors du replay Continue | Le replay rend current_task_view avant la garde, sans nouvelle ronde. suspended représente la pause courante. L’oracle à quatre combinaisons confirme la tâche inchangée et cette projection dynamique. | Contrat clarifié : Delegate/Continue rendent une vue courante ; seuls les reçus HaltSet sont historiques. Pas une réponse de mission rendue immuable. |
+| TEST-001 MEDIUM, audit cycle1 | La première adaptation158 avait affaibli l’oracle ChildProof en acceptant un RPC préalable. La garde queue préconnexion est restaurée au puits, ainsi que la seule section historique ChildProof avant let queue = tools(). La section positive garde une ligne reply_caller_scope ; la fonction entière n’est pas byte-identique. | Corrigé avec preuve ciblée : lot T021-review-fixes158-lib,22PASS,RC0. L’oracle garantit delegated_tool_forbidden et zéro accept, sans credential factice. Le JSON d’audit original conserve historiquement son état open. |
+| Régression preview103 trouvée dans FULL | Reads est autorisé pour toutes les postures. Seul handoff actionpreview réemploie parse_request strict puis preview_result avant le RPC ; aucun ID, DB ou transport. Les paramètres d’envoi, même nuls, sont refusés. | Replay1031PASS. Aucun fallback sur panne RPC et aucune autre lecture de socket exemptée. |
+
+Les pointeurs de code actuels sont :
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs:6313 — if command_id.is_some().
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs:631 — if name == "bridget_queue" && identity.delegated_origin.is_some().
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs:639 — if name == "bridget_handoff" && scope == crate::mcp_scopes::Scope::Reads.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs:2690 — fn guidance156_mcp_queue_schema().
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation_lineage.rs:176 — fn settled_trees.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation_lineage.rs:200 — pub fn purge_trees.
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation_lineage.rs:151 — pub fn parent_lineage.
+
+Preuves : /Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.json
+(22PASS,16,63s,RC0,218sources stables, logSHAcbdb3bc3ba4a4801a8540edada180445cd3664d96ef9caa10aaff82f85c5e630)
+et /Users/moi/.cache/bridget-plan158-20261012-r1/T021-preview103-replay.json
+(1PASS,9,24s,RC0, logSHA04aad2ef396a1c5805f165b8caab5f24c2dceb679aef80a1e5cabaacf828e303).
+La revue R1 n’avait pas lu le diff entier et n’avait exécuté aucun test.
+Les vérifications ciblées et les replays ROOT ci-dessus complètent cette
+preuve ; ils ne deviennent pas une revue entière ni un GREENglobal.
+T021/T022 et la clôture Converge restent en attente du contrôle final ROOT.
+
+Le dernier oracle152 `native152_rouge_panne_mission_working` est désormais
+PASS : /Users/moi/.cache/bridget-plan158-20261012-r1/T021-native152-replay.json
+(1PASS,9,29s,RC0,218sources stables), logSHA5a45fa4e827c9d28e0752808384f3a6ca8f653424fd79131dffc73137904f3e7.
+Les quatre nouveaux échecs de FULL sont ainsi résolus par replays distincts ;
+les huit échecs historiques et le RC101 de la FULL restent conservés.
+T021/T022 et Converge demeurent soumis au contrôle final ROOT.
+
+## Contre-revue d’implémentation158A — Haiku R2, 2026-10-12
+
+Verdict : **APPROVE_WITH_CHANGES**, sans défaut bloquant restant. Rapport :
+/Users/moi/.cache/bridget-review158A-20261012-r2/rapport.md
+SHA256 83b9d943af4268591ab529a2b8b4ffbead0de9450ef58d93cde9fa3e0dda725c.
+Les checkpoints précédents restent historiques. T021/T022 sont désormais
+prouvées et cochées par ROOT :22/22 ; aucune nouvelle tâche n’est ajoutée.
+
+| Objection | Vérification et décision ROOT | Preuve et limite |
+|---|---|---|
+| C1 LOW : message trop large pour resume | Un seul littéral CLI devient neutre : l’état du contrôle des délégations a pu changer ; consulter la vue puis annuler séparément si nécessaire. Le bras et exit1 restent identiques. | Source CLI cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543 relue. Ce texte ne confirme pas un commit. |
+| C2 LOW : fonction156 présentée entière identique | L’extraction de fn guidance156_mcp_queue_schema jusqu’avant let queue = tools() donne1710octets, SHAc107269454f8b8d3923eaf36a546972137760630a74a86fd6f61f3a010010d69. Seule la section ChildProof est byte-identique. Le reste diffère par la ligne positive reply_caller_scope. | Formulations de tests et de ce rapport corrigées. Aucun code ou oracle changé pour cette clarification. |
+| C3 LOW : branche du nouveau message sans test dédié | Le dernier changement est un littéral de diagnostic. Le chemin reste relu, mais aucune panne forcée de human_cancel n’est testée. La compilation de livraison reste une preuve distincte à venir. | Limite acceptée. Aucun scénario supplémentaire : l’utilisateur impose les tests prévus. Aucun PASS de ce message ni build final anticipé. |
+| Limite R2 : contenu compilé incertain à cause des dates | Les reçus lib22PASS et quatre replays portent avant/après le même mcp0c525f7c… et cli3c428621…,218sources strictement stables. Le lancement à la même seconde que l’écriture ne remplace pas cette corrélation par empreintes. | Correction CallerScope/preview/ChildProof testée sur les octets annoncés. Le littéral C1 ultérieur cedf1abb… est séparé, sans fausse attribution aux runs antérieurs. |
+| Proposition R2 : refaire une FULL | La FULL unique historique reste2440P/12F/74I, RC101. Les quatre nouveaux échecs sont résolus par replays ciblés ;8échecs historiques restent déclarés. | Non retenue : la stratégie retenue limite les répétitions et respecte les tests prévus demandés par l’utilisateur. Pas de GREENglobal déclaré. |
+
+Les limites de lecture R1/R2 demeurent : ces contre-revues n’ont ni lu tous les
+hunks ni exécuté les tests. La relecture complète T022 est distincte et attribuée
+à ROOT :152/152hunks,126corps identiques réutilisés et26relus après correctifs.
+La capture de livraison27fichiers/151hunks suit le seul littéral C1 et les deux
+cases T021/T022 cochées ; aucune nouvelle règle métier n’est attribuée à ce delta.

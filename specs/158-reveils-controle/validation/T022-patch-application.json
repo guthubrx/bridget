@@ -1,0 +1,6 @@
+{
+  "original_patch_sha256": "821305d3c2800ed2608086164ec703f95b2cca6213c9de8db1f1d9b2aeae814f",
+  "applied_patch_sha256": "0f76be8d9d57ce220743be84502ab52f86a9258e6053bcbab5c5b86a1f7496e9",
+  "git_metadata_only_fix": "new file mode 100644 ajout\u00e9 ; contenu documentaire inchang\u00e9",
+  "implementation_sha256": "28dc57ea70984d60efdd94fbffc4f7eb4b003708f8825ee90cb44b31988e83dc"
+}

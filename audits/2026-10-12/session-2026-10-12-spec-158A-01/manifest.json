@@ -1,0 +1,204 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T09:32:51.474301+00:00",
+    "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle",
+    "scope_description": "Diff158A contrôle global et portées MCP ; hors fonctionnalités158B futures",
+    "scope_mode": "diff",
+    "spec": "158A",
+    "mode": "M",
+    "grid": "all",
+    "audit_mode": "fix",
+    "session_id": "session-2026-10-12-spec-158A-01",
+    "session_dir": "/Users/moi/.cache/bridget-audit158-20261012-r1",
+    "preparation_only": false,
+    "source_frozen": true,
+    "stage": "final-code-format-frozen-FULL-in-progress",
+    "diff": {
+      "base": "bd37e927eee0b28f058df9d6a6992e38665a6ad0",
+      "files_count": 24,
+      "rust_files_count": 10,
+      "patch": "/Users/moi/.cache/bridget-audit158-20261012-r1/diff158A-final.patch",
+      "sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+      "hunks": 137,
+      "scope_inventory": "/Users/moi/.cache/bridget-audit158-20261012-r1/scope-files.json"
+    }
+  },
+  "repo": {
+    "files_count": 288,
+    "all_files_discovered": 2648,
+    "languages": [
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "language_files": {
+      "rust": 213,
+      "python": 56,
+      "typescript": 19
+    },
+    "frameworks": [
+      "Rust2024/std",
+      "serde/serde_json",
+      "rusqlite bundled",
+      "CLI/MCP/UnixSocket"
+    ],
+    "type": "cli-daemon-mcp",
+    "has_ui": false,
+    "has_llm_integration": true,
+    "llm_evidence": "Localisation des déclarations admission/tick de missions natives ; corps non audités en préparation.",
+    "db_type": "sqlite",
+    "db_evidence": "Cargo.toml workspace.dependencies.rusqlite",
+    "ci_system": "none_detected",
+    "container": false
+  },
+  "sampling": null,
+  "sampling_policy": "Inventaire global seulement ; delta thématique entier prévu après gel, aucune couverture déclarée.",
+  "hot_paths": [
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "line": 11092,
+      "symbol": "handle_control_state_set",
+      "symbol_line": "fn handle_control_state_set(",
+      "trigger": "mutation du contrôle global",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    },
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "line": 11164,
+      "symbol": "interrupt_executions_for_pause",
+      "symbol_line": "fn interrupt_executions_for_pause(st: &mut DaemonState, control_generation: u64) {",
+      "trigger": "interruption des exécutions à la pause",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    },
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+      "line": 57,
+      "symbol": "scope_of",
+      "symbol_line": "pub(crate) fn scope_of(tool: &str, arguments: &Map<String, Value>) -> Option<Scope> {",
+      "trigger": "classification de la portée MCP",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    },
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "line": 440,
+      "symbol": "dispatch_with_executor",
+      "symbol_line": "fn dispatch_with_executor(",
+      "trigger": "distribution des outils MCP",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    },
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "line": 1399,
+      "symbol": "handle_locked_with_project",
+      "symbol_line": "fn handle_locked_with_project(",
+      "trigger": "admission de mission native",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    },
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "line": 2612,
+      "symbol": "tick",
+      "symbol_line": "pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {",
+      "trigger": "progression des missions natives",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    },
+    {
+      "type": "source_symbol_locator",
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "line": 6041,
+      "symbol": "apply_control_mutation",
+      "symbol_line": "fn apply_control_mutation(",
+      "trigger": "commande de contrôle CLI",
+      "semantic_audit": false,
+      "confidence": "Déclaration localisée uniquement ; fréquence et corps non audités."
+    }
+  ],
+  "threat_model": {
+    "status": "preparation_hypotheses_to_validate",
+    "assets": [
+      "état du contrôle global",
+      "identités et portées des commandes",
+      "état des missions et messages"
+    ],
+    "attackers": [
+      "client local pouvant soumettre une commande CLI/MCP",
+      "entrée issue d’un agent natif"
+    ],
+    "surfaces": [
+      "distribution des outils MCP",
+      "mutation du contrôle global",
+      "admission des missions natives"
+    ],
+    "limits": "Aucun scénario d’exploitation ni garde validé à ce stade."
+  },
+  "slos": {
+    "defined": false,
+    "proposed": null,
+    "status": "not_assessed_in_preparation",
+    "reason": "Aucun nouveau SLO demandé ; aucune mesure de performance ni conclusion de production."
+  },
+  "modules_actifs": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12"
+  ],
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "exists": false,
+    "read_or_modified": false
+  },
+  "execution_metrics": {
+    "semantic_files_read": 0,
+    "semantic_hunks_read": 0,
+    "coverage_estimate_percent": 0,
+    "phases_completed": [
+      "00",
+      "01",
+      "02-final-source-refresh"
+    ],
+    "phases_pending": [
+      "thematic_cycle1",
+      "cycle-scoring",
+      "output-validation"
+    ],
+    "tools_used": [
+      "rg files inventory",
+      "read-only Git delta",
+      "stdlib metadata serialization"
+    ],
+    "warnings": [
+      "Code158A gelé après formatage vérifié. FULL unique158 en cours ; aucune réussite globale déduite.",
+      "Tâches et preuves documentaires seront complétées après résultats, sans mutation source pendant FULL."
+    ]
+  }
+}

@@ -39,6 +39,7 @@ pub use managed_supervisor::{
 pub(crate) mod delegation;
 pub(crate) mod delegation_mcp;
 pub mod mcp;
+pub(crate) mod mcp_scopes;
 pub mod mcp_identity;
 mod native_permission_observer;
 pub(crate) mod native_permissions;

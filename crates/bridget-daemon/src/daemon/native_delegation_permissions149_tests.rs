@@ -669,6 +669,7 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
             "child_requests_default",
             "cwd_root",
             "cwd_scope",
+            "delegations_halted",
             "features",
             "keep_alive_max_secs",
             "keep_alive_min_secs",

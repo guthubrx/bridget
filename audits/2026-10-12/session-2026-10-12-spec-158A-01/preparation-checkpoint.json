@@ -1,0 +1,20 @@
+{
+  "version": "v14.0",
+  "timestamp": "2026-10-12T09:31:48.199684+00:00",
+  "status": "PREPARATION_READY_FINAL_CAPTURE_REQUIRED",
+  "allowed_phases": [
+    "00",
+    "01",
+    "02-preparation"
+  ],
+  "thematic_started": false,
+  "source_frozen": false,
+  "current_hash_changes_during_capture": [],
+  "source_files_read_semantically": 0,
+  "hunks_read_semantically": 0,
+  "manifest_sha256": "a21fd78a96de1f1c53b1201f3f1446d0fd7187604921860c589e34e6d315eac6",
+  "scope_sha256": "c7288194104677a433decaa596486c0c142dcbe81dbb72b2da5ef19775e21c1e",
+  "diff_sha256": "9dbc9da221c6267e9c9611d1f77341486cfbf393f0b55978210674a4f58f3b0b",
+  "config_sha256": "e1e3e64695f03945b185571f3b337f4fc065101e5c0768924911b53253a31b38",
+  "next_action": "ROOT refresh final source hashes/delta after selective fmt and Converge; explicit GO before cycle1."
+}

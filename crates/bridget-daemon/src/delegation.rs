@@ -113,6 +113,16 @@ impl ChildRequest {
     }
 }
 
+/// Ligne unique d'arrêt158A ; distincte de la pause et des tâches natives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HaltState {
+    pub halted: bool,
+    pub since: Option<i64>,
+    pub by: Option<String>,
+    pub reason: Option<String>,
+    pub generation: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RoundRecord {
     pub round: u32,
@@ -279,7 +289,17 @@ impl Task {
         }
     }
 
-    #[cfg(test)]
+    /// O(1+B), B octets des seuls labels/identifiants ; projection froide158A.
+    /// Partagé par la vue globale et la ligne rendue après l'annulation humaine.
+    pub(crate) fn overview_row(&self, now: i64) -> serde_json::Value {
+        serde_json::json!({
+            "task_id":self.task_id,"owner":self.owner,"child":self.child,"state":self.state,
+            "age_secs":now.saturating_sub(self.created_at),
+            "deadline_in_secs":self.mission_deadline_at.map(|deadline| deadline.saturating_sub(now)),
+            "parent_task_id":self.parent_task_id,
+        })
+    }
+
     pub fn holds_slot(&self) -> bool {
         !self.terminal() || (self.guarded && !self.cleanup_done)
     }
@@ -348,7 +368,22 @@ CREATE TABLE IF NOT EXISTS native_child_requests(
   UNIQUE(task_id, child_instance, provider_session, turn_id, provider_request_id));
 CREATE INDEX IF NOT EXISTS native_child_requests_open ON native_child_requests(state, deadline_at);
 CREATE INDEX IF NOT EXISTS native_child_requests_task ON native_child_requests(task_id, state);
-CREATE INDEX IF NOT EXISTS native_child_requests_inbox ON native_child_requests(inbox_settled, state);")?;
+CREATE INDEX IF NOT EXISTS native_child_requests_inbox ON native_child_requests(inbox_settled, state);
+CREATE TABLE IF NOT EXISTS native_delegation_halt(
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  halted INTEGER NOT NULL CHECK (halted IN (0, 1)),
+  since INTEGER,
+  by_actor TEXT,
+  reason TEXT,
+  generation INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO native_delegation_halt(id, halted, generation) VALUES (1, 0, 0);
+CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
+  command_id TEXT PRIMARY KEY,
+  applied_at INTEGER NOT NULL,
+  response_json TEXT NOT NULL
+);
+")?;
         const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
         const CURRENT_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'),coalesce(json_extract(payload,'$.guarded'),0),coalesce(json_extract(payload,'$.cleanup_done'),0),owner_instance)";
         let existing: Option<String> = tx.query_row(
@@ -377,6 +412,120 @@ CREATE INDEX IF NOT EXISTS native_child_requests_inbox ON native_child_requests(
         };
         store.initialize_lineage()?;
         Ok(store)
+    }
+
+    /// O(1), lecture de l'unique ligne ; aucun effet sur pause, tâches ou réveils.
+    pub fn delegation_halt(&self) -> Result<HaltState, bridget_transport::protocol::DelegationControlRefusal> {
+        use bridget_transport::protocol::DelegationControlRefusal as E;
+        self.conn.query_row(
+            "SELECT halted,since,by_actor,reason,generation FROM native_delegation_halt WHERE id=1",
+            [], |row| Ok(HaltState { halted:row.get(0)?, since:row.get(1)?, by:row.get(2)?,
+                reason:row.get(3)?, generation:row.get(4)? }),
+        ).map_err(|_| E::StoreUnavailable)
+    }
+
+    /// O(r log r+B), r<=257 reçus, B<=512 caractères ; transaction immédiate.
+    /// L'appelant est déjà autorisé. `cancelled` est le nombre d'arbres ciblés
+    /// pour annulation à cet instant ; le callback ne s'évalue qu'après absence
+    /// du reçu, sous cette transaction et le verrou d'état tenu par l'appelant.
+    /// Aucun parcours d'annulation ici. Un rejeu ne modifie jamais le reçu ni l'état.
+    pub fn set_delegation_halt(
+        &self,
+        command_id: &str,
+        halted: bool,
+        actor: &str,
+        reason: Option<&str>,
+        cancelled: impl FnOnce() -> Result<u32, bridget_transport::protocol::DelegationControlRefusal>,
+        now: i64,
+    ) -> Result<serde_json::Value, bridget_transport::protocol::DelegationControlRefusal> {
+        use bridget_transport::protocol::DelegationControlRefusal as E;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|_| E::StoreUnavailable)?;
+        let saved: Option<String> = tx
+            .query_row(
+                "SELECT response_json FROM native_delegation_halt_commands WHERE command_id=?1",
+                [command_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| E::StoreUnavailable)?;
+        if let Some(saved) = saved {
+            // Décodage typé : un reçu malformé ne devient jamais une mutation neuve.
+            let mut response: bridget_transport::protocol::DaemonToWrapper =
+                serde_json::from_str(&saved).map_err(|_| E::StoreUnavailable)?;
+            let bridget_transport::protocol::DaemonToWrapper::DelegationHaltState {
+                replayed, ..
+            } = &mut response
+            else {
+                return Err(E::StoreUnavailable);
+            };
+            *replayed = true;
+            let response = serde_json::to_value(response).map_err(|_| E::StoreUnavailable)?;
+            tx.commit().map_err(|_| E::StoreUnavailable)?;
+            return Ok(response);
+        }
+        // Même convention que la pause087 : un booléen inchangé conserve auteur/date/motif.
+        let mut state = self.delegation_halt()?;
+        let cancelled = cancelled()?;
+        if state.halted != halted {
+            state.halted = halted;
+            state.generation = state.generation.checked_add(1).ok_or(E::StoreUnavailable)?;
+            state.since = halted.then_some(now);
+            state.by = halted.then(|| actor.to_owned());
+            state.reason = if halted {
+                reason.map(|text| text.chars().take(crate::referent_control::MAX_REASON_CHARS).collect())
+            } else { None };
+            tx.execute("UPDATE native_delegation_halt SET halted=?1,since=?2,by_actor=?3,reason=?4,generation=?5 WHERE id=1",
+                params![state.halted,state.since,state.by,state.reason,state.generation])
+                .map_err(|_| E::StoreUnavailable)?;
+        }
+        let response = bridget_transport::protocol::DaemonToWrapper::DelegationHaltState {
+            halted: state.halted,
+            since: state.since,
+            by: state.by,
+            reason: state.reason,
+            generation: state.generation,
+            cancelled,
+            replayed: false,
+        };
+        let response = serde_json::to_value(response).map_err(|_| E::StoreUnavailable)?;
+        tx.execute("INSERT INTO native_delegation_halt_commands(command_id,applied_at,response_json) VALUES(?1,?2,?3)",
+            params![command_id,now,response.to_string()]).map_err(|_| E::StoreUnavailable)?;
+        // Plus anciens d'abord ; rowid départage les commandes d'une même seconde.
+        tx.execute("DELETE FROM native_delegation_halt_commands WHERE command_id IN (
+            SELECT command_id FROM native_delegation_halt_commands ORDER BY applied_at DESC,rowid DESC LIMIT -1 OFFSET 256)",
+            []).map_err(|_| E::StoreUnavailable)?;
+        tx.commit().map_err(|_| E::StoreUnavailable)?;
+        Ok(response)
+    }
+
+    /// Complexité : O(n log n) - n = tâches conservées, borné à4096.
+    /// Le décodage déjà fourni par tasks() ajoute O(B), B octets des payloads.
+    /// Projection globale en lecture seule ; aucun corps de mission/résultat/cwd.
+    pub fn overview_page(
+        &self,
+        state_filter: &str,
+        limit: u32,
+    ) -> Result<serde_json::Value, bridget_transport::protocol::DelegationControlRefusal> {
+        use bridget_transport::protocol::DelegationControlRefusal as E;
+        if !matches!(state_filter, "active" | "all") || !(1..=100).contains(&limit) {
+            return Err(E::InvalidRequest);
+        }
+        let mut tasks = self.tasks().map_err(|_| E::StoreUnavailable)?;
+        let total_active = tasks.iter().filter(|task| task.holds_slot()).count() as u32;
+        if state_filter == "active" { tasks.retain(Task::holds_slot); }
+        tasks.sort_by(|a,b| b.created_at.cmp(&a.created_at).then_with(|| b.task_id.cmp(&a.task_id)));
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| E::StoreUnavailable)?.as_secs().min(i64::MAX as u64) as i64;
+        let items = tasks.into_iter().take(limit as usize).map(|task| task.overview_row(now)).collect();
+        // Tous les champs d'arrêt viennent de cette seule lecture, jamais de fragments distincts.
+        let halt = self.delegation_halt()?;
+        serde_json::to_value(bridget_transport::protocol::DaemonToWrapper::DelegationOverview {
+            halted:halt.halted, since:halt.since, by:halt.by, reason:halt.reason, items, total_active,
+        }).map_err(|_| E::StoreUnavailable)
     }
 
     /// O(log n+B). Les deux clés uniques et l'empreinte sont contrôlées dans
@@ -1637,5 +1786,340 @@ mod tests {
         assert!(store.permission("owner").unwrap().is_none());
         drop(store);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn control158_halt_store_pose_levee() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        assert_eq!(
+            store.delegation_halt().unwrap(),
+            HaltState {
+                halted: false,
+                since: None,
+                by: None,
+                reason: None,
+                generation: 0,
+            }
+        );
+        let pose = store
+            .set_delegation_halt("A", true, "cli", Some("essai"), || Ok(0), 100)
+            .unwrap();
+        assert_eq!(
+            pose,
+            serde_json::json!({"type":"delegation_halt_state","halted":true,
+            "since":100,"by":"cli","reason":"essai","generation":1,"cancelled":0,"replayed":false})
+        );
+        let levee = store
+            .set_delegation_halt("B", false, "cli", None, || Ok(0), 200)
+            .unwrap();
+        assert_eq!(levee["halted"], false);
+        assert_eq!(levee["generation"], 2);
+        assert!(levee["since"].is_null() && levee["by"].is_null() && levee["reason"].is_null());
+        assert!(!store.delegation_halt().unwrap().halted);
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM native_delegation_halt", [], |row| row
+                    .get::<_, u32>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn control158_halt_store_a_b_rejeu_a() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let first = store
+            .set_delegation_halt("A", true, "cli", Some("premier"), || Ok(0), 100)
+            .unwrap();
+        store
+            .set_delegation_halt("B", false, "cli", None, || Ok(0), 200)
+            .unwrap();
+        let before = store.delegation_halt().unwrap();
+        let original_receipt: String = store.conn.query_row(
+            "SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'", [], |row| row.get(0)).unwrap();
+        let replay = store.set_delegation_halt("A", true, "humain", Some("autre"), || panic!("aucun comptage au rejeu"), 999).unwrap();
+        let mut expected = first;
+        expected["replayed"] = serde_json::json!(true);
+        assert_eq!(replay, expected);
+        assert_eq!(store.delegation_halt().unwrap(), before);
+        assert!(!before.halted);
+        assert_eq!(store.conn.query_row("SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'",
+            [], |row| row.get::<_,String>(0)).unwrap(), original_receipt);
+    }
+
+    #[test]
+    fn control158_halt_store_a_b_rejeu_a_apres_redemarrage() {
+        // Reprise du montage SQLite disque déjà utilisé par les tests du magasin.
+        let dir = std::env::temp_dir().join(format!("native158-halt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("native.sqlite");
+        let store = DelegationStore::open(&path).unwrap();
+        let first = store
+            .set_delegation_halt("A", true, "cli", Some("premier"), || Ok(0), 100)
+            .unwrap();
+        store
+            .set_delegation_halt("B", false, "cli", None, || Ok(0), 200)
+            .unwrap();
+        drop(store);
+        let store = DelegationStore::open(&path).unwrap();
+        let before = store.delegation_halt().unwrap();
+        let mut expected = first;
+        expected["replayed"] = serde_json::json!(true);
+        assert_eq!(
+            store
+                .set_delegation_halt(
+                    "A",
+                    true,
+                    "cli",
+                    Some("premier"),
+                    || panic!("aucun comptage après reprise"),
+                    300
+                )
+                .unwrap(),
+            expected
+        );
+        assert_eq!(store.delegation_halt().unwrap(), before);
+        assert!(!before.halted);
+        assert_eq!(before.generation, 2);
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn control158_halt_store_recu_porte_la_reponse() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        // Trois arbres ciblés : valeur fournie par l'appelant, pas une terminaison simulée.
+        let first = store.set_delegation_halt("A", true, "cli", Some("compte fourni"), || Ok(3), 100).unwrap();
+        let saved: String = store.conn.query_row("SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'",
+            [], |row| row.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap(), first);
+        assert_eq!(first["cancelled"], 3);
+        store
+            .set_delegation_halt("B", false, "cli", None, || Ok(0), 200)
+            .unwrap();
+        let replay = store
+            .set_delegation_halt("A", true, "cli", None, || Ok(0), 300)
+            .unwrap();
+        assert_eq!(replay["cancelled"], 3);
+        assert_eq!(replay["generation"], first["generation"]);
+        assert_eq!(replay["replayed"], true);
+    }
+
+    #[test]
+    fn control158_halt_store_recus_bornes() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        for index in 0..257 {
+            store.set_delegation_halt(&format!("command-{index}"), true, "cli", None, || Ok(0), index).unwrap();
+        }
+        let count: u32 = store.conn.query_row("SELECT count(*) FROM native_delegation_halt_commands", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 256);
+        assert!(!store.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_halt_commands WHERE command_id='command-0')",
+            [], |row| row.get::<_,bool>(0)).unwrap());
+        assert!(store.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_halt_commands WHERE command_id='command-256')",
+            [], |row| row.get::<_,bool>(0)).unwrap());
+        assert_eq!(
+            store
+                .set_delegation_halt("command-256", true, "cli", None, || Ok(0), 999)
+                .unwrap()["replayed"],
+            true
+        );
+    }
+
+    #[test]
+    fn control158_halt_store_motif_borne() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let text = "é".repeat(crate::referent_control::MAX_REASON_CHARS + 1);
+        let response = store
+            .set_delegation_halt("A", true, "cli", Some(&text), || Ok(0), 100)
+            .unwrap();
+        let expected = "é".repeat(crate::referent_control::MAX_REASON_CHARS);
+        assert_eq!(response["reason"], expected);
+        assert_eq!(
+            store.delegation_halt().unwrap().reason.as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    // Quatre consommateurs réels ; même legacy_task151 et vraie insertion du magasin.
+    // Aucun faux verdict, processus, harnais ou hook d'horloge.
+    fn overview158_insert(store: &DelegationStore, index: u32, mut task: Task) -> Task {
+        task.owner = format!("parent-{}", index % 3);
+        task.owner_instance = format!("instance-parent-{}", index % 3);
+        task.child = format!("child-{index}");
+        task.mission = format!("mission-{index}");
+        task.mission_deadline_at = Some(task.created_at + 1000);
+        let key = format!("overview-{index}");
+        store.insert(&task, &key, key.as_bytes()).unwrap();
+        task
+    }
+
+    #[test]
+    fn control158_overview_trois_proprietaires() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let mut tasks: Vec<Task> = Vec::new();
+        for index in 0..10 {
+            let mut task = legacy_task151();
+            task.state = "working".into();
+            task.created_at = now - 30 + index as i64;
+            // La lignée est fixée avant insertion, comme dans le magasin livré.
+            if index == 3 {
+                task.parent_task_id = Some(tasks[0].task_id.clone());
+            }
+            tasks.push(overview158_insert(&store, index, task));
+        }
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let response = store.overview_page("all", 100).unwrap();
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let items = response["items"].as_array().unwrap();
+        assert_eq!(items.len(), 10);
+        assert_eq!(response["total_active"], 10);
+        let owners: std::collections::BTreeSet<&str> = items
+            .iter()
+            .map(|item| item["owner"].as_str().unwrap())
+            .collect();
+        assert_eq!(owners.len(), 3);
+        for (item, task) in items.iter().zip(tasks.iter().rev()) {
+            assert_eq!(item["task_id"], task.task_id);
+            assert_eq!(item["owner"], task.owner);
+            assert_eq!(item["child"], task.child);
+            assert_eq!(item["state"], "working");
+            assert_eq!(
+                item["parent_task_id"],
+                serde_json::to_value(&task.parent_task_id).unwrap()
+            );
+            let age = item["age_secs"].as_i64().unwrap();
+            let remaining = item["deadline_in_secs"].as_i64().unwrap();
+            assert!(
+                (before.min(after) - task.created_at..=before.max(after) - task.created_at)
+                    .contains(&age)
+            );
+            assert!(
+                (task.mission_deadline_at.unwrap() - before.max(after)
+                    ..=task.mission_deadline_at.unwrap() - before.min(after))
+                    .contains(&remaining)
+            );
+        }
+        assert_eq!(response["halted"], false);
+        assert!(
+            response["since"].is_null() && response["by"].is_null() && response["reason"].is_null()
+        );
+    }
+
+    #[test]
+    fn control158_overview_filtre_actif() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let mut live = Vec::new();
+        for (index, state) in ["working","cancelling","result_available","failed","cancelled"].into_iter().enumerate() {
+            let mut task = legacy_task151();
+            task.state = state.into();
+            task.created_at = 100 + index as i64;
+            if index == 2 {
+                task.guarded = true;
+            }
+            // Garde immuable posée avant admission.
+            else if index > 2 {
+                task.cleanup_done = true;
+            }
+            let task = overview158_insert(&store, index as u32, task);
+            if index <= 2 {
+                live.push(task.task_id);
+            }
+        }
+        let active = store.overview_page("active", 100).unwrap();
+        let ids: Vec<&str> = active["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["task_id"].as_str().unwrap())
+            .collect();
+        let expected: Vec<&str> = live.iter().rev().map(String::as_str).collect();
+        assert_eq!(ids, expected);
+        assert_eq!(active["total_active"], 3);
+        assert_eq!(
+            store.overview_page("all", 100).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+    }
+
+    #[test]
+    fn control158_overview_limite_100() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        for index in 0..101 {
+            let mut task = legacy_task151();
+            task.state = "working".into();
+            task.created_at = index as i64;
+            overview158_insert(&store, index, task);
+        }
+        let page = store.overview_page("all", 100).unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 100);
+        assert_eq!(page["total_active"], 101, "le total précède la pagination");
+        assert_eq!(
+            store.overview_page("active", 1).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        for invalid in [0, 101] {
+            assert_eq!(
+                store.overview_page("all", invalid).unwrap_err(),
+                bridget_transport::protocol::DelegationControlRefusal::InvalidRequest
+            );
+        }
+    }
+
+    #[test]
+    fn control158_overview_sans_corps_ni_resultat() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let mut seed = legacy_task151();
+        seed.state = "result_available".into();
+        seed.created_at = 100;
+        let mut task = overview158_insert(&store, 0, seed);
+        if let NativeDelegationRequest::Delegate { task: body, .. } = &mut task.request {
+            *body = "MISSION_PRIVEE_158".into();
+        }
+        task.result = Some("RESULTAT_PRIVE_158".into());
+        task.cwd = "/chemin-prive-158".into();
+        task.mission_deadline_at = None;
+        store.save(&task).unwrap();
+        let response = store.overview_page("all", 1).unwrap();
+        let item = &response["items"][0];
+        let keys: std::collections::BTreeSet<&str> = item
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            std::collections::BTreeSet::from([
+                "task_id",
+                "owner",
+                "child",
+                "state",
+                "age_secs",
+                "deadline_in_secs",
+                "parent_task_id"
+            ])
+        );
+        assert!(item["deadline_in_secs"].is_null());
+        let wire = response.to_string();
+        for private in ["MISSION_PRIVEE_158", "RESULTAT_PRIVE_158", "/chemin-prive-158"] {
+            assert!(!wire.contains(private), "la projection ne contient aucune donnée privée");
+        }
     }
 }

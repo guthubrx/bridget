@@ -1,0 +1,2234 @@
+{
+  "review": "T022158A complete diff before pending corrections",
+  "read_at": "2026-10-12T09:44:58.586982+00:00",
+  "scope_file": "/Users/moi/.cache/bridget-audit158-20261012-r1/scope-files.json",
+  "scope_sha256": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+  "base": "bd37e927eee0b28f058df9d6a6992e38665a6ad0",
+  "diff_file": "/Users/moi/.cache/bridget-audit158-20261012-r1/diff158A-final.patch",
+  "diff_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+  "diff_read_ranges": [
+    [
+      1,
+      4612
+    ]
+  ],
+  "hunks_read": 137,
+  "hunks_total": 137,
+  "files_read": 24,
+  "files_total": 24,
+  "rust_files": 10,
+  "document_files": 14,
+  "coverage_meaning": "All supplied diff lines, old/new text and hunk contexts were read. This does not establish coverage of whole existing source files or global architecture. Source SHA checks alone are not semantic reading. Deleted text is recorded by old hunk coordinates.",
+  "sources_match_scope_before_and_after_report": true,
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "sha256": "a632f1ae095ce4bbd1dc8f589ffd45fee908ae873f485341ce1b9dc5247e847e",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 10388,
+      "ranges": [
+        [
+          695,
+          701
+        ],
+        [
+          6093,
+          6195
+        ],
+        [
+          6197,
+          6229
+        ],
+        [
+          6254,
+          6328
+        ],
+        [
+          10094,
+          10103
+        ],
+        [
+          10343,
+          10388
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 1,
+          "diff_start_line": 5,
+          "diff_end_line": 13,
+          "old_start": 695,
+          "old_count": 7,
+          "new_start": 695,
+          "new_count": 7
+        },
+        {
+          "id": 2,
+          "diff_start_line": 14,
+          "diff_end_line": 118,
+          "old_start": 6093,
+          "old_count": 8,
+          "new_start": 6093,
+          "new_count": 103
+        },
+        {
+          "id": 3,
+          "diff_start_line": 119,
+          "diff_end_line": 152,
+          "old_start": 6102,
+          "old_count": 6,
+          "new_start": 6197,
+          "new_count": 33
+        },
+        {
+          "id": 4,
+          "diff_start_line": 153,
+          "diff_end_line": 228,
+          "old_start": 6132,
+          "old_count": 6,
+          "new_start": 6254,
+          "new_count": 75
+        },
+        {
+          "id": 5,
+          "diff_start_line": 229,
+          "diff_end_line": 240,
+          "old_start": 9903,
+          "old_count": 7,
+          "new_start": 10094,
+          "new_count": 10
+        },
+        {
+          "id": 6,
+          "diff_start_line": 241,
+          "diff_end_line": 287,
+          "old_start": 10149,
+          "old_count": 4,
+          "new_start": 10343,
+          "new_count": 46
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 39916,
+      "ranges": [
+        [
+          10716,
+          10936
+        ],
+        [
+          16054,
+          16062
+        ],
+        [
+          16117,
+          16125
+        ],
+        [
+          16139,
+          16147
+        ],
+        [
+          16156,
+          16165
+        ],
+        [
+          16351,
+          16359
+        ],
+        [
+          16745,
+          16761
+        ],
+        [
+          22279,
+          22791
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 7,
+          "diff_start_line": 292,
+          "diff_end_line": 513,
+          "old_start": 10716,
+          "old_count": 6,
+          "new_start": 10716,
+          "new_count": 221
+        },
+        {
+          "id": 8,
+          "diff_start_line": 514,
+          "diff_end_line": 523,
+          "old_start": 15839,
+          "old_count": 6,
+          "new_start": 16054,
+          "new_count": 9
+        },
+        {
+          "id": 9,
+          "diff_start_line": 524,
+          "diff_end_line": 533,
+          "old_start": 15899,
+          "old_count": 6,
+          "new_start": 16117,
+          "new_count": 9
+        },
+        {
+          "id": 10,
+          "diff_start_line": 534,
+          "diff_end_line": 543,
+          "old_start": 15918,
+          "old_count": 6,
+          "new_start": 16139,
+          "new_count": 9
+        },
+        {
+          "id": 11,
+          "diff_start_line": 544,
+          "diff_end_line": 555,
+          "old_start": 15932,
+          "old_count": 7,
+          "new_start": 16156,
+          "new_count": 10
+        },
+        {
+          "id": 12,
+          "diff_start_line": 556,
+          "diff_end_line": 565,
+          "old_start": 16124,
+          "old_count": 6,
+          "new_start": 16351,
+          "new_count": 9
+        },
+        {
+          "id": 13,
+          "diff_start_line": 566,
+          "diff_end_line": 583,
+          "old_start": 16515,
+          "old_count": 6,
+          "new_start": 16745,
+          "new_count": 17
+        },
+        {
+          "id": 14,
+          "diff_start_line": 584,
+          "diff_end_line": 1097,
+          "old_start": 22038,
+          "old_count": 6,
+          "new_start": 22279,
+          "new_count": 513
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 11005,
+      "ranges": [
+        [
+          1069,
+          1087
+        ],
+        [
+          1447,
+          1469
+        ],
+        [
+          1536,
+          1542
+        ],
+        [
+          1796,
+          1814
+        ],
+        [
+          10135,
+          10298
+        ],
+        [
+          10303,
+          10554
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 15,
+          "diff_start_line": 1102,
+          "diff_end_line": 1129,
+          "old_start": 1069,
+          "old_count": 14,
+          "new_start": 1069,
+          "new_count": 19
+        },
+        {
+          "id": 16,
+          "diff_start_line": 1130,
+          "diff_end_line": 1153,
+          "old_start": 1442,
+          "old_count": 9,
+          "new_start": 1447,
+          "new_count": 23
+        },
+        {
+          "id": 17,
+          "diff_start_line": 1154,
+          "diff_end_line": 1162,
+          "old_start": 1517,
+          "old_count": 7,
+          "new_start": 1536,
+          "new_count": 7
+        },
+        {
+          "id": 18,
+          "diff_start_line": 1163,
+          "diff_end_line": 1190,
+          "old_start": 1777,
+          "old_count": 14,
+          "new_start": 1796,
+          "new_count": 19
+        },
+        {
+          "id": 19,
+          "diff_start_line": 1191,
+          "diff_end_line": 1355,
+          "old_start": 10111,
+          "old_count": 6,
+          "new_start": 10135,
+          "new_count": 164
+        },
+        {
+          "id": 20,
+          "diff_start_line": 1356,
+          "diff_end_line": 1608,
+          "old_start": 10121,
+          "old_count": 6,
+          "new_start": 10303,
+          "new_count": 252
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 4793,
+      "ranges": [
+        [
+          669,
+          675
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 21,
+          "diff_start_line": 1613,
+          "diff_end_line": 1620,
+          "old_start": 669,
+          "old_count": 6,
+          "new_start": 669,
+          "new_count": 7
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 2125,
+      "ranges": [
+        [
+          113,
+          128
+        ],
+        [
+          289,
+          305
+        ],
+        [
+          368,
+          389
+        ],
+        [
+          414,
+          533
+        ],
+        [
+          1787,
+          2125
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 22,
+          "diff_start_line": 1625,
+          "diff_end_line": 1641,
+          "old_start": 113,
+          "old_count": 6,
+          "new_start": 113,
+          "new_count": 16
+        },
+        {
+          "id": 23,
+          "diff_start_line": 1642,
+          "diff_end_line": 1660,
+          "old_start": 279,
+          "old_count": 7,
+          "new_start": 289,
+          "new_count": 17
+        },
+        {
+          "id": 24,
+          "diff_start_line": 1661,
+          "diff_end_line": 1684,
+          "old_start": 348,
+          "old_count": 7,
+          "new_start": 368,
+          "new_count": 22
+        },
+        {
+          "id": 25,
+          "diff_start_line": 1685,
+          "diff_end_line": 1805,
+          "old_start": 379,
+          "old_count": 6,
+          "new_start": 414,
+          "new_count": 120
+        },
+        {
+          "id": 26,
+          "diff_start_line": 1806,
+          "diff_end_line": 2145,
+          "old_start": 1638,
+          "old_count": 4,
+          "new_start": 1787,
+          "new_count": 339
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 68,
+      "ranges": [
+        [
+          39,
+          45
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 27,
+          "diff_start_line": 2150,
+          "diff_end_line": 2157,
+          "old_start": 39,
+          "old_count": 6,
+          "new_start": 39,
+          "new_count": 7
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 7992,
+      "ranges": [
+        [
+          623,
+          669
+        ],
+        [
+          2636,
+          2657
+        ],
+        [
+          2675,
+          2686
+        ],
+        [
+          2698,
+          2704
+        ],
+        [
+          2712,
+          2718
+        ],
+        [
+          2746,
+          2752
+        ],
+        [
+          2840,
+          2846
+        ],
+        [
+          2893,
+          2907
+        ],
+        [
+          2922,
+          2930
+        ],
+        [
+          2982,
+          2994
+        ],
+        [
+          3019,
+          3025
+        ],
+        [
+          3044,
+          3050
+        ],
+        [
+          3131,
+          3137
+        ],
+        [
+          3221,
+          3227
+        ],
+        [
+          3356,
+          3369
+        ],
+        [
+          3383,
+          3389
+        ],
+        [
+          3399,
+          3410
+        ],
+        [
+          3642,
+          3648
+        ],
+        [
+          3665,
+          3673
+        ],
+        [
+          3797,
+          3803
+        ],
+        [
+          3930,
+          3936
+        ],
+        [
+          4125,
+          4131
+        ],
+        [
+          4239,
+          4245
+        ],
+        [
+          4428,
+          4434
+        ],
+        [
+          4492,
+          4504
+        ],
+        [
+          4519,
+          4536
+        ],
+        [
+          4547,
+          4553
+        ],
+        [
+          4757,
+          4768
+        ],
+        [
+          4801,
+          4807
+        ],
+        [
+          4880,
+          4886
+        ],
+        [
+          4957,
+          4968
+        ],
+        [
+          4981,
+          4998
+        ],
+        [
+          5002,
+          5008
+        ],
+        [
+          5015,
+          5021
+        ],
+        [
+          5027,
+          5037
+        ],
+        [
+          5244,
+          5250
+        ],
+        [
+          5350,
+          5356
+        ],
+        [
+          5384,
+          5390
+        ],
+        [
+          5435,
+          5880
+        ],
+        [
+          5932,
+          5938
+        ],
+        [
+          6010,
+          6016
+        ],
+        [
+          6069,
+          6082
+        ],
+        [
+          6087,
+          6099
+        ],
+        [
+          6101,
+          6107
+        ],
+        [
+          6156,
+          6162
+        ],
+        [
+          6244,
+          6256
+        ],
+        [
+          6260,
+          6271
+        ],
+        [
+          6277,
+          6283
+        ],
+        [
+          6355,
+          6361
+        ],
+        [
+          6440,
+          6446
+        ],
+        [
+          6574,
+          6580
+        ],
+        [
+          6851,
+          6857
+        ],
+        [
+          6886,
+          6893
+        ],
+        [
+          6983,
+          6989
+        ],
+        [
+          7083,
+          7089
+        ],
+        [
+          7394,
+          7400
+        ],
+        [
+          7474,
+          7485
+        ],
+        [
+          7509,
+          7515
+        ],
+        [
+          7517,
+          7523
+        ],
+        [
+          7593,
+          7599
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 28,
+          "diff_start_line": 2162,
+          "diff_end_line": 2209,
+          "old_start": 623,
+          "old_count": 6,
+          "new_start": 623,
+          "new_count": 47
+        },
+        {
+          "id": 29,
+          "diff_start_line": 2210,
+          "diff_end_line": 2232,
+          "old_start": 2595,
+          "old_count": 6,
+          "new_start": 2636,
+          "new_count": 22
+        },
+        {
+          "id": 30,
+          "diff_start_line": 2233,
+          "diff_end_line": 2246,
+          "old_start": 2618,
+          "old_count": 7,
+          "new_start": 2675,
+          "new_count": 12
+        },
+        {
+          "id": 31,
+          "diff_start_line": 2247,
+          "diff_end_line": 2257,
+          "old_start": 2636,
+          "old_count": 9,
+          "new_start": 2698,
+          "new_count": 7
+        },
+        {
+          "id": 32,
+          "diff_start_line": 2258,
+          "diff_end_line": 2266,
+          "old_start": 2652,
+          "old_count": 7,
+          "new_start": 2712,
+          "new_count": 7
+        },
+        {
+          "id": 33,
+          "diff_start_line": 2267,
+          "diff_end_line": 2274,
+          "old_start": 2686,
+          "old_count": 6,
+          "new_start": 2746,
+          "new_count": 7
+        },
+        {
+          "id": 34,
+          "diff_start_line": 2275,
+          "diff_end_line": 2282,
+          "old_start": 2779,
+          "old_count": 6,
+          "new_start": 2840,
+          "new_count": 7
+        },
+        {
+          "id": 35,
+          "diff_start_line": 2283,
+          "diff_end_line": 2299,
+          "old_start": 2831,
+          "old_count": 7,
+          "new_start": 2893,
+          "new_count": 15
+        },
+        {
+          "id": 36,
+          "diff_start_line": 2300,
+          "diff_end_line": 2314,
+          "old_start": 2852,
+          "old_count": 12,
+          "new_start": 2922,
+          "new_count": 9
+        },
+        {
+          "id": 37,
+          "diff_start_line": 2315,
+          "diff_end_line": 2328,
+          "old_start": 2915,
+          "old_count": 6,
+          "new_start": 2982,
+          "new_count": 13
+        },
+        {
+          "id": 38,
+          "diff_start_line": 2329,
+          "diff_end_line": 2337,
+          "old_start": 2945,
+          "old_count": 7,
+          "new_start": 3019,
+          "new_count": 7
+        },
+        {
+          "id": 39,
+          "diff_start_line": 2338,
+          "diff_end_line": 2345,
+          "old_start": 2970,
+          "old_count": 6,
+          "new_start": 3044,
+          "new_count": 7
+        },
+        {
+          "id": 40,
+          "diff_start_line": 2346,
+          "diff_end_line": 2353,
+          "old_start": 3056,
+          "old_count": 6,
+          "new_start": 3131,
+          "new_count": 7
+        },
+        {
+          "id": 41,
+          "diff_start_line": 2354,
+          "diff_end_line": 2361,
+          "old_start": 3145,
+          "old_count": 6,
+          "new_start": 3221,
+          "new_count": 7
+        },
+        {
+          "id": 42,
+          "diff_start_line": 2362,
+          "diff_end_line": 2376,
+          "old_start": 3279,
+          "old_count": 6,
+          "new_start": 3356,
+          "new_count": 14
+        },
+        {
+          "id": 43,
+          "diff_start_line": 2377,
+          "diff_end_line": 2385,
+          "old_start": 3298,
+          "old_count": 7,
+          "new_start": 3383,
+          "new_count": 7
+        },
+        {
+          "id": 44,
+          "diff_start_line": 2386,
+          "diff_end_line": 2399,
+          "old_start": 3314,
+          "old_count": 11,
+          "new_start": 3399,
+          "new_count": 12
+        },
+        {
+          "id": 45,
+          "diff_start_line": 2400,
+          "diff_end_line": 2407,
+          "old_start": 3556,
+          "old_count": 6,
+          "new_start": 3642,
+          "new_count": 7
+        },
+        {
+          "id": 46,
+          "diff_start_line": 2408,
+          "diff_end_line": 2417,
+          "old_start": 3578,
+          "old_count": 6,
+          "new_start": 3665,
+          "new_count": 9
+        },
+        {
+          "id": 47,
+          "diff_start_line": 2418,
+          "diff_end_line": 2425,
+          "old_start": 3707,
+          "old_count": 6,
+          "new_start": 3797,
+          "new_count": 7
+        },
+        {
+          "id": 48,
+          "diff_start_line": 2426,
+          "diff_end_line": 2433,
+          "old_start": 3839,
+          "old_count": 6,
+          "new_start": 3930,
+          "new_count": 7
+        },
+        {
+          "id": 49,
+          "diff_start_line": 2434,
+          "diff_end_line": 2441,
+          "old_start": 4033,
+          "old_count": 6,
+          "new_start": 4125,
+          "new_count": 7
+        },
+        {
+          "id": 50,
+          "diff_start_line": 2442,
+          "diff_end_line": 2449,
+          "old_start": 4146,
+          "old_count": 6,
+          "new_start": 4239,
+          "new_count": 7
+        },
+        {
+          "id": 51,
+          "diff_start_line": 2450,
+          "diff_end_line": 2457,
+          "old_start": 4334,
+          "old_count": 6,
+          "new_start": 4428,
+          "new_count": 7
+        },
+        {
+          "id": 52,
+          "diff_start_line": 2458,
+          "diff_end_line": 2471,
+          "old_start": 4397,
+          "old_count": 6,
+          "new_start": 4492,
+          "new_count": 13
+        },
+        {
+          "id": 53,
+          "diff_start_line": 2472,
+          "diff_end_line": 2508,
+          "old_start": 4417,
+          "old_count": 35,
+          "new_start": 4519,
+          "new_count": 18
+        },
+        {
+          "id": 54,
+          "diff_start_line": 2509,
+          "diff_end_line": 2516,
+          "old_start": 4462,
+          "old_count": 6,
+          "new_start": 4547,
+          "new_count": 7
+        },
+        {
+          "id": 55,
+          "diff_start_line": 2517,
+          "diff_end_line": 2529,
+          "old_start": 4671,
+          "old_count": 6,
+          "new_start": 4757,
+          "new_count": 12
+        },
+        {
+          "id": 56,
+          "diff_start_line": 2530,
+          "diff_end_line": 2537,
+          "old_start": 4709,
+          "old_count": 6,
+          "new_start": 4801,
+          "new_count": 7
+        },
+        {
+          "id": 57,
+          "diff_start_line": 2538,
+          "diff_end_line": 2545,
+          "old_start": 4787,
+          "old_count": 6,
+          "new_start": 4880,
+          "new_count": 7
+        },
+        {
+          "id": 58,
+          "diff_start_line": 2546,
+          "diff_end_line": 2558,
+          "old_start": 4863,
+          "old_count": 6,
+          "new_start": 4957,
+          "new_count": 12
+        },
+        {
+          "id": 59,
+          "diff_start_line": 2559,
+          "diff_end_line": 2577,
+          "old_start": 4881,
+          "old_count": 10,
+          "new_start": 4981,
+          "new_count": 18
+        },
+        {
+          "id": 60,
+          "diff_start_line": 2578,
+          "diff_end_line": 2586,
+          "old_start": 4894,
+          "old_count": 7,
+          "new_start": 5002,
+          "new_count": 7
+        },
+        {
+          "id": 61,
+          "diff_start_line": 2587,
+          "diff_end_line": 2595,
+          "old_start": 4907,
+          "old_count": 7,
+          "new_start": 5015,
+          "new_count": 7
+        },
+        {
+          "id": 62,
+          "diff_start_line": 2596,
+          "diff_end_line": 2608,
+          "old_start": 4919,
+          "old_count": 10,
+          "new_start": 5027,
+          "new_count": 11
+        },
+        {
+          "id": 63,
+          "diff_start_line": 2609,
+          "diff_end_line": 2616,
+          "old_start": 5135,
+          "old_count": 6,
+          "new_start": 5244,
+          "new_count": 7
+        },
+        {
+          "id": 64,
+          "diff_start_line": 2617,
+          "diff_end_line": 2624,
+          "old_start": 5240,
+          "old_count": 6,
+          "new_start": 5350,
+          "new_count": 7
+        },
+        {
+          "id": 65,
+          "diff_start_line": 2625,
+          "diff_end_line": 2632,
+          "old_start": 5273,
+          "old_count": 6,
+          "new_start": 5384,
+          "new_count": 7
+        },
+        {
+          "id": 66,
+          "diff_start_line": 2633,
+          "diff_end_line": 3079,
+          "old_start": 5323,
+          "old_count": 6,
+          "new_start": 5435,
+          "new_count": 446
+        },
+        {
+          "id": 67,
+          "diff_start_line": 3080,
+          "diff_end_line": 3087,
+          "old_start": 5380,
+          "old_count": 6,
+          "new_start": 5932,
+          "new_count": 7
+        },
+        {
+          "id": 68,
+          "diff_start_line": 3088,
+          "diff_end_line": 3095,
+          "old_start": 5457,
+          "old_count": 6,
+          "new_start": 6010,
+          "new_count": 7
+        },
+        {
+          "id": 69,
+          "diff_start_line": 3096,
+          "diff_end_line": 3111,
+          "old_start": 5515,
+          "old_count": 8,
+          "new_start": 6069,
+          "new_count": 14
+        },
+        {
+          "id": 70,
+          "diff_start_line": 3112,
+          "diff_end_line": 3126,
+          "old_start": 5527,
+          "old_count": 12,
+          "new_start": 6087,
+          "new_count": 13
+        },
+        {
+          "id": 71,
+          "diff_start_line": 3127,
+          "diff_end_line": 3134,
+          "old_start": 5540,
+          "old_count": 6,
+          "new_start": 6101,
+          "new_count": 7
+        },
+        {
+          "id": 72,
+          "diff_start_line": 3135,
+          "diff_end_line": 3142,
+          "old_start": 5594,
+          "old_count": 6,
+          "new_start": 6156,
+          "new_count": 7
+        },
+        {
+          "id": 73,
+          "diff_start_line": 3143,
+          "diff_end_line": 3157,
+          "old_start": 5681,
+          "old_count": 7,
+          "new_start": 6244,
+          "new_count": 13
+        },
+        {
+          "id": 74,
+          "diff_start_line": 3158,
+          "diff_end_line": 3171,
+          "old_start": 5691,
+          "old_count": 11,
+          "new_start": 6260,
+          "new_count": 12
+        },
+        {
+          "id": 75,
+          "diff_start_line": 3172,
+          "diff_end_line": 3179,
+          "old_start": 5707,
+          "old_count": 6,
+          "new_start": 6277,
+          "new_count": 7
+        },
+        {
+          "id": 76,
+          "diff_start_line": 3180,
+          "diff_end_line": 3187,
+          "old_start": 5784,
+          "old_count": 6,
+          "new_start": 6355,
+          "new_count": 7
+        },
+        {
+          "id": 77,
+          "diff_start_line": 3188,
+          "diff_end_line": 3195,
+          "old_start": 5868,
+          "old_count": 6,
+          "new_start": 6440,
+          "new_count": 7
+        },
+        {
+          "id": 78,
+          "diff_start_line": 3196,
+          "diff_end_line": 3203,
+          "old_start": 6001,
+          "old_count": 6,
+          "new_start": 6574,
+          "new_count": 7
+        },
+        {
+          "id": 79,
+          "diff_start_line": 3204,
+          "diff_end_line": 3211,
+          "old_start": 6277,
+          "old_count": 6,
+          "new_start": 6851,
+          "new_count": 7
+        },
+        {
+          "id": 80,
+          "diff_start_line": 3212,
+          "diff_end_line": 3220,
+          "old_start": 6311,
+          "old_count": 6,
+          "new_start": 6886,
+          "new_count": 8
+        },
+        {
+          "id": 81,
+          "diff_start_line": 3221,
+          "diff_end_line": 3228,
+          "old_start": 6406,
+          "old_count": 6,
+          "new_start": 6983,
+          "new_count": 7
+        },
+        {
+          "id": 82,
+          "diff_start_line": 3229,
+          "diff_end_line": 3236,
+          "old_start": 6505,
+          "old_count": 6,
+          "new_start": 7083,
+          "new_count": 7
+        },
+        {
+          "id": 83,
+          "diff_start_line": 3237,
+          "diff_end_line": 3244,
+          "old_start": 6815,
+          "old_count": 6,
+          "new_start": 7394,
+          "new_count": 7
+        },
+        {
+          "id": 84,
+          "diff_start_line": 3245,
+          "diff_end_line": 3257,
+          "old_start": 6894,
+          "old_count": 6,
+          "new_start": 7474,
+          "new_count": 12
+        },
+        {
+          "id": 85,
+          "diff_start_line": 3258,
+          "diff_end_line": 3265,
+          "old_start": 6923,
+          "old_count": 6,
+          "new_start": 7509,
+          "new_count": 7
+        },
+        {
+          "id": 86,
+          "diff_start_line": 3266,
+          "diff_end_line": 3273,
+          "old_start": 6930,
+          "old_count": 6,
+          "new_start": 7517,
+          "new_count": 7
+        },
+        {
+          "id": 87,
+          "diff_start_line": 3274,
+          "diff_end_line": 3281,
+          "old_start": 7005,
+          "old_count": 6,
+          "new_start": 7593,
+          "new_count": 7
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": true,
+      "source_lines_total": 134,
+      "ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 88,
+          "diff_start_line": 3287,
+          "diff_end_line": 3421,
+          "old_start": 0,
+          "old_count": 0,
+          "new_start": 1,
+          "new_count": 134
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 1012,
+      "ranges": [
+        [
+          142,
+          160
+        ],
+        [
+          889,
+          915
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 89,
+          "diff_start_line": 3426,
+          "diff_end_line": 3445,
+          "old_start": 142,
+          "old_count": 6,
+          "new_start": 142,
+          "new_count": 19
+        },
+        {
+          "id": 90,
+          "diff_start_line": 3446,
+          "diff_end_line": 3473,
+          "old_start": 876,
+          "old_count": 6,
+          "new_start": 889,
+          "new_count": 27
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 8535,
+      "ranges": [
+        [
+          1260,
+          1278
+        ],
+        [
+          2131,
+          2138
+        ],
+        [
+          3634,
+          3661
+        ],
+        [
+          4496,
+          4524
+        ],
+        [
+          8474,
+          8535
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 91,
+          "diff_start_line": 3478,
+          "diff_end_line": 3497,
+          "old_start": 1260,
+          "old_count": 6,
+          "new_start": 1260,
+          "new_count": 19
+        },
+        {
+          "id": 92,
+          "diff_start_line": 3498,
+          "diff_end_line": 3506,
+          "old_start": 2118,
+          "old_count": 6,
+          "new_start": 2131,
+          "new_count": 8
+        },
+        {
+          "id": 93,
+          "diff_start_line": 3507,
+          "diff_end_line": 3535,
+          "old_start": 3619,
+          "old_count": 6,
+          "new_start": 3634,
+          "new_count": 28
+        },
+        {
+          "id": 94,
+          "diff_start_line": 3536,
+          "diff_end_line": 3565,
+          "old_start": 4459,
+          "old_count": 6,
+          "new_start": 4496,
+          "new_count": 29
+        },
+        {
+          "id": 95,
+          "diff_start_line": 3566,
+          "diff_end_line": 3628,
+          "old_start": 8414,
+          "old_count": 4,
+          "new_start": 8474,
+          "new_count": 62
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/decisions/158-controle-global-portees.md",
+      "sha256": "e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": true,
+      "source_lines_total": 107,
+      "ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 96,
+          "diff_start_line": 3634,
+          "diff_end_line": 3741,
+          "old_start": 0,
+          "old_count": 0,
+          "new_start": 1,
+          "new_count": 107
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/delegation-native.md",
+      "sha256": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 940,
+      "ranges": [
+        [
+          138,
+          225
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 97,
+          "diff_start_line": 3746,
+          "diff_end_line": 3834,
+          "old_start": 138,
+          "old_count": 6,
+          "new_start": 138,
+          "new_count": 88
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/skills/bridget/SKILL.md",
+      "sha256": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 954,
+      "ranges": [
+        [
+          44,
+          74
+        ],
+        [
+          123,
+          131
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 98,
+          "diff_start_line": 3839,
+          "diff_end_line": 3870,
+          "old_start": 44,
+          "old_count": 6,
+          "new_start": 44,
+          "new_count": 31
+        },
+        {
+          "id": 99,
+          "diff_start_line": 3871,
+          "diff_end_line": 3882,
+          "old_start": 98,
+          "old_count": 8,
+          "new_start": 123,
+          "new_count": 9
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/skills/bridget/references/commandes.md",
+      "sha256": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 1392,
+      "ranges": [
+        [
+          1,
+          7
+        ],
+        [
+          59,
+          65
+        ],
+        [
+          203,
+          280
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 100,
+          "diff_start_line": 3887,
+          "diff_end_line": 3896,
+          "old_start": 1,
+          "old_count": 7,
+          "new_start": 1,
+          "new_count": 7
+        },
+        {
+          "id": 101,
+          "diff_start_line": 3897,
+          "diff_end_line": 3905,
+          "old_start": 59,
+          "old_count": 7,
+          "new_start": 59,
+          "new_count": 7
+        },
+        {
+          "id": 102,
+          "diff_start_line": 3906,
+          "diff_end_line": 3984,
+          "old_start": 203,
+          "old_count": 6,
+          "new_start": 203,
+          "new_count": 78
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/analyze-report.md",
+      "sha256": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 85,
+      "ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 103,
+          "diff_start_line": 3989,
+          "diff_end_line": 4001,
+          "old_start": 1,
+          "old_count": 6,
+          "new_start": 1,
+          "new_count": 11
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 38,
+      "ranges": [
+        [
+          14,
+          23
+        ],
+        [
+          35,
+          38
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 104,
+          "diff_start_line": 4006,
+          "diff_end_line": 4018,
+          "old_start": 14,
+          "old_count": 10,
+          "new_start": 14,
+          "new_count": 10
+        },
+        {
+          "id": 105,
+          "diff_start_line": 4019,
+          "diff_end_line": 4024,
+          "old_start": 35,
+          "old_count": 4,
+          "new_start": 35,
+          "new_count": 4
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 136,
+      "ranges": [
+        [
+          1,
+          11
+        ],
+        [
+          14,
+          25
+        ],
+        [
+          32,
+          47
+        ],
+        [
+          53,
+          76
+        ],
+        [
+          118,
+          136
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 106,
+          "diff_start_line": 4029,
+          "diff_end_line": 4043,
+          "old_start": 1,
+          "old_count": 8,
+          "new_start": 1,
+          "new_count": 11
+        },
+        {
+          "id": 107,
+          "diff_start_line": 4044,
+          "diff_end_line": 4059,
+          "old_start": 11,
+          "old_count": 10,
+          "new_start": 14,
+          "new_count": 12
+        },
+        {
+          "id": 108,
+          "diff_start_line": 4060,
+          "diff_end_line": 4079,
+          "old_start": 27,
+          "old_count": 12,
+          "new_start": 32,
+          "new_count": 16
+        },
+        {
+          "id": 109,
+          "diff_start_line": 4080,
+          "diff_end_line": 4104,
+          "old_start": 44,
+          "old_count": 6,
+          "new_start": 53,
+          "new_count": 24
+        },
+        {
+          "id": 110,
+          "diff_start_line": 4105,
+          "diff_end_line": 4124,
+          "old_start": 91,
+          "old_count": 3,
+          "new_start": 118,
+          "new_count": 19
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 80,
+      "ranges": [
+        [
+          24,
+          31
+        ],
+        [
+          54,
+          61
+        ],
+        [
+          74,
+          80
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 111,
+          "diff_start_line": 4129,
+          "diff_end_line": 4138,
+          "old_start": 24,
+          "old_count": 7,
+          "new_start": 24,
+          "new_count": 8
+        },
+        {
+          "id": 112,
+          "diff_start_line": 4139,
+          "diff_end_line": 4147,
+          "old_start": 53,
+          "old_count": 6,
+          "new_start": 54,
+          "new_count": 8
+        },
+        {
+          "id": 113,
+          "diff_start_line": 4148,
+          "diff_end_line": 4155,
+          "old_start": 71,
+          "old_count": 3,
+          "new_start": 74,
+          "new_count": 7
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/plan.md",
+      "sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 127,
+      "ranges": [
+        [
+          1,
+          13
+        ],
+        [
+          43,
+          49
+        ],
+        [
+          97,
+          103
+        ],
+        [
+          111,
+          127
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 114,
+          "diff_start_line": 4160,
+          "diff_end_line": 4175,
+          "old_start": 1,
+          "old_count": 13,
+          "new_start": 1,
+          "new_count": 13
+        },
+        {
+          "id": 115,
+          "diff_start_line": 4176,
+          "diff_end_line": 4184,
+          "old_start": 43,
+          "old_count": 7,
+          "new_start": 43,
+          "new_count": 7
+        },
+        {
+          "id": 116,
+          "diff_start_line": 4185,
+          "diff_end_line": 4193,
+          "old_start": 97,
+          "old_count": 7,
+          "new_start": 97,
+          "new_count": 7
+        },
+        {
+          "id": 117,
+          "diff_start_line": 4194,
+          "diff_end_line": 4213,
+          "old_start": 111,
+          "old_count": 5,
+          "new_start": 111,
+          "new_count": 17
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/quickstart.md",
+      "sha256": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 46,
+      "ranges": [
+        [
+          1,
+          8
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          36,
+          46
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 118,
+          "diff_start_line": 4218,
+          "diff_end_line": 4228,
+          "old_start": 1,
+          "old_count": 7,
+          "new_start": 1,
+          "new_count": 8
+        },
+        {
+          "id": 119,
+          "diff_start_line": 4229,
+          "diff_end_line": 4237,
+          "old_start": 11,
+          "old_count": 7,
+          "new_start": 12,
+          "new_count": 7
+        },
+        {
+          "id": 120,
+          "diff_start_line": 4238,
+          "diff_end_line": 4250,
+          "old_start": 35,
+          "old_count": 4,
+          "new_start": 36,
+          "new_count": 11
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/research.md",
+      "sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 125,
+      "ranges": [
+        [
+          1,
+          18
+        ],
+        [
+          26,
+          32
+        ],
+        [
+          78,
+          125
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 121,
+          "diff_start_line": 4255,
+          "diff_end_line": 4276,
+          "old_start": 1,
+          "old_count": 14,
+          "new_start": 1,
+          "new_count": 18
+        },
+        {
+          "id": 122,
+          "diff_start_line": 4277,
+          "diff_end_line": 4285,
+          "old_start": 22,
+          "old_count": 7,
+          "new_start": 26,
+          "new_count": 7
+        },
+        {
+          "id": 123,
+          "diff_start_line": 4286,
+          "diff_end_line": 4334,
+          "old_start": 74,
+          "old_count": 3,
+          "new_start": 78,
+          "new_count": 48
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 143,
+      "ranges": [
+        [
+          2,
+          11
+        ],
+        [
+          58,
+          64
+        ],
+        [
+          96,
+          143
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 124,
+          "diff_start_line": 4339,
+          "diff_end_line": 4351,
+          "old_start": 2,
+          "old_count": 9,
+          "new_start": 2,
+          "new_count": 10
+        },
+        {
+          "id": 125,
+          "diff_start_line": 4352,
+          "diff_end_line": 4360,
+          "old_start": 57,
+          "old_count": 7,
+          "new_start": 58,
+          "new_count": 7
+        },
+        {
+          "id": 126,
+          "diff_start_line": 4361,
+          "diff_end_line": 4409,
+          "old_start": 95,
+          "old_count": 3,
+          "new_start": 96,
+          "new_count": 48
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256": "4451768d0677151acfb835c664b42bdf9deee068ad2e6a2214fe6092bf7434f1",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 246,
+      "ranges": [
+        [
+          21,
+          27
+        ],
+        [
+          30,
+          40
+        ],
+        [
+          102,
+          108
+        ],
+        [
+          110,
+          118
+        ],
+        [
+          122,
+          147
+        ],
+        [
+          153,
+          159
+        ],
+        [
+          170,
+          180
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 127,
+          "diff_start_line": 4414,
+          "diff_end_line": 4422,
+          "old_start": 21,
+          "old_count": 7,
+          "new_start": 21,
+          "new_count": 7
+        },
+        {
+          "id": 128,
+          "diff_start_line": 4423,
+          "diff_end_line": 4437,
+          "old_start": 30,
+          "old_count": 9,
+          "new_start": 30,
+          "new_count": 11
+        },
+        {
+          "id": 129,
+          "diff_start_line": 4438,
+          "diff_end_line": 4446,
+          "old_start": 100,
+          "old_count": 7,
+          "new_start": 102,
+          "new_count": 7
+        },
+        {
+          "id": 130,
+          "diff_start_line": 4447,
+          "diff_end_line": 4458,
+          "old_start": 108,
+          "old_count": 9,
+          "new_start": 110,
+          "new_count": 9
+        },
+        {
+          "id": 131,
+          "diff_start_line": 4459,
+          "diff_end_line": 4489,
+          "old_start": 120,
+          "old_count": 26,
+          "new_start": 122,
+          "new_count": 26
+        },
+        {
+          "id": 132,
+          "diff_start_line": 4490,
+          "diff_end_line": 4498,
+          "old_start": 151,
+          "old_count": 7,
+          "new_start": 153,
+          "new_count": 7
+        },
+        {
+          "id": 133,
+          "diff_start_line": 4499,
+          "diff_end_line": 4510,
+          "old_start": 168,
+          "old_count": 6,
+          "new_start": 170,
+          "new_count": 11
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/tasks.md",
+      "sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_with_context",
+      "entire_source_file_read": false,
+      "source_lines_total": 89,
+      "ranges": [
+        [
+          2,
+          11
+        ],
+        [
+          13,
+          59
+        ],
+        [
+          61,
+          67
+        ],
+        [
+          83,
+          89
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 134,
+          "diff_start_line": 4515,
+          "diff_end_line": 4527,
+          "old_start": 2,
+          "old_count": 10,
+          "new_start": 2,
+          "new_count": 10
+        },
+        {
+          "id": 135,
+          "diff_start_line": 4528,
+          "diff_end_line": 4595,
+          "old_start": 13,
+          "old_count": 47,
+          "new_start": 13,
+          "new_count": 47
+        },
+        {
+          "id": 136,
+          "diff_start_line": 4596,
+          "diff_end_line": 4604,
+          "old_start": 61,
+          "old_count": 7,
+          "new_start": 61,
+          "new_count": 7
+        },
+        {
+          "id": 137,
+          "diff_start_line": 4605,
+          "diff_end_line": 4612,
+          "old_start": 83,
+          "old_count": 3,
+          "new_start": 83,
+          "new_count": 7
+        }
+      ],
+      "verified_at": "2026-10-12T09:44:58.586982+00:00",
+      "read_at": "2026-10-12T09:44:58.586982+00:00"
+    }
+  ],
+  "context_reads": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "ranges": [
+        [
+          615,
+          675
+        ],
+        [
+          1125,
+          1165
+        ]
+      ],
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "read_kind": "targeted_context",
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "ranges": [
+        [
+          10713,
+          10717
+        ]
+      ],
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "read_kind": "targeted_context",
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/156-guidage-file/tasks.md",
+      "ranges": [
+        [
+          55,
+          66
+        ]
+      ],
+      "sha256": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+      "read_kind": "targeted_context",
+      "entire_source_file_read": false
+    }
+  ],
+  "open_findings": [
+    {
+      "id": "T022-CHILDPROOF",
+      "status": "open_confirmed_static_by_root",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "ranges": [
+        [
+          631,
+          655
+        ],
+        [
+          1135,
+          1146
+        ]
+      ],
+      "diff_ranges": [
+        [
+          2162,
+          2210
+        ],
+        [
+          2233,
+          2264
+        ]
+      ],
+      "contract": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/156-guidage-file/tasks.md",
+      "contract_ranges": [
+        [
+          62,
+          64
+        ]
+      ],
+      "evidence": "registered_connection/CallerScope precedes execute_queue ChildProof refusal; old no-connection oracle changed to no-business-connection. ROOT correction and exact replay pending."
+    }
+  ],
+  "root_notices_pending": [
+    "F1 CLI StoreUnavailable can occur after halt commit: partial mutation wording.",
+    "F2 atomic tree purge/tree_settled: ROOT/Haiku finding, not independently revalidated here.",
+    "F3 document control status refusal exit1.",
+    "F4 distinguish current dynamic Continue suspended view from historical halt receipt."
+  ],
+  "performed_actions": {
+    "source_writes": false,
+    "tests": false,
+    "builds": false,
+    "git_mutations": false,
+    "task_checking": false
+  },
+  "runtime_status": "No global GREEN claimed; ROOT full-suite receipt and exact 255 baseline comparison pending at review."
+}

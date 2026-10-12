@@ -1,0 +1,153 @@
+{
+  "at": "2026-10-12T10:19:36.310722+00:00",
+  "command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/audits/2026-10-12/session-2026-10-12-spec-158A-01"
+  ],
+  "rc": 0,
+  "stdout": "\n0 erreur(s), 0 warning(s) — session conforme\n",
+  "stderr": "",
+  "source_scope_sha256": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+  "diff_sha256": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+  "grade": {
+    "grade": "A",
+    "date": "2026-10-12",
+    "spec": "158",
+    "scope": "SPEC158A contrôle global/portées MCP — delta bd37e927,27 fichiers,151 hunks",
+    "coverage_percent": 85.43,
+    "justification": "A100 sur zéro finding actif confirmé, avec couverture partielle déclarée. TEST-001 corrigé et relu ; signal R2-C3 LOW contesté visible comme limite non contractuelle. Aucun GREEN global.",
+    "metrics": {
+      "security": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 3
+      },
+      "llm_security": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "supply_chain": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "observability": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "reliability": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "tests": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "performance": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "complexity": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "quality": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 2
+      },
+      "architecture": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "ai_hygiene": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "duplication": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "minimalism": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0,
+        "weight": 1
+      },
+      "ux": {
+        "grade": "N/A",
+        "numeric": null,
+        "findings_count": 0,
+        "weight": 1
+      }
+    },
+    "numeric": 100,
+    "release_blocked": false,
+    "global_test_green": false
+  },
+  "historical_manifest": "manifest.json initial24files137hunks conserved ; final source27 separate scope-delivery158A.json and cycle-scoring meta",
+  "scoring_bounded_at": "2026-10-12T10:18:00Z environ ; ROOT validated then froze CACHE after bounded readonly report",
+  "files": {
+    "00_Configuration_Chargee.md": "77a45f6d961b9b42437d9ed45b189e139616957b9992c042b2f568d14a6e9310",
+    "01_Decouverte.md": "7378bd13be5cbd0b7783377c050d55568b1654d394b4f1e3d0c4ad75a1a93f9c",
+    "closure-report.json": "fc0cea5374e494c6a18d4b371ccf584da809f97767ea758dca92fd2bb1e5c446",
+    "config.json": "e1e3e64695f03945b185571f3b337f4fc065101e5c0768924911b53253a31b38",
+    "cycle-1/03-securite.md": "604d56327379e37acd43ae66bac9880650b6a42348df7ad8daa3a4e441a8d0cf",
+    "cycle-1/04-08-cycle1.md": "c8f9fb88201a04f3f6ed2fa04786495ae2ae36f157f97decda8f0aa9970224ef",
+    "cycle-1/05-07.md": "b1899994d82f31f2ab634f84cf6c3dc889f50e32149d71aca97f8fea41b73888",
+    "cycle-1/06-tests.md": "5e55e30ccff5bd1b4275303c330582ffcdda09648ccc9228b731372215ea45e2",
+    "cycle-1/12-minimalisme.md": "27137a31507c8a7c123b87c7980de8b313e7ad077d020e300e31a168489833f6",
+    "cycle-1/aggregated-findings.json": "a67b3c1e608e58162e9516be890d88ebd6c516cccbdaea41a1504f21c5fcca5c",
+    "cycle-1/findings_complexite.json": "ba89face4443b60f234728567b3a12f541b614487b05cd91933eabc8e6807c81",
+    "cycle-1/findings_duplication.json": "0ac4a42640bc707f6104a92085ced6a8aa8a7a0d2199d259f24c44ddeeb3cec1",
+    "cycle-1/findings_minimalisme.json": "47ae6a3e4019542a7b6e7eece0f419df262418640ac43aba8cb9d93200216911",
+    "cycle-1/findings_performance.json": "ff7f76d787b4f9170cdb437b615d47d1274705800c93307f835cbfeeca8920aa",
+    "cycle-1/findings_qualite.json": "6ebce7852a908d71ab45e10514d01b0d14134ead13a7a946a5ba64109d486862",
+    "cycle-1/findings_securite.json": "feb90ddb5bf8dd5b33aedd9b8270c38df5d6f85f286bcd08963db4c469a72860",
+    "cycle-1/findings_tests.json": "6d02e81d2b27a5b85d2eed80b3e8ac71d869a10dedf04fccc54eab6791366616",
+    "cycle-1/read_manifest.json": "6c95448e25e56c9d9739d398f2db066a6798ebc5544fcef9190f880a051c18ec",
+    "cycle-1/read_manifest04-08.json": "f1fa671be46fc30014b28b393ec6e6471bf9a78c15049ef233db43574802400f",
+    "cycle-1/readmanifest03.json": "bf65aa7edbb88cf6e71d8c23718699a7fbc3d648f51d420d0f09b64d421ed9a4",
+    "cycle-scoring/aggregated-findings.json": "a174e42141aad6c67ee40efd40ecd9c4d63637b894d55aba3ca2240cd4a088de",
+    "cycle-scoring/findings_final_delta.json": "ab9f4f0cb6e1879a609bb3fc22b744f9feec7c2ae03c0649bec8ace6dabd5c9b",
+    "cycle-scoring/read_manifest.json": "0d74678cf08aad3087986b1b833fb035d56a31850140cdaa8f1bf730aa8947af",
+    "cycles.log": "4c88ebc109ca78069a4e42f7a53f0ea53b5a6d24580b638dad313e5f60269d58",
+    "delta158A-vs157-preparation.patch": "9dbc9da221c6267e9c9611d1f77341486cfbf393f0b55978210674a4f58f3b0b",
+    "diff158A-delivery-final.patch": "23594335c28e4c399cad286309a20419bc3be67da1c488eb7177d9526c8fb925",
+    "diff158A-final.patch": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+    "diff_files.txt": "7ec05cc1614c4ab5834da74789d8168597314283b86c953fbca5aa37c5666ba3",
+    "fix-report.md": "598e6d7fd9f17f724afd80fd0acad3ce94c589fe6d3adfb45c1f89077b3890ee",
+    "global-files.txt": "c36275e8744b86ea149c661fea0c1d2f346478475eee43305b447b5d764d51f9",
+    "global-source-files.txt": "ca33e589f1c483a7ebb6aadca152f6192fa2d7b8e43262a4efac3569d5884372",
+    "grade.json": "7fecc921e511f147b10ca7ff765cd884d0e831e9efbbda5d8264174eeccd02c6",
+    "manifest.final.json": "d8af067be8c2b9a1536086dd7b88140080bc18dec572a11f3ebec5e4335a70ef",
+    "manifest.json": "9cbd719b39de768224c7b2c893028a40949de4b7d2db1c31d692171635a7ddc5",
+    "preparation-checkpoint.json": "b34e9ca4c442d0890a6bcaa25252a911fe91bfb7fdd41ea403b18b128d8a1670",
+    "scope-files.final.json": "2951edefe71e5b32c68cb48ea98cf1f7528796eba42afb59f200e84ca36649db",
+    "scope-files.json": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+    "scoring.md": "22774262022ed74add6c03fab9faf10b5da7b19ceb82eb43f44dae79038e6881"
+  },
+  "GLOBAL_GREEN": false
+}

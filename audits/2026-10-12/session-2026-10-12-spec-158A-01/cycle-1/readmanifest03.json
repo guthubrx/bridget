@@ -1,0 +1,82 @@
+{
+  "module": "03",
+  "spec": "158A",
+  "mode": "readonly",
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle",
+  "head": "bd37e927eee0b28f058df9d6a6992e38665a6ad0",
+  "sha_check": {
+    "scope_files_json": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+    "diff_patch": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+    "before": "identique à l'attendu (patch, scope-files.json, 24 fichiers)",
+    "after": "identique à l'attendu (patch, scope-files.json, 24 fichiers)",
+    "files_mismatch": []
+  },
+  "executed": "aucun test, build, scanner, Cargo, fournisseur ni sous-agent",
+  "written": [
+    "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/findings_securite.json",
+    "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/03-securite.md",
+    "/Users/moi/.cache/bridget-audit158-20261012-r1/cycle-1/readmanifest03.json"
+  ],
+  "counters": { "critical": 0, "high": 0, "medium": 0, "low": 0, "total": 0 },
+  "diff_files_read_full": [
+    {"file": "crates/bridget-daemon/src/mcp_scopes.rs", "hunks": "1/1 (fichier entier, 134 lignes)"},
+    {"file": "crates/bridget-daemon/src/lib.rs", "hunks": "1/1 (fichier entier)"},
+    {"file": "crates/bridget-daemon/src/referent_control.rs", "hunks": "2/2"},
+    {"file": "crates/bridget-transport/src/protocol.rs", "hunks": "5/5"},
+    {"file": "crates/bridget-daemon/src/delegation.rs", "hunks": "5/5 (code et tests)"},
+    {"file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs", "hunks": "1/1"},
+    {"file": "crates/bridget-daemon/src/daemon/native_delegation.rs", "hunks": "6/6 (3 de code, 3 de tests)"},
+    {"file": "crates/bridget-daemon/src/cli.rs", "hunks": "6/6"},
+    {"file": "docs/decisions/158-controle-global-portees.md", "hunks": "1/1"},
+    {"file": "specs/158-reveils-controle/contracts/control158.md", "hunks": "fichier entier"},
+    {"file": "docs/delegation-native.md", "hunks": "1/1"},
+    {"file": "skills/bridget/SKILL.md", "hunks": "2/2 (lignes + et - du diff)"}
+  ],
+  "diff_files_read_partial": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "hunks_read": "7/8 en entier (handlers 10716, cinq hunks de dispatch/matrices 15839-16515, arbre de dispatch) ; hunk 8 (tests, @@ -22038) lu sur environ 404 des 513 lignes ajoutées",
+      "not_read": "fin du hunk de tests daemon.rs (environ 109 dernières lignes ajoutées après control158_halt_sans_cancel_active_ne_touche_rien)"
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "hunks_read": "3 hunks : 1 (garde de portée, code), 2 (annotations readOnlyHint, code), le grand hunk de tests @@ -5323 (fixture reply_caller_scope + dix tests mcp158, lignes 476-925 du diff extrait)",
+      "not_read": "57 hunks de tests uniquement (mod tests), lignes 77-475 et 926-1124 du diff extrait ; leur en-tête confirme `mod tests` ; ajouts d'appels reply_caller_scope aux fixtures existantes supposés"
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "hunks_read": "lignes FR-001 à FR-029 par grep (extrait tronqué à 330 caractères)",
+      "not_read": "le reste du fichier et les hunks complets"
+    }
+  ],
+  "diff_files_not_read": [
+    "skills/bridget/references/commandes.md (3 hunks)",
+    "specs/158-reveils-controle/analyze-report.md",
+    "specs/158-reveils-controle/checklists/requirements.md",
+    "specs/158-reveils-controle/data-model.md",
+    "specs/158-reveils-controle/plan.md",
+    "specs/158-reveils-controle/quickstart.md",
+    "specs/158-reveils-controle/research.md",
+    "specs/158-reveils-controle/reuse-audit.md",
+    "specs/158-reveils-controle/tasks.md"
+  ],
+  "callers_and_sinks_read_outside_diff": [
+    "crates/bridget-daemon/src/mcp.rs : dispatch_with_executor, execute_tool*, execute_request_wait, execute_queue (début), execute_ledger*, execute_who (début), execute_status, execute_domain/runtime/rename/dnd, dispatch des 30 outils (lignes 436-806)",
+    "crates/bridget-daemon/src/communication/client.rs : registered_connection*, authenticate_auxiliary",
+    "crates/bridget-daemon/src/mcp_identity.rs : combine_session_identity, résolution delegated_origin (extraits)",
+    "crates/bridget-daemon/src/delegation_mcp.rs : execute (table outil -> opération)",
+    "crates/bridget-daemon/src/delegation_lineage.rs : for_child, human_cancel, index et purge des reçus",
+    "crates/bridget-daemon/src/daemon.rs : live_connection_identity, control_client_actor, rôles Client/Service/Attach/Wrapper, ClientHello, NativeDelegation, ArtifactRead (extraits), connexion et réponses",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs : handle_with_fact, admit_delegate (début), Status/Cancel/Ack, Continue, nettoyage cleanup_done (extrait 3290-3450)",
+    "crates/bridget-daemon/src/handoff.rs : parse_request, TRANSPORT_FIELDS",
+    "crates/bridget-daemon/src/attach.rs : JournalRequest, read, read_journal_excerpt (début)",
+    "crates/bridget-transport/src/protocol.rs : ThreadAction, ObservationRequest, attach_refusal",
+    "crates/bridget-daemon/src/threads.rs : ack",
+    "crates/bridget-daemon/src/delegation.rs : record_refusal, admission_counts"
+  ],
+  "limits_declared": [
+    "Aucune exécution : comportements déduits par lecture du code.",
+    "ADR011 / human principal : déclaré, non traité comme finding.",
+    "Aucune note globale ni succès global déduit ; couverture module 03 limitée au tableau ci-dessus."
+  ]
+}

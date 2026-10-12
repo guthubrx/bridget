@@ -1,0 +1,56 @@
+{
+  "review": "SPEC158A adverse readonly r1",
+  "verdict": "APPROVE_WITH_CHANGES",
+  "writes": ["/Users/moi/.cache/bridget-review158A-20261012-r1/rapport.md", "/Users/moi/.cache/bridget-review158A-20261012-r1/read_manifest.json"],
+  "no_cargo_or_tests": true,
+  "no_source_modification": true,
+  "sha_verified": {
+    "scope-files.json": "5081979d37c5bbe52df6e6cc616547944105430c4f88c99f7dad7ea4e43cb25e",
+    "diff158A-final.patch": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+    "worktree_frozen_files_match_scope": [
+      "crates/bridget-daemon/src/daemon.rs a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "crates/bridget-daemon/src/daemon/native_delegation.rs 4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "crates/bridget-daemon/src/mcp.rs 5c8619f11dd5dbf1bfe7febeffd19b206d38f13b6452e5c4285a78d12bc6e68f",
+      "crates/bridget-daemon/src/mcp_scopes.rs eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "specs/158-reveils-controle/contracts/control158.md f9cd5db490a35a41b22ea005ec466901c0eb99720bbbcd1cb6176e47cc0bf4e0",
+      "docs/decisions/158-controle-global-portees.md e765d60c8d5a9502f3fdd53fbd9c2c8a1a5208e13e2a38b94b59b8c86ca544f1"
+    ]
+  },
+  "read": [
+    "contrat control158.md (final)",
+    "ADR 158-controle-global-portees.md (final)",
+    "diff patch cli.rs 1-287",
+    "diff patch daemon.rs 288-583 (handlers overview/cancel/halt, dispatch)",
+    "diff patch native_delegation.rs 1098-1190 et 1191-1352 (admission, CallerScope, tests halt)",
+    "diff patch delegation.rs 1621-1920 (HaltState, overview_row, schema, set_delegation_halt, overview_page, tests store début)",
+    "diff patch lib.rs, mcp.rs 2146-2300 (scope gate, readOnlyHint)",
+    "diff patch mcp_scopes.rs 3282-3421",
+    "diff patch referent_control.rs 3422-3473",
+    "diff patch protocol.rs 3474-3628",
+    "worktree native_delegation.rs ~1040-1072 et 1754-1800 (ordre replay/garde)",
+    "worktree delegation_lineage.rs 126, 146-160, 236-262",
+    "tasks.md (cases cochées : 20, T021/T022 ouvertes)"
+  ],
+  "unread_hunks": [
+    "daemon.rs patch 584-1097 (presence_tests, ~513 lignes)",
+    "native_delegation.rs patch 1356-1608 (tests)",
+    "delegation.rs patch 1920-2145 (tests store)",
+    "mcp.rs patch 2300-3281 (tests, vus par grep)",
+    "delegation-native.md patch 3742-3834",
+    "skills/bridget/SKILL.md patch 3835-3882",
+    "skills/bridget/references/commandes.md patch 3883-3984",
+    "specs 158 patch 3985-4612 (hors contrat et ADR finaux)"
+  ],
+  "findings": [
+    {"id": "F1", "severity": "MEDIUM", "file": "crates/bridget-daemon/src/daemon.rs", "line": "478-506", "summary": "Arrêt committé mais réponse de refus store_unavailable si une annulation échoue"},
+    {"id": "F2", "severity": "LOW_TO_VERIFY", "file": "crates/bridget-daemon/src/daemon.rs", "line": "442-456", "summary": "Un ancêtre absent fait échouer toute la commande --cancel-active, arrêt compris"},
+    {"id": "F3", "severity": "LOW", "file": "crates/bridget-daemon/src/cli.rs", "line": "6197-6229", "summary": "control status sort en code 1 si la vue d'arrêt est refusée, non documenté"},
+    {"id": "F4", "severity": "LOW", "file": "crates/bridget-daemon/src/daemon/native_delegation.rs", "line": "1336", "summary": "Oracle du rejeu Continue ajusté au comportement dynamique (suspended)"}
+  ],
+  "limits": [
+    "pas de compilation, pas de test, pas de build",
+    "suites 158 non exécutées : aucune preuve de PASS déduite",
+    "purge delegation_lineage.rs:253 non lue en amont",
+    "FULL T021 et Converge non évalués"
+  ]
+}

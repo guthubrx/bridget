@@ -1,0 +1,3063 @@
+{
+  "review": "T022158A final delta review",
+  "review_at": "2026-10-12T10:03:50.094245+00:00",
+  "final_diff": "/Users/moi/.cache/bridget-audit158-final-20261012/diff158A-final.patch",
+  "final_diff_sha256": "67001c94315d17eeac8968df0ce7c48d653792df149b5d9e93ac6e4d748dfe76",
+  "scope": "/Users/moi/.cache/bridget-audit158-final-20261012/scope-files.json",
+  "scope_sha256": "79f34885e1336f205523f4d9f1905287b4ad192a3c090b5535f86da31a541197",
+  "initial_evidence": {
+    "manifest": "/Users/moi/.cache/bridget-finalread158-20261012/read_manifest.json",
+    "sha256": "30b836c4d73853446d53420634c08530b310af51a411d78e48cb5daa7321b4a3",
+    "diff": "/Users/moi/.cache/bridget-audit158-20261012-r1/diff158A-final.patch",
+    "diff_sha256": "590c8bbb70c61471552513428c468cc0e3211feaa67ee02acfd61e992d87399b",
+    "hunks_read_initial": 137
+  },
+  "coverage": {
+    "final_hunks": 152,
+    "inherited_exact_hunk_bodies": 126,
+    "fresh_final_hunks_read": 26,
+    "covered_final_hunks": 152,
+    "files": 27,
+    "rust_files": 13,
+    "documentation_files": 14,
+    "meaning": "Coverage of supplied final diff; no claim of whole existing source or architecture coverage. Initial 137 hunks are not added to final152. Three restored ChildProof test hunks disappear from final diff. Changed hunk bodies are reread."
+  },
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "sha256": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          695,
+          701
+        ],
+        [
+          6093,
+          6195
+        ],
+        [
+          6197,
+          6229
+        ],
+        [
+          6254,
+          6334
+        ],
+        [
+          10100,
+          10109
+        ],
+        [
+          10349,
+          10394
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 1,
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "diff_start_line": 5,
+          "diff_end_line": 13,
+          "old_start": 695,
+          "old_count": 7,
+          "new_start": 695,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 1
+        },
+        {
+          "id": 2,
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "diff_start_line": 14,
+          "diff_end_line": 118,
+          "old_start": 6093,
+          "old_count": 8,
+          "new_start": 6093,
+          "new_count": 103,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 2
+        },
+        {
+          "id": 3,
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "diff_start_line": 119,
+          "diff_end_line": 152,
+          "old_start": 6102,
+          "old_count": 6,
+          "new_start": 6197,
+          "new_count": 33,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 3
+        },
+        {
+          "id": 4,
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "diff_start_line": 153,
+          "diff_end_line": 234,
+          "old_start": 6132,
+          "old_count": 6,
+          "new_start": 6254,
+          "new_count": 81,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 5,
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "diff_start_line": 235,
+          "diff_end_line": 246,
+          "old_start": 9903,
+          "old_count": 7,
+          "new_start": 10100,
+          "new_count": 10,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 5
+        },
+        {
+          "id": 6,
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "diff_start_line": 247,
+          "diff_end_line": 293,
+          "old_start": 10149,
+          "old_count": 4,
+          "new_start": 10349,
+          "new_count": 46,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 6
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          10716,
+          10936
+        ],
+        [
+          16054,
+          16062
+        ],
+        [
+          16117,
+          16125
+        ],
+        [
+          16139,
+          16147
+        ],
+        [
+          16156,
+          16165
+        ],
+        [
+          16351,
+          16359
+        ],
+        [
+          16745,
+          16761
+        ],
+        [
+          22279,
+          22791
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 7,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 298,
+          "diff_end_line": 519,
+          "old_start": 10716,
+          "old_count": 6,
+          "new_start": 10716,
+          "new_count": 221,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 7
+        },
+        {
+          "id": 8,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 520,
+          "diff_end_line": 529,
+          "old_start": 15839,
+          "old_count": 6,
+          "new_start": 16054,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 8
+        },
+        {
+          "id": 9,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 530,
+          "diff_end_line": 539,
+          "old_start": 15899,
+          "old_count": 6,
+          "new_start": 16117,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 9
+        },
+        {
+          "id": 10,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 540,
+          "diff_end_line": 549,
+          "old_start": 15918,
+          "old_count": 6,
+          "new_start": 16139,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 10
+        },
+        {
+          "id": 11,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 550,
+          "diff_end_line": 561,
+          "old_start": 15932,
+          "old_count": 7,
+          "new_start": 16156,
+          "new_count": 10,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 11
+        },
+        {
+          "id": 12,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 562,
+          "diff_end_line": 571,
+          "old_start": 16124,
+          "old_count": 6,
+          "new_start": 16351,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 12
+        },
+        {
+          "id": 13,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 572,
+          "diff_end_line": 589,
+          "old_start": 16515,
+          "old_count": 6,
+          "new_start": 16745,
+          "new_count": 17,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 13
+        },
+        {
+          "id": 14,
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "diff_start_line": 590,
+          "diff_end_line": 1103,
+          "old_start": 22038,
+          "old_count": 6,
+          "new_start": 22279,
+          "new_count": 513,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 14
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1069,
+          1087
+        ],
+        [
+          1447,
+          1469
+        ],
+        [
+          1536,
+          1542
+        ],
+        [
+          1796,
+          1814
+        ],
+        [
+          10135,
+          10298
+        ],
+        [
+          10303,
+          10554
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 15,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "diff_start_line": 1108,
+          "diff_end_line": 1135,
+          "old_start": 1069,
+          "old_count": 14,
+          "new_start": 1069,
+          "new_count": 19,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 15
+        },
+        {
+          "id": 16,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "diff_start_line": 1136,
+          "diff_end_line": 1159,
+          "old_start": 1442,
+          "old_count": 9,
+          "new_start": 1447,
+          "new_count": 23,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 16
+        },
+        {
+          "id": 17,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "diff_start_line": 1160,
+          "diff_end_line": 1168,
+          "old_start": 1517,
+          "old_count": 7,
+          "new_start": 1536,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 17
+        },
+        {
+          "id": 18,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "diff_start_line": 1169,
+          "diff_end_line": 1196,
+          "old_start": 1777,
+          "old_count": 14,
+          "new_start": 1796,
+          "new_count": 19,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 18
+        },
+        {
+          "id": 19,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "diff_start_line": 1197,
+          "diff_end_line": 1361,
+          "old_start": 10111,
+          "old_count": 6,
+          "new_start": 10135,
+          "new_count": 164,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 19
+        },
+        {
+          "id": 20,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "diff_start_line": 1362,
+          "diff_end_line": 1614,
+          "old_start": 10121,
+          "old_count": 6,
+          "new_start": 10303,
+          "new_count": 252,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 20
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "b5153a39df2b5cca49e81d4cfe2c335cf8a5638cbb893a84b44ab96eb1797969",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          669,
+          675
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 21,
+          "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "diff_start_line": 1619,
+          "diff_end_line": 1626,
+          "old_start": 669,
+          "old_count": 6,
+          "new_start": 669,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 21
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          113,
+          128
+        ],
+        [
+          289,
+          305
+        ],
+        [
+          368,
+          389
+        ],
+        [
+          414,
+          533
+        ],
+        [
+          1787,
+          2125
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 22,
+          "file": "crates/bridget-daemon/src/delegation.rs",
+          "diff_start_line": 1631,
+          "diff_end_line": 1647,
+          "old_start": 113,
+          "old_count": 6,
+          "new_start": 113,
+          "new_count": 16,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 22
+        },
+        {
+          "id": 23,
+          "file": "crates/bridget-daemon/src/delegation.rs",
+          "diff_start_line": 1648,
+          "diff_end_line": 1666,
+          "old_start": 279,
+          "old_count": 7,
+          "new_start": 289,
+          "new_count": 17,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 23
+        },
+        {
+          "id": 24,
+          "file": "crates/bridget-daemon/src/delegation.rs",
+          "diff_start_line": 1667,
+          "diff_end_line": 1690,
+          "old_start": 348,
+          "old_count": 7,
+          "new_start": 368,
+          "new_count": 22,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 24
+        },
+        {
+          "id": 25,
+          "file": "crates/bridget-daemon/src/delegation.rs",
+          "diff_start_line": 1691,
+          "diff_end_line": 1811,
+          "old_start": 379,
+          "old_count": 6,
+          "new_start": 414,
+          "new_count": 120,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 25
+        },
+        {
+          "id": 26,
+          "file": "crates/bridget-daemon/src/delegation.rs",
+          "diff_start_line": 1812,
+          "diff_end_line": 2151,
+          "old_start": 1638,
+          "old_count": 4,
+          "new_start": 1787,
+          "new_count": 339,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 26
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/lib.rs",
+      "sha256": "1b4961f224a15666fe0fb3351095c3d47ba1b5e47fc60f9e6828e1f2b2f3e522",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          39,
+          45
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 27,
+          "file": "crates/bridget-daemon/src/lib.rs",
+          "diff_start_line": 2156,
+          "diff_end_line": 2163,
+          "old_start": 39,
+          "old_count": 6,
+          "new_start": 39,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 27
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          623,
+          686
+        ],
+        [
+          2653,
+          2674
+        ],
+        [
+          2760,
+          2766
+        ],
+        [
+          2854,
+          2860
+        ],
+        [
+          2907,
+          2921
+        ],
+        [
+          2936,
+          2944
+        ],
+        [
+          2996,
+          3008
+        ],
+        [
+          3033,
+          3039
+        ],
+        [
+          3058,
+          3064
+        ],
+        [
+          3145,
+          3151
+        ],
+        [
+          3235,
+          3241
+        ],
+        [
+          3370,
+          3383
+        ],
+        [
+          3397,
+          3403
+        ],
+        [
+          3413,
+          3424
+        ],
+        [
+          3656,
+          3662
+        ],
+        [
+          3679,
+          3687
+        ],
+        [
+          3811,
+          3817
+        ],
+        [
+          3944,
+          3950
+        ],
+        [
+          4139,
+          4145
+        ],
+        [
+          4253,
+          4259
+        ],
+        [
+          4442,
+          4448
+        ],
+        [
+          4506,
+          4518
+        ],
+        [
+          4533,
+          4550
+        ],
+        [
+          4561,
+          4567
+        ],
+        [
+          4771,
+          4782
+        ],
+        [
+          4815,
+          4821
+        ],
+        [
+          4894,
+          4900
+        ],
+        [
+          4971,
+          4982
+        ],
+        [
+          4995,
+          5012
+        ],
+        [
+          5016,
+          5022
+        ],
+        [
+          5029,
+          5035
+        ],
+        [
+          5041,
+          5051
+        ],
+        [
+          5258,
+          5264
+        ],
+        [
+          5364,
+          5370
+        ],
+        [
+          5398,
+          5404
+        ],
+        [
+          5449,
+          5894
+        ],
+        [
+          5946,
+          5952
+        ],
+        [
+          6024,
+          6030
+        ],
+        [
+          6083,
+          6096
+        ],
+        [
+          6101,
+          6113
+        ],
+        [
+          6115,
+          6121
+        ],
+        [
+          6170,
+          6176
+        ],
+        [
+          6258,
+          6270
+        ],
+        [
+          6274,
+          6285
+        ],
+        [
+          6291,
+          6297
+        ],
+        [
+          6369,
+          6375
+        ],
+        [
+          6454,
+          6460
+        ],
+        [
+          6588,
+          6594
+        ],
+        [
+          6865,
+          6871
+        ],
+        [
+          6900,
+          6907
+        ],
+        [
+          6997,
+          7003
+        ],
+        [
+          7097,
+          7103
+        ],
+        [
+          7408,
+          7414
+        ],
+        [
+          7488,
+          7499
+        ],
+        [
+          7523,
+          7529
+        ],
+        [
+          7531,
+          7537
+        ],
+        [
+          7607,
+          7613
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 28,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2168,
+          "diff_end_line": 2232,
+          "old_start": 623,
+          "old_count": 6,
+          "new_start": 623,
+          "new_count": 64,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 29,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2233,
+          "diff_end_line": 2255,
+          "old_start": 2595,
+          "old_count": 6,
+          "new_start": 2653,
+          "new_count": 22,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 29
+        },
+        {
+          "id": 30,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2256,
+          "diff_end_line": 2263,
+          "old_start": 2686,
+          "old_count": 6,
+          "new_start": 2760,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 33
+        },
+        {
+          "id": 31,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2264,
+          "diff_end_line": 2271,
+          "old_start": 2779,
+          "old_count": 6,
+          "new_start": 2854,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 34
+        },
+        {
+          "id": 32,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2272,
+          "diff_end_line": 2288,
+          "old_start": 2831,
+          "old_count": 7,
+          "new_start": 2907,
+          "new_count": 15,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 35
+        },
+        {
+          "id": 33,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2289,
+          "diff_end_line": 2303,
+          "old_start": 2852,
+          "old_count": 12,
+          "new_start": 2936,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 36
+        },
+        {
+          "id": 34,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2304,
+          "diff_end_line": 2317,
+          "old_start": 2915,
+          "old_count": 6,
+          "new_start": 2996,
+          "new_count": 13,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 37
+        },
+        {
+          "id": 35,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2318,
+          "diff_end_line": 2326,
+          "old_start": 2945,
+          "old_count": 7,
+          "new_start": 3033,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 38
+        },
+        {
+          "id": 36,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2327,
+          "diff_end_line": 2334,
+          "old_start": 2970,
+          "old_count": 6,
+          "new_start": 3058,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 39
+        },
+        {
+          "id": 37,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2335,
+          "diff_end_line": 2342,
+          "old_start": 3056,
+          "old_count": 6,
+          "new_start": 3145,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 40
+        },
+        {
+          "id": 38,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2343,
+          "diff_end_line": 2350,
+          "old_start": 3145,
+          "old_count": 6,
+          "new_start": 3235,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 41
+        },
+        {
+          "id": 39,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2351,
+          "diff_end_line": 2365,
+          "old_start": 3279,
+          "old_count": 6,
+          "new_start": 3370,
+          "new_count": 14,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 42
+        },
+        {
+          "id": 40,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2366,
+          "diff_end_line": 2374,
+          "old_start": 3298,
+          "old_count": 7,
+          "new_start": 3397,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 43
+        },
+        {
+          "id": 41,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2375,
+          "diff_end_line": 2388,
+          "old_start": 3314,
+          "old_count": 11,
+          "new_start": 3413,
+          "new_count": 12,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 44
+        },
+        {
+          "id": 42,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2389,
+          "diff_end_line": 2396,
+          "old_start": 3556,
+          "old_count": 6,
+          "new_start": 3656,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 45
+        },
+        {
+          "id": 43,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2397,
+          "diff_end_line": 2406,
+          "old_start": 3578,
+          "old_count": 6,
+          "new_start": 3679,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 46
+        },
+        {
+          "id": 44,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2407,
+          "diff_end_line": 2414,
+          "old_start": 3707,
+          "old_count": 6,
+          "new_start": 3811,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 47
+        },
+        {
+          "id": 45,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2415,
+          "diff_end_line": 2422,
+          "old_start": 3839,
+          "old_count": 6,
+          "new_start": 3944,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 48
+        },
+        {
+          "id": 46,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2423,
+          "diff_end_line": 2430,
+          "old_start": 4033,
+          "old_count": 6,
+          "new_start": 4139,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 49
+        },
+        {
+          "id": 47,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2431,
+          "diff_end_line": 2438,
+          "old_start": 4146,
+          "old_count": 6,
+          "new_start": 4253,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 50
+        },
+        {
+          "id": 48,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2439,
+          "diff_end_line": 2446,
+          "old_start": 4334,
+          "old_count": 6,
+          "new_start": 4442,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 51
+        },
+        {
+          "id": 49,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2447,
+          "diff_end_line": 2460,
+          "old_start": 4397,
+          "old_count": 6,
+          "new_start": 4506,
+          "new_count": 13,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 52
+        },
+        {
+          "id": 50,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2461,
+          "diff_end_line": 2497,
+          "old_start": 4417,
+          "old_count": 35,
+          "new_start": 4533,
+          "new_count": 18,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 53
+        },
+        {
+          "id": 51,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2498,
+          "diff_end_line": 2505,
+          "old_start": 4462,
+          "old_count": 6,
+          "new_start": 4561,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 54
+        },
+        {
+          "id": 52,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2506,
+          "diff_end_line": 2518,
+          "old_start": 4671,
+          "old_count": 6,
+          "new_start": 4771,
+          "new_count": 12,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 55
+        },
+        {
+          "id": 53,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2519,
+          "diff_end_line": 2526,
+          "old_start": 4709,
+          "old_count": 6,
+          "new_start": 4815,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 56
+        },
+        {
+          "id": 54,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2527,
+          "diff_end_line": 2534,
+          "old_start": 4787,
+          "old_count": 6,
+          "new_start": 4894,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 57
+        },
+        {
+          "id": 55,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2535,
+          "diff_end_line": 2547,
+          "old_start": 4863,
+          "old_count": 6,
+          "new_start": 4971,
+          "new_count": 12,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 58
+        },
+        {
+          "id": 56,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2548,
+          "diff_end_line": 2566,
+          "old_start": 4881,
+          "old_count": 10,
+          "new_start": 4995,
+          "new_count": 18,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 59
+        },
+        {
+          "id": 57,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2567,
+          "diff_end_line": 2575,
+          "old_start": 4894,
+          "old_count": 7,
+          "new_start": 5016,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 61
+        },
+        {
+          "id": 58,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2576,
+          "diff_end_line": 2584,
+          "old_start": 4907,
+          "old_count": 7,
+          "new_start": 5029,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 61
+        },
+        {
+          "id": 59,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2585,
+          "diff_end_line": 2597,
+          "old_start": 4919,
+          "old_count": 10,
+          "new_start": 5041,
+          "new_count": 11,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 62
+        },
+        {
+          "id": 60,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2598,
+          "diff_end_line": 2605,
+          "old_start": 5135,
+          "old_count": 6,
+          "new_start": 5258,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 63
+        },
+        {
+          "id": 61,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2606,
+          "diff_end_line": 2613,
+          "old_start": 5240,
+          "old_count": 6,
+          "new_start": 5364,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 64
+        },
+        {
+          "id": 62,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2614,
+          "diff_end_line": 2621,
+          "old_start": 5273,
+          "old_count": 6,
+          "new_start": 5398,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 65
+        },
+        {
+          "id": 63,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 2622,
+          "diff_end_line": 3068,
+          "old_start": 5323,
+          "old_count": 6,
+          "new_start": 5449,
+          "new_count": 446,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 66
+        },
+        {
+          "id": 64,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3069,
+          "diff_end_line": 3076,
+          "old_start": 5380,
+          "old_count": 6,
+          "new_start": 5946,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 67
+        },
+        {
+          "id": 65,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3077,
+          "diff_end_line": 3084,
+          "old_start": 5457,
+          "old_count": 6,
+          "new_start": 6024,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 68
+        },
+        {
+          "id": 66,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3085,
+          "diff_end_line": 3100,
+          "old_start": 5515,
+          "old_count": 8,
+          "new_start": 6083,
+          "new_count": 14,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 69
+        },
+        {
+          "id": 67,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3101,
+          "diff_end_line": 3115,
+          "old_start": 5527,
+          "old_count": 12,
+          "new_start": 6101,
+          "new_count": 13,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 70
+        },
+        {
+          "id": 68,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3116,
+          "diff_end_line": 3123,
+          "old_start": 5540,
+          "old_count": 6,
+          "new_start": 6115,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 71
+        },
+        {
+          "id": 69,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3124,
+          "diff_end_line": 3131,
+          "old_start": 5594,
+          "old_count": 6,
+          "new_start": 6170,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 72
+        },
+        {
+          "id": 70,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3132,
+          "diff_end_line": 3146,
+          "old_start": 5681,
+          "old_count": 7,
+          "new_start": 6258,
+          "new_count": 13,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 73
+        },
+        {
+          "id": 71,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3147,
+          "diff_end_line": 3160,
+          "old_start": 5691,
+          "old_count": 11,
+          "new_start": 6274,
+          "new_count": 12,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 74
+        },
+        {
+          "id": 72,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3161,
+          "diff_end_line": 3168,
+          "old_start": 5707,
+          "old_count": 6,
+          "new_start": 6291,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 75
+        },
+        {
+          "id": 73,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3169,
+          "diff_end_line": 3176,
+          "old_start": 5784,
+          "old_count": 6,
+          "new_start": 6369,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 76
+        },
+        {
+          "id": 74,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3177,
+          "diff_end_line": 3184,
+          "old_start": 5868,
+          "old_count": 6,
+          "new_start": 6454,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 77
+        },
+        {
+          "id": 75,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3185,
+          "diff_end_line": 3192,
+          "old_start": 6001,
+          "old_count": 6,
+          "new_start": 6588,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 78
+        },
+        {
+          "id": 76,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3193,
+          "diff_end_line": 3200,
+          "old_start": 6277,
+          "old_count": 6,
+          "new_start": 6865,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 79
+        },
+        {
+          "id": 77,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3201,
+          "diff_end_line": 3209,
+          "old_start": 6311,
+          "old_count": 6,
+          "new_start": 6900,
+          "new_count": 8,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 80
+        },
+        {
+          "id": 78,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3210,
+          "diff_end_line": 3217,
+          "old_start": 6406,
+          "old_count": 6,
+          "new_start": 6997,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 81
+        },
+        {
+          "id": 79,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3218,
+          "diff_end_line": 3225,
+          "old_start": 6505,
+          "old_count": 6,
+          "new_start": 7097,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 82
+        },
+        {
+          "id": 80,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3226,
+          "diff_end_line": 3233,
+          "old_start": 6815,
+          "old_count": 6,
+          "new_start": 7408,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 83
+        },
+        {
+          "id": 81,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3234,
+          "diff_end_line": 3246,
+          "old_start": 6894,
+          "old_count": 6,
+          "new_start": 7488,
+          "new_count": 12,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 84
+        },
+        {
+          "id": 82,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3247,
+          "diff_end_line": 3254,
+          "old_start": 6923,
+          "old_count": 6,
+          "new_start": 7523,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 85
+        },
+        {
+          "id": 83,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3255,
+          "diff_end_line": 3262,
+          "old_start": 6930,
+          "old_count": 6,
+          "new_start": 7531,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 86
+        },
+        {
+          "id": 84,
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "diff_start_line": 3263,
+          "diff_end_line": 3270,
+          "old_start": 7005,
+          "old_count": 6,
+          "new_start": 7607,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 87
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          134
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 151,
+          "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+          "diff_start_line": 4828,
+          "diff_end_line": 4962,
+          "old_start": 0,
+          "old_count": 0,
+          "new_start": 1,
+          "new_count": 134,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 88
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          142,
+          160
+        ],
+        [
+          889,
+          915
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 85,
+          "file": "crates/bridget-daemon/src/referent_control.rs",
+          "diff_start_line": 3275,
+          "diff_end_line": 3294,
+          "old_start": 142,
+          "old_count": 6,
+          "new_start": 142,
+          "new_count": 19,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 89
+        },
+        {
+          "id": 86,
+          "file": "crates/bridget-daemon/src/referent_control.rs",
+          "diff_start_line": 3295,
+          "diff_end_line": 3322,
+          "old_start": 876,
+          "old_count": 6,
+          "new_start": 889,
+          "new_count": 27,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 90
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          55,
+          62
+        ],
+        [
+          99,
+          118
+        ],
+        [
+          141,
+          147
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 87,
+          "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+          "diff_start_line": 3327,
+          "diff_end_line": 3336,
+          "old_start": 55,
+          "old_count": 7,
+          "new_start": 55,
+          "new_count": 8,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 88,
+          "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+          "diff_start_line": 3337,
+          "diff_end_line": 3358,
+          "old_start": 98,
+          "old_count": 8,
+          "new_start": 99,
+          "new_count": 20,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 89,
+          "file": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+          "diff_start_line": 3359,
+          "diff_end_line": 3366,
+          "old_start": 128,
+          "old_count": 6,
+          "new_start": 141,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          246,
+          352
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 90,
+          "file": "crates/bridget-daemon/tests/core_089_security_test.rs",
+          "diff_start_line": 3371,
+          "diff_end_line": 3563,
+          "old_start": 246,
+          "old_count": 96,
+          "new_start": 246,
+          "new_count": 107,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "56c51e5b2bab3be73e08e0832c34e09273f602907248beb0e8dfc5104b3a46a4",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          135,
+          147
+        ],
+        [
+          159,
+          165
+        ],
+        [
+          167,
+          173
+        ],
+        [
+          197,
+          211
+        ],
+        [
+          528,
+          534
+        ],
+        [
+          555,
+          572
+        ],
+        [
+          610,
+          616
+        ],
+        [
+          750,
+          799
+        ],
+        [
+          810,
+          817
+        ],
+        [
+          820,
+          836
+        ],
+        [
+          862,
+          869
+        ],
+        [
+          1125,
+          1131
+        ],
+        [
+          1394,
+          1400
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 91,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3568,
+          "diff_end_line": 3582,
+          "old_start": 135,
+          "old_count": 12,
+          "new_start": 135,
+          "new_count": 13,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 92,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3583,
+          "diff_end_line": 3591,
+          "old_start": 158,
+          "old_count": 7,
+          "new_start": 159,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 93,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3592,
+          "diff_end_line": 3600,
+          "old_start": 166,
+          "old_count": 7,
+          "new_start": 167,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 94,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3601,
+          "diff_end_line": 3616,
+          "old_start": 196,
+          "old_count": 6,
+          "new_start": 197,
+          "new_count": 15,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 95,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3617,
+          "diff_end_line": 3625,
+          "old_start": 518,
+          "old_count": 7,
+          "new_start": 528,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 96,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3626,
+          "diff_end_line": 3644,
+          "old_start": 545,
+          "old_count": 6,
+          "new_start": 555,
+          "new_count": 18,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 97,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3645,
+          "diff_end_line": 3653,
+          "old_start": 588,
+          "old_count": 7,
+          "new_start": 610,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 98,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3654,
+          "diff_end_line": 3708,
+          "old_start": 728,
+          "old_count": 15,
+          "new_start": 750,
+          "new_count": 50,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 99,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3709,
+          "diff_end_line": 3717,
+          "old_start": 753,
+          "old_count": 6,
+          "new_start": 810,
+          "new_count": 8,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 100,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3718,
+          "diff_end_line": 3736,
+          "old_start": 761,
+          "old_count": 7,
+          "new_start": 820,
+          "new_count": 17,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 101,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3737,
+          "diff_end_line": 3745,
+          "old_start": 793,
+          "old_count": 6,
+          "new_start": 862,
+          "new_count": 8,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 102,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3746,
+          "diff_end_line": 3754,
+          "old_start": 1054,
+          "old_count": 7,
+          "new_start": 1125,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 103,
+          "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+          "diff_start_line": 3755,
+          "diff_end_line": 3763,
+          "old_start": 1323,
+          "old_count": 7,
+          "new_start": 1394,
+          "new_count": 7,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-transport/src/protocol.rs",
+      "sha256": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1260,
+          1278
+        ],
+        [
+          2131,
+          2138
+        ],
+        [
+          3634,
+          3661
+        ],
+        [
+          4496,
+          4524
+        ],
+        [
+          8474,
+          8535
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 104,
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "diff_start_line": 3768,
+          "diff_end_line": 3787,
+          "old_start": 1260,
+          "old_count": 6,
+          "new_start": 1260,
+          "new_count": 19,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 91
+        },
+        {
+          "id": 105,
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "diff_start_line": 3788,
+          "diff_end_line": 3796,
+          "old_start": 2118,
+          "old_count": 6,
+          "new_start": 2131,
+          "new_count": 8,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 92
+        },
+        {
+          "id": 106,
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "diff_start_line": 3797,
+          "diff_end_line": 3825,
+          "old_start": 3619,
+          "old_count": 6,
+          "new_start": 3634,
+          "new_count": 28,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 93
+        },
+        {
+          "id": 107,
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "diff_start_line": 3826,
+          "diff_end_line": 3855,
+          "old_start": 4459,
+          "old_count": 6,
+          "new_start": 4496,
+          "new_count": 29,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 94
+        },
+        {
+          "id": 108,
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "diff_start_line": 3856,
+          "diff_end_line": 3918,
+          "old_start": 8414,
+          "old_count": 4,
+          "new_start": 8474,
+          "new_count": 62,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 95
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/decisions/158-controle-global-portees.md",
+      "sha256": "d2bc90a95a3fdb0581ac8e79663b860dd1f074bbc20d639b5b3365f408e659b7",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          125
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 152,
+          "file": "docs/decisions/158-controle-global-portees.md",
+          "diff_start_line": 4968,
+          "diff_end_line": 5093,
+          "old_start": 0,
+          "old_count": 0,
+          "new_start": 1,
+          "new_count": 125,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/docs/delegation-native.md",
+      "sha256": "e2875cf319b086f9deb38c17a1cb1b9a6e3e39b9c9b6f752fd80060d1ef93113",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          138,
+          225
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 109,
+          "file": "docs/delegation-native.md",
+          "diff_start_line": 3923,
+          "diff_end_line": 4011,
+          "old_start": 138,
+          "old_count": 6,
+          "new_start": 138,
+          "new_count": 88,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 97
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/skills/bridget/SKILL.md",
+      "sha256": "2c0cacdffa34418af1ec09ce7ce29504798cd24a5c2fd225fecce5808533d6a3",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          44,
+          74
+        ],
+        [
+          123,
+          131
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 110,
+          "file": "skills/bridget/SKILL.md",
+          "diff_start_line": 4016,
+          "diff_end_line": 4047,
+          "old_start": 44,
+          "old_count": 6,
+          "new_start": 44,
+          "new_count": 31,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 98
+        },
+        {
+          "id": 111,
+          "file": "skills/bridget/SKILL.md",
+          "diff_start_line": 4048,
+          "diff_end_line": 4059,
+          "old_start": 98,
+          "old_count": 8,
+          "new_start": 123,
+          "new_count": 9,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 99
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/skills/bridget/references/commandes.md",
+      "sha256": "9835323c5dcdfa4df26a3c2e0ab41a881036eb57297e0e80bccbf50a2ead2125",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          7
+        ],
+        [
+          59,
+          65
+        ],
+        [
+          203,
+          280
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 112,
+          "file": "skills/bridget/references/commandes.md",
+          "diff_start_line": 4064,
+          "diff_end_line": 4073,
+          "old_start": 1,
+          "old_count": 7,
+          "new_start": 1,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 100
+        },
+        {
+          "id": 113,
+          "file": "skills/bridget/references/commandes.md",
+          "diff_start_line": 4074,
+          "diff_end_line": 4082,
+          "old_start": 59,
+          "old_count": 7,
+          "new_start": 59,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 101
+        },
+        {
+          "id": 114,
+          "file": "skills/bridget/references/commandes.md",
+          "diff_start_line": 4083,
+          "diff_end_line": 4161,
+          "old_start": 203,
+          "old_count": 6,
+          "new_start": 203,
+          "new_count": 78,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 102
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/analyze-report.md",
+      "sha256": "b344f7e5c2c9accc7e6cd4943af370ab38e3ca6affb0beecadb7551755a2d437",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          11
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 115,
+          "file": "specs/158-reveils-controle/analyze-report.md",
+          "diff_start_line": 4166,
+          "diff_end_line": 4178,
+          "old_start": 1,
+          "old_count": 6,
+          "new_start": 1,
+          "new_count": 11,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 103
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "0b3a08b82c109f98c54ee103676e8fbbd0cee182533aa1c2e10166071bcaefa2",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          14,
+          23
+        ],
+        [
+          35,
+          38
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 116,
+          "file": "specs/158-reveils-controle/checklists/requirements.md",
+          "diff_start_line": 4183,
+          "diff_end_line": 4195,
+          "old_start": 14,
+          "old_count": 10,
+          "new_start": 14,
+          "new_count": 10,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 104
+        },
+        {
+          "id": 117,
+          "file": "specs/158-reveils-controle/checklists/requirements.md",
+          "diff_start_line": 4196,
+          "diff_end_line": 4201,
+          "old_start": 35,
+          "old_count": 4,
+          "new_start": 35,
+          "new_count": 4,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 105
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/contracts/control158.md",
+      "sha256": "8be30faf734fbfbb5ee17ecabacd58f4bc0acf40edfb9d2c66ef87857f2b8d77",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          11
+        ],
+        [
+          14,
+          31
+        ],
+        [
+          35,
+          50
+        ],
+        [
+          56,
+          86
+        ],
+        [
+          93,
+          101
+        ],
+        [
+          131,
+          155
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 118,
+          "file": "specs/158-reveils-controle/contracts/control158.md",
+          "diff_start_line": 4206,
+          "diff_end_line": 4220,
+          "old_start": 1,
+          "old_count": 8,
+          "new_start": 1,
+          "new_count": 11,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 106
+        },
+        {
+          "id": 119,
+          "file": "specs/158-reveils-controle/contracts/control158.md",
+          "diff_start_line": 4221,
+          "diff_end_line": 4243,
+          "old_start": 11,
+          "old_count": 13,
+          "new_start": 14,
+          "new_count": 18,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 120,
+          "file": "specs/158-reveils-controle/contracts/control158.md",
+          "diff_start_line": 4244,
+          "diff_end_line": 4263,
+          "old_start": 27,
+          "old_count": 12,
+          "new_start": 35,
+          "new_count": 16,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 108
+        },
+        {
+          "id": 121,
+          "file": "specs/158-reveils-controle/contracts/control158.md",
+          "diff_start_line": 4264,
+          "diff_end_line": 4295,
+          "old_start": 44,
+          "old_count": 6,
+          "new_start": 56,
+          "new_count": 31,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 122,
+          "file": "specs/158-reveils-controle/contracts/control158.md",
+          "diff_start_line": 4296,
+          "diff_end_line": 4305,
+          "old_start": 56,
+          "old_count": 6,
+          "new_start": 93,
+          "new_count": 9,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 123,
+          "file": "specs/158-reveils-controle/contracts/control158.md",
+          "diff_start_line": 4306,
+          "diff_end_line": 4331,
+          "old_start": 91,
+          "old_count": 3,
+          "new_start": 131,
+          "new_count": 25,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/data-model.md",
+      "sha256": "9519b5000fadbc8cf4b1dce832e4965bfbb0a06b324f7b5de901d9e629e561a7",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          24,
+          31
+        ],
+        [
+          54,
+          61
+        ],
+        [
+          74,
+          80
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 124,
+          "file": "specs/158-reveils-controle/data-model.md",
+          "diff_start_line": 4336,
+          "diff_end_line": 4345,
+          "old_start": 24,
+          "old_count": 7,
+          "new_start": 24,
+          "new_count": 8,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 111
+        },
+        {
+          "id": 125,
+          "file": "specs/158-reveils-controle/data-model.md",
+          "diff_start_line": 4346,
+          "diff_end_line": 4354,
+          "old_start": 53,
+          "old_count": 6,
+          "new_start": 54,
+          "new_count": 8,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 112
+        },
+        {
+          "id": 126,
+          "file": "specs/158-reveils-controle/data-model.md",
+          "diff_start_line": 4355,
+          "diff_end_line": 4362,
+          "old_start": 71,
+          "old_count": 3,
+          "new_start": 74,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 113
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/plan.md",
+      "sha256": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          13
+        ],
+        [
+          43,
+          49
+        ],
+        [
+          97,
+          103
+        ],
+        [
+          111,
+          127
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 127,
+          "file": "specs/158-reveils-controle/plan.md",
+          "diff_start_line": 4367,
+          "diff_end_line": 4382,
+          "old_start": 1,
+          "old_count": 13,
+          "new_start": 1,
+          "new_count": 13,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 114
+        },
+        {
+          "id": 128,
+          "file": "specs/158-reveils-controle/plan.md",
+          "diff_start_line": 4383,
+          "diff_end_line": 4391,
+          "old_start": 43,
+          "old_count": 7,
+          "new_start": 43,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 115
+        },
+        {
+          "id": 129,
+          "file": "specs/158-reveils-controle/plan.md",
+          "diff_start_line": 4392,
+          "diff_end_line": 4400,
+          "old_start": 97,
+          "old_count": 7,
+          "new_start": 97,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 116
+        },
+        {
+          "id": 130,
+          "file": "specs/158-reveils-controle/plan.md",
+          "diff_start_line": 4401,
+          "diff_end_line": 4420,
+          "old_start": 111,
+          "old_count": 5,
+          "new_start": 111,
+          "new_count": 17,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 117
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/quickstart.md",
+      "sha256": "d5ff2959a8e1cb252f9d0266f9d6ca936969a08e575e600b86ab0b5f8deaf652",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          8
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          36,
+          46
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 131,
+          "file": "specs/158-reveils-controle/quickstart.md",
+          "diff_start_line": 4425,
+          "diff_end_line": 4435,
+          "old_start": 1,
+          "old_count": 7,
+          "new_start": 1,
+          "new_count": 8,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 118
+        },
+        {
+          "id": 132,
+          "file": "specs/158-reveils-controle/quickstart.md",
+          "diff_start_line": 4436,
+          "diff_end_line": 4444,
+          "old_start": 11,
+          "old_count": 7,
+          "new_start": 12,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 119
+        },
+        {
+          "id": 133,
+          "file": "specs/158-reveils-controle/quickstart.md",
+          "diff_start_line": 4445,
+          "diff_end_line": 4457,
+          "old_start": 35,
+          "old_count": 4,
+          "new_start": 36,
+          "new_count": 11,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 120
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/research.md",
+      "sha256": "47bd54959fc347a535f03592fba23fe1eca024ff0362866b26b6ad1467ee4a50",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          1,
+          18
+        ],
+        [
+          26,
+          32
+        ],
+        [
+          78,
+          125
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 134,
+          "file": "specs/158-reveils-controle/research.md",
+          "diff_start_line": 4462,
+          "diff_end_line": 4483,
+          "old_start": 1,
+          "old_count": 14,
+          "new_start": 1,
+          "new_count": 18,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 121
+        },
+        {
+          "id": 135,
+          "file": "specs/158-reveils-controle/research.md",
+          "diff_start_line": 4484,
+          "diff_end_line": 4492,
+          "old_start": 22,
+          "old_count": 7,
+          "new_start": 26,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 122
+        },
+        {
+          "id": 136,
+          "file": "specs/158-reveils-controle/research.md",
+          "diff_start_line": 4493,
+          "diff_end_line": 4541,
+          "old_start": 74,
+          "old_count": 3,
+          "new_start": 78,
+          "new_count": 48,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 123
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "43ed51ba114ed8605349f0820ea956c6c38d0200fe0a37fcf7a3d61a256f7b2d",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          2,
+          11
+        ],
+        [
+          58,
+          64
+        ],
+        [
+          96,
+          143
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 137,
+          "file": "specs/158-reveils-controle/reuse-audit.md",
+          "diff_start_line": 4546,
+          "diff_end_line": 4558,
+          "old_start": 2,
+          "old_count": 9,
+          "new_start": 2,
+          "new_count": 10,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 124
+        },
+        {
+          "id": 138,
+          "file": "specs/158-reveils-controle/reuse-audit.md",
+          "diff_start_line": 4559,
+          "diff_end_line": 4567,
+          "old_start": 57,
+          "old_count": 7,
+          "new_start": 58,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 125
+        },
+        {
+          "id": 139,
+          "file": "specs/158-reveils-controle/reuse-audit.md",
+          "diff_start_line": 4568,
+          "diff_end_line": 4616,
+          "old_start": 95,
+          "old_count": 3,
+          "new_start": 96,
+          "new_count": 48,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 126
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          21,
+          27
+        ],
+        [
+          30,
+          40
+        ],
+        [
+          102,
+          108
+        ],
+        [
+          110,
+          119
+        ],
+        [
+          122,
+          147
+        ],
+        [
+          153,
+          159
+        ],
+        [
+          170,
+          180
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 140,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4621,
+          "diff_end_line": 4629,
+          "old_start": 21,
+          "old_count": 7,
+          "new_start": 21,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 127
+        },
+        {
+          "id": 141,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4630,
+          "diff_end_line": 4644,
+          "old_start": 30,
+          "old_count": 9,
+          "new_start": 30,
+          "new_count": 11,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 128
+        },
+        {
+          "id": 142,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4645,
+          "diff_end_line": 4653,
+          "old_start": 100,
+          "old_count": 7,
+          "new_start": 102,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 129
+        },
+        {
+          "id": 143,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4654,
+          "diff_end_line": 4668,
+          "old_start": 108,
+          "old_count": 10,
+          "new_start": 110,
+          "new_count": 10,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 144,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4669,
+          "diff_end_line": 4699,
+          "old_start": 120,
+          "old_count": 26,
+          "new_start": 122,
+          "new_count": 26,
+          "read_kind": "fresh_post_fix_delta",
+          "read_at": "2026-10-12T10:03:50.094245+00:00"
+        },
+        {
+          "id": 145,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4700,
+          "diff_end_line": 4708,
+          "old_start": 151,
+          "old_count": 7,
+          "new_start": 153,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 132
+        },
+        {
+          "id": 146,
+          "file": "specs/158-reveils-controle/spec.md",
+          "diff_start_line": 4709,
+          "diff_end_line": 4720,
+          "old_start": 168,
+          "old_count": 6,
+          "new_start": 170,
+          "new_count": 11,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 133
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/specs/158-reveils-controle/tasks.md",
+      "sha256": "8db90f488b1a8f9edc23858383786221858dcc5d5abf76af8dc180f505cd412a",
+      "verified_at": "2026-10-12T10:03:50.094245+00:00",
+      "semantic_audit": true,
+      "read_kind": "complete_diff_by_initial_review_plus_fresh_delta",
+      "entire_existing_source_read": false,
+      "ranges": [
+        [
+          2,
+          11
+        ],
+        [
+          13,
+          59
+        ],
+        [
+          61,
+          67
+        ],
+        [
+          83,
+          89
+        ]
+      ],
+      "hunks": [
+        {
+          "id": 147,
+          "file": "specs/158-reveils-controle/tasks.md",
+          "diff_start_line": 4725,
+          "diff_end_line": 4737,
+          "old_start": 2,
+          "old_count": 10,
+          "new_start": 2,
+          "new_count": 10,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 134
+        },
+        {
+          "id": 148,
+          "file": "specs/158-reveils-controle/tasks.md",
+          "diff_start_line": 4738,
+          "diff_end_line": 4805,
+          "old_start": 13,
+          "old_count": 47,
+          "new_start": 13,
+          "new_count": 47,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 135
+        },
+        {
+          "id": 149,
+          "file": "specs/158-reveils-controle/tasks.md",
+          "diff_start_line": 4806,
+          "diff_end_line": 4814,
+          "old_start": 61,
+          "old_count": 7,
+          "new_start": 61,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 136
+        },
+        {
+          "id": 150,
+          "file": "specs/158-reveils-controle/tasks.md",
+          "diff_start_line": 4815,
+          "diff_end_line": 4822,
+          "old_start": 83,
+          "old_count": 3,
+          "new_start": 83,
+          "new_count": 7,
+          "read_kind": "inherited_exact_hunk_body",
+          "initial_hunk_id": 137
+        }
+      ]
+    }
+  ],
+  "fresh_context": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "ranges": [
+        [
+          622,
+          672
+        ],
+        [
+          2710,
+          2748
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "sha256": "3c4286217e5b2269c10b2f9c2cda227885e85214ddd6f69657faa1569ce5008f",
+      "ranges": [
+        [
+          6310,
+          6335
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/handoff.rs",
+      "sha256": "7ca9284f63c55f6da590145df8fc0ec51f2168ab5be43ce6a1910f0883372957",
+      "ranges": [
+        [
+          548,
+          615
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "4ea51409dad43bf864bb8048d0d60b807265bb10d8f31ad2368a1f8b8a43aeed",
+      "ranges": [
+        [
+          3470,
+          3546
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/delegation_lineage.rs",
+      "sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "ranges": [
+        [
+          1,
+          67
+        ],
+        [
+          150,
+          285
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "ranges": [
+        [
+          130,
+          180
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "ranges": [
+        [
+          350,
+          375
+        ]
+      ],
+      "semantic_audit": true,
+      "entire_source_file_read": false
+    }
+  ],
+  "delta_patches_read": [
+    {
+      "file": "/Users/moi/.cache/bridget-fix158-review-20261012/combinedchildproof-preview.patch",
+      "sha256": "b3855e9818742d0453ce646d8943138fc1c3d382997e7d695857b37c859e438c",
+      "lines_read": [
+        [
+          1,
+          60
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-fix158-review-20261012/v2cli-docs-preview.patch",
+      "sha256": "c9d639b59797d71685e25fd937756e5524f4f6796d9dad36d12a2b491113a9b4",
+      "lines_read": [
+        [
+          1,
+          154
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-fix158-full-20261012/01-core_089_concurrency_test-fixture.patch",
+      "sha256": "53c623db0b95fc9a9b2b42ae6773fc985f6ef8f62a3cc984340753febd108e91",
+      "lines_read": [
+        [
+          1,
+          42
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-fix158-full-20261012/02-core_089_security_test-fixture.patch",
+      "sha256": "b976a4fb8a33ddf48739f4bf18e88f11fe4541034aefa70e4d72124d0eec845c",
+      "lines_read": [
+        [
+          1,
+          198
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-fix158-full-20261012/03-native_delegation_e2e-fixture.patch",
+      "sha256": "83b4c51c6ab9d633ae32e508afe1c3602351e7ea9388f56f3020f8cf30b1bc2b",
+      "lines_read": [
+        [
+          1,
+          198
+        ]
+      ]
+    }
+  ],
+  "receipts": [
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.json",
+      "sha256": "d321701384d000f3c696d214ee33fc4c7f74fbcae369797f3eb767b01bf9d50c",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-review-fixes158-lib.log",
+      "log_sha256": "cbdb3bc3ba4a4801a8540edada180445cd3664d96ef9caa10aaff82f85c5e630",
+      "rc": 0,
+      "pass": 22,
+      "names": [
+        "mcp::tests::guidance156_mcp_queue_schema",
+        "cli::guidance156_tests::control158_halt_aucun_outil_mcp",
+        "mcp::tests::mcp158_discovery_lecture_artefact_permise",
+        "mcp_scopes::tests::mcp158_journal_read_only_hint_faux",
+        "mcp::tests::mcp158_discovery_partage_journal_refuse_sans_effet",
+        "mcp::tests::mcp158_discovery_publication_artefact_refusee_sans_effet",
+        "mcp_scopes::tests::mcp158_outil_sans_portee_echoue",
+        "mcp_scopes::tests::mcp158_read_only_hint_correspond_a_la_base",
+        "mcp_scopes::tests::mcp158_scopes_couvrent_tous_les_outils",
+        "mcp::tests::mcp158_plafond_aucun_effet_de_bord_au_refus",
+        "mcp::tests::mcp158_discovery_events_sub_unsub_permis",
+        "mcp::tests::mcp158_discovery_journal_avec_et_sans_to",
+        "cli::guidance156_tests::control158_delegations_cli_parse",
+        "mcp::tests::mcp158_discovery_chaque_action_de_fil",
+        "mcp::tests::mcp158_plafond_enfant_discovery_refuse_ecriture",
+        "mcp::tests::mcp158_discovery_lecture_ack_page_suivante",
+        "mcp::tests::mcp158_plafond_parent_garde_tous_les_outils",
+        "daemon::native_delegation::tests::mcp158_discovery_reponse_automatique_au_parent",
+        "daemon::native_delegation::tests::mcp158_plafond_posture_omise_suit_effective",
+        "daemon::native_delegation::tests::mcp158_plafond_enfant_nettoye_retrouve_les_droits",
+        "daemon::native_delegation::tests::mcp158_plafond_tache_terminale_avant_nettoyage",
+        "daemon::native_delegation::tests::mcp158_plafond_enfant_conserve_entre_rondes"
+      ],
+      "seconds": 16.63,
+      "sources_stable": true
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-preview103-replay.json",
+      "sha256": "6057e9e2dec533af13d4a6bda4a78141a5a596c6be4e2bb45d285029317678eb",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-preview103-replay.log",
+      "log_sha256": "04aad2ef396a1c5805f165b8caab5f24c2dceb679aef80a1e5cabaacf828e303",
+      "rc": 0,
+      "pass": 1,
+      "names": [
+        "spec103_s02_apercu_sans_daemon_ni_socket_ni_identifiant"
+      ],
+      "seconds": 9.24,
+      "sources_stable": true
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-concurrency089-replay.json",
+      "sha256": "e917a6f14afcd0faeaae18b43cda8d80c67a6e42135b4739675a08bd6f76e9d9",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-concurrency089-replay.log",
+      "log_sha256": "a41722b2c1e1fd9d2d190dc2295253573efc45bfaef244f0243fa7d8af87645a",
+      "rc": 0,
+      "pass": 1,
+      "names": [
+        "mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket"
+      ],
+      "seconds": 7.26,
+      "sources_stable": true
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-security089-replay.json",
+      "sha256": "9ae57615a5d1bb24e5ea1f4724f103c7c659213c4a1c774ac31f969848d60e9e",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-security089-replay.log",
+      "log_sha256": "3f9e193452124a7c62837477206d9fee56ad0766305d30fffb6b01b67bf045ba",
+      "rc": 0,
+      "pass": 1,
+      "names": [
+        "mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari"
+      ],
+      "seconds": 7.65,
+      "sources_stable": true
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-native152-replay.json",
+      "sha256": "071627be854d0a4314403d0b8ee49050870b141de49a01609c23ed8917bed875",
+      "log": "/Users/moi/.cache/bridget-plan158-20261012-r1/T021-native152-replay.log",
+      "log_sha256": "5a45fa4e827c9d28e0752808384f3a6ca8f653424fd79131dffc73137904f3e7",
+      "rc": 0,
+      "pass": 1,
+      "names": [
+        "native152_rouge_panne_mission_working"
+      ],
+      "seconds": 9.29,
+      "sources_stable": true
+    }
+  ],
+  "findings_review": [
+    {
+      "id": "T022-CHILDPROOF",
+      "status": "resolved",
+      "evidence": "mcp guard before registered_connection; original listener WouldBlock/no RPC oracle restored; exact test PASS in22lib receipt."
+    },
+    {
+      "id": "F1",
+      "status": "resolved_wording",
+      "evidence": "CLI states halt/cancellations may have applied on StoreUnavailable; spec FR009/contract/ADR explicit."
+    },
+    {
+      "id": "F2",
+      "status": "not_established_normal_purge",
+      "evidence": "tree_settled checks all descendants, settled_trees selects whole root tree, delete_tree transaction removes whole tree. Corrupt/missing ancestry remains closed StoreUnavailable."
+    },
+    {
+      "id": "F3",
+      "status": "resolved_documentation",
+      "evidence": "FR011/contract/ADR document exit1 for status metadata read failure after partial output."
+    },
+    {
+      "id": "F4",
+      "status": "resolved_documentation",
+      "evidence": "FR008/contract/ADR distinguish dynamic suspended replay view from immutable halt receipt."
+    }
+  ],
+  "global_green": false,
+  "full_status": {
+    "rc": 101,
+    "pass": 2440,
+    "fail": 12,
+    "ignored": 74,
+    "baseline_identical": 255,
+    "new_failures": 4,
+    "new_failures_resolved_by_targeted_replays": 4,
+    "legacy_failures_remaining": 8,
+    "full_repeated_after_fixes": false
+  },
+  "performed": {
+    "source_writes": false,
+    "test_execution": false,
+    "build_execution": false,
+    "git_mutation": false,
+    "task_checking": false
+  }
+}
