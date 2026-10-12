@@ -6,7 +6,9 @@
 //! cette frontière.
 
 use crate::journal::JournalLiveFeed;
-use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
+use crate::protocol::{
+    ChildProviderRequest, ChildRequestAnswer, PresenceMode, ProviderObservation, ProviderOperation,
+};
 use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use std::path::Path;
@@ -146,6 +148,10 @@ impl ManagedEvent {
 
 #[derive(Debug, Clone)]
 pub enum ManagedEventKind {
+    /// Demande normalisée du callback fournisseur, sans décision locale.
+    ProviderRequest {
+        request: ChildProviderRequest,
+    },
     /// Activité attestée sans message Bridget (tour humain natif).
     ActivityObserved {
         in_progress: bool,
@@ -275,6 +281,15 @@ fn continuation_fallback(
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    /// O(1) par défaut : aucun ancien pilote n'accorde une demande différée.
+    fn answer_provider_request(
+        &mut self,
+        _answer: &ChildRequestAnswer,
+    ) -> Result<(), TransportError> {
+        Err(TransportError::DeliveryFailed(
+            "child_requests_unsupported".into(),
+        ))
+    }
     /// Politique réellement annoncée par le fournisseur, et sa session.
     /// Aucune valeur de repli ne donne de droits si le pilote ne l'observe pas.
     fn provider_permissions(&self)->Option<(String,serde_json::Value,u64,Option<String>)>{None}
@@ -364,6 +379,64 @@ pub trait ManagedSession: Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native155_managed_pilote_sans_implementation_refuse() {
+        struct LegacySession;
+        impl Transport for LegacySession {
+            fn deliver(&mut self, _: &BridgetMessage) -> Result<(), TransportError> {
+                Err(TransportError::DeliveryFailed("fixture".into()))
+            }
+            fn is_alive(&self) -> bool {
+                false
+            }
+            fn connection_id(&self) -> &str {
+                "fixture"
+            }
+        }
+        impl ManagedSession for LegacySession {
+            fn descriptor(&self) -> ManagedSessionDescriptor {
+                ManagedSessionDescriptor {
+                    transport: "fixture".into(),
+                    mode: PresenceMode::Acp,
+                    location: None,
+                }
+            }
+            fn process_id(&self) -> u32 {
+                0
+            }
+            fn activate_journal(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<JournalLiveFeed>,
+            ) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn drain_events(&self) -> Vec<ManagedEvent> {
+                Vec::new()
+            }
+            fn cancel_delivery(&self, _: &str, _: &str) -> bool {
+                false
+            }
+            fn stop(&self) {}
+            fn is_busy(&self) -> bool {
+                false
+            }
+        }
+        let answer = ChildRequestAnswer {
+            request_id: "request".into(),
+            provider_session: "session".into(),
+            turn_id: "turn".into(),
+            provider_request_id: crate::protocol::ChildProviderRequestId::Number(155),
+            decision: crate::protocol::ChildRequestDecision::Decline,
+            answer: None,
+            outcome: "refused:approval_method_unsupported".into(),
+        };
+        let mut session = LegacySession;
+        assert!(matches!(session.answer_provider_request(&answer),
+            Err(TransportError::DeliveryFailed(reason)) if reason == "child_requests_unsupported"));
+    }
 
     #[test]
     fn enfant_reel_ignore_term_puis_int_ferme_le_groupe_sous_borne() {

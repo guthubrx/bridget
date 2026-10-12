@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-10-12T00:43:21.773713+00:00",
+  "tasks": [
+    "T016",
+    "T033"
+  ],
+  "red_passed": 0,
+  "red_failed": 7,
+  "red_rc": 101,
+  "seconds": 21.98,
+  "source_stable": true,
+  "log_sha256": "dc2bfd16cae4627d5c835ae8775f51681d5b7769a9babdd2ff480388aff2904d",
+  "wrapper_test_hash": "8616d9e82fb5f2f3a82eb8d001b5eba2373f80a48b41d579297835a6bc4cd612",
+  "purge_test_hash": "d9cecef71c9335eaa2f475af8b231faffa15906f07c87db03643f44b60cb35d3",
+  "production_go": true,
+  "first_attempt": "Compilation seule : import json absent dans tests wrapper. Aucune preuve m\u00e9tier d\u00e9duite.",
+  "purge_test2_scope": "Garde150 cleanup_done ; pas garde ind\u00e9pendante sur demandes ouvertes."
+}

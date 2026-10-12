@@ -402,6 +402,7 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         "bridget_request_wait",
         "bridget_task_ack",
         "bridget_task_continue",
+        "bridget_task_respond",
     ]
     .map(|name| format!("mcp__bridget__{name}"))
     .into_iter()

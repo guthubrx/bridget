@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS native_child_requests(
   summary TEXT NOT NULL,                 -- <= 400 caractères, nettoyé
   facts_json TEXT NOT NULL,              -- faits vérifiés par Bridget (voir plus bas), <= 4 Kio
   model_text TEXT NOT NULL,              -- texte du modèle cité (reason, question), <= 1 Kio, marqué non fiable
-  offered_json TEXT NOT NULL,            -- décisions proposées par le fournisseur, filtrées à accept/decline/cancel
+  offered_json TEXT NOT NULL,            -- choix internes fermés et offres explicites si la méthode en porte ; ne pas inventer availableDecisions
   created_at INTEGER NOT NULL,
   deadline_at INTEGER NOT NULL,
   decision TEXT,                         -- accept | decline | cancel (HISTORIQUE)
@@ -59,8 +59,7 @@ Règles :
   ce cas : l'issue stockée est `cancelled_outcome_unknown`.
 - Fermeture d'une demande `sent` : le daemon envoie `ChildRequestCancel` et attend
   `ChildRequestClosed` ; `already_applied` donne `delivered`, `closed_before_apply`
-  donne `void`. Tant que l'état est `sent`, le renvoi reste identique (idempotent côté
-  wrapper).
+  donne `void`. Avant chaque renvoi `sent`, le daemon refait FR027. Expiration et fermeture sont traitées avant le renvoi ; une invalidité envoie Cancel, jamais l’accord. Le renvoi encore valide reste identique (idempotent côté wrapper).
 - Échéance : `now >= deadline_at` interdit tout envoi ; à l'échéance, `pending` devient
   `void` (`expired`), `sent` suit la fermeture ci-dessus.
 - Un accusé reçu d'une autre connexion est ignoré et journalisé.
@@ -95,7 +94,7 @@ Calculés par Bridget, jamais copiés tels quels du fournisseur.
 | état `waiting` / `answered` / `closed` | transitions sous un seul verrou avec l'écriture de la réponse |
 | anneau des 64 dernières demandes réglées | répondre exactement à un renvoi ou à une fermeture tardive |
 | méthode | choisit la forme de la réponse |
-| décisions proposées | pour écrire `decline` ou `cancel` seulement |
+| forme de réponse par méthode | commande/élicitation refusée : choix fermés ; user_input : answers enveloppé, refus JSON-RPC |
 | identifiants de question | pour valider `answer` |
 
 Au plus 4 entrées ouvertes. Vidée à la fin du tour, à l'interruption et à l'arrêt. Une réponse
@@ -105,7 +104,7 @@ du daemon qui ne correspond à aucune entrée exacte donne `applied = false`.
 
 ```json
 "pending_requests": [{"request_id":"…","kind":"user_input","summary":"…","verdict":"parent","deadline_at":0}],
-"recent_requests":  [{"request_id":"…","kind":"…","outcome":"answered_by_parent","decision":"accept","decided_at":0}]
+"recent_requests":  [{"request_id":"…","kind":"…","outcome":"answered_by_parent","decision":"accept","decided_at":0,"delivery_state":"delivered"}]
 ```
 
 `recent_requests` : 10 dernières issues terminales. Clés ajoutées, aucune retirée. Les
@@ -123,17 +122,18 @@ sans pouvoir y répondre.
 | `options` | `accept`, `decline` |
 | `producer` | `daemon` |
 
-## Verdicts (`classify_request`, fonction pure sur des faits déjà résolus)
+## Verdicts (`classify_request`, fonction pure sur des faits structurés et chemins cités)
 
 Entrées : politique figée du parent (`snapshot.parent.provider_policy`), politique
-figée de l'enfant (`snapshot.child_policy`), demande normalisée avec chemins déjà
-résolus (FR-011), indicateurs de complétude. Sortie : `Parent`, `Human` ou
+figée de l'enfant (`snapshot.child_policy`), demande normalisée avec chemins cités et normalisés lexicalement, sans
+résolution filesystem ni preuve de confinement (FR-011), indicateurs de complétude. Sortie : `Parent`, `Human` ou
 `Forbidden(code)`.
 
 | Cas | Verdict |
 |---|---|
-| question `user_input` ou formulaire sans secret, parent vivant, prouvé, non révoqué | Parent |
+| question user_input avec isSecret=false (défaut normatif), parent vivant/prouvé/non révoqué | Parent |
 | question, parent absent ou révoqué | Forbidden(`parent_unavailable`) |
+| formulaire MCP tiers, quel que soit type/contenu/meta | Forbidden(`approval_method_unsupported`) |
 | question à secret | Forbidden(`secret_not_forwardable`) |
 | élicitation en mode URL | Forbidden(`url_mode_unsupported`) |
 | méthode `item/permissions/requestApproval` ou autre méthode inconnue | Forbidden(`approval_method_unsupported`) |
@@ -141,7 +141,7 @@ résolus (FR-011), indicateurs de complétude. Sortie : `Parent`, `Human` ou
 | approbation, enfant `readOnly` | Forbidden(`child_restricted`) |
 | approbation, politique du parent incomplète, `readOnly` ou `externalSandbox` | Forbidden(`parent_limit_unknown`) |
 | écriture de fichier, parent `workspaceWrite`, quel que soit le chemin | Forbidden(`file_confinement_unproven`) |
-| écriture de fichier, parent `dangerFullAccess` | Human |
+| faits synthétiques complets d’écriture, durée once, parent dangerFullAccess | Human dans le classifier pur ; transport fileChange0.162.1 réel refusé en amont |
 | réseau, parent `workspaceWrite` avec `networkAccess` vrai, ou `dangerFullAccess` | Human |
 | réseau, `networkAccess` faux ou absent | Forbidden(`network_not_granted`) |
 | commande, parent `dangerFullAccess` | Human |
@@ -150,3 +150,58 @@ résolus (FR-011), indicateurs de complétude. Sortie : `Parent`, `Human` ou
 | durée autre que `once` | Forbidden(`duration_unsupported`) |
 
 Cette table est le contrat testé par T006 et T008 (au moins 24 cas).
+
+## Précisions de la contre-revue plan R1
+
+La décision historique et sa remise ont deux contrôles distincts. L’écriture de
+la décision exige un CAS state = open et deadline_at > now. Le claim de remise
+exige delivery_state = pending et FR027 valide. Chaque opération vérifie rowcount ;
+zéro ligne modifiée n’autorise aucun envoi. Un état terminal ne rouvre pas, mais
+sa delivery_state peut encore être réglée par un accusé de fermeture.
+
+Une fermeture fournisseur non confirmée envoie ChildRequestCancel même pour
+none ou pending. void signifie accord invalidé, sans prouver que le fournisseur
+a quitté son attente. Closed confirme le règlement ; sans réponse, l’issue ne
+prétend pas l’annulation confirmée. Une répétition terminale rend la réponse
+persistée ; aucun accord void n’est réappliqué.
+
+Pendant une pause, une décision humaine est acquittée sans exécution. La reprise
+ne remet pas cette décision ; une nouvelle demande sera nécessaire.
+
+L’attente151 reste une lecture d’état. ready contient uniquement les tâches
+terminales et pending les identifiants nonterminaux. La clé pending_requests à la
+racine du résultat wait contient les demandes Parent/open/nonexpirées/actionnables
+avec task_id et projection155. Une question déjà ouverte peut rendre immédiatement
+la main. Human est exclu de cette liste et du prédicat de retour, tout en restant
+visible via status. timed_out est faux si ready ou pending_requests est non vide ;
+il est vrai seulement à l’échéance wait avec les deux listes vides.
+Aucune mémoire persistante de waiter, aucun marqueur de consommation. WaitEpoch
+est notifié après commit Parent ; le compteur est lu avant l’état, comme en151.
+« Nouvellement ouverte » décrit une notification, pas un filtre des demandes.
+
+Le checkpointR1 demandait la lecture elicitation/approval/_meta ; le schéma 0.162.1 est désormais lu, avec T002 final PASS attestée dans validation/gate-schema155.json. Un formulaire tiers
+vide ou marqué approval, ou une métadonnée d’effet non établi, reste Forbidden ;
+l’exception du formulaire vide Bridget reste distincte. Ces variantes sont
+intégrées à la table existante d’au moins 24 cas, pas à une nouvelle série de tests.
+
+## Bornes du schéma courant 0.162.1
+
+fileChange réel :approval_method_unsupported en v1, duration_unsupported si
+grantRoot non nul. Params n’a ni paths ni availableDecisions. Les notifications
+changes/path/diff/kind existent, sans preuve de confinement ni route Human
+automatique ; aucune table/cache de corrélation supplémentaire. Le verdict pur
+Human pour facts synthétiques complets ne signifie pas support du transport réel.
+
+permissions est refusée par erreur JSON-RPC, jamais decision:decline. Pour
+user_input, la réponse fournisseur est {answers:{questionId:{answers:[string]}}}.
+La réponse interne du parent reste answer[questionId]=[strings] ; le transport
+adapte chaque valeur. Un refus ou une expiration user_input utilise l’erreur
+JSON-RPC -32000 child_request_refused, car aucun decline/cancel n’est défini.
+
+Elicitation0.162.1 définit cinq modes : form,openai/form,openaiForm,url et
+openai/userVerification. Aucun formulaire MCP tiers n’est routable Parent : approval_method_unsupported, même pour form typé ; _meta non vide ou d’effet non établi et modes enrichis sont refusés.
+_meta est un JSON arbitraire, pas une clé approval/durée attestée. Aucun champ
+structuré fictif n’est ajouté aux faits. Exception vide Bridget historique distincte.
+serverRequest/resolved ne porte pas turnId ; rapprochement par la table existante.
+
+Le schéma form MCP n’a pas de drapeau isSecret standard : ne pas déduire une absence de secret de ce seul silence. Réponse de refus fileChange/permissions/user_input : erreur JSON-RPC -32000 child_request_refused sans result, motif interne distinct. Closed atteste le règlement sérialisé du wrapper ; l’erreur JSON-RPC seule ne prouve aucune fermeture runtime du fournisseur.

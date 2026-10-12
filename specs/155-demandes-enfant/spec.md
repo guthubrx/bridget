@@ -5,10 +5,10 @@
 
 Spec: 155-demandes-enfant
 Titre: Remontée des demandes de l'enfant au parent ou à l'humain
-Statut: Spécifiée (révisée après contre-revues Codex, rondes 1 et 2, du 2026-10-11)
+Statut: In Progress (42/42 acquises ; T040 validée ; correctif cwd prouvé par 71 PASS ciblés ; vérification du delta après P3 attendue)
 Priorité: P1
-Tâches: 0/41 (voir tasks.md ; T000 est un correctif de sécurité livrable seul)
-Tests: rouges d'abord, recette `umask 077` (quickstart.md)
+Tâches: 42/42 (cochées par root ; T040 validée avec accord explicite utilisateur)
+Tests: 71 PASS ciblés post-cwd, RC0, 214 sources stables ; quatre régressions canal087/STDIO antérieures distinctes ; recette réelle quatre cas PASS avant cwd ; suite unique antérieure 2259 PASS / 15 FAIL / 72 ignored, aucun GREEN global
 
 Résumé:
 - Contexte: Un enfant natif qui demande une approbation ou pose une question reçoit aujourd'hui une réponse automatique (Codex) ou un refus (élicitation). Personne ne décide. Le parent et l'humain ne voient rien.
@@ -21,9 +21,9 @@ Fichiers:
 - tasks.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-155-demandes-enfant` (worktree partagé `.worktrees/150-socle-delegation`, exécution séquentielle, sans commit automatique)
+**Feature Branch**: `session-155-demandes-enfant` (worktree dédié `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant`, exécution séquentielle, sans commit automatique)
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: In Progress
 **Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-150, SPEC-151
 
@@ -67,8 +67,8 @@ plafond de droits vérifié par le daemon, une issue explicite et une trace dura
 
 | Demande | Décideur | Pourquoi |
 |---|---|---|
-| Question (`user_input`, élicitation en formulaire sans secret) | le parent | c'est une information, pas un droit |
-| Approbation (commande, écriture de fichier) | l'humain | un parent modèle pourrait être induit en erreur par le texte de la demande ; un enfant hérité a la même politique que son parent, donc le parent ne peut rien couvrir de plus |
+| Question user_input avec isSecret=false (défaut normatif) ; formulaires MCP tiers refusés | le parent | c'est une information, pas un droit |
+| Approbation de commande kind=command, offre explicite accept/decline/cancel, aux effets/durée établis ; fileChange reste refusée en v1 selon le schéma 0.162.1 | l'humain | un parent modèle pourrait être induit en erreur par le texte de la demande ; un enfant hérité a la même politique que son parent, donc le parent ne peut rien couvrir de plus |
 | Tout ce qui dépasse la limite absolue | personne : refus automatique | aucune décision ne donne plus de droits que le bac à sable figé du parent |
 
 **Limite absolue.** La limite absolue est la politique de bac à sable attestée et
@@ -104,8 +104,7 @@ dialogue humain Bridget ». La session 155 change cette décision de façon limi
 - Interface graphique des demandes dans T3 ou dans le panneau Bridget.
 - Décisions durables (« toujours autoriser », « pour la session », amendements de
   règles) : jamais proposées, jamais relayées.
-- Méthode `item/permissions/requestApproval` (octroi de permissions dont la durée
-  n'est pas bornée en v1) et toute autre méthode `item/*/requestApproval` inconnue :
+- Méthode item/permissions/requestApproval (octroi additionnel à scope turn/session, hors périmètre v1) et toute autre méthode `item/*/requestApproval` inconnue :
   refus automatique `approval_method_unsupported`.
 - Questions à secret (`isSecret`) : refus `secret_not_forwardable`. Élicitations en
   mode URL : refus `url_mode_unsupported`.
@@ -123,7 +122,7 @@ dialogue humain Bridget ». La session 155 change cette décision de façon limi
 ### US1 - Une question remonte au parent et la réponse revient à l'enfant (P1)
 
 Un parent délègue avec `child_requests: "forward"`. L'enfant Codex pose une question
-(`user_input`, ou élicitation MCP en formulaire sans secret). Le tour de l'enfant
+(user_input avec isSecret=false, défaut normatif ; aucune élicitation MCP tierce). Le tour de l'enfant
 attend. Le parent reçoit un avis avec l'identifiant de la demande, la question et ses
 choix. Il répond avec `bridget_task_respond`. L'enfant reçoit la réponse et continue.
 Si le parent répond `decline`, l'enfant reçoit un refus.
@@ -163,8 +162,7 @@ d'identité ne peut pas répondre. Les décisions durables ne sont jamais relay�
 ### US6 - Voir et suivre les demandes (P2)
 
 Le parent lit dans `bridget_task_status` les demandes ouvertes et les dix dernières
-issues. Quand l'attente de la session 151 existe, elle rend la main dès qu'une demande
-s'ouvre.
+issues. L’attente151 rendra la main après T034 pour une demande Parent ouverte et actionnable, y compris déjà présente. Une demande Human seule ne provoque pas ce retour. ready reste réservé aux tâches terminales et pending aux tâches nonterminales. pending_requests est une clé à la racine du résultat wait, réservée aux demandes Parent actionnables avec task_id. timed_out est faux si ready ou pending_requests est non vide ; il est vrai seulement à l’échéance wait avec ces deux listes vides.
 
 ### US7 - Aucun changement sans option (P1)
 
@@ -195,9 +193,8 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
 **Interception**
 
 - **FR-005** : En mode `forward`, le transport ne répond pas automatiquement aux
-  demandes `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`,
-  aux élicitations MCP (hors formulaire vide de Bridget) et aux demandes `user_input`.
-  Il les enregistre, les signale au wrapper et attend. Toute autre méthode
+  demandes item/commandExecution/requestApproval aux effets/durée établis, aux demandes user_input avec isSecret=false (défaut normatif) ; aucune élicitation MCP tierce ne remonte.
+  Il les enregistre, les signale au wrapper et attend. fileChange et permissions sont refusées avec approval_method_unsupported selon les formes 0.162.1 (duration_unsupported pour grantRoot non nul) : les effets/durée de fileChange ne sont pas établis. TOUT formulaire MCP tiers, même form typé, non vide et sans _meta, reste refusé en v1 avec approval_method_unsupported : aucune preuve structurée de non-secret ou de non-approbation. L’exception historique vide Bridget reste distincte ; URL reste refusé avec url_mode_unsupported. T002 fige le contrat avant T003. Toute autre méthode
   `item/*/requestApproval` reçoit un refus `approval_method_unsupported`.
 - **FR-006** : Attendre ne bloque pas la lecture du fournisseur : fins de tour et
   notifications continuent d'être traitées.
@@ -231,7 +228,7 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
   de la demande sont seulement cités à l'humain (bornés, nettoyés, marqués non
   vérifiés). La résolution de chemins et la preuve de confinement à l'exécution sont
   reportées à une session future. Les commandes et le réseau n'utilisent aucun chemin.
-- **FR-012** : Décisions relayées : `accept` (une fois), `decline`, `cancel`. Aucune
+- **FR-012** : Décisions internes : accept (une fois), decline, cancel. Leur réponse fournisseur suit la forme propre à chaque méthode établie en T002 ; user_input n’a pas de decline/cancel natif et reçoit une erreur JSON-RPC fermée pour ces refus. Aucune
   décision durable. Si le fournisseur ne propose ni `decline` ni `cancel`, le
   transport écrit une erreur JSON-RPC fermée, jamais une autre décision. Cette règle
   vaut pour les modes `forward` et `deny` (correctif T000).
@@ -244,26 +241,37 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
   `decision`, `answer` facultatif). `decision` vaut `accept`, `decline` ou `cancel`.
   `answer` n'existe que pour une question avec `accept`. Champs inconnus refusés.
 - **FR-015** : L'outil est ajouté à la liste fermée des outils du parent natif
-  (`BRIDGET_SAFE_MCP_TOOLS`, 21 outils), pour Claude et pour Codex.
+  (`BRIDGET_SAFE_MCP_TOOLS`, 24 outils existants plus `bridget_task_respond`, soit 25), pour Claude et pour Codex.
 - **FR-016** : Au moment de la réponse, le daemon vérifie : propriétaire attesté ;
   demande ouverte et non expirée ; route `Parent` ; révocation ; pause. Une réponse
   identique rejouée rend l'état. Une réponse différente sur une demande close rend
   `request_closed`.
 - **FR-017** : Pendant la pause du référent, la réponse d'un parent rend
-  `referent_paused`. La réponse humaine par la boîte reste possible.
+  `referent_paused`. La décision humaine par la boîte reste possible, mais elle est acquittée sans exécution pendant la pause. Elle ne produit aucun accord différé après reprise ; une réponse après reprise concerne une nouvelle demande.
 
 **Avis, statut, boîte humaine**
 
-- **FR-018** : Une question ouvre un avis système idempotent vers le parent. L'avis
-  donne l'identifiant, le type, un résumé borné et l'échéance.
-- **FR-019** : Présentation : les faits vérifiés par Bridget (commande citée, chemins
-  résolus, réseau oui ou non, méthode, durée) viennent d'abord. Le texte du modèle
-  (`reason`, question) est cité à part, borné, nettoyé des caractères de contrôle et de
+- **FR-018** : Une question tente un avis système idempotent vers le parent par
+  SendAs, avec les gardes149 et leur disjoncteur. S’il est émis, l’avis donne
+  l’identifiant, le type, un résumé borné et l’échéance. Son succès n’est pas
+  garanti. Un refus ne supprime pas la demande persistée : le propriétaire
+  peut la consulter par Status et par Wait lorsqu’elle est actionnable.
+- **FR-019** : Présentation : les faits vérifiés par Bridget (commande citée,
+  dossier fournisseur cwd cité, chemins
+  cités et normalisés lexicalement, sans résolution filesystem ni valeur de preuve de confinement, réseau oui ou non, méthode, durée) viennent d'abord.
+  Le dossier provider cwd est une chaîne citée entière, rendue avec Debug et
+  contrôles visibles, ou null si absent/null ; cwd_verified reste false. Un autre
+  type ou plus de 1024 octets UTF-8 impose details_incomplete. Commande et cwd
+  ont cette borne séparément ; les faits restent bornés à 4096 octets. Aucun
+  fallback vers task.cwd ni résolution, confinement ou droit n’est inventé.
+  La commande reste entière, avec ses contrôles visibles ; toute perte de contenu
+  décisif impose un refus. Les chemins signalent toute coupe ou modification.
+  Le texte du modèle (`reason`, question) est cité à part, borné, nettoyé des caractères de contrôle et de
   direction, et marqué non fiable.
 - **FR-020** : `bridget_task_status` ajoute `pending_requests` et `recent_requests`.
-  Les clés actuelles ne changent pas.
+  Les clés actuelles ne changent pas. recent_requests expose aussi delivery_state.
 - **FR-021** : Une approbation `Human` crée un item `intervention_required` (type
-  existant) avec les options `accept` et `decline`. `daemon_deposit_human_inbox` rend
+  existant) avec les options `accept` et `decline`. Le dépôt humain existant rend
   l'identifiant de l'item. Avant tout dépôt, le daemon cherche un item de même clé
   exacte et le réutilise.
 - **FR-022** : Le daemon lit l'état de chaque item par son identifiant exact (au plus
@@ -275,8 +283,7 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
 - **FR-023** : Délai : 600 s pour le parent, 3600 s pour l'humain, bornés par le
   temps restant de la tâche moins 30 s. S'il reste moins de 30 s : refus immédiat
   `deadline_too_close`.
-- **FR-024** : À l'expiration, l'enfant reçoit `decline` (approbation) ou `cancel`
-  (question). Jamais `accept`. L'issue `expired` est stockée.
+- **FR-024** : À l’expiration, l’enfant reçoit le refus propre à sa méthode : decline/cancel pour approbation ou élicitation, erreur JSON-RPC -32000 child_request_refused pour user_input. Jamais accept. L'issue `expired` est stockée.
 - **FR-025** : Chaque demande a une issue terminale visible : `answered_by_parent`,
   `answered_by_human`, `expired`, `cancelled` ou `refused:<code>`.
 - **FR-026** : Annulation, fin de tâche, interruption du tour (pause), arrêt de
@@ -294,15 +301,15 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
   demande ou constate qu'elle est déjà réglée, puis répond par l'état réel
   (`closed_before_apply` ou `already_applied`). Une fois la fermeture confirmée,
   aucun accord ne peut plus être écrit. Le wrapper garde les 64 dernières demandes
-  réglées pour répondre exactement à un renvoi. Une demande inconnue donne
-  `applied = false`.
+  réglées pour répondre exactement à un renvoi. La fermeture non confirmée utilise ChildRequestCancel→ChildRequestClosed même pour une demande pending ou none. Une demande inconnue donne
+  `applied = false`. Expiration et fermeture sont traitées avant chaque renvoi sent, qui recontrôle FR027.
 
 **Corrélation et rejeu**
 
 - **FR-028** : L'identifiant d'une demande dérive de la tâche, de l'instance attestée,
   de la session, du tour et de l'identifiant fournisseur. Le contenu est figé par une
   empreinte. Une trame répétée au même contenu rend la même ligne. Un contenu différent
-  rend `request_conflict`. Un accusé de remise n'est accepté que de la connexion de
+  rend `request_conflict`. Le replay d’une ligne terminale rend la réponse persistée, sans recréer une demande ni rejouer un accord invalidé. Un accusé de remise n'est accepté que de la connexion de
   l'instance de la ligne.
 
 **Pas de boucle**
@@ -373,12 +380,11 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
 - **Avis de demande** : message système idempotent vers le parent (questions).
 - **Item humain** : item `intervention_required` de la boîte existante (approbations).
 
-**Hypothèses** (à confirmer par la tâche T002 contre Codex 0.161.0)
+**Formes fournisseur** (schéma courant 0.162.1 lu ; 0.161.0 était l’hypothèse initiale, T002 final PASS attestée dans validation/gate-schema155.json)
 
 - Le serveur Codex envoie une requête JSON-RPC par approbation, élicitation et saisie,
   et attend la réponse tant que le tour dure.
-- Les champs d'effet de chaque méthode, la forme de `item/tool/requestUserInput` et la
-  durée des octrois ne sont pas lus dans ce dépôt. T002 les fige avant tout code. Un
+- Les formes générées 0.162.1 sont lues. Le contrat T002 consigne la réponse user_input {answers:{questionId:{answers:[string]}} et les refus par méthode. FileChangeRequestApprovalParams n’a ni paths ni availableDecisions ; grantRoot vise une portée session à l’effet incertain : fileChange entière reste approval_method_unsupported en v1, duration_unsupported si grantRoot non nul. Les notifications changes/path/diff/kind existent mais ne créent aucune route Human réelle ni nouveau cache. permissions répond avec permissions/scope/strictAutoReview, jamais decision. T002 est revue et figée, PASS attesté dans validation/gate-schema155.json ; protocole/store prouvés par les tests ciblés ; recette utilisateur T040 ouverte. Un
   champ d'effet absent de la liste blanche donne `Forbidden`.
 - Les délais 600 s et 3600 s sont des valeurs de départ.
 - Le défaut du paramètre est `deny` pour garder le contrat 149 (question 1).
@@ -401,3 +407,75 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
    changer leur lancement (`--permission-prompts`), donc de rouvrir le contrat 149.
    Réponse attendue : `Codex seul` ou `inclure Claude` (ajoute une sonde et environ 6
    tâches).
+
+Checkpoint courant après T041 : In Progress, 41/42, T039 et T041 documentaire
+acquises ; T040 seule ouverte. Les checkpoints historiques 40/41 restent
+historiques et sont remplacés par cet état courant. T041 corrige uniquement
+le paragraphe Journal du contrat, sans changement de code ou de tests.
+Preuve et lectures ciblées :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/implementation.md,
+section T041 (transport codex_app_server.rs:165–178,4266–4310 ;
+table delegation.rs:307–327).
+
+## Checkpoint final avant Converge P3 — 42/42
+
+Le principal a validé et coché T040 après l’accord explicite « Oui, accepter et
+valider si les quatre cas réussissent ». Le reçu conserve cet accord à
+2026-10-12T03:02:02.400752+00:00. Les quatre cas sont PASS. L’implémentation
+est réalisée à 100 %, 42/42 ; le pipeline reste In Progress. Converge P2 est
+historique avant les correctifs C1 ; P3, audit final, revue R2 et livraison
+restent à faire.
+
+Reçu actuel :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/recette155-postfix-final.json.
+SHA256 : 153b70cbbbaa94315b87f192a8fa67fc217f607eb1cc70c5e9ea5b047b6cc9f3.
+H1/H2/H3 et le permis d’émission MEDIUM ont leurs correctifs et preuves ciblées
+fraîches. PERF-041 change seulement le commentaire de coût. PERF-082 et DUP-001
+restent les deux LOW acceptés dans le périmètre. Cela ne vaut pas audit final.
+La suite complète unique reste 2259 PASS / 15 FAIL / 72 ignored avant correctifs,
+avec 180/180 baseline PASS et les sept nouveaux échecs ensuite rejoués PASS.
+Aucune seconde suite complète n’a été lancée.
+
+## Checkpoint R2 — correctif cwd prouvé par les ciblés
+
+État courant : In Progress, 42/42 tâches acquises, T040 validée. L’objection
+MEDIUM cwd de la revue R2 est retenue ; le correctif minimal a maintenant 71 PASS ciblés, RC0, sources 214 stables.
+Le reçu post-cwd ci-dessous remplace l’attente des tests ; aucun hash futur
+de source ou résultat global n’est inventé. Converge P3 est un
+checkpoint historique antérieur au correctif cwd (03:23 selon le principal).
+La vérification du delta après audit reste attendue. Aucun audit final,
+livraison ou GREEN workspace global n’est déduit.
+
+La recette réelle canonique reste immuable :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/recette155-postfix-final.json.
+SHA256 : 153b70cbbbaa94315b87f192a8fa67fc217f607eb1cc70c5e9ea5b047b6cc9f3.
+Elle atteste quatre cas PASS et executed=true. Son Human frais était réalisé
+après H1/H2/H3, mais avant le correctif cwd. Les trois autres cas gardent leurs
+captures et ancien binaire. Ces quatre cas ne sont pas déclarés sur le dernier
+binaire incluant cwd. Le delta cwd est validé uniquement par les ciblés avec
+fournisseur synthétique lorsqu’ils sont reçus ; aucune nouvelle recette de
+modèle, attente réelle600s, suite complète ou permission utilisateur n’est
+exigée ou annoncée dans ce passage documentaire.
+
+Converge P3 historique :
+/Users/moi/.cache/bridget-delivery155.um4xccv4/converge155-p3.json.
+SHA256 : 74a0df9585f1d32b0811c54ed289a6e5d857370b1eaf65a195827d6ad9dce129.
+Les 71 PASS C1 et quatre régressions distinctes conservent leur propre snapshot
+avant cwd. La suite unique2259/15/72 n’est pas rejouée ni transformée en GREEN.
+
+## Preuve ciblée post-cwd — 71 PASS courants
+
+native155-cwd-r1 : RC0, 64,81 s, 71 PASS / 0 FAIL (63 daemon, 1 E2E,
+7 transport). Les 214 empreintes avant/après sont strictement égales.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/native155-cwd-r1.json.
+Log : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/native155-cwd-r1.log.
+SHA256 du log : 2be93808d3211bfe126877fec072bae9eba5c2d8652f575ac3c353a531d7ba16.
+Le correctif cwd a maintenant sa preuve synthétique sur le code courant.
+La capture et la relecture du delta après P3 appartiennent au principal.
+
+Les quatre régressions canal087/STDIO restent des preuves distinctes avant cwd ;
+aucun total de 75 PASS sur le dernier snapshot n’est revendiqué. La recette réelle
+canonique 153b70 reste validée sur ses provenances antérieures à cwd, avec Human
+après H1/H2/H3. Aucun nouveau runtime de modèle, second délai réel de 600 s ou second
+FULL n’est lancé ou déduit. Statut In Progress, 42/42 et T040 acquise ; audit
+final, relecture du delta, revue finale et livraison restent distincts.

@@ -1,0 +1,47 @@
+{
+  "checked_at": "2026-10-12T00:47:22.909764+00:00",
+  "run": "core-purge155-red-r1",
+  "tasks_green": [
+    "T016",
+    "T033"
+  ],
+  "wrapper_passed": [
+    "wrapper::native_child_requests155_tests::native155_wrapper_demande_puis_reprise",
+    "wrapper::native_child_requests155_tests::native155_wrapper_fermeture_puis_reponse_jamais_ecrite",
+    "wrapper::native_child_requests155_tests::native155_wrapper_reponse_puis_fermeture_already_applied",
+    "wrapper::native_child_requests155_tests::native155_wrapper_renvoi_apres_reglement",
+    "wrapper::native_child_requests155_tests::native155_wrapper_reponse_ancien_tour_refusee"
+  ],
+  "purge_passed": [
+    "delegation::lineage::delegation_lineage_tests::native155_purge_demande_ouverte_impossible_sur_arbre_terminal",
+    "delegation::lineage::delegation_lineage_tests::native155_purge_supprime_les_demandes_de_l_arbre"
+  ],
+  "core_red_failed": [
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accord_apres_echeance_jamais_envoye",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accord_pending_annulation_puis_reconnexion_void",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_human_item_deja_resolu_reutilise",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_human_depot_idempotent_apres_panne",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accuse_negatif_annule",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_annulation_course_closed_avant_ou_apres_application",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_enfant_disparu_accord_sent_reste_unknown",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_expiration_refus_et_cloture_none_pending_void",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_invalidations_avant_renvoi_et_finalisation",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_plantage_entre_sent_et_envoi",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_renvoi_jusqu_a_accuse",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_avis_idempotent",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_budgets_ouverte_et_totale",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_echeances_fenetres_et_decision_tardive",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_tuple_idempotence_conflit_tour_et_identite",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_verdicts_et_forbidden_sans_inbox"
+  ],
+  "core_production_go": true,
+  "rc": 101,
+  "global_green": false,
+  "sources_stable": true,
+  "log_sha256": "62c19e3d6be8aa647fcbc9da53d3ef7d4d9a44ff4a8f81025cb7f6cfe8778ae2",
+  "seconds": 12.45,
+  "limitations": [
+    "16 tests core sont RED, pas de full workspace155",
+    "Test purge2 prouve garde150 cleanup_done, pas garde ind\u00e9pendante sur demande ouverte"
+  ]
+}

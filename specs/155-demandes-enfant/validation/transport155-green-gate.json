@@ -1,0 +1,22 @@
+{
+  "checked_at": "2026-10-12T00:37:06.366838+00:00",
+  "tasks": [
+    "T012",
+    "T013",
+    "T014",
+    "T015"
+  ],
+  "green": "transport155-green-r1.json",
+  "transport_passed": 4,
+  "rights_replay_passed": 3,
+  "rc": 0,
+  "sources_stable": true,
+  "source_hash": "f8170a7db9e223372249f8c8210ab0f6ed45940766c52b9ca044b0fbb232846b",
+  "reason_classifier_hash": "46178916130afbe253613fb8f72ab765aa77c354c9912b3c1880c47eef4efafa",
+  "limits": [
+    "Pas de full workspace ex\u00e9cut\u00e9e155",
+    "Ok \u00e9criture+flush ne prouve pas execution fournisseur"
+  ],
+  "cache_cleanup_gib": 20.21,
+  "next_build_cache_process_budget_gib": 40
+}

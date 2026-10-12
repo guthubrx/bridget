@@ -45,6 +45,74 @@ pub(crate) struct DelegationStore {
     wait_epoch: WaitEpoch,
 }
 
+/// Ligne durable155. L'identifiant fournisseur contient son JSON canonique,
+/// y compris les guillemets d'une chaîne ; un entier reste distinct d'une chaîne.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ChildRequest {
+    pub request_id: String,
+    pub task_id: String,
+    pub child_instance: String,
+    pub provider_session: String,
+    pub turn_id: String,
+    pub provider_request_id: String,
+    pub content_hash: String,
+    pub kind: String,
+    pub verdict: String,
+    pub state: String,
+    pub outcome: Option<String>,
+    pub summary: String,
+    pub facts_json: String,
+    pub model_text: String,
+    pub offered_json: String,
+    pub created_at: i64,
+    pub deadline_at: i64,
+    pub decision: Option<String>,
+    pub answer_json: Option<String>,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<i64>,
+    pub delivery_state: String,
+    pub void_reason: Option<String>,
+    pub sent_at: Option<i64>,
+    pub delivered_at: Option<i64>,
+    pub inbox_item_id: Option<String>,
+    pub inbox_settled: bool,
+}
+
+impl ChildRequest {
+    /// O(B), B taille bornée de la ligne, sans interprétation des faits stockés.
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            request_id: row.get("request_id")?,
+            task_id: row.get("task_id")?,
+            child_instance: row.get("child_instance")?,
+            provider_session: row.get("provider_session")?,
+            turn_id: row.get("turn_id")?,
+            provider_request_id: row.get("provider_request_id")?,
+            content_hash: row.get("content_hash")?,
+            kind: row.get("kind")?,
+            verdict: row.get("verdict")?,
+            state: row.get("state")?,
+            outcome: row.get("outcome")?,
+            summary: row.get("summary")?,
+            facts_json: row.get("facts_json")?,
+            model_text: row.get("model_text")?,
+            offered_json: row.get("offered_json")?,
+            created_at: row.get("created_at")?,
+            deadline_at: row.get("deadline_at")?,
+            decision: row.get("decision")?,
+            answer_json: row.get("answer_json")?,
+            decided_by: row.get("decided_by")?,
+            decided_at: row.get("decided_at")?,
+            delivery_state: row.get("delivery_state")?,
+            void_reason: row.get("void_reason")?,
+            sent_at: row.get("sent_at")?,
+            delivered_at: row.get("delivered_at")?,
+            inbox_item_id: row.get("inbox_item_id")?,
+            inbox_settled: row.get("inbox_settled")?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RoundRecord {
     pub round: u32,
@@ -109,6 +177,8 @@ pub(crate) struct Task {
     #[serde(default)]
     pub parent_execution_id: Option<String>,
     pub request: NativeDelegationRequest,
+    #[serde(default)]
+    pub child_requests: Option<String>,
     #[serde(default)]
     pub permission_snapshot: Option<bridget_transport::protocol::NativePermissionSnapshot>,
     #[serde(default)]
@@ -233,7 +303,39 @@ impl DelegationStore {
             CREATE TABLE IF NOT EXISTS native_delegation_past_missions (
             mission TEXT PRIMARY KEY, task_id TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS native_delegation_past_missions_task
-            ON native_delegation_past_missions(task_id);")?;
+            ON native_delegation_past_missions(task_id);
+CREATE TABLE IF NOT EXISTS native_child_requests(
+  request_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  child_instance TEXT NOT NULL,
+  provider_session TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  provider_request_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('approval_command','approval_file','elicitation_form','user_input')),
+  verdict TEXT NOT NULL CHECK (verdict IN ('parent','human','forbidden')),
+  state TEXT NOT NULL CHECK (state IN ('open','answered','expired','cancelled','refused')),
+  outcome TEXT,
+  summary TEXT NOT NULL,
+  facts_json TEXT NOT NULL,
+  model_text TEXT NOT NULL,
+  offered_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  deadline_at INTEGER NOT NULL,
+  decision TEXT,
+  answer_json TEXT,
+  decided_by TEXT,
+  decided_at INTEGER,
+  delivery_state TEXT NOT NULL DEFAULT 'none' CHECK (delivery_state IN ('none','pending','sent','delivered','void','unknown')),
+  void_reason TEXT,
+  sent_at INTEGER,
+  delivered_at INTEGER,
+  inbox_item_id TEXT,
+  inbox_settled INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(task_id, child_instance, provider_session, turn_id, provider_request_id));
+CREATE INDEX IF NOT EXISTS native_child_requests_open ON native_child_requests(state, deadline_at);
+CREATE INDEX IF NOT EXISTS native_child_requests_task ON native_child_requests(task_id, state);
+CREATE INDEX IF NOT EXISTS native_child_requests_inbox ON native_child_requests(inbox_settled, state);")?;
         const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
         const CURRENT_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'),coalesce(json_extract(payload,'$.guarded'),0),coalesce(json_extract(payload,'$.cleanup_done'),0),owner_instance)";
         let existing: Option<String> = tx.query_row(
@@ -262,6 +364,209 @@ impl DelegationStore {
         };
         store.initialize_lineage()?;
         Ok(store)
+    }
+
+    /// O(log n+B). Les deux clés uniques et l'empreinte sont contrôlées dans
+    /// une transaction immédiate ; un conflit ne modifie jamais la ligne.
+    pub fn insert_child_request(&self, request: &ChildRequest) -> Result<ChildRequest, String> {
+        let provider_id: bridget_transport::protocol::ChildProviderRequestId =
+            serde_json::from_str(&request.provider_request_id).map_err(|e| e.to_string())?;
+        let provider_id = serde_json::to_string(&provider_id).map_err(|e| e.to_string())?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO native_child_requests (request_id, task_id, child_instance, provider_session, turn_id, provider_request_id, content_hash, kind, verdict, state, outcome, summary, facts_json, model_text, offered_json, created_at, deadline_at, decision, answer_json, decided_by, decided_at, delivery_state, void_reason, sent_at, delivered_at, inbox_item_id, inbox_settled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27) ON CONFLICT DO NOTHING",
+            params![request.request_id, request.task_id, request.child_instance, request.provider_session, request.turn_id, provider_id, request.content_hash, request.kind, request.verdict, request.state, request.outcome, request.summary, request.facts_json, request.model_text, request.offered_json, request.created_at, request.deadline_at, request.decision, request.answer_json, request.decided_by, request.decided_at, request.delivery_state, request.void_reason, request.sent_at, request.delivered_at, request.inbox_item_id, request.inbox_settled],
+        ).map_err(|e| e.to_string())?;
+        let existing = tx.query_row(
+            "SELECT * FROM native_child_requests WHERE task_id=?1 AND child_instance=?2 AND provider_session=?3 AND turn_id=?4 AND provider_request_id=?5",
+            params![request.task_id, request.child_instance, request.provider_session, request.turn_id, provider_id],
+            ChildRequest::from_row,
+        ).optional().map_err(|e| e.to_string())?.ok_or("request_conflict")?;
+        if existing.content_hash != request.content_hash {
+            return Err("request_conflict".into());
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(existing)
+    }
+
+    /// O(log n+B), lecture par clé primaire.
+    pub fn get_child_request(&self, request_id: &str) -> Result<Option<ChildRequest>, String> {
+        self.conn
+            .query_row(
+                "SELECT * FROM native_child_requests WHERE request_id=?1",
+                [request_id],
+                ChildRequest::from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    /// O(log n+k+B), index task/state ; k<=32 selon l'admission155.
+    pub(crate) fn child_requests_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<ChildRequest>, String> {
+        let mut statement=self.conn.prepare("SELECT * FROM native_child_requests WHERE task_id=?1 ORDER BY created_at,request_id LIMIT 32").map_err(|e|e.to_string())?;
+        statement
+            .query_map([task_id], ChildRequest::from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// O(n+B), parcours de l'index state/deadline existant, au plus512 lignes.
+    /// Une remise void ne prouve pas Closed ; les clôtures confirmées sont exclues.
+    pub(crate) fn child_request_followups(&self) -> Result<Vec<ChildRequest>, String> {
+        let mut statement=self.conn.prepare("SELECT * FROM native_child_requests INDEXED BY native_child_requests_open WHERE state='open' OR delivery_state IN ('pending','sent') OR (delivery_state IN ('none','void') AND coalesce(void_reason,'')!='closed_before_apply') ORDER BY deadline_at,request_id LIMIT 512").map_err(|e|e.to_string())?;
+        statement
+            .query_map([], ChildRequest::from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// O(u+B), u lignes non soldées de l'index existant, sortie<=512 lignes.
+    /// Les décisions humaines sont lues par leur item exact, sans relever la boîte.
+    pub(crate) fn child_inbox_followups(&self) -> Result<Vec<ChildRequest>, String> {
+        let mut statement=self.conn.prepare("SELECT * FROM native_child_requests INDEXED BY native_child_requests_inbox WHERE inbox_settled=0 AND inbox_item_id IS NOT NULL ORDER BY state LIMIT 512").map_err(|e|e.to_string())?;
+        statement
+            .query_map([], ChildRequest::from_row)
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// O(log n), CAS : un lien déjà publié ne peut pas être remplacé.
+    pub(crate) fn link_child_inbox(&self, request_id: &str, item_id: &str) -> Result<bool, String> {
+        self.conn.execute("UPDATE native_child_requests SET inbox_item_id=?2 WHERE request_id=?1 AND inbox_item_id IS NULL",params![request_id,item_id])
+            .map(|count|count==1).map_err(|e|e.to_string())
+    }
+
+    /// O(log n), après règlement exact de l'item ; ne touche aucune décision.
+    pub(crate) fn mark_child_inbox_settled(&self, request_id: &str) -> Result<bool, String> {
+        self.conn.execute("UPDATE native_child_requests SET inbox_settled=1 WHERE request_id=?1 AND inbox_item_id IS NOT NULL AND inbox_settled=0",[request_id]).map(|count|count==1).map_err(|e|e.to_string())
+    }
+
+    /// O(log n), trace de fermeture demandée ; aucune décision historique changée.
+    pub(crate) fn mark_child_closing(&self, request_id: &str, reason: &str) -> Result<(), String> {
+        self.conn.execute("UPDATE native_child_requests SET void_reason=coalesce(void_reason,?2) WHERE request_id=?1 AND delivery_state NOT IN ('delivered','unknown') AND coalesce(void_reason,'')!='closed_before_apply'",params![request_id,reason])
+            .map(|_|()).map_err(|e|e.to_string())
+    }
+
+    /// O(log n+B). Preuve : Closed reçu, OU arrêt OS149/152 attesté AVANT
+    /// premier envoi (sent_at=None), via settle_after_stop ; aucune trame inventée.
+    /// La décision et l'issue terminales sont conservées.
+    pub(crate) fn confirm_child_closed(
+        &self,
+        request_id: &str,
+        applied: bool,
+        now: i64,
+    ) -> Result<bool, String> {
+        self.conn.execute("UPDATE native_child_requests SET delivery_state=CASE WHEN ?2 THEN 'delivered' ELSE 'void' END,void_reason=CASE WHEN ?2 THEN void_reason ELSE 'closed_before_apply' END,delivered_at=CASE WHEN ?2 THEN ?3 ELSE delivered_at END,state=CASE WHEN state='open' THEN 'cancelled' ELSE state END,outcome=CASE WHEN state='open' THEN 'cancelled' ELSE outcome END,decided_by=CASE WHEN state='open' THEN 'system' ELSE decided_by END,decided_at=CASE WHEN state='open' THEN ?3 ELSE decided_at END WHERE request_id=?1 AND delivery_state NOT IN ('delivered','unknown') AND coalesce(void_reason,'')!='closed_before_apply'",params![request_id,applied,now])
+            .map(|count|count==1).map_err(|e|e.to_string())
+    }
+
+    /// O(log n+k), k<=32 ; provider ET item humain soldés avant cleanup_done.
+    pub(crate) fn child_closure_pending(&self, task_id: &str) -> Result<bool, String> {
+        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_child_requests WHERE task_id=?1 AND ((delivery_state NOT IN ('delivered','unknown') AND coalesce(void_reason,'')!='closed_before_apply') OR (inbox_item_id IS NOT NULL AND inbox_settled=0)))",[task_id],|row|row.get(0)).map_err(|e|e.to_string())
+    }
+
+    /// O(log n+k log k+B), k lignes ouvertes de la tâche (borne métier : 4).
+    pub fn open_child_requests(&self, task_id: &str) -> Result<Vec<ChildRequest>, String> {
+        let mut stmt = self.conn.prepare("SELECT * FROM native_child_requests WHERE task_id=?1 AND state='open' ORDER BY created_at,request_id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([task_id], ChildRequest::from_row)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// O(log n+k+B), index state/deadline ; au plus 512 lignes par lecture.
+    pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
+        let mut stmt = self.conn.prepare("SELECT * FROM native_child_requests WHERE state='open' AND deadline_at<=?1 ORDER BY deadline_at LIMIT 512")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([now], ChildRequest::from_row)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// O(log n+k), index task/state. Retour : (ouvertes, total).
+    pub fn child_request_counts(&self, task_id: &str) -> Result<(usize, usize), String> {
+        self.conn.query_row("SELECT coalesce(sum(state='open'),0),count(*) FROM native_child_requests WHERE task_id=?1", [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| e.to_string())
+    }
+
+    /// O(log n+B). CAS de décision distinct du claim de remise ; false ne
+    /// donne aucun droit d'envoi. Les validations métier appartiennent à l'appelant.
+    pub fn decide_child_request(
+        &self,
+        request_id: &str,
+        decision: &str,
+        answer_json: Option<&str>,
+        decided_by: &str,
+        outcome: &str,
+        now: i64,
+    ) -> Result<bool, String> {
+        if !matches!(decision, "accept" | "decline" | "cancel") {
+            return Err("decision_not_offered".into());
+        }
+        self.conn.execute("UPDATE native_child_requests SET state='answered',outcome=?2,decision=?3,answer_json=?4,decided_by=?5,decided_at=?6,delivery_state='pending' WHERE request_id=?1 AND state='open' AND deadline_at>?6 AND delivery_state='none'",
+            params![request_id,outcome,decision,answer_json,decided_by,now]).map(|count| count == 1).map_err(|e| e.to_string())
+    }
+
+    /// O(log n+B), clôture unique : aucun état terminal ne peut être réécrit.
+    pub fn close_child_request(
+        &self,
+        request_id: &str,
+        state: &str,
+        outcome: &str,
+        now: i64,
+    ) -> Result<bool, String> {
+        if !matches!(state, "expired" | "cancelled" | "refused") {
+            return Err("request_closed".into());
+        }
+        self.conn.execute("UPDATE native_child_requests SET state=?2,outcome=?3,decided_by='system',decided_at=?4 WHERE request_id=?1 AND state='open'",
+            params![request_id,state,outcome,now]).map(|count| count == 1).map_err(|e| e.to_string())
+    }
+
+    /// O(log n). À appeler APRÈS revalidation FR027 sous le verrou métier.
+    /// sent_at est committé avant toute trame ; false interdit l'envoi.
+    pub fn claim_child_request(&self, request_id: &str, now: i64) -> Result<bool, String> {
+        self.conn.execute("UPDATE native_child_requests SET delivery_state='sent',sent_at=?2 WHERE request_id=?1 AND state='answered' AND delivery_state='pending' AND deadline_at>?2",
+            params![request_id,now]).map(|count| count == 1).map_err(|e| e.to_string())
+    }
+
+    /// O(log n+B). Une invalidation ne réactive jamais un accord déjà envoyé.
+    pub fn void_pending_child_request(
+        &self,
+        request_id: &str,
+        reason: &str,
+    ) -> Result<bool, String> {
+        self.conn.execute("UPDATE native_child_requests SET delivery_state='void',void_reason=?2 WHERE request_id=?1 AND delivery_state='pending'",
+            params![request_id,reason]).map(|count| count == 1).map_err(|e| e.to_string())
+    }
+
+    /// O(log n+B). Seule une remise sent peut être réglée ; les décisions
+    /// historiques restent intactes, y compris si leur application est inconnue.
+    pub fn settle_sent_child_request(
+        &self,
+        request_id: &str,
+        delivery: &str,
+        reason: Option<&str>,
+        now: i64,
+    ) -> Result<bool, String> {
+        if !matches!(delivery, "delivered" | "void" | "unknown") {
+            return Err("request_closed".into());
+        }
+        self.conn.execute("UPDATE native_child_requests SET delivery_state=?2,void_reason=?3,delivered_at=CASE WHEN ?2='delivered' THEN ?4 ELSE delivered_at END,outcome=CASE WHEN ?2='unknown' THEN 'cancelled_outcome_unknown' ELSE outcome END WHERE request_id=?1 AND delivery_state='sent'",
+            params![request_id,delivery,reason,now]).map(|count| count == 1).map_err(|e| e.to_string())
     }
 
     pub fn wait_epoch(&self) -> WaitEpoch {
@@ -618,6 +923,355 @@ mod tests {
             "delivery_acked": false, "acknowledged_at": null
         });
         serde_json::from_value(payload).unwrap()
+    }
+
+    fn child_request155() -> ChildRequest {
+        ChildRequest {
+            request_id: "request155".into(),
+            task_id: "task155".into(),
+            child_instance: "child155".into(),
+            provider_session: "session155".into(),
+            turn_id: "turn155".into(),
+            provider_request_id: "42".into(),
+            content_hash: "hash155".into(),
+            kind: "user_input".into(),
+            verdict: "parent".into(),
+            state: "open".into(),
+            outcome: None,
+            summary: "Question".into(),
+            facts_json: "{}".into(),
+            model_text: "Choisir".into(),
+            offered_json: "[\"accept\",\"decline\",\"cancel\"]".into(),
+            created_at: 100,
+            deadline_at: 200,
+            decision: None,
+            answer_json: None,
+            decided_by: None,
+            decided_at: None,
+            delivery_state: "none".into(),
+            void_reason: None,
+            sent_at: None,
+            delivered_at: None,
+            inbox_item_id: None,
+            inbox_settled: false,
+        }
+    }
+
+    #[test]
+    fn native155_store_payload150_sans_mode() {
+        let task = legacy_task151();
+        assert_eq!(task.child_requests, None);
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        store.insert(&task, "request-152", b"canonical").unwrap();
+        assert_eq!(
+            store.get(&task.task_id).unwrap().unwrap().child_requests,
+            None
+        );
+    }
+
+    #[test]
+    fn native155_store_doublon_identique_meme_ligne() {
+        use bridget_transport::protocol::ChildProviderRequestId;
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        for (index, provider_id) in [
+            ChildProviderRequestId::Number(i64::MIN),
+            ChildProviderRequestId::String(i64::MIN.to_string()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut request = child_request155();
+            request.request_id = format!("request155-{index}");
+            request.provider_request_id = serde_json::to_string(&provider_id).unwrap();
+            assert_eq!(store.insert_child_request(&request).unwrap(), request);
+            assert!(
+                store
+                    .decide_child_request(
+                        &request.request_id,
+                        "accept",
+                        Some("{}"),
+                        "parent",
+                        "answered_by_parent",
+                        110
+                    )
+                    .unwrap()
+            );
+            let decided = store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<ChildProviderRequestId>(&decided.provider_request_id)
+                    .unwrap(),
+                provider_id
+            );
+            assert_eq!(store.insert_child_request(&request).unwrap(), decided);
+        }
+        assert_eq!(store.child_request_counts("task155").unwrap(), (0, 2));
+    }
+
+    #[test]
+    fn native155_store_doublon_different_request_conflict() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let request = child_request155();
+        store.insert_child_request(&request).unwrap();
+        let mut divergent = request.clone();
+        divergent.content_hash = "other".into();
+        assert_eq!(
+            store.insert_child_request(&divergent).unwrap_err(),
+            "request_conflict"
+        );
+        assert_eq!(
+            store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn native155_store_terminal_immuable() {
+        for state in ["expired", "cancelled", "refused", "answered"] {
+            let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+            let request = child_request155();
+            store.insert_child_request(&request).unwrap();
+            if state == "answered" {
+                assert!(
+                    store
+                        .decide_child_request(
+                            &request.request_id,
+                            "accept",
+                            Some("{}"),
+                            "parent",
+                            "answered_by_parent",
+                            110
+                        )
+                        .unwrap()
+                );
+            } else {
+                assert!(
+                    store
+                        .close_child_request(&request.request_id, state, state, 110)
+                        .unwrap()
+                );
+            }
+            let closed = store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                !store
+                    .close_child_request(&request.request_id, "cancelled", "cancelled", 120)
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .decide_child_request(
+                        &request.request_id,
+                        "decline",
+                        None,
+                        "human",
+                        "answered_by_human",
+                        120
+                    )
+                    .unwrap()
+            );
+            assert_eq!(
+                store
+                    .get_child_request(&request.request_id)
+                    .unwrap()
+                    .unwrap(),
+                closed
+            );
+        }
+    }
+
+    #[test]
+    fn native155_store_void_ne_redevient_pas_pending() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let request = child_request155();
+        store.insert_child_request(&request).unwrap();
+        assert!(
+            store
+                .decide_child_request(
+                    &request.request_id,
+                    "accept",
+                    Some("{}"),
+                    "parent",
+                    "answered_by_parent",
+                    110
+                )
+                .unwrap()
+        );
+        assert!(
+            store
+                .void_pending_child_request(&request.request_id, "paused")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .decide_child_request(
+                    &request.request_id,
+                    "accept",
+                    Some("{}"),
+                    "parent",
+                    "answered_by_parent",
+                    120
+                )
+                .unwrap()
+        );
+        assert!(!store.claim_child_request(&request.request_id, 120).unwrap());
+        let void = store
+            .get_child_request(&request.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(void.delivery_state, "void");
+        assert_eq!(void.void_reason.as_deref(), Some("paused"));
+        assert_eq!(void.decision.as_deref(), Some("accept"));
+        assert_eq!(store.insert_child_request(&request).unwrap(), void);
+    }
+
+    #[test]
+    fn native155_store_sent_ne_redevient_pas_pending() {
+        for delivery in ["delivered", "void", "unknown"] {
+            let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+            let request = child_request155();
+            store.insert_child_request(&request).unwrap();
+            assert!(
+                store
+                    .decide_child_request(
+                        &request.request_id,
+                        "accept",
+                        Some("{}"),
+                        "parent",
+                        "answered_by_parent",
+                        110
+                    )
+                    .unwrap()
+            );
+            assert!(store.claim_child_request(&request.request_id, 120).unwrap());
+            assert!(!store.claim_child_request(&request.request_id, 121).unwrap());
+            assert!(
+                !store
+                    .void_pending_child_request(&request.request_id, "cancelled")
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .decide_child_request(
+                        &request.request_id,
+                        "accept",
+                        Some("{}"),
+                        "parent",
+                        "answered_by_parent",
+                        121
+                    )
+                    .unwrap()
+            );
+            let sent = store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(sent.delivery_state, "sent");
+            assert_eq!(sent.sent_at, Some(120));
+            assert!(
+                store
+                    .settle_sent_child_request(
+                        &request.request_id,
+                        delivery,
+                        Some("closed_before_apply"),
+                        130
+                    )
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .settle_sent_child_request(&request.request_id, "void", None, 131)
+                    .unwrap()
+            );
+            let settled = store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(settled.state, sent.state);
+            assert_eq!(settled.decision, sent.decision);
+            assert_eq!(settled.answer_json, sent.answer_json);
+            assert_eq!(settled.decided_at, sent.decided_at);
+            assert_eq!(settled.delivery_state, delivery);
+            assert_eq!(
+                settled.outcome.as_deref(),
+                Some(if delivery == "unknown" {
+                    "cancelled_outcome_unknown"
+                } else {
+                    "answered_by_parent"
+                })
+            );
+            assert_eq!(
+                settled.delivered_at,
+                if delivery == "delivered" {
+                    Some(130)
+                } else {
+                    None
+                }
+            );
+            assert_eq!(store.insert_child_request(&request).unwrap(), settled);
+        }
+    }
+
+    #[test]
+    fn native155_store_cas_echeance_et_claim_distinct() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let request = child_request155();
+        store.insert_child_request(&request).unwrap();
+        assert_eq!(
+            store.child_request_counts(&request.task_id).unwrap(),
+            (1, 1)
+        );
+        assert_eq!(
+            store.open_child_requests(&request.task_id).unwrap(),
+            vec![request.clone()]
+        );
+        assert!(store.due_child_requests(199).unwrap().is_empty());
+        assert_eq!(
+            store.due_child_requests(200).unwrap(),
+            vec![request.clone()]
+        );
+        assert!(
+            !store
+                .decide_child_request(
+                    &request.request_id,
+                    "accept",
+                    None,
+                    "parent",
+                    "answered_by_parent",
+                    200
+                )
+                .unwrap()
+        );
+        assert!(!store.claim_child_request(&request.request_id, 199).unwrap());
+        assert_eq!(
+            store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .unwrap(),
+            request
+        );
+        assert!(
+            store
+                .decide_child_request(
+                    &request.request_id,
+                    "accept",
+                    None,
+                    "parent",
+                    "answered_by_parent",
+                    199
+                )
+                .unwrap()
+        );
+        assert!(!store.claim_child_request(&request.request_id, 200).unwrap());
+        assert!(store.claim_child_request(&request.request_id, 199).unwrap());
+        assert!(!store.claim_child_request(&request.request_id, 199).unwrap());
     }
 
     #[test]

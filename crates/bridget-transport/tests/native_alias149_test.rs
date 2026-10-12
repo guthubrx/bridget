@@ -153,6 +153,7 @@ fn lancer(banc: &Banc, socket: &Path) -> Result<CodexAppServerTransport, String>
         notify_timeout_secs: 3,
         model: Some("gpt-5.6-terra".to_string()),
         permissions: "interactive".to_string(),
+        child_requests: false,
         provider_observation: None,
         thread_bootstrap: Default::default(),
         dynamic_tool_handler: None,

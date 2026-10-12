@@ -135,9 +135,13 @@ impl Fixture {
         Self::new_with_notify_timeout(2)
     }
     fn new_with_notify_timeout(notify_timeout_secs: u64) -> Self {
-        Self::new_with_provider(notify_timeout_secs, false)
+        Self::new_with_provider(notify_timeout_secs, false, None)
     }
-    fn new_with_provider(notify_timeout_secs: u64, native_recovery152: bool) -> Self {
+    fn new_with_provider(
+        notify_timeout_secs: u64,
+        native_recovery152: bool,
+        codex155: Option<&str>,
+    ) -> Self {
         let root = fs::canonicalize("/tmp").unwrap().join(format!(
             "n148-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..10]
@@ -146,7 +150,14 @@ impl Fixture {
             support::private_dir(&root.join(relative)).unwrap();
         }
         let provider = root.join("provider.py");
-        let (command, args) = if native_recovery152 {
+        let (command, args) = if let Some(script) = codex155 {
+            for relative in ["bin", ".git"] {
+                support::private_dir(&root.join(relative)).unwrap();
+            }
+            support::private_write(&provider, script).unwrap();
+            let cli = compile_provider152(&root, script, "codex");
+            (cli.to_string_lossy().into_owned(), json!(["app-server"]))
+        } else if native_recovery152 {
             let script = provider_recovery152();
             support::private_write(&provider, &script).unwrap();
             for relative in ["bin", ".git", "provider/.claude"] {
@@ -161,7 +172,7 @@ impl Fixture {
                 .unwrap(),
             )
             .unwrap();
-            let cli = compile_provider152(&root, &script);
+            let cli = compile_provider152(&root, &script, "claude");
             (cli.to_string_lossy().into_owned(), json!([]))
         } else {
             support::private_write(
@@ -184,6 +195,15 @@ impl Fixture {
         if native_recovery152 {
             registry["agents"]["fake-glm"]["claude_config_dir"] =
                 json!(root.join("provider/.claude"));
+        }
+        if codex155.is_some() {
+            let mut definition = registry["agents"]["fake-glm"].take();
+            definition["protocol"] = json!("codex_app_server");
+            definition["capabilities"] = json!({
+                "execution_paths":["codex_app_server"],
+                "models":{"gpt-5.6-terra":{"efforts":["high"]}}
+            });
+            registry["agents"] = json!({"fake-codex":definition});
         }
         support::private_write(
             &root.join("state/agents.json"),
@@ -430,6 +450,7 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
         cwd: root.to_string_lossy().into_owned(),
         posture: Some(SpawnPosture::Discovery),
         reply_timeout: None,
+        child_requests: None,
         workspace: None,
         keep_alive_secs: None,
         brief: None,
@@ -438,7 +459,7 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
 
 // T004/T048 : adapter la fixture fermée sur disque, sans nouveau hook du daemon.
 // Le MCP est lancé par le fournisseur : il porte la vraie identité de l'enfant.
-fn compile_provider152(root: &Path, script: &str) -> PathBuf {
+fn compile_provider152(root: &Path, script: &str, cli_name: &str) -> PathBuf {
     // Montage149 : CLI directe du PATH, profil privé et ancêtres bornés par .git.
     // Le texte Python est incorporé : la SHA du CLI capturé couvre le programme.
     let program = format!(
@@ -474,7 +495,7 @@ int main(int argc, char **argv) {{
         ),
     )
     .unwrap();
-    let cli = root.join("bin/claude");
+    let cli = root.join("bin").join(cli_name);
     let compiled = Command::new("/usr/bin/cc")
         .args(["-std=c99", "-Wall", "-Wextra", "-Werror", "-o"])
         .arg(&cli)
@@ -706,7 +727,7 @@ fn assert_native_identity152(f: &Fixture, id: &str, mission: &str) -> String {
 }
 
 fn working_native152(nested: bool) -> (Fixture, support::Client, Value) {
-    let mut f = Fixture::new_with_provider(15, true);
+    let mut f = Fixture::new_with_provider(15, true, None);
     let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
     f.human_grant();
     let task = if nested {
@@ -956,9 +977,352 @@ fn native152_rouge_identite_frontieres_marqueur_deja_reconcilie() {
 }
 
 #[test]
+fn native155_e2e() {
+    use bridget_transport::protocol::{ChildRequestDecision, PresenceMode, ProviderPermissions};
+    use rusqlite::OptionalExtension;
+
+    // Même daemon, wrapper, exécutable capturé et base privée que152. Le faux
+    // serveur ne lance aucune commande demandée et n'accède à aucun modèle.
+    let provider = r#"import json
+import os
+import sys
+
+evidence = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evidence.jsonl")
+instance = os.environ["BRIDGET_AGENT_INSTANCE_ID"]
+thread_id = "thread155-" + instance
+turn_id = "turn155-" + instance
+sandbox = json.loads('FIXTURE_SANDBOX155')
+assert os.environ.get("BRIDGET_NATIVE_CHILD_REQUESTS") == "forward"
+assert not any(key in os.environ for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "T3CODE_HOME", "BRIDGET_T3_MCP_ENDPOINT", "BRIDGET_T3_MCP_AUTHORIZATION"))
+
+def record(event, **values):
+    with open(evidence, "a", encoding="utf-8") as output:
+        output.write(json.dumps(dict(event=event, instance_id=instance, **values)) + "\n")
+
+def emit(frame):
+    print(json.dumps(frame), flush=True)
+
+record("started", provider="closed_codex_fixture", agent_id=os.environ["BRIDGET_AGENT_ID"],
+       native_bootstrap=json.loads(os.environ["BRIDGET_NATIVE_MISSION_BOOTSTRAP"]), forward=True)
+callback = None
+for line in sys.stdin:
+    frame = json.loads(line)
+    method = frame.get("method")
+    if method == "initialize":
+        emit(dict(id=frame["id"], result=dict(userAgent="fixture155", codexHome=os.environ["HOME"], platformFamily="unix", platformOs="macos")))
+    elif method == "thread/start":
+        emit(dict(id=frame["id"], result=dict(thread=dict(id=thread_id), model="gpt-5.6-terra", reasoningEffort="high",
+                   approvalPolicy="on-request", approvalsReviewer="user", sandboxPolicy=sandbox)))
+    elif method == "account/rateLimits/read":
+        emit(dict(id=frame["id"], result=dict(rateLimits={})))
+    elif method == "turn/start":
+        params = frame["params"]
+        assert params["threadId"] == thread_id
+        assert params["approvalPolicy"] == "on-request"
+        assert params["approvalsReviewer"] == "user"
+        assert params["sandboxPolicy"] == sandbox
+        prompt = json.dumps(params["input"])
+        case = next(case for case in ("question", "human", "forbidden", "expiry") if "NATIVE155_" + case in prompt)
+        callback = "request155-" + case
+        record("turn155", case=case, params=params, turn_id=turn_id)
+        emit(dict(id=frame["id"], result=dict(turn=dict(id=turn_id), approvalPolicy="on-request", approvalsReviewer="user", sandboxPolicy=sandbox)))
+        request = dict(threadId=thread_id, turnId=turn_id, itemId="item155-" + case)
+        if case in ("question", "expiry"):
+            request.update(isBlocking=True, questions=[dict(id="q155", header="Choix", question="Quelle couleur155 ?", isSecret=False, isOther=False,
+                           options=[dict(label="bleu155", description="Couleur de la fixture")])])
+            method = "item/tool/requestUserInput"
+        else:
+            request.update(startedAtMs=1, command="printf couleur155", cwd=os.getcwd(), kind="command", availableDecisions=["accept", "decline", "cancel"])
+            method = "item/commandExecution/requestApproval"
+        emit(dict(id=callback, method=method, params=request))
+        record("request155", case=case, callback=callback, frame=request)
+    elif callback is not None and frame.get("id") == callback:
+        record("response155", frame=frame)
+        emit(dict(method="item/agentMessage/delta", params=dict(threadId=thread_id, turnId=turn_id, itemId="answer155", delta="fixture155-resumed")))
+        emit(dict(method="turn/completed", params=dict(threadId=thread_id, turn=dict(id=turn_id, status="completed", items=[]))))
+        record("resumed155", callback=callback)
+    elif method == "turn/interrupt":
+        emit(dict(id=frame["id"], result={}))
+        emit(dict(method="turn/completed", params=dict(threadId=thread_id, turn=dict(id=turn_id, status="interrupted", items=[]))))
+"#;
+
+    for case in ["question", "human", "forbidden", "expiry"] {
+        let sandbox = if case == "forbidden" {
+            json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[]})
+        } else {
+            json!({"type":"dangerFullAccess"})
+        };
+        let script = provider.replace("FIXTURE_SANDBOX155", &sandbox.to_string());
+        let mut f = Fixture::new_with_provider(15, false, Some(&script));
+        let mut parent = support::Client::connect(&support::socket(&f.root));
+        parent.send(WrapperToDaemon::Register {
+            agent_type: "fake-codex".into(),
+            identity_version: 2,
+            agent_id: PARENT.into(),
+            host: Some("t1209".into()),
+            transport: Some("codex_app_server".into()),
+            channel: None.into(),
+            mode: Some(PresenceMode::Acp),
+            location: None,
+            os: Some("test".into()),
+            instance_id: Some(INSTANCE.into()),
+            domain: None,
+            journal_available: None,
+            turn_in_progress: false,
+        });
+        let DaemonToWrapper::Registered {
+            agent_id,
+            credential: Some(credential),
+        } = parent.receive()
+        else {
+            panic!("identité primaire du parent155 absente");
+        };
+        assert_eq!(agent_id, PARENT);
+        support::save_fixture_credential(&support::socket(&f.root), PARENT, INSTANCE, credential);
+        let policy = json!({"kind":"codex","approval_policy":"on-request", "approvals_reviewer":"user", "sandbox_policy":sandbox});
+        let observation = uuid::Uuid::new_v4().to_string();
+        parent.send(WrapperToDaemon::NativePermissionFact {
+            fact: Some(ProviderPermissions {
+                version: 1,
+                source: "native_wrapper".into(),
+                run_id: "parent-turn155".into(),
+                provider_session_id: "parent-session155".into(),
+                provider_instance_id: INSTANCE.into(),
+                revision: 1,
+                driver: "codex_app_server".into(),
+                cwd: f.root.to_string_lossy().into_owned(),
+                runtime_mode: "approval-required".into(),
+                interaction_mode: "default".into(),
+                provider_policy: policy.clone(),
+            }),
+            request_id: None,
+            observation_id: Some(observation.clone()),
+            unavailable_code: None,
+        });
+        assert!(
+            matches!(f.receive(&mut parent), DaemonToWrapper::NativePermissionAcknowledged { observation_id, accepted: true } if observation_id == observation),
+            "politique parent155 non attestée : {case}"
+        );
+        let mut request = delegate(
+            &f.root,
+            &format!("e2e155-{case}"),
+            &format!("NATIVE155_{case}"),
+        );
+        let NativeDelegationRequest::Delegate {
+            agent_type,
+            model,
+            posture,
+            child_requests,
+            ..
+        } = &mut request
+        else {
+            unreachable!()
+        };
+        *agent_type = "fake-codex".into();
+        *model = "gpt-5.6-terra".into();
+        *posture = Some(SpawnPosture::Development);
+        *child_requests = Some("forward".into());
+        let created = f.request(&mut parent, request);
+        let id = created["task_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("délégation155 refusée {case} : {created}"));
+        let saved = wait_native_ready152(&f, id, "");
+        assert_eq!(saved["child_requests"], "forward");
+        assert_eq!(
+            saved["permission_snapshot"]["parent"]["provider_policy"],
+            policy
+        );
+        assert_eq!(saved["permission_snapshot"]["child_policy"], policy);
+        f.remember_native_group(saved["child"].as_str().unwrap());
+        let instance = assert_native_identity152(&f, id, created["message_id"].as_str().unwrap());
+        let started = wait_evidence152(&f, "started", &instance);
+        assert_eq!(started["forward"], true);
+        let turn = wait_evidence152(&f, "turn155", &instance);
+        assert_eq!(turn["params"]["sandboxPolicy"], policy["sandbox_policy"]);
+        let db = rusqlite::Connection::open(f.root.join("state/bridget.db")).unwrap();
+        db.busy_timeout(Duration::from_secs(5)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let (request_id, verdict, state, inbox): (String, String, String, Option<String>) = loop {
+            let row: Option<(String, String, String, Option<String>)> = db.query_row(
+                "SELECT request_id,verdict,state,inbox_item_id FROM native_child_requests WHERE task_id=?1",
+                [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            ).optional().unwrap();
+            if let Some(row) = row {
+                if case != "human" || row.3.is_some() {
+                    break row;
+                }
+            }
+            let status = f.request(
+                &mut parent,
+                NativeDelegationRequest::Status { task_id: id.into() },
+            );
+            assert!(
+                Instant::now() < deadline,
+                "demande155 non persistée {case} : {status}; {}",
+                f.root.display()
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        if case == "forbidden" {
+            assert_eq!(verdict, "forbidden");
+            assert_eq!(state, "refused");
+            assert!(inbox.is_none());
+        } else {
+            assert_eq!(state, "open");
+            assert_eq!(verdict, if case == "human" { "human" } else { "parent" });
+            if case == "human" {
+                let inbox = inbox.expect("approbation155 déposée dans la boîte humaine");
+                let item = bridget_daemon::human_inbox::get(&db, &inbox)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    item.state,
+                    bridget_transport::protocol::HumanInboxState::Open
+                );
+                assert!(item.options.iter().any(|option| option == "accept"));
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                bridget_daemon::human_inbox::resolve(
+                    &db,
+                    &inbox,
+                    "accept",
+                    "fixture155-human",
+                    now,
+                )
+                .unwrap()
+                .unwrap();
+            } else if case == "question" {
+                assert!(inbox.is_none());
+                // Status fait également recevoir et ACKer les avis idempotents.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !f
+                    .replies
+                    .iter()
+                    .any(|message| message.id == format!("native-request-{request_id}"))
+                {
+                    f.request(
+                        &mut parent,
+                        NativeDelegationRequest::Status { task_id: id.into() },
+                    );
+                    assert!(
+                        Instant::now() < deadline,
+                        "avis155 absent pour {request_id}"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+                let answer = f.request(
+                    &mut parent,
+                    NativeDelegationRequest::Respond {
+                        task_id: id.into(),
+                        request_id: request_id.clone(),
+                        decision: ChildRequestDecision::Accept,
+                        answer: Some(json!({"q155":["bleu155"]})),
+                    },
+                );
+                assert_eq!(answer["state"], "answered", "{answer}");
+                assert_eq!(answer["outcome"], "answered_by_parent", "{answer}");
+            } else {
+                assert!(inbox.is_none());
+                // Horloge de production intacte : seule cette ligne privée est
+                // échue ; aucun délai600s ni nouveau hook d'horloge.
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                assert_eq!(db.execute("UPDATE native_child_requests SET deadline_at=?1 WHERE request_id=?2 AND task_id=?3 AND state='open'",
+                                     rusqlite::params![now - 1, request_id, id]).unwrap(), 1);
+            }
+        }
+        let response = wait_evidence152(&f, "response155", &instance);
+        let frame = &response["frame"];
+        assert_eq!(frame["id"], format!("request155-{case}"));
+        match case {
+            "question" => assert_eq!(
+                frame["result"],
+                json!({"answers":{"q155":{"answers":["bleu155"]}}})
+            ),
+            "human" => assert_eq!(frame["result"], json!({"decision":"accept"})),
+            "forbidden" => assert!(
+                matches!(
+                    frame["result"]["decision"].as_str(),
+                    Some("decline" | "cancel")
+                ) || frame["error"]["message"] == "child_request_refused",
+                "{frame}"
+            ),
+            _ => {
+                assert!(frame.get("result").is_none(), "{frame}");
+                assert_eq!(frame["error"]["message"], "child_request_refused");
+            }
+        }
+        wait_evidence152(&f, "resumed155", &instance);
+        f.status_until(&mut parent, id, "result_available");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (state, outcome, delivery, decided_by): (
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+        ) = loop {
+            let row: (String, Option<String>, String, Option<String>) = db.query_row(
+                "SELECT state,outcome,delivery_state,decided_by FROM native_child_requests WHERE request_id=?1", [&request_id],
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+            ).unwrap();
+            if row.0 == "refused" || row.0 == "expired" || row.2 == "delivered" {
+                break row;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "issue155 non réglée {case} : {row:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        match case {
+            "question" | "human" => {
+                assert_eq!(state, "answered");
+                assert_eq!(delivery, "delivered");
+                assert_eq!(
+                    decided_by.as_deref(),
+                    Some(if case == "human" { "human" } else { "parent" })
+                );
+            }
+            "forbidden" => {
+                assert_eq!(state, "refused");
+                assert!(
+                    outcome
+                        .as_deref()
+                        .is_some_and(|outcome| outcome.starts_with("refused:"))
+                );
+            }
+            _ => {
+                assert_eq!(state, "expired");
+                assert_eq!(outcome.as_deref(), Some("expired"));
+            }
+        }
+        if case != "human" {
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM human_inbox", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        assert_eq!(
+            evidence152(&f)
+                .iter()
+                .filter(|event| event["event"] == "response155" && event["instance_id"] == instance)
+                .count(),
+            1,
+            "une seule réponse fournisseur pour {case}"
+        );
+    }
+}
+
+#[test]
 fn native153_e2e_trois_rondes() {
     // Réemploi152 : CLI/profil privés réellement capturés, sans T3 ni modèle.
-    let mut f = Fixture::new_with_provider(15, true);
+    let mut f = Fixture::new_with_provider(15, true, None);
     let mut parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
     f.human_grant();
     let db = rusqlite::Connection::open_with_flags(

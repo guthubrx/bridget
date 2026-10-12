@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-12T00:50:39.432833+00:00",
+  "task": "T024",
+  "source": "contracts/child-requests155.md : ordre route avant answer",
+  "correction": "Aligner un seul oracle contradictoire sur le contrat ; aucun sc\u00e9nario ajout\u00e9",
+  "before_sha256": "4e40b9cc9d86d28b50c824dc8254335e1358525b51452a1f4ef341c69e27ff99",
+  "after_sha256": "2e93726f3ef459d5e1a43668c57c2a0636c29f145374ebf81e4026607a7b51fd",
+  "tasks_done": 19,
+  "tasks_total": 41
+}

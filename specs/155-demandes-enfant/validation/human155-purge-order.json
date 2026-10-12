@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-12T00:56:13.871064+00:00",
+  "task": "T028",
+  "rule": "Soldage des items li\u00e9s AVANT purge ; r\u00e9solution tardive de l\u2019item exact d\u00e9j\u00e0 sold\u00e9 refus\u00e9e.",
+  "reason": "La purge supprime la ligne de rapprochement ; retrouver une nouvelle d\u00e9cision orpheline exigerait un balayage interdit.",
+  "implementation_scope": "Garde dans callback releasable/pipeline de purge existant ; pas nouveau handler, table, outil ou balayage",
+  "new_scenarios": 0,
+  "tasks_total": 41,
+  "tasks_done": 19,
+  "before_sha256": "2e93726f3ef459d5e1a43668c57c2a0636c29f145374ebf81e4026607a7b51fd",
+  "after_sha256": "24d4b267735f5a09008b3dc55fc7a9a60f5226de33e382a927d936f4c0d4b8dd"
+}

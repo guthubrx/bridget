@@ -1,6 +1,7 @@
 //! Daemon bridget — écoute sur socket locale Unix, route les messages
 //! entre les wrappers connectés, persiste l'état en SQLite.
 
+mod native_child_requests;
 mod native_delegation;
 mod native_lineage;
 
@@ -2092,8 +2093,8 @@ fn push_control_message_until_checked(
             }
         }
     };
-    // Le contrôle ne s'exécute qu'après l'attente du writer. Il ne garde
-    // aucun verrou métier pendant la sérialisation ou l'écriture socket.
+    // Le contrôle intervient après acquisition du writer. Le callback peut
+    // conserver le verrou métier jusqu'à la fin de l'écriture.
     let mut json = encode(replacement_message.as_ref().unwrap_or(message))
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     json.push('\n');
@@ -3708,7 +3709,7 @@ impl DaemonState {
                 "at": now,
             })
             .to_string();
-            daemon_deposit_human_inbox(
+            let _ = daemon_deposit_human_inbox(
                 self,
                 &format!("human-route:{incoming_conn}"),
                 bridget_transport::protocol::HumanInboxKind::HumanRouteReplaced,
@@ -5237,7 +5238,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                                 "timeout_secs": timeout_secs,
                             })
                             .to_string();
-                            daemon_deposit_human_inbox(
+                            let _ = daemon_deposit_human_inbox(
                                 &st,
                                 &format!("reply-debt:{msg_id}"),
                                 bridget_transport::protocol::HumanInboxKind::ReplyDebt,
@@ -9921,7 +9922,14 @@ fn daemon_deposit_human_inbox(
     context: &str,
     options: &[String],
     now: i64,
-) {
+) -> Result<crate::human_inbox::Deposited, String> {
+    #[cfg(test)]
+    let channel = if st.fixture_root.is_some() {
+        None
+    } else {
+        human_channel_config()
+    };
+    #[cfg(not(test))]
     let channel = human_channel_config();
     let request = crate::human_inbox::DepositRequest {
         dedup_key,
@@ -9933,16 +9941,24 @@ fn daemon_deposit_human_inbox(
         now,
     };
     match crate::human_inbox::deposit_and_notify(st.store.connection(), request, channel.as_ref()) {
-        Ok(Ok(deposited)) if deposited.created => {
-            info!(
-                "boîte humaine: item {} déposé ({})",
-                deposited.item_id,
-                kind.as_sql()
-            );
+        Ok(Ok(deposited)) => {
+            if deposited.created {
+                info!(
+                    "boîte humaine: item {} déposé ({})",
+                    deposited.item_id,
+                    kind.as_sql()
+                );
+            }
+            Ok(deposited)
         }
-        Ok(Ok(_)) => {}
-        Ok(Err(refusal)) => warn!("boîte humaine: dépôt {dedup_key} refusé: {refusal:?}"),
-        Err(error) => warn!("boîte humaine: dépôt {dedup_key} impossible: {error}"),
+        Ok(Err(refusal)) => {
+            warn!("boîte humaine: dépôt {dedup_key} refusé: {refusal:?}");
+            Err(format!("human_inbox_refused:{refusal:?}"))
+        }
+        Err(error) => {
+            warn!("boîte humaine: dépôt {dedup_key} impossible: {error}");
+            Err(error.to_string())
+        }
     }
 }
 
@@ -14897,6 +14913,9 @@ fn handle_wrapper_message_with_peer(
                 // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ChildRequest { .. }
+                | WrapperToDaemon::ChildRequestAnswered { .. }
+                | WrapperToDaemon::ChildRequestClosed { .. }
                 | WrapperToDaemon::NativeDelegation { .. }
                 | WrapperToDaemon::NativeDelegationT3 { .. }
                 | WrapperToDaemon::RequestWait { .. }
@@ -15129,6 +15148,9 @@ fn handle_wrapper_message_with_peer(
                 // c'est le rôle Client qui l'emprunte (`daemon_identity`).
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ChildRequest { .. }
+                | WrapperToDaemon::ChildRequestAnswered { .. }
+                | WrapperToDaemon::ChildRequestClosed { .. }
                 | WrapperToDaemon::NativePermissionFact { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
@@ -18824,6 +18846,33 @@ fn handle_wrapper_message_with_peer(
                     reason: error.to_string(),
                 }),
             }
+        }
+
+        WrapperToDaemon::ChildRequest { request } => {
+            native_child_requests::receive(conn_id, request, state)
+        }
+        WrapperToDaemon::ChildRequestAnswered {
+            request_id,
+            applied,
+            reason,
+        } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            native_child_requests::acknowledged(
+                conn_id,
+                &request_id,
+                applied,
+                reason.as_deref(),
+                &st,
+            );
+            None
+        }
+        WrapperToDaemon::ChildRequestClosed {
+            request_id,
+            state: closed_state,
+        } => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            native_child_requests::closed(conn_id, &request_id, closed_state, &st);
+            None
         }
 
         WrapperToDaemon::LedgerProjection { scope, limit } => {

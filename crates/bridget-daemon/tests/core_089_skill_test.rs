@@ -149,14 +149,28 @@ fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
     let skill = include_str!("../../../skills/bridget/SKILL.md");
     assert_eq!(
         examples(skill).len(),
-        9,
-        "les neuf JSON publiés doivent tous avoir un banc explicite"
+        10,
+        "les dix JSON publiés doivent tous avoir un banc explicite"
     );
     // Le contrat138 commence à ce titre et couvre aussi les chapitres suivants
     // d'envoi, de réponse et de ledger. Tous ses JSON doivent être exécutés.
     let (before_138, communication_138) = skill
         .split_once("### Privilégier le même projet — contrat 138\n")
         .expect("titre stable du contrat de communication138");
+    let requests_155 = before_138
+        .split_once("### Demandes de l’enfant — contrat155\n")
+        .expect("titre stable du contrat des demandes155")
+        .1
+        .split_once("### Espace de travail — contrat 154\n")
+        .expect("fin du contrat des demandes155")
+        .0;
+    assert_eq!(
+        examples(requests_155),
+        vec![json!({"name":"bridget_task_respond","arguments":{"task_id":"<task_id>","request_id":"<request_id>","decision":"accept","answer":{"<question_id>":["<réponse>"]}}})],
+        "le seul exemple155 garde son outil, ses arguments et ses identifiants de question"
+    );
+    // Ce banc exécute les six communications138 et RequestWait151. Respond
+    // est exercé par native155_e2e ; ici, seule sa forme publiée est vérifiée.
     let waiting_151 = before_138
         .split_once("### Attendre et déclarer la lecture - contrat 151\n")
         .expect("titre stable du contrat d'attente151")

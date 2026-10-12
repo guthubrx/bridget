@@ -1,0 +1,1628 @@
+{
+  "version": 1,
+  "prepared_at": "2026-10-12T01:32:41.460982+00:00",
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant",
+  "head": "c24f6e3af548a750e8e9044f55fc951d207ce761",
+  "archive": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj",
+  "rustfmt_version": "rustfmt 1.8.0-stable (ded5c06cf2 2025-12-08)",
+  "canonical_command": [
+    "rustfmt",
+    "--edition",
+    "2024",
+    "--emit",
+    "stdout"
+  ],
+  "merge_command": [
+    "git",
+    "merge-file",
+    "-p",
+    "--theirs",
+    "HEAD-original",
+    "rustfmt-HEAD",
+    "current"
+  ],
+  "pre_fmt_receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/core155-green-futurs-red-r2.json",
+  "entries": [
+    {
+      "path": "crates/bridget-daemon/src/attach.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/attach.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "2c9518374598476425d739d209b36462c40f11bc5214b1537e15f448ed726dd5",
+      "before_sha256": "14bae1cdf4e22bc4a705b3796a17add7ab70c5e423c194f3d3547637e1c70913",
+      "pre_fmt_sha256": "32790ecda05e4e1c18e5ff3d5a863cb5c5b8639f77dcd3364be0b6a7e3601068",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "32790ecda05e4e1c18e5ff3d5a863cb5c5b8639f77dcd3364be0b6a7e3601068",
+      "canonical_before_sha256": "14bae1cdf4e22bc4a705b3796a17add7ab70c5e423c194f3d3547637e1c70913",
+      "canonical_candidate_sha256": "14bae1cdf4e22bc4a705b3796a17add7ab70c5e423c194f3d3547637e1c70913",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 216,
+        "removed": 74
+      },
+      "stats_candidate": {
+        "added": 1,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/attach.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/attach.rs",
+      "after_sha256": "32790ecda05e4e1c18e5ff3d5a863cb5c5b8639f77dcd3364be0b6a7e3601068",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/cli.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/cli.rs",
+      "classification": "format_only",
+      "head_sha256": "9017573b7142879909efaf1d41d99ddf2e65c1b44f09a03a1ee0fe0dc110fc2a",
+      "before_sha256": "199d95524fd846e84d66518d91b5f4a278a48586cff8550fd00d9c9ba4c5ee4b",
+      "pre_fmt_sha256": "9017573b7142879909efaf1d41d99ddf2e65c1b44f09a03a1ee0fe0dc110fc2a",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "9017573b7142879909efaf1d41d99ddf2e65c1b44f09a03a1ee0fe0dc110fc2a",
+      "canonical_before_sha256": "199d95524fd846e84d66518d91b5f4a278a48586cff8550fd00d9c9ba4c5ee4b",
+      "canonical_candidate_sha256": "199d95524fd846e84d66518d91b5f4a278a48586cff8550fd00d9c9ba4c5ee4b",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 6,
+        "removed": 3
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/cli.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/cli.rs",
+      "after_sha256": "9017573b7142879909efaf1d41d99ddf2e65c1b44f09a03a1ee0fe0dc110fc2a",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/cli_lineage.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/cli_lineage.rs",
+      "classification": "format_only",
+      "head_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "before_sha256": "c516c1285e6b989a60d5f727e5f1df7c23d8c85157211106d18bc4024ea73840",
+      "pre_fmt_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "canonical_before_sha256": "c516c1285e6b989a60d5f727e5f1df7c23d8c85157211106d18bc4024ea73840",
+      "canonical_candidate_sha256": "c516c1285e6b989a60d5f727e5f1df7c23d8c85157211106d18bc4024ea73840",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 156,
+        "removed": 47
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/cli_lineage.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/cli_lineage.rs",
+      "after_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/communication/client.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/communication/client.rs",
+      "classification": "format_only",
+      "head_sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "before_sha256": "227cb4310e175fe25280cc34501dd6abe2a3ba87fd9556d0eb72b9b4ecc6fb1f",
+      "pre_fmt_sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "canonical_before_sha256": "227cb4310e175fe25280cc34501dd6abe2a3ba87fd9556d0eb72b9b4ecc6fb1f",
+      "canonical_candidate_sha256": "227cb4310e175fe25280cc34501dd6abe2a3ba87fd9556d0eb72b9b4ecc6fb1f",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 19,
+        "removed": 7
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/communication/client.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/communication/client.rs",
+      "after_sha256": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "f5b58ff387611e3cb15b3e716453ff6d0738b545baab8bd1ca7d05d66d1674cc",
+      "before_sha256": "6a215bca02d606c6766347659e91979061b7a1682c83c7d620304f3c38a49f89",
+      "pre_fmt_sha256": "15e363aa1bb74f191b4c1cdf3791653ab1102d885b0d873ac7b5f1a7532f4ba8",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "e4b467b44d7b5b8f9278fb5f6f566ef55b29614c674aa9bc837bc7a909ee39e3",
+      "canonical_before_sha256": "6a215bca02d606c6766347659e91979061b7a1682c83c7d620304f3c38a49f89",
+      "canonical_candidate_sha256": "6a215bca02d606c6766347659e91979061b7a1682c83c7d620304f3c38a49f89",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 519,
+        "removed": 129
+      },
+      "stats_candidate": {
+        "added": 63,
+        "removed": 14
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/daemon.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/daemon.rs",
+      "after_sha256": "e4b467b44d7b5b8f9278fb5f6f566ef55b29614c674aa9bc837bc7a909ee39e3",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "75e3713d50a0ee60492e5cdaf2cf7f6f5960fb814550ee95d100d2d36d4979a4",
+      "before_sha256": "64577aa06f7d2dcc5f3339df398f62de10208fe8187047ae481fb42d1f88656c",
+      "pre_fmt_sha256": "ef258f2304ec850b8a97f77d5fa4370ae314f637f733e0902bf88b80ffac3555",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "ff18e1c336b540940582b3e8b8887c8c4a7a9582cfa253a2e34083acbca47646",
+      "canonical_before_sha256": "64577aa06f7d2dcc5f3339df398f62de10208fe8187047ae481fb42d1f88656c",
+      "canonical_candidate_sha256": "64577aa06f7d2dcc5f3339df398f62de10208fe8187047ae481fb42d1f88656c",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 3220,
+        "removed": 829
+      },
+      "stats_candidate": {
+        "added": 325,
+        "removed": 22
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "after_sha256": "ff18e1c336b540940582b3e8b8887c8c4a7a9582cfa253a2e34083acbca47646",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "c16675727f046748ce49ab8241aa562efc784cd4715a4274a52e1d4ee990ff27",
+      "before_sha256": "6ee99112ac368783f4cdec70e907c6a0967f90724596e1058b341e5df6b61cd6",
+      "pre_fmt_sha256": "e1602a6d35f49c69d783147f08d26838af125861d412a7d7d1fb60022df8119c",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "dd7fa5ed8699c89f86986ad57dad84fe8f9dd6e11e035cd0d54e6be56470421a",
+      "canonical_before_sha256": "6ee99112ac368783f4cdec70e907c6a0967f90724596e1058b341e5df6b61cd6",
+      "canonical_candidate_sha256": "6ee99112ac368783f4cdec70e907c6a0967f90724596e1058b341e5df6b61cd6",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 959,
+        "removed": 96
+      },
+      "stats_candidate": {
+        "added": 381,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "after_sha256": "dd7fa5ed8699c89f86986ad57dad84fe8f9dd6e11e035cd0d54e6be56470421a",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "classification": "format_only",
+      "head_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "before_sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "pre_fmt_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "canonical_before_sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "canonical_candidate_sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 501,
+        "removed": 165
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "after_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "da0f5435ab25c6faf626d09b74d5f0ce5a3ec7e961556c713e028dbe653500c8",
+      "before_sha256": "f29fb5b5a6bbc8e9bd5c86ae0c4a6af552efd2b622c329488d802ea9cfb7593d",
+      "pre_fmt_sha256": "59bb085fedfce68179007bc08df2aa9e101ffdcd9fe989df342c3796445d831c",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "59bb085fedfce68179007bc08df2aa9e101ffdcd9fe989df342c3796445d831c",
+      "canonical_before_sha256": "f29fb5b5a6bbc8e9bd5c86ae0c4a6af552efd2b622c329488d802ea9cfb7593d",
+      "canonical_candidate_sha256": "f29fb5b5a6bbc8e9bd5c86ae0c4a6af552efd2b622c329488d802ea9cfb7593d",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 252,
+        "removed": 60
+      },
+      "stats_candidate": {
+        "added": 2,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "after_sha256": "59bb085fedfce68179007bc08df2aa9e101ffdcd9fe989df342c3796445d831c",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "classification": "format_only",
+      "head_sha256": "150bfbbdac8ece378bf45a3c6883d23abd9aa14a6a2b58df4fafeb9fcca8b0e8",
+      "before_sha256": "3f41e11a16900a9e5ae98a731f9f5d7e76afdad272c165d49a1de1bf097094af",
+      "pre_fmt_sha256": "150bfbbdac8ece378bf45a3c6883d23abd9aa14a6a2b58df4fafeb9fcca8b0e8",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "150bfbbdac8ece378bf45a3c6883d23abd9aa14a6a2b58df4fafeb9fcca8b0e8",
+      "canonical_before_sha256": "3f41e11a16900a9e5ae98a731f9f5d7e76afdad272c165d49a1de1bf097094af",
+      "canonical_candidate_sha256": "3f41e11a16900a9e5ae98a731f9f5d7e76afdad272c165d49a1de1bf097094af",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 1710,
+        "removed": 407
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "after_sha256": "150bfbbdac8ece378bf45a3c6883d23abd9aa14a6a2b58df4fafeb9fcca8b0e8",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "c590a16fae5c5f8c0214b58d73c7f7ea7dcdb4cde9938836389589986fc53102",
+      "before_sha256": "f0ba7552881ba15b25e729a39ea88221456cd024d7ddd45b40964222fb685ef1",
+      "pre_fmt_sha256": "9c9b7b7fe86dd640ae7319a1026207c53c06299818b37ead2254e10310972dfe",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "01336553b359e82c6231d8ff8aa18575a9f818bd4043f15a040b89384012660a",
+      "canonical_before_sha256": "f0ba7552881ba15b25e729a39ea88221456cd024d7ddd45b40964222fb685ef1",
+      "canonical_candidate_sha256": "f0ba7552881ba15b25e729a39ea88221456cd024d7ddd45b40964222fb685ef1",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 693,
+        "removed": 14
+      },
+      "stats_candidate": {
+        "added": 655,
+        "removed": 1
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/delegation.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/delegation.rs",
+      "after_sha256": "01336553b359e82c6231d8ff8aa18575a9f818bd4043f15a040b89384012660a",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_lineage.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "386677eb50bd924fe9bcf8271d9ba087d269e41d864f9b6f899e2b456a2f3e47",
+      "before_sha256": "5e521b54112f897f157a9a83504412187358d15084dc7be11e44026e48ebe10d",
+      "pre_fmt_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "canonical_before_sha256": "5e521b54112f897f157a9a83504412187358d15084dc7be11e44026e48ebe10d",
+      "canonical_candidate_sha256": "5e521b54112f897f157a9a83504412187358d15084dc7be11e44026e48ebe10d",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 462,
+        "removed": 146
+      },
+      "stats_candidate": {
+        "added": 5,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/delegation_lineage.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/delegation_lineage.rs",
+      "after_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "caadbd288354010aad87cc54c736071a16c20d954e134ecab6ba2c7a1e69338b",
+      "before_sha256": "40f01da3d2a23c765ce21508f63796f0e9d98df8c209b7c0b0110927c494727c",
+      "pre_fmt_sha256": "d9cecef71c9335eaa2f475af8b231faffa15906f07c87db03643f44b60cb35d3",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "53aa02b185ff638ae1afa37f2eb4328c76f112703a910619d145f083fddfedf7",
+      "canonical_before_sha256": "40f01da3d2a23c765ce21508f63796f0e9d98df8c209b7c0b0110927c494727c",
+      "canonical_candidate_sha256": "40f01da3d2a23c765ce21508f63796f0e9d98df8c209b7c0b0110927c494727c",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1414,
+        "removed": 177
+      },
+      "stats_candidate": {
+        "added": 208,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "after_sha256": "53aa02b185ff638ae1afa37f2eb4328c76f112703a910619d145f083fddfedf7",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_mcp.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "98a664ce70d289a69d91145ef4d179297ae6963596e64e32aab7eda35500c058",
+      "before_sha256": "f91d1ce1ce71108c4c861ab01a93891cbbb170d285ee4f8ec0b8b279535e4948",
+      "pre_fmt_sha256": "37bf09b5d4cd0f7db4fa31cab7eb313052099984132d68c6ffab5cb94d755cfe",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "34bb99255382fc3b6947331f18e31f64f86b5cd9d5719df600aa94ffaa4e2ad9",
+      "canonical_before_sha256": "f91d1ce1ce71108c4c861ab01a93891cbbb170d285ee4f8ec0b8b279535e4948",
+      "canonical_candidate_sha256": "f91d1ce1ce71108c4c861ab01a93891cbbb170d285ee4f8ec0b8b279535e4948",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 117,
+        "removed": 23
+      },
+      "stats_candidate": {
+        "added": 52,
+        "removed": 7
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/delegation_mcp.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/delegation_mcp.rs",
+      "after_sha256": "34bb99255382fc3b6947331f18e31f64f86b5cd9d5719df600aa94ffaa4e2ad9",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/desired_state.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/desired_state.rs",
+      "classification": "format_only",
+      "head_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "before_sha256": "4eed549fddec4b61e3d537dcba25383831b6585e202ea7568b0317a5139dc05a",
+      "pre_fmt_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "canonical_before_sha256": "4eed549fddec4b61e3d537dcba25383831b6585e202ea7568b0317a5139dc05a",
+      "canonical_candidate_sha256": "4eed549fddec4b61e3d537dcba25383831b6585e202ea7568b0317a5139dc05a",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 2,
+        "removed": 1
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/desired_state.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/desired_state.rs",
+      "after_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/human_inbox.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "724296955958c854fa0d0056fa7f589432d874250cc913d02bc2493d5abbd096",
+      "before_sha256": "2dec4111483fbefdff3131d782188c0e8772a33c29004875094658813c178b41",
+      "pre_fmt_sha256": "d9bc81db63927f8805c4b28fc1bd9a0eb08b9d8b0e2677ebfa7331b6248c4e73",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "2dec4111483fbefdff3131d782188c0e8772a33c29004875094658813c178b41",
+      "canonical_before_sha256": "2dec4111483fbefdff3131d782188c0e8772a33c29004875094658813c178b41",
+      "canonical_candidate_sha256": "2dec4111483fbefdff3131d782188c0e8772a33c29004875094658813c178b41",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 16,
+        "removed": 1
+      },
+      "stats_candidate": {
+        "added": 16,
+        "removed": 1
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/human_inbox.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/human_inbox.rs",
+      "after_sha256": "2dec4111483fbefdff3131d782188c0e8772a33c29004875094658813c178b41",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/lib.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/lib.rs",
+      "classification": "format_only",
+      "head_sha256": "03b0994f4809efa71a89dba439ee702b1b25b8c7344dc3cfcf28bfb29a9111e9",
+      "before_sha256": "90f653e743face7cb0d6e4c188a1f8cfb172ade1833e626057a959ff4300c117",
+      "pre_fmt_sha256": "03b0994f4809efa71a89dba439ee702b1b25b8c7344dc3cfcf28bfb29a9111e9",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "03b0994f4809efa71a89dba439ee702b1b25b8c7344dc3cfcf28bfb29a9111e9",
+      "canonical_before_sha256": "90f653e743face7cb0d6e4c188a1f8cfb172ade1833e626057a959ff4300c117",
+      "canonical_candidate_sha256": "90f653e743face7cb0d6e4c188a1f8cfb172ade1833e626057a959ff4300c117",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 3,
+        "removed": 3
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/lib.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/lib.rs",
+      "after_sha256": "03b0994f4809efa71a89dba439ee702b1b25b8c7344dc3cfcf28bfb29a9111e9",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/lineage_client.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/lineage_client.rs",
+      "classification": "format_only",
+      "head_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "before_sha256": "1cda55a80b302f735b6be5251985e9a2ebab78ae5f53f2cc0d2a77fea9f807b2",
+      "pre_fmt_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "canonical_before_sha256": "1cda55a80b302f735b6be5251985e9a2ebab78ae5f53f2cc0d2a77fea9f807b2",
+      "canonical_candidate_sha256": "1cda55a80b302f735b6be5251985e9a2ebab78ae5f53f2cc0d2a77fea9f807b2",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 138,
+        "removed": 47
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/lineage_client.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/lineage_client.rs",
+      "after_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/managed_process.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/managed_process.rs",
+      "classification": "format_only",
+      "head_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "before_sha256": "a71aa1ae0a858473736f6880f6a164f9b1ff45194b32d7c68d1e92a4b76361ff",
+      "pre_fmt_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "canonical_before_sha256": "a71aa1ae0a858473736f6880f6a164f9b1ff45194b32d7c68d1e92a4b76361ff",
+      "canonical_candidate_sha256": "a71aa1ae0a858473736f6880f6a164f9b1ff45194b32d7c68d1e92a4b76361ff",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 33,
+        "removed": 10
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/managed_process.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/managed_process.rs",
+      "after_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/mcp.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "ab16810d9489f8100b954eab721164ee04a20765fe23b4fc3c6117604b47a9e6",
+      "before_sha256": "b82d7b6128e1e19a30fa551436b9b91664dceeb4a8fbd2d547abd4cfa2b365c1",
+      "pre_fmt_sha256": "ab16810d9489f8100b954eab721164ee04a20765fe23b4fc3c6117604b47a9e6",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "b82d7b6128e1e19a30fa551436b9b91664dceeb4a8fbd2d547abd4cfa2b365c1",
+      "canonical_before_sha256": "b82d7b6128e1e19a30fa551436b9b91664dceeb4a8fbd2d547abd4cfa2b365c1",
+      "canonical_candidate_sha256": "b82d7b6128e1e19a30fa551436b9b91664dceeb4a8fbd2d547abd4cfa2b365c1",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 3,
+        "removed": 1
+      },
+      "stats_candidate": {
+        "added": 3,
+        "removed": 1
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/mcp.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/mcp.rs",
+      "after_sha256": "b82d7b6128e1e19a30fa551436b9b91664dceeb4a8fbd2d547abd4cfa2b365c1",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permission_observer.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permission_observer.rs",
+      "classification": "format_only",
+      "head_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "before_sha256": "4abdfa6e5d40cd05ffb7819bdc2dc3a7cb1641622783b1525bff2f4cce3af92f",
+      "pre_fmt_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "canonical_before_sha256": "4abdfa6e5d40cd05ffb7819bdc2dc3a7cb1641622783b1525bff2f4cce3af92f",
+      "canonical_candidate_sha256": "4abdfa6e5d40cd05ffb7819bdc2dc3a7cb1641622783b1525bff2f4cce3af92f",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 386,
+        "removed": 129
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/native_permission_observer.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/native_permission_observer.rs",
+      "after_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+      "classification": "format_only",
+      "head_sha256": "f4b003ee3478f2d72fb695c6cade66fb7bd0757e92100647a0414cb3f9674b7c",
+      "before_sha256": "bb3988153fbef88b84d16c3f499a684385c8fca323ee2d2b9c2ad86ca529838d",
+      "pre_fmt_sha256": "f4b003ee3478f2d72fb695c6cade66fb7bd0757e92100647a0414cb3f9674b7c",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "f4b003ee3478f2d72fb695c6cade66fb7bd0757e92100647a0414cb3f9674b7c",
+      "canonical_before_sha256": "bb3988153fbef88b84d16c3f499a684385c8fca323ee2d2b9c2ad86ca529838d",
+      "canonical_candidate_sha256": "bb3988153fbef88b84d16c3f499a684385c8fca323ee2d2b9c2ad86ca529838d",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 191,
+        "removed": 43
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+      "after_sha256": "f4b003ee3478f2d72fb695c6cade66fb7bd0757e92100647a0414cb3f9674b7c",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permissions.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "4149844bb0264ace3fc11413c65c064c6de1886875694305b05a31a66824abc0",
+      "before_sha256": "6d802c26e7e0d3692f6aaae4b70a073649d442d0183443dd90684abf97083a0b",
+      "pre_fmt_sha256": "46178916130afbe253613fb8f72ab765aa77c354c9912b3c1880c47eef4efafa",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "db3fba7b0026a2ff95fe53f40d0e77ca610bd7bf7294a7436375e640bcbed9bc",
+      "canonical_before_sha256": "6d802c26e7e0d3692f6aaae4b70a073649d442d0183443dd90684abf97083a0b",
+      "canonical_candidate_sha256": "6d802c26e7e0d3692f6aaae4b70a073649d442d0183443dd90684abf97083a0b",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1027,
+        "removed": 256
+      },
+      "stats_candidate": {
+        "added": 249,
+        "removed": 5
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/native_permissions.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/native_permissions.rs",
+      "after_sha256": "db3fba7b0026a2ff95fe53f40d0e77ca610bd7bf7294a7436375e640bcbed9bc",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permissions149_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions149_tests.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "357dea4cc055f63e0ce24f82ce7cc53e661efad0df4a16ae5429affbdd5cfcfe",
+      "before_sha256": "de800cc9b9cfd8b966121276570a3486f276e6e5b7493e48a3307f30aee830c0",
+      "pre_fmt_sha256": "0c97143753cc1fd1f7b254538c239188f45b757ef9ddef8a3251216424020558",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "0c97143753cc1fd1f7b254538c239188f45b757ef9ddef8a3251216424020558",
+      "canonical_before_sha256": "de800cc9b9cfd8b966121276570a3486f276e6e5b7493e48a3307f30aee830c0",
+      "canonical_candidate_sha256": "de800cc9b9cfd8b966121276570a3486f276e6e5b7493e48a3307f30aee830c0",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 494,
+        "removed": 83
+      },
+      "stats_candidate": {
+        "added": 3,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/native_permissions149_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/native_permissions149_tests.rs",
+      "after_sha256": "0c97143753cc1fd1f7b254538c239188f45b757ef9ddef8a3251216424020558",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/observation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/observation.rs",
+      "classification": "format_only",
+      "head_sha256": "d9449e4dcd2c28339f89d77eafc05b41d6aa90ad21d134e0c18d53854be80cbd",
+      "before_sha256": "1d8bdf43692fbfedce3a2ed009de0643bada23872d7c195ffeb5cbea7f356103",
+      "pre_fmt_sha256": "d9449e4dcd2c28339f89d77eafc05b41d6aa90ad21d134e0c18d53854be80cbd",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "d9449e4dcd2c28339f89d77eafc05b41d6aa90ad21d134e0c18d53854be80cbd",
+      "canonical_before_sha256": "1d8bdf43692fbfedce3a2ed009de0643bada23872d7c195ffeb5cbea7f356103",
+      "canonical_candidate_sha256": "1d8bdf43692fbfedce3a2ed009de0643bada23872d7c195ffeb5cbea7f356103",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 14,
+        "removed": 2
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/observation.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/observation.rs",
+      "after_sha256": "d9449e4dcd2c28339f89d77eafc05b41d6aa90ad21d134e0c18d53854be80cbd",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/registry.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/registry.rs",
+      "classification": "format_only",
+      "head_sha256": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+      "before_sha256": "37cba523197c40c9570e07be9b4dceade4c66a8c9b573c1d313be9defa44a25a",
+      "pre_fmt_sha256": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+      "canonical_before_sha256": "37cba523197c40c9570e07be9b4dceade4c66a8c9b573c1d313be9defa44a25a",
+      "canonical_candidate_sha256": "37cba523197c40c9570e07be9b4dceade4c66a8c9b573c1d313be9defa44a25a",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 35,
+        "removed": 10
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/registry.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/registry.rs",
+      "after_sha256": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/t3code_contract.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/t3code_contract.rs",
+      "classification": "format_only",
+      "head_sha256": "861317db5e1d92e146b0adef497d5d47c713db25d6b182e43d8ef8c0c4bcc9c9",
+      "before_sha256": "0e759a6817c3165c76475f305572a601ffb655ab383fa1ce628c925f0e0abca1",
+      "pre_fmt_sha256": "861317db5e1d92e146b0adef497d5d47c713db25d6b182e43d8ef8c0c4bcc9c9",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "861317db5e1d92e146b0adef497d5d47c713db25d6b182e43d8ef8c0c4bcc9c9",
+      "canonical_before_sha256": "0e759a6817c3165c76475f305572a601ffb655ab383fa1ce628c925f0e0abca1",
+      "canonical_candidate_sha256": "0e759a6817c3165c76475f305572a601ffb655ab383fa1ce628c925f0e0abca1",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 54,
+        "removed": 12
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/t3code_contract.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/t3code_contract.rs",
+      "after_sha256": "861317db5e1d92e146b0adef497d5d47c713db25d6b182e43d8ef8c0c4bcc9c9",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "classification": "format_only",
+      "head_sha256": "93ec3e3350cb09f389f035ab7f7940ca7ceaca5a54f27e57b6510519af872a56",
+      "before_sha256": "298bfe062df242097a5f920be46f3e9229633b7f2ae0a5115dfa18982f0c43da",
+      "pre_fmt_sha256": "93ec3e3350cb09f389f035ab7f7940ca7ceaca5a54f27e57b6510519af872a56",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "93ec3e3350cb09f389f035ab7f7940ca7ceaca5a54f27e57b6510519af872a56",
+      "canonical_before_sha256": "298bfe062df242097a5f920be46f3e9229633b7f2ae0a5115dfa18982f0c43da",
+      "canonical_candidate_sha256": "298bfe062df242097a5f920be46f3e9229633b7f2ae0a5115dfa18982f0c43da",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 11,
+        "removed": 6
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "after_sha256": "93ec3e3350cb09f389f035ab7f7940ca7ceaca5a54f27e57b6510519af872a56",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/t3code_mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/t3code_mcp.rs",
+      "classification": "format_only",
+      "head_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "before_sha256": "b127a60abe58367935e9a4534c4e06a972d063a990c7c29acb014ab75918e710",
+      "pre_fmt_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "canonical_before_sha256": "b127a60abe58367935e9a4534c4e06a972d063a990c7c29acb014ab75918e710",
+      "canonical_candidate_sha256": "b127a60abe58367935e9a4534c4e06a972d063a990c7c29acb014ab75918e710",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 12,
+        "removed": 7
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/t3code_mcp.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/t3code_mcp.rs",
+      "after_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/workspace_git.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/workspace_git.rs",
+      "classification": "format_only",
+      "head_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "before_sha256": "4a555951358a121aee787d247631637ab6d089e5167bea177f972c8744a4a1e5",
+      "pre_fmt_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "canonical_before_sha256": "4a555951358a121aee787d247631637ab6d089e5167bea177f972c8744a4a1e5",
+      "canonical_candidate_sha256": "4a555951358a121aee787d247631637ab6d089e5167bea177f972c8744a4a1e5",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 433,
+        "removed": 119
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/workspace_git.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/workspace_git.rs",
+      "after_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/workspace_git_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/workspace_git_tests.rs",
+      "classification": "format_only",
+      "head_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "before_sha256": "215803bd6ffeb838bbd1ed2d9259f4f6c88c4345ab9ad98916d6949a0c1c68c4",
+      "pre_fmt_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "canonical_before_sha256": "215803bd6ffeb838bbd1ed2d9259f4f6c88c4345ab9ad98916d6949a0c1c68c4",
+      "canonical_candidate_sha256": "215803bd6ffeb838bbd1ed2d9259f4f6c88c4345ab9ad98916d6949a0c1c68c4",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 434,
+        "removed": 98
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/workspace_git_tests.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/workspace_git_tests.rs",
+      "after_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/src/wrapper.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "8c41103730235758e3ad4813804bacc3ad690663eb161dbd377b1f3e1b2bd9d0",
+      "before_sha256": "e6ad5ee5c57981431ff9a0084a20e0dcd6a72c9e515552bd7a206032fbef9547",
+      "pre_fmt_sha256": "c4a03be1f55cd386456ecf101f56265ae0e888725eddfb97e9d8d9237b117e0c",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "659a1e09f6ac4c351d6d906e1065f4614680e016cf36cd0c066b039df074278d",
+      "canonical_before_sha256": "e6ad5ee5c57981431ff9a0084a20e0dcd6a72c9e515552bd7a206032fbef9547",
+      "canonical_candidate_sha256": "e6ad5ee5c57981431ff9a0084a20e0dcd6a72c9e515552bd7a206032fbef9547",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1071,
+        "removed": 91
+      },
+      "stats_candidate": {
+        "added": 833,
+        "removed": 8
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/src/wrapper.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/src/wrapper.rs",
+      "after_sha256": "659a1e09f6ac4c351d6d906e1065f4614680e016cf36cd0c066b039df074278d",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "cc7e65db7472bd279721cc6ae11acddf9b93ccd29c2f608587d0294e403f73ca",
+      "before_sha256": "554c3278754a00a2cd336171d7be210efeaf39315a385b4da5a82f3cda501fe3",
+      "pre_fmt_sha256": "cc7e65db7472bd279721cc6ae11acddf9b93ccd29c2f608587d0294e403f73ca",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "554c3278754a00a2cd336171d7be210efeaf39315a385b4da5a82f3cda501fe3",
+      "canonical_before_sha256": "554c3278754a00a2cd336171d7be210efeaf39315a385b4da5a82f3cda501fe3",
+      "canonical_candidate_sha256": "554c3278754a00a2cd336171d7be210efeaf39315a385b4da5a82f3cda501fe3",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1,
+        "removed": 0
+      },
+      "stats_candidate": {
+        "added": 1,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "after_sha256": "554c3278754a00a2cd336171d7be210efeaf39315a385b4da5a82f3cda501fe3",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "classification": "format_only",
+      "head_sha256": "2a9f650e9aa58edafb6be5e8634efb1b62d197e11b05353c8b108f60897dfa8a",
+      "before_sha256": "693126f61f942fa8756edb7149be3dcf9279c92d93102436cdece3a8f243a480",
+      "pre_fmt_sha256": "2a9f650e9aa58edafb6be5e8634efb1b62d197e11b05353c8b108f60897dfa8a",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "2a9f650e9aa58edafb6be5e8634efb1b62d197e11b05353c8b108f60897dfa8a",
+      "canonical_before_sha256": "693126f61f942fa8756edb7149be3dcf9279c92d93102436cdece3a8f243a480",
+      "canonical_candidate_sha256": "693126f61f942fa8756edb7149be3dcf9279c92d93102436cdece3a8f243a480",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 306,
+        "removed": 34
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "after_sha256": "2a9f650e9aa58edafb6be5e8634efb1b62d197e11b05353c8b108f60897dfa8a",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "638472b7b59fcafd4144836faf473d1809b94ec1c2c0665ee2dc6de8b0c79a74",
+      "before_sha256": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401",
+      "pre_fmt_sha256": "806da4c7716ac5d591f8c2a3460e7aea9412fbe1b75e9bae4dfc66649879419c",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401",
+      "canonical_before_sha256": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401",
+      "canonical_candidate_sha256": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 372,
+        "removed": 8
+      },
+      "stats_candidate": {
+        "added": 372,
+        "removed": 8
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "after_sha256": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "classification": "format_only",
+      "head_sha256": "3429c207ab2710f2c00e2c816fdd4d341787f44f06b09f0e8199f8f2f1e19b52",
+      "before_sha256": "2e09dc90b007e8db8461c91fa9d7f110de5dc989810271ba6b0ca0c5c75aa2d5",
+      "pre_fmt_sha256": "3429c207ab2710f2c00e2c816fdd4d341787f44f06b09f0e8199f8f2f1e19b52",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "3429c207ab2710f2c00e2c816fdd4d341787f44f06b09f0e8199f8f2f1e19b52",
+      "canonical_before_sha256": "2e09dc90b007e8db8461c91fa9d7f110de5dc989810271ba6b0ca0c5c75aa2d5",
+      "canonical_candidate_sha256": "2e09dc90b007e8db8461c91fa9d7f110de5dc989810271ba6b0ca0c5c75aa2d5",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 92,
+        "removed": 27
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "after_sha256": "3429c207ab2710f2c00e2c816fdd4d341787f44f06b09f0e8199f8f2f1e19b52",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/src/claude_stream_json.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/claude_stream_json.rs",
+      "classification": "format_only",
+      "head_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "before_sha256": "a4657ebb34d7320083bef245f0a74e7cf394b5c3c9f862387c51158969185635",
+      "pre_fmt_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "canonical_before_sha256": "a4657ebb34d7320083bef245f0a74e7cf394b5c3c9f862387c51158969185635",
+      "canonical_candidate_sha256": "a4657ebb34d7320083bef245f0a74e7cf394b5c3c9f862387c51158969185635",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 131,
+        "removed": 39
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/src/claude_stream_json.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/src/claude_stream_json.rs",
+      "after_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/src/codex_app_server.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "27a2a44928ff3ecd39c260902f0e3f7580276a8f7496bc36b6e760b722162055",
+      "before_sha256": "43b98b5bbf28fdeebeefea2a8229e3379023071c01f17d1381f5a977f4cb4634",
+      "pre_fmt_sha256": "f8170a7db9e223372249f8c8210ab0f6ed45940766c52b9ca044b0fbb232846b",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "aeedb4500ad540cb53007d14e2e2030d19bfec761cfb4a1f3b01cf468d3ab9b3",
+      "canonical_before_sha256": "43b98b5bbf28fdeebeefea2a8229e3379023071c01f17d1381f5a977f4cb4634",
+      "canonical_candidate_sha256": "43b98b5bbf28fdeebeefea2a8229e3379023071c01f17d1381f5a977f4cb4634",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1416,
+        "removed": 54
+      },
+      "stats_candidate": {
+        "added": 1275,
+        "removed": 2
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/src/codex_app_server.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/src/codex_app_server.rs",
+      "after_sha256": "aeedb4500ad540cb53007d14e2e2030d19bfec761cfb4a1f3b01cf468d3ab9b3",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/src/lineage_protocol.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/lineage_protocol.rs",
+      "classification": "format_only",
+      "head_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "before_sha256": "9ff600f971766d3dd35cbb16091d1aedf5dc362dec39a1685e8b62357c1c1c55",
+      "pre_fmt_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "canonical_before_sha256": "9ff600f971766d3dd35cbb16091d1aedf5dc362dec39a1685e8b62357c1c1c55",
+      "canonical_candidate_sha256": "9ff600f971766d3dd35cbb16091d1aedf5dc362dec39a1685e8b62357c1c1c55",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 38,
+        "removed": 8
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/src/lineage_protocol.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/src/lineage_protocol.rs",
+      "after_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/src/managed_session.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/managed_session.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "42dfa0a2fce380fdf2c2b6d6dcf922410cde7b76f57ed0b0ff43420903be2862",
+      "before_sha256": "3f4f8b1e515fcb0a962c606390715fb52e2705a576b7c473073fec1da7f15a2f",
+      "pre_fmt_sha256": "9551b76b089424805db2f67b4443237ffb61456d55741b2664b7d9b440c7d8ae",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "f6d267d41adaacbd825fbab33c0589c55f268c1c3de13d753e911f576349f513",
+      "canonical_before_sha256": "3f4f8b1e515fcb0a962c606390715fb52e2705a576b7c473073fec1da7f15a2f",
+      "canonical_candidate_sha256": "3f4f8b1e515fcb0a962c606390715fb52e2705a576b7c473073fec1da7f15a2f",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 77,
+        "removed": 2
+      },
+      "stats_candidate": {
+        "added": 74,
+        "removed": 1
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/src/managed_session.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/src/managed_session.rs",
+      "after_sha256": "f6d267d41adaacbd825fbab33c0589c55f268c1c3de13d753e911f576349f513",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/src/native_permissions.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/native_permissions.rs",
+      "classification": "format_only",
+      "head_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "before_sha256": "b4a1ea82fa18e01bf350d4216578b87dc15fbbf0e0e18eeeecdacff903d5cc52",
+      "pre_fmt_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "canonical_before_sha256": "b4a1ea82fa18e01bf350d4216578b87dc15fbbf0e0e18eeeecdacff903d5cc52",
+      "canonical_candidate_sha256": "b4a1ea82fa18e01bf350d4216578b87dc15fbbf0e0e18eeeecdacff903d5cc52",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 527,
+        "removed": 152
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/src/native_permissions.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/src/native_permissions.rs",
+      "after_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/src/protocol.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "3b990872e38b610a1566bbb603554eb41526376b676380f3c8c102fcf27057b8",
+      "before_sha256": "ada0b90429509c3a46e0066c1f03f5ee984bc5020774cd55c8900ccf494aafc9",
+      "pre_fmt_sha256": "ad81f5c98b6c55641858a27c1ddc43cab44dfa100cc8af75f6eb9fa4e5d566f1",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "46189835fde25ed0178d2f770ddabfd46f1b2fabcb2e3bd4217082f329af0d55",
+      "canonical_before_sha256": "ada0b90429509c3a46e0066c1f03f5ee984bc5020774cd55c8900ccf494aafc9",
+      "canonical_candidate_sha256": "ada0b90429509c3a46e0066c1f03f5ee984bc5020774cd55c8900ccf494aafc9",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 186,
+        "removed": 14
+      },
+      "stats_candidate": {
+        "added": 144,
+        "removed": 1
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/src/protocol.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/src/protocol.rs",
+      "after_sha256": "46189835fde25ed0178d2f770ddabfd46f1b2fabcb2e3bd4217082f329af0d55",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/tests/lineage_contract_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/tests/lineage_contract_test.rs",
+      "classification": "format_only",
+      "head_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "before_sha256": "1053a795c962d989df901a2695d6e0ce23ffd89d77512675f829e55df0078da8",
+      "pre_fmt_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "canonical_before_sha256": "1053a795c962d989df901a2695d6e0ce23ffd89d77512675f829e55df0078da8",
+      "canonical_candidate_sha256": "1053a795c962d989df901a2695d6e0ce23ffd89d77512675f829e55df0078da8",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 38,
+        "removed": 12
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/tests/lineage_contract_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/tests/lineage_contract_test.rs",
+      "after_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_alias149_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/tests/native_alias149_test.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "e2bae01c27deb5c5e3f2ee690bd84f7d166ac237f8da7a602783ed34e34f1f76",
+      "before_sha256": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+      "pre_fmt_sha256": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+      "canonical_before_sha256": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+      "canonical_candidate_sha256": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1,
+        "removed": 0
+      },
+      "stats_candidate": {
+        "added": 1,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/tests/native_alias149_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/tests/native_alias149_test.rs",
+      "after_sha256": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "classification": "format_only",
+      "head_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "before_sha256": "ab7f9f8a457e6fb29e615207ffa9dc6db7587adcadfe140f6963fb29cf12905f",
+      "pre_fmt_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "canonical_before_sha256": "ab7f9f8a457e6fb29e615207ffa9dc6db7587adcadfe140f6963fb29cf12905f",
+      "canonical_candidate_sha256": "ab7f9f8a457e6fb29e615207ffa9dc6db7587adcadfe140f6963fb29cf12905f",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 2,
+        "removed": 1
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "after_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_permissions149_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/tests/native_permissions149_test.rs",
+      "classification": "format_only",
+      "head_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "before_sha256": "dba4ebceebb6c155844519aeecefdf460acedfeab2c2c5df597942542ff5b187",
+      "pre_fmt_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "pre_fmt_equals_head": true,
+      "candidate_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "canonical_before_sha256": "dba4ebceebb6c155844519aeecefdf460acedfeab2c2c5df597942542ff5b187",
+      "canonical_candidate_sha256": "dba4ebceebb6c155844519aeecefdf460acedfeab2c2c5df597942542ff5b187",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": null,
+      "status": "restored_head",
+      "stats_before": {
+        "added": 167,
+        "removed": 41
+      },
+      "stats_candidate": {
+        "added": 0,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/tests/native_permissions149_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/tests/native_permissions149_test.rs",
+      "after_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "post_write_canonical_verified": true
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_stop149_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/tests/native_stop149_test.rs",
+      "classification": "semantic_delta",
+      "head_sha256": "b125240a00820b35690e8c3c0dd908c48ac3c07a21bc36c20ce453580bf895d8",
+      "before_sha256": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+      "pre_fmt_sha256": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+      "pre_fmt_equals_head": false,
+      "candidate_sha256": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+      "canonical_before_sha256": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+      "canonical_candidate_sha256": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+      "canonical_equal": true,
+      "stable_before_write": true,
+      "merge_returncode": 0,
+      "status": "minimized",
+      "stats_before": {
+        "added": 1,
+        "removed": 0
+      },
+      "stats_candidate": {
+        "added": 1,
+        "removed": 0
+      },
+      "snapshot_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/before/crates/bridget-transport/tests/native_stop149_test.rs",
+      "candidate_path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/format155-minimization.75uyeqzj/candidates/crates/bridget-transport/tests/native_stop149_test.rs",
+      "after_sha256": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+      "post_write_canonical_verified": true
+    }
+  ],
+  "git_stats_before": {
+    "crates/bridget-daemon/src/attach.rs": {
+      "added": 216,
+      "removed": 74
+    },
+    "crates/bridget-daemon/src/cli.rs": {
+      "added": 6,
+      "removed": 3
+    },
+    "crates/bridget-daemon/src/cli_lineage.rs": {
+      "added": 156,
+      "removed": 47
+    },
+    "crates/bridget-daemon/src/communication/client.rs": {
+      "added": 19,
+      "removed": 7
+    },
+    "crates/bridget-daemon/src/daemon.rs": {
+      "added": 519,
+      "removed": 129
+    },
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": {
+      "added": 3229,
+      "removed": 838
+    },
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": {
+      "added": 959,
+      "removed": 96
+    },
+    "crates/bridget-daemon/src/daemon/native_lineage.rs": {
+      "added": 501,
+      "removed": 165
+    },
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": {
+      "added": 252,
+      "removed": 60
+    },
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": {
+      "added": 1710,
+      "removed": 407
+    },
+    "crates/bridget-daemon/src/delegation.rs": {
+      "added": 693,
+      "removed": 14
+    },
+    "crates/bridget-daemon/src/delegation_lineage.rs": {
+      "added": 464,
+      "removed": 148
+    },
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": {
+      "added": 1414,
+      "removed": 177
+    },
+    "crates/bridget-daemon/src/delegation_mcp.rs": {
+      "added": 117,
+      "removed": 23
+    },
+    "crates/bridget-daemon/src/desired_state.rs": {
+      "added": 2,
+      "removed": 1
+    },
+    "crates/bridget-daemon/src/human_inbox.rs": {
+      "added": 16,
+      "removed": 1
+    },
+    "crates/bridget-daemon/src/lib.rs": {
+      "added": 3,
+      "removed": 3
+    },
+    "crates/bridget-daemon/src/lineage_client.rs": {
+      "added": 138,
+      "removed": 47
+    },
+    "crates/bridget-daemon/src/managed_process.rs": {
+      "added": 33,
+      "removed": 10
+    },
+    "crates/bridget-daemon/src/mcp.rs": {
+      "added": 3,
+      "removed": 1
+    },
+    "crates/bridget-daemon/src/native_permission_observer.rs": {
+      "added": 386,
+      "removed": 129
+    },
+    "crates/bridget-daemon/src/native_permission_observer149_tests.rs": {
+      "added": 191,
+      "removed": 43
+    },
+    "crates/bridget-daemon/src/native_permissions.rs": {
+      "added": 1041,
+      "removed": 270
+    },
+    "crates/bridget-daemon/src/native_permissions149_tests.rs": {
+      "added": 494,
+      "removed": 83
+    },
+    "crates/bridget-daemon/src/observation.rs": {
+      "added": 14,
+      "removed": 2
+    },
+    "crates/bridget-daemon/src/registry.rs": {
+      "added": 35,
+      "removed": 10
+    },
+    "crates/bridget-daemon/src/t3code_contract.rs": {
+      "added": 54,
+      "removed": 12
+    },
+    "crates/bridget-daemon/src/t3code_contract_v2.rs": {
+      "added": 11,
+      "removed": 6
+    },
+    "crates/bridget-daemon/src/t3code_mcp.rs": {
+      "added": 12,
+      "removed": 7
+    },
+    "crates/bridget-daemon/src/workspace_git.rs": {
+      "added": 433,
+      "removed": 119
+    },
+    "crates/bridget-daemon/src/workspace_git_tests.rs": {
+      "added": 434,
+      "removed": 98
+    },
+    "crates/bridget-daemon/src/wrapper.rs": {
+      "added": 1071,
+      "removed": 91
+    },
+    "crates/bridget-daemon/tests/claude_native_permissions_test.rs": {
+      "added": 1,
+      "removed": 0
+    },
+    "crates/bridget-daemon/tests/lineage_cli_test.rs": {
+      "added": 306,
+      "removed": 34
+    },
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": {
+      "added": 372,
+      "removed": 8
+    },
+    "crates/bridget-daemon/tests/native_provider_death149_test.rs": {
+      "added": 92,
+      "removed": 27
+    },
+    "crates/bridget-transport/src/claude_stream_json.rs": {
+      "added": 131,
+      "removed": 39
+    },
+    "crates/bridget-transport/src/codex_app_server.rs": {
+      "added": 1416,
+      "removed": 54
+    },
+    "crates/bridget-transport/src/lineage_protocol.rs": {
+      "added": 38,
+      "removed": 8
+    },
+    "crates/bridget-transport/src/managed_session.rs": {
+      "added": 77,
+      "removed": 2
+    },
+    "crates/bridget-transport/src/native_permissions.rs": {
+      "added": 531,
+      "removed": 156
+    },
+    "crates/bridget-transport/src/protocol.rs": {
+      "added": 186,
+      "removed": 14
+    },
+    "crates/bridget-transport/tests/lineage_contract_test.rs": {
+      "added": 38,
+      "removed": 12
+    },
+    "crates/bridget-transport/tests/native_alias149_test.rs": {
+      "added": 1,
+      "removed": 0
+    },
+    "crates/bridget-transport/tests/native_permissions149_e2e.rs": {
+      "added": 2,
+      "removed": 1
+    },
+    "crates/bridget-transport/tests/native_permissions149_test.rs": {
+      "added": 167,
+      "removed": 41
+    },
+    "crates/bridget-transport/tests/native_stop149_test.rs": {
+      "added": 1,
+      "removed": 0
+    }
+  },
+  "phase": "complete",
+  "completed_at": "2026-10-12T01:33:07.429759+00:00",
+  "git_stats_after": {
+    "crates/bridget-daemon/src/attach.rs": {
+      "added": 1,
+      "removed": 0
+    },
+    "crates/bridget-daemon/src/daemon.rs": {
+      "added": 63,
+      "removed": 14
+    },
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": {
+      "added": 325,
+      "removed": 22
+    },
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": {
+      "added": 381,
+      "removed": 0
+    },
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": {
+      "added": 2,
+      "removed": 0
+    },
+    "crates/bridget-daemon/src/delegation.rs": {
+      "added": 655,
+      "removed": 1
+    },
+    "crates/bridget-daemon/src/delegation_lineage.rs": {
+      "added": 5,
+      "removed": 0
+    },
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": {
+      "added": 208,
+      "removed": 0
+    },
+    "crates/bridget-daemon/src/delegation_mcp.rs": {
+      "added": 52,
+      "removed": 7
+    },
+    "crates/bridget-daemon/src/human_inbox.rs": {
+      "added": 16,
+      "removed": 1
+    },
+    "crates/bridget-daemon/src/mcp.rs": {
+      "added": 3,
+      "removed": 1
+    },
+    "crates/bridget-daemon/src/native_permissions.rs": {
+      "added": 249,
+      "removed": 5
+    },
+    "crates/bridget-daemon/src/native_permissions149_tests.rs": {
+      "added": 3,
+      "removed": 0
+    },
+    "crates/bridget-daemon/src/wrapper.rs": {
+      "added": 833,
+      "removed": 8
+    },
+    "crates/bridget-daemon/tests/claude_native_permissions_test.rs": {
+      "added": 1,
+      "removed": 0
+    },
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": {
+      "added": 372,
+      "removed": 8
+    },
+    "crates/bridget-transport/src/codex_app_server.rs": {
+      "added": 1275,
+      "removed": 2
+    },
+    "crates/bridget-transport/src/managed_session.rs": {
+      "added": 74,
+      "removed": 1
+    },
+    "crates/bridget-transport/src/protocol.rs": {
+      "added": 144,
+      "removed": 1
+    },
+    "crates/bridget-transport/tests/native_alias149_test.rs": {
+      "added": 1,
+      "removed": 0
+    },
+    "crates/bridget-transport/tests/native_stop149_test.rs": {
+      "added": 1,
+      "removed": 0
+    }
+  },
+  "counts": {
+    "restored_head": 26,
+    "minimized": 21,
+    "refused_current_changed": 0
+  },
+  "source_stable_after": true,
+  "canonical_after_write_all_equal": true
+}

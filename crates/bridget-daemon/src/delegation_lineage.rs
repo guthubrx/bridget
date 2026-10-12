@@ -235,6 +235,11 @@ impl DelegationStore {
         for task in tree {
             tx.execute("INSERT OR REPLACE INTO native_delegation_tombstones(owner,request_id,purged_at) SELECT json_extract(payload,'$.owner'),request_id,?2 FROM native_delegations WHERE task_id=?1",params![task.task_id,now]).map_err(|e|e.to_string())?;
             tx.execute(
+                "DELETE FROM native_child_requests WHERE task_id=?1",
+                [&task.task_id],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
                 "DELETE FROM native_delegation_cancel_receipts WHERE task_id=?1",
                 [&task.task_id],
             )

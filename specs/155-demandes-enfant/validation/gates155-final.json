@@ -1,0 +1,18 @@
+{
+  "utc": "2026-10-12T03:41:48.880125+00:00",
+  "state": "gates_passed_not_committed",
+  "tasks_sha256": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+  "tasks_checked": 42,
+  "current_test_receipt": "native155-cwd-r1.json",
+  "current_tests": 71,
+  "audit_validation": {
+    "rc": 0,
+    "errors": 0,
+    "warnings": 0
+  },
+  "code_review_r3": "APPROVE cwd delta, no new blocker",
+  "converge": "3passes, P3 historical; targeted post-audit cwd check PASS_TARGETED_CWD",
+  "audit_archive": "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-final",
+  "audit_archive_files": 39,
+  "global_workspace_green": false
+}

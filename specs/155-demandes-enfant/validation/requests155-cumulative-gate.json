@@ -1,0 +1,374 @@
+{
+  "status": "TARGETED_CUMULATIVE_PASS_NOT_GLOBAL_GREEN",
+  "task_checkboxes_modified": false,
+  "runs": {
+    "requests155-green-r2": {
+      "rc": 101,
+      "seconds": 32.14,
+      "sources_stable": true,
+      "source_count": 214,
+      "results": [
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::chain155::native155_chain_trois_niveaux_snapshot_saut_unique_et_silence",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_250_decisions_obsoletes_ne_bloquent_pas_la_nouvelle",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_faits_options_decision_attestee_acquittee",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::chain155::native155_hostile_texte_cite_faits_separes_et_aucune_autorite",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_item_ouvert_ferme_a_expiration",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_ne_peut_pas_repondre_a_une_question",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_human_depot_idempotent_apres_panne",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_human_item_deja_resolu_reutilise",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accuse_negatif_annule",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accord_apres_echeance_jamais_envoye",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_enfant_disparu_accord_sent_reste_unknown",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_expiration_refus_et_cloture_none_pending_void",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accord_pending_annulation_puis_reconnexion_void",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_plantage_entre_sent_et_envoi",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_renvoi_jusqu_a_accuse",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_avis_idempotent",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_decisions_obsoletes_expiration_annulation_purge",
+          "status": "FAIL"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_echeances_fenetres_et_decision_tardive",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_tuple_idempotence_conflit_tour_et_identite",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_verdicts_et_forbidden_sans_inbox",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_accept_question_nested_answer",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_answer_invalide",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_approbation_route_humaine_refusee",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_apres_echeance",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_apres_levee_reussit",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_invalidations_avant_renvoi_et_finalisation",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_decision_durable_et_non_proposee",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_identite_proprietaire_et_ownself_refusees",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_decline_question",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_mcp_champs_inconnus",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_parent_revoque",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_pause_refuse",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_rejeu_identique_et_autre_decision_close",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_statut_cles_existantes_inchangees",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_statut_liste_ouvertes",
+          "status": "PASS"
+        },
+        {
+          "name": "wrapper::reconnect_tests::native148_claude_allows_native_delegation_without_global_mcp_approval",
+          "status": "PASS"
+        },
+        {
+          "name": "wrapper::reconnect_tests::spec091_politique_mcp_reste_octet_pour_octet_stable",
+          "status": "PASS"
+        },
+        {
+          "name": "wrapper::reconnect_tests::spec094_codex_autorise_exactement_les_outils_de_communication_surs",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_budgets_ouverte_et_totale",
+          "status": "FAIL"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::wait155::native155_attente_reveillee_par_une_demande",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_annulation_course_closed_avant_ou_apres_application",
+          "status": "PASS"
+        },
+        {
+          "name": "spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises",
+          "status": "PASS"
+        }
+      ],
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/requests155-green-r2.json",
+      "receipt_sha256": "e75abdbea2e6f65e293f65af0630c32a1d991ba488ae9e8dd59aa06152bb830d",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/requests155-green-r2.log",
+      "log_sha256": "5d2c0a879b09a8cec09c6aa87a8f5479ca80b370a91dfd0112fbf1908c4b9385",
+      "source_hashes_scope": "historical run before/after snapshot; not current source hashes after format-only removal",
+      "build_cache_gib_process_only": "40"
+    },
+    "requests155-fixtures-green-r3": {
+      "rc": 0,
+      "seconds": 6.55,
+      "sources_stable": true,
+      "source_count": 214,
+      "results": [
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_budgets_ouverte_et_totale",
+          "status": "PASS"
+        },
+        {
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_decisions_obsoletes_expiration_annulation_purge",
+          "status": "PASS"
+        }
+      ],
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/requests155-fixtures-green-r3.json",
+      "receipt_sha256": "bd102c7f09b51bb245483a9490f4cd7380eb034aa8a834f139aaefbefa6b600e",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/requests155-fixtures-green-r3.log",
+      "log_sha256": "0a7a292663a55dfcd2189232e79d31b678e1923473905a4c9b8835fc4ab16223",
+      "source_hashes_scope": "historical run before/after snapshot; not current source hashes after format-only removal",
+      "build_cache_gib_process_only": "40"
+    },
+    "e2e155-green-r1": {
+      "rc": 101,
+      "seconds": 2.88,
+      "sources_stable": true,
+      "source_count": 214,
+      "results": [],
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/e2e155-green-r1.json",
+      "receipt_sha256": "c41f707d43de79144278a2e7e88e8345c3cedde14f55cdfdd2d221d1f6d3066f",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/e2e155-green-r1.log",
+      "log_sha256": "6748a319278f4190c502b2da5b06bd76a4a533753a3b3ebb10939a10c4b15442",
+      "source_hashes_scope": "historical run before/after snapshot; not current source hashes after format-only removal",
+      "build_cache_gib_process_only": "40"
+    },
+    "e2e155-green-r2": {
+      "rc": 0,
+      "seconds": 21.99,
+      "sources_stable": true,
+      "source_count": 214,
+      "results": [
+        {
+          "name": "native155_e2e",
+          "status": "PASS"
+        }
+      ],
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/e2e155-green-r2.json",
+      "receipt_sha256": "e7d4fa4add0dbd5ba1323ab649b5ebae4f229d831a21263af5539cdbad62e168",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/e2e155-green-r2.log",
+      "log_sha256": "c3f55aaaafb700ebaf6cf9f0b0e46d90397c0a3287f5a22375714914300d6a2b",
+      "source_hashes_scope": "historical run before/after snapshot; not current source hashes after format-only removal",
+      "build_cache_gib_process_only": "40"
+    }
+  },
+  "requests_cumulative": {
+    "unique_passes": 42,
+    "arithmetic": "40 unique PASS R2 + 2 formerly failing tests PASS in targeted R3; not 42 PASS in one run",
+    "pass_names_r2": [
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::chain155::native155_chain_trois_niveaux_snapshot_saut_unique_et_silence",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::chain155::native155_hostile_texte_cite_faits_separes_et_aucune_autorite",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_250_decisions_obsoletes_ne_bloquent_pas_la_nouvelle",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_faits_options_decision_attestee_acquittee",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_item_ouvert_ferme_a_expiration",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_ne_peut_pas_repondre_a_une_question",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_human_depot_idempotent_apres_panne",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_human_item_deja_resolu_reutilise",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accord_apres_echeance_jamais_envoye",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accord_pending_annulation_puis_reconnexion_void",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_accuse_negatif_annule",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_annulation_course_closed_avant_ou_apres_application",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_enfant_disparu_accord_sent_reste_unknown",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_expiration_refus_et_cloture_none_pending_void",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_invalidations_avant_renvoi_et_finalisation",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_plantage_entre_sent_et_envoi",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_lifecycle_renvoi_jusqu_a_accuse",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_avis_idempotent",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_echeances_fenetres_et_decision_tardive",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_tuple_idempotence_conflit_tour_et_identite",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_verdicts_et_forbidden_sans_inbox",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_accept_question_nested_answer",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_answer_invalide",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_approbation_route_humaine_refusee",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_apres_echeance",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_apres_levee_reussit",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_decision_durable_et_non_proposee",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_decline_question",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_identite_proprietaire_et_ownself_refusees",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_mcp_champs_inconnus",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_parent_revoque",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_pause_refuse",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_rejeu_identique_et_autre_decision_close",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_statut_cles_existantes_inchangees",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::respond155::native155_respond_statut_liste_ouvertes",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::wait155::native155_attente_reveillee_par_une_demande",
+      "spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises",
+      "wrapper::reconnect_tests::native148_claude_allows_native_delegation_without_global_mcp_approval",
+      "wrapper::reconnect_tests::spec091_politique_mcp_reste_octet_pour_octet_stable",
+      "wrapper::reconnect_tests::spec094_codex_autorise_exactement_les_outils_de_communication_surs"
+    ],
+    "pass_names_r3": [
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::human155::native155_human_decisions_obsoletes_expiration_annulation_purge",
+      "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::native155_request_budgets_ouverte_et_totale"
+    ],
+    "remaining_failures_in_this_selection": [],
+    "compatibility_passes_r2": [
+      "wrapper::reconnect_tests::native148_claude_allows_native_delegation_without_global_mcp_approval",
+      "wrapper::reconnect_tests::spec091_politique_mcp_reste_octet_pour_octet_stable",
+      "wrapper::reconnect_tests::spec094_codex_autorise_exactement_les_outils_de_communication_surs",
+      "spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises"
+    ],
+    "native_requests_unique_passes": 38,
+    "changed_between_r2_and_r3": {
+      "crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs": {
+        "r2": "99bfea8ed0f020cff854223cb472f4cff103deaf00ec33dded1223fc9ba557cd",
+        "r3": "96be315b4fc6ad8f4586972ac83b0e0c4a996f5a3956d98c675c5d6e958d8c31"
+      },
+      "crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs": {
+        "r2": "d20bbf4f572d30a93c5738fb3010bfc34f01a40800c6b61f2f506c50a0b710b2",
+        "r3": "e04b0b97814e31782bd530d019704fe9abd726edd2a92b14fc20615eee7ffb44"
+      }
+    }
+  },
+  "e2e": {
+    "r1": "compile failed E0282 row.get(3) option type, zero executed test, RC101,2.88s",
+    "r2": "native155_e2e 1 PASS/0 FAIL, RC0,21.99s",
+    "changed_file_only_between_r1_r2": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+    "root_diagnosis": "Option tuple annotation only",
+    "source_sha256_at_r2": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401"
+  },
+  "diagnostics": {
+    "budget": {
+      "r2_failure": "parent reader WouldBlock; request #8 lacks ledger/delivery because circuit breaker rejects it",
+      "runtime_root_git154_evidence": {
+        "db_readonly": "/private/tmp/b.z08cvf1_/bridget-n149-tot-77ae673e-62468.db",
+        "provider_ids_0_7": "8 ledger + send_deliveries dispatching recipient_instance_id instance-1",
+        "provider_id_8": "row8a4fce8b2cc89d3175d22b540b32d46f open; no ledger/delivery; idempotency terminal/rejected/circuit_breaker",
+        "reason_exact": "disjoncteur: limite 8 échanges / 180s"
+      },
+      "fixture_correction": "existing CircuitBreaker threshold64 only for total-budget fixture; parent drains notices",
+      "unchanged_contract": "4 simultaneous open /32 total per task; production breaker unchanged"
+    },
+    "human_purge": {
+      "r2_failure": "task cancelling where cancelled expected",
+      "root_diagnosis": "STOP completion backend must be installed before first tick; delayed completion does not recover expired receiver",
+      "fixture_correction": "synthetic backend before STOP-requesting first tick; real cancellation/closure/purge assertions retained",
+      "no_production_change_for_these_fixture_causes": true
+    }
+  },
+  "scope": {
+    "candidate_gates": [
+      "T017",
+      "T018",
+      "T019",
+      "T020",
+      "T021",
+      "T022",
+      "T023",
+      "T024",
+      "T025",
+      "T026",
+      "T027",
+      "T028",
+      "T029",
+      "T030",
+      "T031",
+      "T032",
+      "T034",
+      "T035",
+      "T037"
+    ],
+    "t033_purge_gate_separate": "core-purge155-gate.json remains separate, not re-counted here",
+    "workspace_suite_not_executed_by_this_owner": true,
+    "no_global_green": true,
+    "format_only_review_removal_pending_per_root": true,
+    "no_current_after_rollback_source_hash_claim": true
+  },
+  "FR018_parent_notice_limit": {
+    "original_literal": "Une question ouvre un avis",
+    "clarified_contract": "parent notice attempted through SendAs with guards149 and circuit breaker; success not guaranteed",
+    "observed_root_fixture": "provider_id8 / ninth notice rejected circuit_breaker8 exchanges per180s; no ledger/delivery",
+    "request_preserved": true,
+    "status_available_to_owner": true,
+    "wait_requires_parent_open_nonexpired_actionable": true,
+    "notice_success_not_implied_by_request_persistence": true,
+    "source_changed_for_clarification": false,
+    "test_scenario_changed": false
+  }
+}

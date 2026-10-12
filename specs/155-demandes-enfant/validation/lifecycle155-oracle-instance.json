@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-12T00:54:22.823965+00:00",
+  "scope": "T017\u2013T023 existing instance/sent lifecycle case",
+  "primary_rule": "Connexion historique vivante : Cancel puis Closed ; sent reste sent jusqu\u2019\u00e0 preuve. unknown r\u00e9serv\u00e9 \u00e0 disparition/incertitude.",
+  "reason": "Oracle initial void|unknown contredisait T023 et la fixture qui garde l\u2019ancienne connexion vivante.",
+  "new_scenarios": 0,
+  "original_red": "core-purge155-red-r1 :16 \u00e9checs avant cette assertion, sur ligne155 absente",
+  "production_shortcuts_forbidden": [
+    "Inventer une perte de connexion",
+    "Marquer void sans Closed",
+    "R\u00e9appliquer accept apr\u00e8s invalidit\u00e9"
+  ]
+}

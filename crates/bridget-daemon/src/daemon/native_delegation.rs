@@ -8,6 +8,8 @@ use std::path::Path;
 const MISSION_REPLY_LIMIT_SECS: i64 = 3600;
 const WAIT_DEFAULT_SECS: u64 = 600;
 const WAIT_MAX_SECS: u64 = 3600;
+pub(super) const CHILD_REQUEST_PARENT_WINDOW_SECS: i64 = 600;
+pub(super) const CHILD_REQUEST_HUMAN_WINDOW_SECS: i64 = 3600;
 /// Bornes du délai de réponse choisi par le parent (session 150).
 const MISSION_REPLY_MIN_SECS: u64 = 60;
 const MISSION_REPLY_MAX_SECS: u64 = 86_400;
@@ -239,7 +241,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     view
 }
 
-/// O(log n) : lecture par la clé indexée, aucune mutation de remise.
+/// O(log n+r log r+B), r<=32 demandes ; aucune mutation de remise.
 fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value, String> {
     let phase =
         if matches!(task.state.as_str(), "result_available" | "failed") && !task.delivery_acked {
@@ -265,6 +267,17 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     let mut view = task_view(task, phase.as_deref(), full);
     view["suspended"] = json!(control.paused && matches!(task.state.as_str(), "queued" | "starting" | "mission_pending" | "working"));
     view["resume_attempts"] = json!(task.restart_resumes);
+    let mut rows = st.delegation_store.child_requests_for_task(&task.task_id)?;
+    view["pending_requests"]=json!(rows.iter().filter(|row|row.state=="open").map(|row|
+        json!({"request_id":row.request_id,"kind":row.kind,"summary":row.summary,"verdict":row.verdict,"deadline_at":row.deadline_at})).collect::<Vec<_>>());
+    rows.sort_by(|a, b| {
+        b.decided_at
+            .unwrap_or(b.created_at)
+            .cmp(&a.decided_at.unwrap_or(a.created_at))
+            .then_with(|| b.request_id.cmp(&a.request_id))
+    });
+    view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
+        json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state})).collect::<Vec<_>>());
     Ok(view)
 }
 
@@ -588,10 +601,13 @@ fn handle_with_fact(
                 };
             }
         }
-        // Parmi les Continue réussis, seul begin_round écrit. Le compteur est
-        // lu avant/après sous le même verrou en O(1), sans tick sur un rejeu.
-        let previous_epoch = matches!(&request, NativeDelegationRequest::Continue { .. })
-            .then(|| st.delegation_store.wait_epoch().get());
+        // begin_round et le CAS Respond notifient après leur commit. Le compteur
+        // est lu sous le même verrou en O(1), sans tick sur un rejeu.
+        let previous_epoch = matches!(
+            &request,
+            NativeDelegationRequest::Continue { .. } | NativeDelegationRequest::Respond { .. }
+        )
+        .then(|| st.delegation_store.wait_epoch().get());
         let result = match handle_locked_with_project(
             conn,
             request,
@@ -688,7 +704,7 @@ fn validate_task_ids(ids: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// O(k) lectures indexées par réveil, k <= 16 ; aucun verrou d'état pendant le sommeil.
+/// O(k(log n+r(log droits+B))), k<=16, r<=4 ; aucun verrou pendant le sommeil.
 fn wait_tasks(
     conn: &str,
     task_ids: &[String],
@@ -720,7 +736,7 @@ fn wait_tasks(
         if wait_client_gone(peer) || SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
             return Err("daemon_unreachable".into());
         }
-        let (ready, pending) = {
+        let (ready, pending, pending_requests) = {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             if live_connection_identity(&st, conn).as_ref() != Some(&identity) {
                 return Err("task_unavailable".into());
@@ -743,18 +759,49 @@ fn wait_tasks(
             }
             let mut ready = Vec::new();
             let mut pending = Vec::new();
+            let mut pending_requests = Vec::new();
             for task in tasks {
                 if task.terminal() && workspace_report_ready(&task) {
                     ready.push(current_task_view(&st, &task, false)?);
                 } else {
+                    let mut actionable = task.clone();
+                    actionable.owner_instance = identity.1.clone(); // preuve can_own_task, aucune sauvegarde.
+                    let now = unix_timestamp();
+                    let control = crate::referent_control::read(st.store.connection())
+                        .map_err(|_| "control_state_unavailable")?;
+                    let paused = matches!(
+                        crate::referent_control::admit_autonomous_effect(
+                            crate::referent_control::AutonomousEffect::NativeDelegation,
+                            &control
+                        ),
+                        crate::referent_control::Admission::Deferred { .. }
+                    );
+                    if !paused {
+                        for row in st.delegation_store.open_child_requests(&task.task_id)? {
+                            if row.verdict == "parent"
+                                && row.kind == "user_input"
+                                && row.deadline_at > now
+                                && native_child_requests::valid_delivery(
+                                    &st,
+                                    &actionable,
+                                    &row,
+                                    now,
+                                )
+                                .is_ok()
+                            {
+                                pending_requests.push(json!({"task_id":task.task_id,"request_id":row.request_id,"kind":row.kind,
+                                    "summary":row.summary,"verdict":row.verdict,"deadline_at":row.deadline_at}));
+                            }
+                        }
+                    }
                     pending.push(task.task_id);
                 }
             }
-            (ready, pending)
+            (ready, pending, pending_requests)
         };
-        if !ready.is_empty() || Instant::now() >= deadline {
+        if !ready.is_empty() || !pending_requests.is_empty() || Instant::now() >= deadline {
             return Ok(
-                json!({"version":1,"timed_out":ready.is_empty(),"waited_secs":start.elapsed().as_secs(),"ready":ready,"pending":pending}),
+                json!({"version":1,"timed_out":ready.is_empty() && pending_requests.is_empty(),"waited_secs":start.elapsed().as_secs(),"ready":ready,"pending":pending,"pending_requests":pending_requests}),
             );
         }
         epoch.wait_changed(
@@ -816,8 +863,23 @@ fn admit_delegate(
     st: &mut DaemonState, pass: WorkspacePass<'_>,
 ) -> Result<WorkspaceAdmission, String> {
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
-    let NativeDelegationRequest::Delegate { request_id, agent_type, model, effort, task, cwd,
-        posture, reply_timeout, workspace, keep_alive_secs, brief } = request else { return Err("invalid_request".into()); };
+    let NativeDelegationRequest::Delegate {
+        request_id,
+        agent_type,
+        model,
+        effort,
+        task,
+        cwd,
+        posture,
+        reply_timeout,
+        child_requests,
+        workspace,
+        keep_alive_secs,
+        brief,
+    } = request
+    else {
+        return Err("invalid_request".into());
+    };
     if request_id.is_empty()
         || request_id.len() > 128
         || request_id.chars().any(bridget_core::is_disallowed_control)
@@ -834,11 +896,20 @@ fn admit_delegate(
     if keep_alive_secs.is_some_and(|secs| !(60..=7200).contains(&secs)) {
         return Err("keep_alive_out_of_range".into());
     }
-    let round_body = brief.as_ref().map(|draft| {
-        crate::handoff::validate_and_render(draft)
-            .map(|rendered| format!("{}\n\n--- Consigne ---\n{task}", rendered.body))
-            .map_err(|error| format!("brief_invalid:{error}"))
-    }).transpose()?;
+    if child_requests
+        .as_deref()
+        .is_some_and(|mode| !matches!(mode, "deny" | "forward"))
+    {
+        return Err("invalid_request".into());
+    }
+    let round_body = brief
+        .as_ref()
+        .map(|draft| {
+            crate::handoff::validate_and_render(draft)
+                .map(|rendered| format!("{}\n\n--- Consigne ---\n{task}", rendered.body))
+                .map_err(|error| format!("brief_invalid:{error}"))
+        })
+        .transpose()?;
     let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
     if let Some(mut saved) = st
         .delegation_store
@@ -865,10 +936,39 @@ fn admit_delegate(
             return Err("referent_paused".into());
         }
         if !matches!(pass, WorkspacePass::Commit { .. })
-            && st.workspace_work.lock().unwrap_or_else(|e| e.into_inner())
-                .creations.contains_key(&(owner.clone(), request_id.clone()))
-        { return Err("workspace_creation_in_progress".into()); }
+            && st
+                .workspace_work
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .creations
+                .contains_key(&(owner.clone(), request_id.clone()))
+        {
+            return Err("workspace_creation_in_progress".into());
+        }
+        if child_requests.as_deref() == Some("forward")
+            && st
+                .registry
+                .get(agent_type)
+                .map_err(|_| "agent_type_unknown")?
+                .protocol
+                != "codex_app_server"
+        {
+            return Err("child_requests_unsupported".into());
+        }
         let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
+        if child_requests.as_deref() == Some("forward")
+            && fact.as_ref().is_none_or(|fact| {
+                fact.driver != "codex_app_server"
+                    || bridget_transport::protocol::validate_permissions(
+                        fact,
+                        fact.source == "provider_turn",
+                    )
+                    .is_err()
+                    || fact.provider_policy["approvals_reviewer"] != "user"
+            })
+        {
+            return Err("child_requests_reviewer_unsupported".into());
+        }
         let frozen_cwd = if let Some(fact) = &fact {
             let path = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable")?;
             let root = std::fs::canonicalize(&fact.cwd).map_err(|_| "cwd_unavailable")?;
@@ -1064,6 +1164,7 @@ fn admit_delegate(
             origin_owner_instance: instance,
             parent_execution_id: executions.into_iter().next(),
             request: request.clone(),
+            child_requests: child_requests.clone(),
             permission_snapshot,
             effective_posture,
             definition: scoped.resolved_definition(agent_type)?,
@@ -1208,13 +1309,14 @@ fn handle_locked_with_project(
                         Ok(_) => None,
                     };
                     json!({"agent_type":name,"protocol":definition.protocol,"models":definition.capabilities.models,
+                        "child_requests_supported":definition.protocol == "codex_app_server",
                         "worktree":worktree_refusal.is_none(),"worktree_refusal":worktree_refusal,
                         "inherit":inherited.is_ok(),"inherit_refusal":inherited.err(),
                         "discovery":discovery && (permission.is_some()||fact.is_some()),"development":development.as_ref().is_ok_and(|(_,p)|*p==SpawnPosture::Development),
                         "development_refusal":development.err()})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"workspace_strategies":["shared","worktree"],"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
+                json!({"version":1,"providers":entries,"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -1274,6 +1376,161 @@ fn handle_locked_with_project(
             Ok(json!({"version":1,"acknowledged":acknowledged,"already":already}))
         }
         NativeDelegationRequest::Wait { .. } => Err("wait_unsupported".into()),
+        NativeDelegationRequest::Respond {
+            task_id,
+            request_id,
+            decision,
+            answer,
+        } => {
+            // O(log tâches + log demandes + q² + B), réponse<=8Kio ; même propriétaire
+            // direct que recover_owner, sans écriture pour un refus ou un rejeu.
+            if [task_id, request_id].iter().any(|id| {
+                id.is_empty()
+                    || id.len() > 128
+                    || id.chars().any(bridget_core::is_disallowed_control)
+            }) {
+                return Err("invalid_request".into());
+            }
+            let mut task = st
+                .delegation_store
+                .get(task_id)?
+                .ok_or("task_unavailable")?;
+            if task.owner != owner || !can_own_task(st, &task, &owner, &instance)? {
+                return Err("native_owner_identity_mismatch".into());
+            }
+            let row = st
+                .delegation_store
+                .get_child_request(request_id)?
+                .filter(|row| row.task_id == *task_id)
+                .ok_or("request_unknown")?;
+            let decision = match decision {
+                bridget_transport::protocol::ChildRequestDecision::Accept => "accept",
+                bridget_transport::protocol::ChildRequestDecision::Decline => "decline",
+                bridget_transport::protocol::ChildRequestDecision::Cancel => "cancel",
+            };
+            let encoded = answer
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            if row.state != "open" {
+                if row.state == "answered"
+                    && row.decided_by.as_deref() == Some("parent")
+                    && row.decision.as_deref() == Some(decision)
+                    && row.answer_json == encoded
+                {
+                    return Ok(
+                        json!({"version":1,"request_id":row.request_id,"state":row.state,"outcome":row.outcome,"decision":row.decision}),
+                    );
+                }
+                return Err(if row.state == "expired" {
+                    "request_expired"
+                } else {
+                    "request_closed"
+                }
+                .into());
+            }
+            let now = unix_timestamp();
+            if now >= row.deadline_at {
+                return Err("request_expired".into());
+            }
+            if row.verdict != "parent" || row.kind != "user_input" {
+                return Err("parent_cannot_approve".into());
+            }
+            let control = crate::referent_control::read(st.store.connection())
+                .map_err(|_| "control_state_unavailable")?;
+            if matches!(
+                crate::referent_control::admit_autonomous_effect(
+                    crate::referent_control::AutonomousEffect::NativeDelegation,
+                    &control
+                ),
+                crate::referent_control::Admission::Deferred { .. }
+            ) {
+                return Err("referent_paused".into());
+            }
+            if st.delegation_store.revoked_agent(&task.owner)?
+                || st
+                    .delegation_store
+                    .revoked_agent(&task.root_owner_agent_id)?
+                || st.delegation_store.revoked(&task.owner_instance)?
+                || st.delegation_store.revoked(&instance)?
+            {
+                return Err("permission_not_inherited".into());
+            }
+            // La reprise est prouvée par can_own_task ; la lignée garde l'origine.
+            let previous_owner_instance =
+                std::mem::replace(&mut task.owner_instance, instance.clone());
+            native_child_requests::valid_delivery(st, &task, &row, now).map_err(
+                |code| match code {
+                    "expired" => "request_expired",
+                    "paused" => "referent_paused",
+                    "revoked" => "permission_not_inherited",
+                    _ => "request_closed",
+                },
+            )?;
+            let offered: Vec<bridget_transport::protocol::ChildRequestDecision> =
+                serde_json::from_str(&row.offered_json).map_err(|e| e.to_string())?;
+            let choice: bridget_transport::protocol::ChildRequestDecision =
+                serde_json::from_value(json!(decision)).map_err(|e| e.to_string())?;
+            if !offered.contains(&choice) {
+                return Err("decision_not_offered".into());
+            }
+            if decision == "accept" {
+                let facts: Value =
+                    serde_json::from_str(&row.facts_json).map_err(|e| e.to_string())?;
+                let ids = facts["question_ids"].as_array().ok_or("answer_invalid")?;
+                let input = answer
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .ok_or("answer_invalid")?;
+                if encoded.as_ref().is_none_or(|json| json.len() > 8192)
+                    || input.len() != ids.len()
+                    || input
+                        .keys()
+                        .any(|key| !ids.iter().any(|id| id.as_str() == Some(key.as_str())))
+                    || ids.iter().any(|id| {
+                        id.as_str().is_none_or(|id| {
+                            !input.get(id).is_some_and(|value| {
+                                value
+                                    .as_array()
+                                    .is_some_and(|values| values.iter().all(Value::is_string))
+                            })
+                        })
+                    })
+                {
+                    return Err("answer_invalid".into());
+                }
+            } else if answer.is_some() {
+                return Err("answer_invalid".into());
+            }
+            let decided_at = unix_timestamp();
+            if decided_at >= row.deadline_at {
+                return Err("request_expired".into());
+            }
+            if !st.delegation_store.decide_child_request(
+                request_id,
+                decision,
+                encoded.as_deref(),
+                "parent",
+                "answered_by_parent",
+                decided_at,
+            )? {
+                return Err(if unix_timestamp() >= row.deadline_at {
+                    "request_expired"
+                } else {
+                    "request_closed"
+                }
+                .into());
+            }
+            if previous_owner_instance != instance {
+                task.owner_instance = previous_owner_instance;
+                recover_owner(st, &mut task, &owner, &instance)?;
+            }
+            st.delegation_store.wait_epoch().bump();
+            Ok(
+                json!({"version":1,"request_id":request_id,"state":"answered","outcome":"answered_by_parent","decision":decision}),
+            )
+        }
         NativeDelegationRequest::Continue {
             task_id,
             request_id,
@@ -1464,6 +1721,15 @@ pub(super) fn native_launch_registry(st: &DaemonState, task: &Task) -> Result<Ag
 /// Politique figée et mission d'origine, avec l'instance du bail effectivement relancé.
 /// O(b) temps et mémoire, b octets des politiques, sources et identifiants sérialisés.
 pub(super) fn native_child_env(task: &Task, prepared: &mut PreparedSpawn) -> Result<(), String> {
+    prepared
+        .env
+        .remove(crate::wrapper::NATIVE_CHILD_REQUESTS_ENV);
+    if task.child_requests.as_deref() == Some("forward") {
+        prepared.env.insert(
+            crate::wrapper::NATIVE_CHILD_REQUESTS_ENV.into(),
+            "forward".into(),
+        );
+    }
     if let Some(snapshot) = &task.permission_snapshot {
         prepared.env.insert(crate::native_permissions::CHILD_POLICY_ENV.into(),
             serde_json::to_string(&snapshot.child_policy).map_err(|error| error.to_string())?.into());
@@ -1636,7 +1902,7 @@ pub(super) fn authorize_retained_result(
     Ok(())
 }
 
-fn send_as(
+pub(super) fn send_as(
     st: &mut DaemonState,
     owner: &str,
     instance: &str,
@@ -1941,6 +2207,7 @@ pub(super) fn fail_restart(st: &DaemonState, task: &mut Task, reason: &str) -> R
 /// Une seule décision durable, avant toute reprise. Le crash ne peut que
 /// sur-compter. La fermeture des groupes précède cette décision au démarrage.
 pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, String> {
+    super::native_child_requests::prepare_restart(st)?;
     let mut children = HashSet::new();
     let now = unix_timestamp();
     let mut tasks = st.delegation_store.tasks()?;
@@ -2131,6 +2398,8 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
 }
 
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
+    // Les demandes sont fermées AVANT le skip de pause et les arrêts de flotte.
+    super::native_child_requests::tick(state);
     let mut controls = Vec::new();
     let mut cancellations = Vec::new();
     let mut cleanups = Vec::new();
@@ -2885,6 +3154,24 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         let mut closed = Vec::new();
         {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            // Les demandes ne retardent jamais les arrêts ci-dessus. Elles
+            // protègent seulement la finalisation et le nettoyage après arrêt.
+            for id in &task_ids {
+                let Ok(Some(task)) = st.delegation_store.get(id) else {
+                    return;
+                };
+                if let Err(error) = native_child_requests::settle_after_stop(&st, &task) {
+                    warn!("annulation native: règlement après arrêt refusé : {error}");
+                    return;
+                }
+            }
+            if task_ids.iter().any(|id| {
+                st.delegation_store
+                    .child_closure_pending(id)
+                    .unwrap_or(true)
+            }) {
+                return;
+            }
             for id in &task_ids {
                 if let Ok(Some(mut entry)) = st.delegation_store.get(id) {
                     if matches!(entry.state.as_str(), "cancelling" | "cancelled") {
@@ -2922,6 +3209,10 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
             if let Ok(Some(mut entry)) = st.delegation_store.get(&id)
                 && entry.terminal() && workspace_report_ready(&entry)
                 && (!entry.guarded || entry.guard_released)
+                && !st
+                    .delegation_store
+                    .child_closure_pending(&id)
+                    .unwrap_or(true)
             {
                 entry.cleanup_done = true;
                 let _ = st.delegation_store.save(&entry);
@@ -8002,6 +8293,7 @@ mod tests {
             reply_timeout: None,
             keep_alive_secs: None,
             brief: None,
+            child_requests: None,
             workspace: None,
         }
     }
@@ -8910,6 +9202,7 @@ mod tests {
             reply_timeout: None,
             keep_alive_secs: None,
             brief: None,
+            child_requests: None,
             workspace: None,
         };
         handle_locked("conn-1", job, &mut st).unwrap();

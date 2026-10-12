@@ -10,6 +10,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "native_permissions155_tests.rs"]
+mod native_permissions155_tests;
+
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn fixture_root(label: &str) -> (PathBuf, SourceEnvironment) {

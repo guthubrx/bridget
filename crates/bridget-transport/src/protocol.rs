@@ -2018,6 +2018,80 @@ pub enum WorkspaceRequest {
     },
 }
 
+/// Identifiant JSON-RPC Codex : le nombre reste distinct de la chaîne.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChildProviderRequestId {
+    String(String),
+    Number(i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChildRequestKind {
+    ApprovalCommand,
+    ApprovalFile,
+    ElicitationForm,
+    UserInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChildRequestDecision {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+/// Le daemon calcule ce verdict ; une demande de l'enfant ne le porte pas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChildRequestVerdict {
+    Parent,
+    Human,
+    Forbidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChildRequestClosedState {
+    ClosedBeforeApply,
+    AlreadyApplied,
+}
+
+/// Détails normalisés, à vérifier et borner par les gardes155, pas des droits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildProviderRequest {
+    pub version: u16,
+    pub provider_session: String,
+    pub turn_id: String,
+    pub provider_request_id: ChildProviderRequestId,
+    pub kind: ChildRequestKind,
+    pub details: serde_json::Value,
+    pub offered: Vec<ChildRequestDecision>,
+    pub question_ids: Vec<String>,
+    pub truncated: bool,
+}
+
+/// Réponse liée au request_id du daemon et au callback exact du fournisseur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildRequestAnswer {
+    pub request_id: String,
+    pub provider_session: String,
+    pub turn_id: String,
+    pub provider_request_id: ChildProviderRequestId,
+    pub decision: ChildRequestDecision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
+    pub answer: Option<serde_json::Value>,
+    pub outcome: String,
+}
+
 /// Aucun champ d'identité parent n'est accepté dans une demande de mission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -2048,6 +2122,23 @@ pub enum NativeDelegationRequest {
             deserialize_with = "deserialize_present_optional"
         )]
         brief: Option<serde_json::Value>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        child_requests: Option<String>,
+    },
+    Respond {
+        task_id: String,
+        request_id: String,
+        decision: ChildRequestDecision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        answer: Option<serde_json::Value>,
     },
     Continue {
         task_id: String,
@@ -2857,6 +2948,19 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    ChildRequest {
+        request: ChildProviderRequest,
+    },
+    ChildRequestAnswered {
+        request_id: String,
+        applied: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ChildRequestClosed {
+        request_id: String,
+        state: ChildRequestClosedState,
+    },
     /// Délégation native : le propriétaire est toujours déduit de la connexion.
     NativeDelegation {
         request: NativeDelegationRequest,
@@ -3798,7 +3902,19 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
-    NativePermissionAcknowledged { observation_id:String, accepted:bool },
+    ChildRequestAnswer {
+        answer: ChildRequestAnswer,
+    },
+    ChildRequestCancel {
+        request_id: String,
+        provider_session: String,
+        turn_id: String,
+        provider_request_id: ChildProviderRequestId,
+    },
+    NativePermissionAcknowledged {
+        observation_id: String,
+        accepted: bool,
+    },
     NativeDelegationResult {
         result: serde_json::Value,
     },
@@ -7933,6 +8049,7 @@ mod spec104_search_contract_tests {
             workspace: None,
             keep_alive_secs: None,
             brief: None,
+            child_requests: None,
         };
         let expected = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
         assert_eq!(serde_json::to_vec(&request).unwrap(), expected.to_vec());
@@ -8095,6 +8212,32 @@ mod spec104_search_contract_tests {
         ).unwrap();
         let value: serde_json::Value = serde_json::from_str(&encode(&report).unwrap()).unwrap();
         assert_eq!(value["features"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn native155_protocol_delegate_sans_option_garde_octets154() {
+        let wire = r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120,"workspace":{"strategy":"shared"},"keep_alive_secs":600,"brief":{"objective":"objectif","summary":"résultat"}}"#.as_bytes();
+        let request: NativeDelegationRequest = serde_json::from_slice(wire).unwrap();
+        assert_eq!(serde_json::to_vec(&request).unwrap(), wire);
+        assert!(
+            serde_json::to_value(request)
+                .unwrap()
+                .get("child_requests")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native155_protocol_respond_refuse_champ_inconnu() {
+        let wire = serde_json::json!({
+            "operation":"respond", "task_id":"task", "request_id":"request",
+            "decision":"accept", "answer":{"q1":["réponse"]}
+        });
+        let request: NativeDelegationRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+        let mut unknown = wire;
+        unknown["parent"] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<NativeDelegationRequest>(unknown).is_err());
     }
 
     #[test]

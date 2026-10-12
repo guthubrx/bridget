@@ -2,7 +2,7 @@
 
 Date : 2026-10-11. Source : lecture du checkout principal
 `/Users/moi/Nextcloud/10.Scripts/64.bridget` (base `1f2c661d`), lecture seule, et du
-code T3 `origin/main` par `git show`. Les acquis 150 sont supposés livrés. Les
+code T3 `origin/main` par `git show`. Ce checkpoint historique supposait150 livrée ; les acquis150–154 sont désormais livrés. Le passageR16 ci-dessous remplace les hypothèses fournisseur. Les
 lignes citées sont celles du checkout principal.
 
 ## R1 - Aujourd'hui, une approbation Codex est tranchée par un réglage
@@ -29,15 +29,14 @@ lignes citées sont celles du checkout principal.
   formulaire sans champ requis ; tout le reste est décliné (`codex_app_server.rs:2317-2353`).
 - **Constat** : `is_approval_request` accepte toute méthode `item/<x>/requestApproval`
   (`codex_app_server.rs:2176-2181`), donc aussi `item/permissions/requestApproval` (faux
-  serveur `:4864`, test `:4194`). En v1 seules `commandExecution` et `fileChange` sont
-  transmises ; les autres reçoivent un refus `approval_method_unsupported`.
+  serveur `:4864`, test `:4194`). Hypothèse historique : commandExecution et fileChange seraient transmises. Le passageR16 refuse entièrement fileChange réelle 0.162.1 en v1 ; commandExecution reste soumise au contrat et aux limites.
 - **Constat** : aucune trace de `requestUserInput` dans le code, les specs ou les
   docs (recherche `grep -rn requestUserInput`). Une telle requête finit dans la
   branche « non prise en charge » (`codex_app_server.rs:3469-3500`).
 - **Décision** : l'élicitation vide de Bridget reste acceptée automatiquement : elle
-  sert à publier des artefacts. Le reste, en mode `forward`, remonte.
-- **Non vérifié** : forme exacte de `item/tool/requestUserInput` et de sa réponse.
-  T002 la lit sur Codex 0.161.0 (`/opt/homebrew/bin/codex`) avant tout code.
+  sert à publier des artefacts. Le passageR16 restreint la remontée aux formes de question classiques établies, sans secret ni _meta non vide.
+- **Hypothèse historique supersédée** : la forme exacte de `item/tool/requestUserInput`
+  et de sa réponse est établie par la lecture0.162.1 du passageR16 ; T002 est désormais final PASS, reçu validation/gate-schema155.json ; protocole/store prouvés par les tests ciblés ; recette utilisateur T040 ouverte.
 
 ## R3 - La politique de l'enfant n'est PAS modifiée (révisé après contre-revue)
 
@@ -134,7 +133,7 @@ lignes citées sont celles du checkout principal.
   contenir une injection. Un simple avertissement « non fiable » ne l'arrête pas
   (objection 8). Parades : (1) le parent ne répond plus aux approbations, donc aucun
   modèle n'approuve une action ; (2) l'humain voit d'abord les faits calculés par
-  Bridget (commande citée, chemins résolus, réseau, durée), puis le texte du modèle
+  Bridget (commande citée, chemins cités et normalisés lexicalement sans résolution filesystem, réseau, durée), puis le texte du modèle
   cité à part, borné et nettoyé des caractères de contrôle et de direction ; (3) la
   demande doit venir du tour de la mission autorisée (`request_unlinked` sinon) ;
   (4) un cas ambigu est refusé ; (5) la décision est un champ structuré, jamais lue
@@ -214,7 +213,7 @@ lignes citées sont celles du checkout principal.
 
 ## R15 - Liste fermée des outils du parent natif (objection 11)
 
-- `BRIDGET_SAFE_MCP_TOOLS` (20 outils, `wrapper.rs:5035-5057`) alimente
+- `BRIDGET_SAFE_MCP_TOOLS` (24 outils existants, `wrapper.rs:5031-5056`) alimente
   `--allowedTools` de Claude (`:5061`) et `approval_mode="approve"` de Codex
   (`:5265-5270`). Sans l'ajout de `bridget_task_respond`, un parent natif ne pourrait
   pas répondre. Tests de liste : `wrapper.rs` autour de `:8116-8172` et
@@ -243,3 +242,83 @@ lignes citées sont celles du checkout principal.
 | Escalade parent puis humain après silence | Deux états de route, accord tardif après reprise de l'enfant |
 | Réponse humaine en texte libre | La boîte ne le porte pas ; hors périmètre |
 | Enfants Claude dans cette session | Rouvre le lancement 149 ; question 3 |
+
+## R16 — Formes primaires0.162.1 lues avant T003
+
+Source : /Users/moi/.cache/bridget-delivery155.um4xccv4/codex-schema155-0.162.1,
+génération --experimental et initialize.experimentalApi=true par root. Ce passage
+a lu Params/Response fileChange, permissions, userInput, elicitation, la notification
+resolved et les branches fileChange des notifications ItemStarted/Completed.
+Le contrat détaillé et les 447 hashes sont consignés par l’owner de codex-requests.md
+et schema155.md ; aucun outil générateur n’a été exécuté par l’owner documentaire.
+
+| Forme | Constat primaire | Conséquence conservative155 |
+|---|---|---|
+| FileChangeRequestApprovalParams | ni paths ni availableDecisions ; grantRoot vise le reste de session avec effet indiqué incertain | refus entier en v1 approval_method_unsupported ; grantRoot non nul duration_unsupported |
+| FileChangeResponse | décision accept/acceptForSession/decline/cancel | aucune offre ni portée d’effet inventée ; pas de route Human réelle v1 |
+| ItemStarted/Completed | item fileChange corrélé threadId/turnId/id ; changes path/diff/kind et move_path possible | faits cités, piste future, aucune preuve de confinement ni cache supplémentaire |
+| PermissionsResponse | permissions, scope turn/session avec défaut turn, strictAutoReview facultatif | méthode refusée par JSON-RPC -32000 child_request_refused, motif approval_method_unsupported ; jamais faux decision:decline |
+| ToolRequestUserInputResponse | answers{questionId:{answers:[string]}} ; aucune alternative decline/cancel | adapter answer interne qid→tableau ; refus/expiration par erreur JSON-RPC fermée |
+| ElicitationParams | form,openai/form,openaiForm,url,openai/userVerification ; _meta JSONarbitraire, pas clé approval/durée établie | TOUT formulaire tiers fermé approval_method_unsupported, sans preuve structurée non-secret/non-approval ; user_input seul Parent ; exception vide Bridget historique distincte |
+| ServerRequestResolvedNotification | threadId/requestId seulement, pas turnId | corréler à la table existante ; aucune donnée fournisseur inventée |
+
+Arbitrage root : fileChange entière refusée ; aucun cache de corrélation nouveau.
+Le classifier pur conserve ses tests synthétiques complets once/DF→Human, sans
+déduire le support du transport réel. commandExecution exige kind=command et
+offre explicite accept/decline/cancel, plus les limites figées de155.
+T001 reçue root 180 PASS/0 FAIL,207sources stables ; T002 est final PASS et cochée par root, reçu validation/gate-schema155.json ; protocole/store prouvés par les tests ciblés ; recette utilisateur T040 ouverte.
+
+## R17 — Delta runtime environmentId local, GREEN ciblé, recette ouverte
+
+Une capture réelle Codex 0.162.1 montre item/commandExecution/requestApproval
+avec kind=command, environmentId="local", startedAtMs et offre explicite
+[accept,cancel], sans amendement. Preuve durable :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/human-approval-runtime155.json.
+SHA256 : fc69404af625cc3ce5cd8830c9caa4cf225fbd2e8fd8efb5c42cb34d98523b96.
+Capture primaire : /private/tmp/b155.2s2_gkz3/human-approval-runtime.json.
+
+Le snapshot antérieur refusait toute valeur environmentId non nulle avec
+approval_method_unsupported. Le correctif accepte seulement le champ
+absent, null ou la chaîne EXACTE "local". Toute autre valeur non nulle,
+notamment un environnement étranger, reste fermée. "local" n’est pas un droit
+ni une permission d’approuver. kind=command, décisions explicitement offertes,
+effets établis et droits figés requis restent contrôlés.
+
+La revue de confiance native transmise par root porte sur le lancement local
+Command::new, ses pipes STDIO, le mode forward non interactif, session/tour et
+identité enfant attestés, avec dangerFullAccess figé requis. Cette frontière
+ne repose pas sur une simple déclaration de l’enfant dans un texte libre.
+Le correctif transport a un GREEN ciblé dans native155-postfix-r1 : 71 PASS
+(63 daemon, 1 E2E, 7 transport), dont les quatre tests transport prévus.
+La capture initiale sans item reste historique ; la recette réelle finale
+ci-dessous constate désormais une demande Human ouverte. T040 attend la
+validation explicite de l’utilisateur ; aucun accord accepté n’est revendiqué.
+
+La suite unique commencée à 01:47:46 UTC est terminée avant ce correctif :
+2259 PASS / 15 FAIL / 72 ignored. Ses 8 échecs historiques et 7 nouveaux
+sont séparés des replays ciblés ultérieurs. Aucune seconde suite complète
+ni aucun GREEN global n’est revendiqué. T038 et 40/41 restent acquis ; T039 est acquise ; seule T040 reste ouverte. Aucun nouveau
+scénario, API/helper, cochage, test ou changement de source par ce rédacteur.
+
+## Recette réelle finale — Human ouverte, validation utilisateur attendue
+
+Le principal constate dans le namespace isolé
+/private/tmp/b155.2s2_gkz3/final-ns une demande Human open.
+Binaire de cette recette :
+fb48b0420c8e305ef4cff9621f67a5fa84c85ac6d78da62deb3e0581d1b3d2ec.
+Tâche : 37356718-0f26-4f4b-b23f-bbc703d5af32.
+Demande : 7f4868101610d6bd45b22cf7836336ab.
+Item humain : eeeccded-e8bb-45e4-9d85-b7a526eaa115.
+Respond du parent est refusé avec parent_cannot_approve. La remontée réelle
+est observée ; aucune décision humaine acceptée ni exécution approuvée
+n’est attestée. T040 attend la validation explicite de l’utilisateur.
+La session reste In Progress, sans livraison ni GREEN global.
+
+Le refus réel workspaceWrite est PASS dans la même recette : tâche
+8512b027-5afc-4596-bfb9-a8aa5b6ecf7d, demande
+7e0ea0ce245919d60b52e93632199e2d, verdict forbidden, outcome
+refused:command_unbounded, décision decline remise (delivered), sans item
+humain ; parent_sandbox=workspaceWrite. Preuve :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/recette155-final-runtime-open.json.
+SHA256 : 8dee7fc2f7776e5ebb45dec7aa14d1917f093fd14500dade240e92e69e535dcd.
+T039 est acquise sur preuve cumulative ; seule T040 reste ouverte.

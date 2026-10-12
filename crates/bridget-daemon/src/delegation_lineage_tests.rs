@@ -41,6 +41,7 @@ fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequ
         cwd: "/tmp".into(),
         posture: None,
         reply_timeout: None,
+        child_requests: None,
         workspace: None,
         keep_alive_secs: None,
         brief: None,
@@ -74,6 +75,7 @@ fn task(
         effective_posture: None,
         definition: definition(),
         cwd: "/tmp".into(),
+        child_requests: None,
         workspace: None,
         child: child.into(),
         workspace_report_mission: None,
@@ -1062,6 +1064,212 @@ fn native150_purge_deux_arbres_du_meme_proprietaire_sont_independants() {
     let mut ids = restantes(&store);
     ids.sort();
     assert_eq!(ids, vec!["actif".to_string(), "actif-enfant".to_string()]);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// FR031 : même transaction pour tâches, demandes et projection. Le trigger
+///150 réutilisé force un échec tardif, après la suppression de la racine.
+#[test]
+fn native155_purge_supprime_les_demandes_de_l_arbre() {
+    let dir = temp_dir("155-purge-arbre");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(
+        &store,
+        "root",
+        "parent",
+        None,
+        "result_available",
+        true,
+        true,
+        false,
+    );
+    poser(
+        &store,
+        "leaf",
+        "parent",
+        Some("root"),
+        "cancelled",
+        false,
+        true,
+        false,
+    );
+    poser(
+        &store,
+        "retained",
+        "autre-parent",
+        None,
+        "working",
+        false,
+        false,
+        false,
+    );
+    let mut requests = Vec::new();
+    for (task_id, state) in [
+        ("root", "answered"),
+        ("leaf", "cancelled"),
+        ("retained", "open"),
+    ] {
+        let request = crate::delegation::ChildRequest {
+            request_id: format!("request-{task_id}"),
+            task_id: task_id.into(),
+            child_instance: format!("inst-agent-{task_id}"),
+            provider_session: "session155".into(),
+            turn_id: format!("turn-{task_id}"),
+            provider_request_id: "42".into(),
+            content_hash: format!("hash-{task_id}"),
+            kind: "user_input".into(),
+            verdict: "parent".into(),
+            state: state.into(),
+            outcome: (state != "open").then(|| state.into()),
+            summary: "Question".into(),
+            facts_json: "{}".into(),
+            model_text: "Choisir".into(),
+            offered_json: "[\"accept\",\"decline\",\"cancel\"]".into(),
+            created_at: 100,
+            deadline_at: 200,
+            decision: (state == "answered").then(|| "accept".into()),
+            answer_json: (state == "answered").then(|| "{\"q1\":[\"bleu\"]}".into()),
+            decided_by: (state != "open").then(|| "parent".into()),
+            decided_at: (state != "open").then_some(110),
+            delivery_state: if state == "answered" {
+                "delivered"
+            } else {
+                "none"
+            }
+            .into(),
+            void_reason: None,
+            sent_at: (state == "answered").then_some(110),
+            delivered_at: (state == "answered").then_some(111),
+            inbox_item_id: None,
+            inbox_settled: state != "open",
+        };
+        assert_eq!(store.insert_child_request(&request).unwrap(), request);
+        requests.push(request);
+    }
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    let _ = store.take_changes();
+    store.test_connection().execute_batch("CREATE TRIGGER refuse_tree BEFORE DELETE ON native_delegations WHEN old.task_id='leaf' BEGIN SELECT RAISE(ABORT,'rollback tree'); END;").unwrap();
+    assert!(
+        store
+            .purge_trees(maintenant() + 8 * JOUR, None, 16, |_| true)
+            .is_err()
+    );
+    assert_eq!(restantes(&store).len(), 3);
+    for request in &requests {
+        assert_eq!(
+            store
+                .get_child_request(&request.request_id)
+                .unwrap()
+                .as_ref(),
+            Some(request)
+        );
+    }
+    assert_eq!(meta(&store).seq, before.seq);
+    assert_eq!(meta(&store).generation, before.generation);
+    assert_eq!(store.wait_epoch().get(), epoch);
+    assert!(store.take_changes().is_empty());
+    store
+        .test_connection()
+        .execute_batch("DROP TRIGGER refuse_tree")
+        .unwrap();
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+    assert_eq!(restantes(&store), vec!["retained"]);
+    assert!(store.get_child_request("request-root").unwrap().is_none());
+    assert!(store.get_child_request("request-leaf").unwrap().is_none());
+    assert_eq!(
+        store
+            .get_child_request("request-retained")
+            .unwrap()
+            .as_ref(),
+        Some(&requests[2])
+    );
+    assert_eq!(store.child_request_counts("root").unwrap(), (0, 0));
+    assert_eq!(store.child_request_counts("leaf").unwrap(), (0, 0));
+    assert_eq!(store.child_request_counts("retained").unwrap(), (1, 1));
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Garde150 : une attente non soldée garde cleanup_done faux. La terminalité
+/// seule ne permet aucune purge ; le nettoyage suit la fermeture confirmée.
+#[test]
+fn native155_purge_demande_ouverte_impossible_sur_arbre_terminal() {
+    let dir = temp_dir("155-purge-ouverte");
+    let store = open_store(&dir.join("store.sqlite"));
+    poser(
+        &store,
+        "root",
+        "parent",
+        None,
+        "cancelled",
+        false,
+        false,
+        false,
+    );
+    let request = crate::delegation::ChildRequest {
+        request_id: "request-open".into(),
+        task_id: "root".into(),
+        child_instance: "inst-agent-root".into(),
+        provider_session: "session155".into(),
+        turn_id: "turn155".into(),
+        provider_request_id: "42".into(),
+        content_hash: "hash155".into(),
+        kind: "user_input".into(),
+        verdict: "parent".into(),
+        state: "open".into(),
+        outcome: None,
+        summary: "Question".into(),
+        facts_json: "{}".into(),
+        model_text: "Choisir".into(),
+        offered_json: "[\"accept\",\"decline\",\"cancel\"]".into(),
+        created_at: 100,
+        deadline_at: 200,
+        decision: None,
+        answer_json: None,
+        decided_by: None,
+        decided_at: None,
+        delivery_state: "none".into(),
+        void_reason: None,
+        sent_at: None,
+        delivered_at: None,
+        inbox_item_id: None,
+        inbox_settled: false,
+    };
+    store.insert_child_request(&request).unwrap();
+    let before = meta(&store);
+    let epoch = store.wait_epoch().get();
+    assert_eq!(purger(&store, maintenant() + 30 * JOUR, true), 0);
+    assert!(store.get("root").unwrap().unwrap().terminal());
+    assert!(!store.get("root").unwrap().unwrap().cleanup_done);
+    assert_eq!(
+        store
+            .get_child_request(&request.request_id)
+            .unwrap()
+            .as_ref(),
+        Some(&request)
+    );
+    assert_eq!(meta(&store).generation, before.generation);
+    assert_eq!(meta(&store).seq, before.seq);
+    assert_eq!(store.wait_epoch().get(), epoch);
+    // La fixture représente ici la confirmation d'arrêt/fermeture reçue.
+    assert!(
+        store
+            .close_child_request(&request.request_id, "cancelled", "cancelled", 110)
+            .unwrap()
+    );
+    let mut task = store.get("root").unwrap().unwrap();
+    task.cleanup_done = true;
+    store.save(&task).unwrap();
+    assert_eq!(purger(&store, maintenant() + 8 * JOUR, false), 1);
+    assert!(store.get("root").unwrap().is_none());
+    assert!(
+        store
+            .get_child_request(&request.request_id)
+            .unwrap()
+            .is_none()
+    );
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }

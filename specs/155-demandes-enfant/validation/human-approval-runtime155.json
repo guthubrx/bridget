@@ -1,0 +1,25 @@
+{
+  "method": "item/commandExecution/requestApproval",
+  "id": 0,
+  "params": {
+    "kind": "command",
+    "threadId": "01a12dcc-dadd-7bd1-aba2-59635f86860d",
+    "turnId": "01a12dcc-db52-7153-8d38-ea9b591c7072",
+    "itemId": "exec-2230085a-c430-4743-8aaa-b62dd565e633",
+    "startedAtMs": 1791769768009,
+    "environmentId": "local",
+    "reason": "`/opt/homebrew/bin/zsh -lc 'printf RECETTE155_HUMAN'` requires approval by policy",
+    "command": "/opt/homebrew/bin/zsh -lc 'printf RECETTE155_HUMAN'",
+    "cwd": "/private/tmp/b155.2s2_gkz3/project",
+    "commandActions": [
+      {
+        "type": "unknown",
+        "command": "printf RECETTE155_HUMAN"
+      }
+    ],
+    "availableDecisions": [
+      "accept",
+      "cancel"
+    ]
+  }
+}

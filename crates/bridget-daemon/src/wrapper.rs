@@ -396,6 +396,7 @@ fn managed_resume_context(
 /// Instruction interne du Start natif, liée à l'instance neuve et à sa mission.
 /// Elle ne donne aucun droit et ne change aucune identité.
 pub(crate) const NATIVE_MISSION_BOOTSTRAP_ENV: &str = "BRIDGET_NATIVE_MISSION_BOOTSTRAP";
+pub(crate) const NATIVE_CHILD_REQUESTS_ENV: &str = "BRIDGET_NATIVE_CHILD_REQUESTS";
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3778,6 +3779,8 @@ fn spawn_managed_session_transport(
                 }) as bridget_transport::codex_app_server::DynamicToolHandler
             });
             let options = CodexAppServerOptions {
+                child_requests: std::env::var(NATIVE_CHILD_REQUESTS_ENV).as_deref()
+                    == Ok("forward"),
                 command: definition.command.clone(),
                 args: native_args.to_vec(),
                 queue_capacity: definition.queue_capacity,
@@ -4068,6 +4071,7 @@ fn launch_session_with_status(
         );
         let native = bridget_transport::CodexAppServerTransport::spawn_interactive_selecting(
             bridget_transport::CodexAppServerOptions {
+                child_requests: false,
                 command: definition.command.clone(),
                 args: native_args.clone(),
                 queue_capacity: definition.queue_capacity,
@@ -4163,6 +4167,9 @@ fn launch_session_with_status(
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
     let mut execution_bindings = HashMap::new();
+    let child_requests = Mutex::new(ManagedChildRequests::default());
+    let forward_child_requests =
+        std::env::var(NATIVE_CHILD_REQUESTS_ENV).as_deref() == Ok("forward");
     std::fs::write(&name_state_path, &my_name)?;
     let marker_directory = state_root.join("agent-pids");
     let adapter_pid = transport.process_id();
@@ -4313,6 +4320,7 @@ fn launch_session_with_status(
             &mut redaction_lease,
             Some(&profile_ledger_path(socket)),
             interactive.is_none(),
+            Some(&child_requests),
         );
         if journal_failed {
             break;
@@ -4324,7 +4332,7 @@ fn launch_session_with_status(
         }
         match read_result {
             Ok(0) => {
-                if native_bootstrap.is_some() {
+                if native_bootstrap.is_some() && !forward_child_requests {
                     break;
                 }
                 relay.reset_generation();
@@ -4342,6 +4350,7 @@ fn launch_session_with_status(
                     &instance_id,
                     &my_name,
                     interactive.is_some(),
+                    native_termination.as_ref(),
                 ) else {
                     break;
                 };
@@ -4349,6 +4358,25 @@ fn launch_session_with_status(
                 my_name = registered_name;
                 last_permission_fact=None;
                 last_heartbeat = Instant::now();
+                if native_termination
+                    .as_ref()
+                    .is_some_and(NativeTerminationSignal::requested)
+                {
+                    break;
+                }
+                if forward_child_requests {
+                    let pending: Vec<_> = child_requests
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .waiting
+                        .iter()
+                        .filter(|entry| !entry.uncertain)
+                        .map(|entry| entry.request.clone())
+                        .collect();
+                    for request in pending {
+                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });
+                    }
+                }
                 continue;
             }
             Ok(_) => match decode(line.trim()) {
@@ -4490,6 +4518,18 @@ fn launch_session_with_status(
                         command,
                     );
                 }
+                Ok(message @ DaemonToWrapper::ChildRequestAnswer { .. })
+                | Ok(message @ DaemonToWrapper::ChildRequestCancel { .. }) => {
+                    if dispatch_managed_child_request(
+                        &writer,
+                        transport.as_mut(),
+                        &mut execution_bindings,
+                        &child_requests,
+                        message,
+                    ) {
+                        break;
+                    }
+                }
                 Ok(DaemonToWrapper::SelectRuntime { token, selection }) => {
                     let outcome = transport.select_runtime(selection);
                     send_wrapper_message(
@@ -4536,7 +4576,7 @@ fn launch_session_with_status(
             }
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
-                if native_bootstrap.is_some() {
+                if native_bootstrap.is_some() && !forward_child_requests {
                     break;
                 }
                 relay.reset_generation();
@@ -4554,6 +4594,7 @@ fn launch_session_with_status(
                     &instance_id,
                     &my_name,
                     interactive.is_some(),
+                    native_termination.as_ref(),
                 ) else {
                     break;
                 };
@@ -4561,6 +4602,25 @@ fn launch_session_with_status(
                 my_name = registered_name;
                 last_permission_fact=None;
                 last_heartbeat = Instant::now();
+                if native_termination
+                    .as_ref()
+                    .is_some_and(NativeTerminationSignal::requested)
+                {
+                    break;
+                }
+                if forward_child_requests {
+                    let pending: Vec<_> = child_requests
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .waiting
+                        .iter()
+                        .filter(|entry| !entry.uncertain)
+                        .map(|entry| entry.request.clone())
+                        .collect();
+                    for request in pending {
+                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });
+                    }
+                }
                 continue;
             }
         }
@@ -4575,6 +4635,7 @@ fn launch_session_with_status(
                 &mut redaction_lease,
                 Some(&profile_ledger_path(socket)),
                 interactive.is_none(),
+                Some(&child_requests),
             );
             if terminal_journal_failed {
                 break;
@@ -4749,6 +4810,7 @@ fn launch_session_with_status(
         &mut redaction_lease,
         Some(&profile_ledger_path(socket)),
         interactive.is_none(),
+        Some(&child_requests),
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
@@ -5028,7 +5090,7 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 24] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 25] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
@@ -5053,6 +5115,7 @@ const BRIDGET_SAFE_MCP_TOOLS: [&str; 24] = [
     "bridget_request_wait",
     "bridget_task_ack",
     "bridget_task_continue",
+    "bridget_task_respond",
 ];
 
 fn append_claude_allowed_tools(args: &mut Vec<String>) {
@@ -5344,20 +5407,24 @@ fn reconnect_managed_session(
     instance_id: &str,
     fallback_name: &str,
     terminal_session: bool,
+    termination: Option<&NativeTerminationSignal>,
 ) -> Option<(BufReader<UnixStream>, String)> {
     let mut attempts = 0_u32;
-    while transport.is_alive() {
+    while transport.is_alive() && !termination.is_some_and(NativeTerminationSignal::requested) {
         // Une TUI peut se fermer pendant une panne prolongée du daemon.
         // Le backoff réseau ne doit pas retenir son terminal jusqu'à 36 s.
         let retry_at = Instant::now() + reconnect_delay(attempts);
-        while Instant::now() < retry_at && transport.is_alive() {
+        while Instant::now() < retry_at
+            && transport.is_alive()
+            && !termination.is_some_and(NativeTerminationSignal::requested)
+        {
             thread::sleep(
                 retry_at
                     .saturating_duration_since(Instant::now())
                     .min(Duration::from_millis(50)),
             );
         }
-        if !transport.is_alive() {
+        if !transport.is_alive() || termination.is_some_and(NativeTerminationSignal::requested) {
             return None;
         }
         attempts = attempts.saturating_add(1);
@@ -5377,6 +5444,11 @@ fn reconnect_managed_session(
             busy,
         ) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
+                if termination.is_some_and(NativeTerminationSignal::requested)
+                    || !transport.is_alive()
+                {
+                    return None;
+                }
                 *writer.lock().unwrap_or_else(|error| error.into_inner()) = Some(new_writer);
                 // Register réinitialise l'attestation au niveau du daemon : le
                 // même journal local reste actif, il doit donc être annoncé de
@@ -5414,6 +5486,203 @@ fn reconnect_managed_session(
         }
     }
     None
+}
+
+#[derive(Default)]
+struct ManagedChildRequests {
+    waiting: Vec<ManagedChildWaiting>,
+    settled: std::collections::VecDeque<ManagedChildSettled>,
+}
+
+struct ManagedChildWaiting {
+    request: bridget_transport::protocol::ChildProviderRequest,
+    request_id: Option<String>,
+    message_id: Option<String>,
+    uncertain: bool,
+}
+
+struct ManagedChildSettled {
+    request: bridget_transport::protocol::ChildProviderRequest,
+    request_id: Option<String>,
+    state: bridget_transport::protocol::ChildRequestClosedState,
+    answer: Option<bridget_transport::protocol::ChildRequestAnswer>,
+}
+
+impl ManagedChildRequests {
+    /// O(1), anneau limité à64 ; les attentes sont limitées à4.
+    fn remember(&mut self, settled: ManagedChildSettled) {
+        if self.settled.len() == 64 {
+            self.settled.pop_front();
+        }
+        self.settled.push_back(settled);
+    }
+}
+
+/// O(4+64+B), B réponse bornée. Le verrou métier couvre la validation,
+/// l'écriture fournisseur et le règlement ; le writer IPC est pris après.
+/// true demande l'arrêt : une écriture incertaine n'est jamais rejouée.
+fn dispatch_managed_child_request(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &mut dyn ManagedSession,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    requests: &Mutex<ManagedChildRequests>,
+    message: DaemonToWrapper,
+) -> bool {
+    use bridget_transport::protocol::{
+        ChildRequestAnswer, ChildRequestClosedState, ChildRequestDecision,
+    };
+    let (answer, cancel) = match message {
+        DaemonToWrapper::ChildRequestAnswer { answer } => (answer, false),
+        DaemonToWrapper::ChildRequestCancel {
+            request_id,
+            provider_session,
+            turn_id,
+            provider_request_id,
+        } => (
+            ChildRequestAnswer {
+                request_id,
+                provider_session,
+                turn_id,
+                provider_request_id,
+                decision: ChildRequestDecision::Decline,
+                answer: None,
+                outcome: "cancelled".into(),
+            },
+            true,
+        ),
+        _ => return false,
+    };
+    let matches_request = |request: &bridget_transport::protocol::ChildProviderRequest| {
+        request.provider_session == answer.provider_session
+            && request.turn_id == answer.turn_id
+            && request.provider_request_id == answer.provider_request_id
+    };
+    let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(index) = requests.settled.iter().position(|entry| {
+        matches_request(&entry.request)
+            && entry
+                .request_id
+                .as_deref()
+                .is_none_or(|id| id == answer.request_id)
+    }) {
+        let entry = &mut requests.settled[index];
+        entry.request_id = Some(answer.request_id.clone());
+        let receipt = if cancel {
+            WrapperToDaemon::ChildRequestClosed {
+                request_id: answer.request_id,
+                state: entry.state,
+            }
+        } else {
+            let applied = entry.state == ChildRequestClosedState::AlreadyApplied
+                && entry.answer.as_ref() == Some(&answer);
+            WrapperToDaemon::ChildRequestAnswered {
+                request_id: answer.request_id,
+                applied,
+                reason: if applied {
+                    None
+                } else {
+                    Some("request_closed".into())
+                },
+            }
+        };
+        drop(requests);
+        send_wrapper_message(writer, receipt);
+        return false;
+    }
+    let index = requests.waiting.iter().position(|entry| {
+        matches_request(&entry.request)
+            && entry
+                .request_id
+                .as_deref()
+                .is_none_or(|id| id == answer.request_id)
+    });
+    let Some(index) = index else {
+        drop(requests);
+        if !cancel {
+            send_wrapper_message(
+                writer,
+                WrapperToDaemon::ChildRequestAnswered {
+                    request_id: answer.request_id,
+                    applied: false,
+                    reason: Some("request_unknown".into()),
+                },
+            );
+        }
+        return false; // Une fermeture inconnue n'est jamais confirmée.
+    };
+    if requests.waiting[index].uncertain {
+        return true;
+    }
+    requests.waiting[index].request_id = Some(answer.request_id.clone());
+    match transport.answer_provider_request(&answer) {
+        Ok(()) => {
+            let entry = requests.waiting.remove(index);
+            let resume = entry.message_id.filter(|message_id| {
+                !requests
+                    .waiting
+                    .iter()
+                    .any(|pending| pending.message_id.as_ref() == Some(message_id))
+            });
+            let state = if cancel {
+                ChildRequestClosedState::ClosedBeforeApply
+            } else {
+                ChildRequestClosedState::AlreadyApplied
+            };
+            requests.remember(ManagedChildSettled {
+                request: entry.request,
+                request_id: Some(answer.request_id.clone()),
+                state,
+                answer: if cancel { None } else { Some(answer.clone()) },
+            });
+            drop(requests);
+            send_wrapper_message(
+                writer,
+                if cancel {
+                    WrapperToDaemon::ChildRequestClosed {
+                        request_id: answer.request_id,
+                        state,
+                    }
+                } else {
+                    WrapperToDaemon::ChildRequestAnswered {
+                        request_id: answer.request_id,
+                        applied: true,
+                        reason: None,
+                    }
+                },
+            );
+            if let Some(message_id) = resume {
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "running",
+                    "child_request_settled",
+                );
+            }
+            false
+        }
+        Err(bridget_transport::TransportError::Io(detail))
+            if detail.starts_with("child_request_write_uncertain:") =>
+        {
+            requests.waiting[index].uncertain = true;
+            warn!("réponse fournisseur incertaine : arrêt de la session sans accusé");
+            true
+        }
+        Err(error) => {
+            drop(requests);
+            if !cancel {
+                send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::ChildRequestAnswered {
+                        request_id: answer.request_id,
+                        applied: false,
+                        reason: Some(error.to_string()),
+                    },
+                );
+            }
+            false
+        }
+    }
 }
 
 /// Corrélation locale entre une remise admise par Bridget et les événements du
@@ -6057,6 +6326,7 @@ fn forward_managed_events(
         &mut None,
         None,
         true,
+        None,
     )
 }
 
@@ -6081,6 +6351,7 @@ fn forward_managed_events_with_redaction(
     redaction: &mut Option<OutputRedactionLease>,
     profile_db_path: Option<&Path>,
     automatic_reply: bool,
+    child_requests: Option<&Mutex<ManagedChildRequests>>,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -6133,6 +6404,30 @@ fn forward_managed_events_with_redaction(
                         redact_managed_text(redaction, "provider_error", std::mem::take(detail));
                 }
                 let message_id = message.id.clone();
+                if let Some(requests) = child_requests {
+                    let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut closed = Vec::new();
+                    let mut index = 0;
+                    while index < requests.waiting.len() {
+                        let entry = &requests.waiting[index];
+                        if entry.message_id.as_ref().is_none_or(|id| id == &message_id)
+                            && !entry.uncertain
+                        {
+                            let entry = requests.waiting.remove(index);
+                            if let Some(id) = &entry.request_id {
+                                closed.push(id.clone());
+                            }
+                            requests.remember(ManagedChildSettled { request:entry.request,request_id:entry.request_id,
+                                state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply,answer:None });
+                        } else {
+                            index += 1;
+                        }
+                    }
+                    drop(requests);
+                    for request_id in closed {
+                        send_wrapper_message(writer,WrapperToDaemon::ChildRequestClosed {request_id,state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply});
+                    }
+                }
                 if !bindings.is_empty() && !bindings.contains_key(&message_id) {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
@@ -6423,8 +6718,120 @@ fn forward_managed_events_with_redaction(
                 });
                 publish_provider_context(writer, bindings, &identity)
             }
+            ManagedEventKind::ProviderRequest { request } => {
+                if let Some(requests) = child_requests {
+                    let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+                    let duplicate = requests.waiting.iter().any(|entry| {
+                        entry.request.provider_session == request.provider_session
+                            && entry.request.turn_id == request.turn_id
+                            && entry.request.provider_request_id == request.provider_request_id
+                    });
+                    if !duplicate {
+                        if requests.waiting.len() == 4 {
+                            journal_failed = true;
+                            continue;
+                        }
+                        let mut active = bindings.iter().filter(|(_, binding)| {
+                            matches!(
+                                binding.state.as_str(),
+                                "running" | "waiting_approval" | "waiting_user_input"
+                            )
+                        });
+                        let first = active.next().map(|(id, _)| id.clone());
+                        let message_id = if active.next().is_none() { first } else { None };
+                        requests.waiting.push(ManagedChildWaiting {
+                            request: request.clone(),
+                            request_id: None,
+                            message_id: message_id.clone(),
+                            uncertain: false,
+                        });
+                        drop(requests);
+                        if let Some(message_id) = message_id {
+                            let state = if matches!(request.kind,bridget_transport::protocol::ChildRequestKind::UserInput|bridget_transport::protocol::ChildRequestKind::ElicitationForm) {"waiting_user_input"} else {"waiting_approval"};
+                            publish_execution_transition(
+                                writer,
+                                bindings,
+                                &message_id,
+                                state,
+                                "child_request_pending",
+                            );
+                        }
+                    } else {
+                        drop(requests);
+                    }
+                    send_wrapper_message(writer, WrapperToDaemon::ChildRequest { request });
+                }
+            }
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
             ManagedEventKind::Diagnostic { code, reference } => {
+                if matches!(
+                    code.as_str(),
+                    "child_request_closed" | "child_request_outcome_unknown"
+                ) {
+                    if let Some(requests) = child_requests {
+                        let value = serde_json::from_slice::<serde_json::Value>(&raw).ok();
+                        let correlation = value
+                            .as_ref()
+                            .filter(|value| {
+                                value["method"] == "serverRequest/resolved"
+                                    && value["params"].as_object().is_some_and(|params| {
+                                        params.len() == 2
+                                            && params.contains_key("threadId")
+                                            && params.contains_key("requestId")
+                                    })
+                            })
+                            .and_then(|value| value.get("correlation"));
+                        if let Some(correlation) = correlation {
+                            let provider_id = serde_json::from_value::<
+                                bridget_transport::protocol::ChildProviderRequestId,
+                            >(
+                                correlation["provider_request_id"].clone()
+                            )
+                            .ok();
+                            let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
+                            let index = requests.waiting.iter().position(|entry| {
+                                Some(entry.request.provider_session.as_str())
+                                    == correlation["provider_session"].as_str()
+                                    && Some(entry.request.turn_id.as_str())
+                                        == correlation["turn_id"].as_str()
+                                    && Some(&entry.request.provider_request_id)
+                                        == provider_id.as_ref()
+                            });
+                            if let Some(index) = index {
+                                if requests.waiting[index].uncertain
+                                    || code == "child_request_outcome_unknown"
+                                {
+                                    requests.waiting[index].uncertain = true;
+                                    journal_failed = true;
+                                } else {
+                                    let entry = requests.waiting.remove(index);
+                                    let request_id = entry.request_id.clone();
+                                    let resume = entry.message_id.filter(|id| {
+                                        !requests
+                                            .waiting
+                                            .iter()
+                                            .any(|pending| pending.message_id.as_ref() == Some(id))
+                                    });
+                                    requests.remember(ManagedChildSettled { request:entry.request,request_id:request_id.clone(),state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply,answer:None });
+                                    drop(requests);
+                                    if let Some(request_id) = request_id {
+                                        send_wrapper_message(writer,WrapperToDaemon::ChildRequestClosed { request_id,state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply });
+                                    }
+                                    if let Some(message_id) = resume {
+                                        publish_execution_transition(
+                                            writer,
+                                            bindings,
+                                            &message_id,
+                                            "running",
+                                            "child_request_settled",
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let code = redact_managed_text(redaction, "provider_diagnostic_code", code);
                 let reference =
                     redact_managed_text(redaction, "provider_diagnostic_reference", reference);
@@ -7148,6 +7555,7 @@ mod delegated_runtime_tests {
                             &mut None,
                             None,
                             automatic,
+                            None,
                         );
                         drop(writer);
                         let frames: Vec<WrapperToDaemon> = BufReader::new(peer)
@@ -7494,6 +7902,7 @@ mod reconnect_tests {
             &mut redaction,
             None,
             true,
+            None,
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -8290,7 +8699,8 @@ mod reconnect_tests {
                 "bridget_task_wait={approval_mode=\"approve\"},",
                 "bridget_request_wait={approval_mode=\"approve\"},",
                 "bridget_task_ack={approval_mode=\"approve\"},",
-                "bridget_task_continue={approval_mode=\"approve\"}}}"
+                "bridget_task_continue={approval_mode=\"approve\"},",
+                "bridget_task_respond={approval_mode=\"approve\"}}}"
             )
         );
     }
@@ -8352,6 +8762,7 @@ mod reconnect_tests {
             "bridget_request_wait",
             "bridget_task_ack",
             "bridget_task_continue",
+            "bridget_task_respond",
         ] {
             assert!(
                 policy.contains(&format!("{name}={{approval_mode=\"approve\"}}")),
@@ -8368,7 +8779,7 @@ mod reconnect_tests {
         append_claude_allowed_tools(&mut args);
         assert_eq!(args[0], "--allowedTools");
         let permitted: Vec<_> = args[1].split(',').collect();
-        assert_eq!(permitted.len(), 24);
+        assert_eq!(permitted.len(), 25);
         for tool in [
             "bridget_capabilities",
             "bridget_delegate",
@@ -8378,6 +8789,7 @@ mod reconnect_tests {
             "bridget_request_wait",
             "bridget_task_ack",
             "bridget_task_continue",
+            "bridget_task_respond",
         ] {
             assert!(permitted.contains(&format!("mcp__bridget__{tool}").as_str()));
         }
@@ -10663,5 +11075,418 @@ mod reconnect_tests {
             bindings["message-079"].execution_id, "execution-079",
             "un rejeu ne remplace jamais la première corrélation admise"
         );
+    }
+}
+
+#[cfg(test)]
+mod native_child_requests155_tests {
+    use super::*;
+    use bridget_transport::protocol::{
+        ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestClosedState,
+        ChildRequestDecision, ChildRequestKind,
+    };
+    use bridget_transport::{Transport, TransportError};
+    use serde_json::json;
+
+    #[derive(Clone, Default)]
+    struct Session155 {
+        writes: Arc<Mutex<Vec<ChildRequestAnswer>>>,
+        entered: Option<std::sync::mpsc::SyncSender<()>>,
+        release: Option<Arc<std::sync::Barrier>>,
+    }
+    impl Transport for Session155 {
+        fn deliver(&mut self, _: &bridget_core::BridgetMessage) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn is_alive(&self) -> bool {
+            true
+        }
+        fn connection_id(&self) -> &str {
+            "wrapper155"
+        }
+    }
+    impl ManagedSession for Session155 {
+        fn answer_provider_request(
+            &mut self,
+            answer: &ChildRequestAnswer,
+        ) -> Result<(), TransportError> {
+            self.writes.lock().unwrap().push(answer.clone());
+            if let Some(entered) = &self.entered {
+                entered.send(()).unwrap();
+            }
+            if let Some(release) = &self.release {
+                release.wait();
+            }
+            Ok(())
+        }
+        fn descriptor(&self) -> ManagedSessionDescriptor {
+            ManagedSessionDescriptor {
+                transport: "codex_app_server".into(),
+                mode: bridget_transport::protocol::PresenceMode::Acp,
+                location: None,
+            }
+        }
+        fn process_id(&self) -> u32 {
+            0
+        }
+        fn activate_journal(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<JournalLiveFeed>,
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn drain_events(&self) -> Vec<ManagedEvent> {
+            Vec::new()
+        }
+        fn cancel_delivery(&self, _: &str, _: &str) -> bool {
+            false
+        }
+        fn stop(&self) {}
+        fn is_busy(&self) -> bool {
+            true
+        }
+    }
+
+    fn request155() -> ChildProviderRequest {
+        ChildProviderRequest {
+            version: 1,
+            provider_session: "session155".into(),
+            turn_id: "turn155".into(),
+            provider_request_id: ChildProviderRequestId::Number(155),
+            kind: ChildRequestKind::UserInput,
+            details: json!({"questions":[{"id":"q","question":"Choisir","isSecret":false}]}),
+            offered: vec![
+                ChildRequestDecision::Accept,
+                ChildRequestDecision::Decline,
+                ChildRequestDecision::Cancel,
+            ],
+            question_ids: vec!["q".into()],
+            truncated: false,
+        }
+    }
+    fn answer155() -> ChildRequestAnswer {
+        let request = request155();
+        ChildRequestAnswer {
+            request_id: "request155".into(),
+            provider_session: request.provider_session,
+            turn_id: request.turn_id,
+            provider_request_id: request.provider_request_id,
+            decision: ChildRequestDecision::Accept,
+            answer: Some(json!({"q":["oui"]})),
+            outcome: "answered_by_parent".into(),
+        }
+    }
+    fn cancel155() -> DaemonToWrapper {
+        let request = request155();
+        DaemonToWrapper::ChildRequestCancel {
+            request_id: "request155".into(),
+            provider_session: request.provider_session,
+            turn_id: request.turn_id,
+            provider_request_id: request.provider_request_id,
+        }
+    }
+    fn fixture155() -> (
+        Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+        BufReader<UnixStream>,
+        Arc<Mutex<ManagedChildRequests>>,
+        Session155,
+        HashMap<String, ManagedExecutionBinding>,
+    ) {
+        let (stream, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        let requests = Arc::new(Mutex::new(ManagedChildRequests {
+            waiting: vec![ManagedChildWaiting {
+                request: request155(),
+                request_id: Some("request155".into()),
+                message_id: Some("message155".into()),
+                uncertain: false,
+            }],
+            settled: Default::default(),
+        }));
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message155".into(),
+            ManagedExecutionBinding {
+                execution_id: "execution155".into(),
+                provider_kind: "codex".into(),
+                execution_path: "codex_app_server".into(),
+                generation: 1,
+                revision: 1,
+                state: "waiting_user_input".into(),
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        );
+        (
+            writer,
+            BufReader::new(peer),
+            requests,
+            Session155::default(),
+            bindings,
+        )
+    }
+    fn frames155(reader: &mut BufReader<UnixStream>) -> Vec<WrapperToDaemon> {
+        let mut frames = Vec::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => frames.push(decode(line.trim()).unwrap()),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("lecture fixture155 : {error}"),
+            }
+        }
+        frames
+    }
+
+    #[test]
+    fn native155_wrapper_demande_puis_reprise() {
+        let (writer, mut reader, requests, mut session, mut bindings) = fixture155();
+        requests.lock().unwrap().waiting.clear();
+        bindings.get_mut("message155").unwrap().state = "running".into();
+        let root =
+            std::env::temp_dir().join(format!("bridget-wrapper155-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "instance155").unwrap();
+        forward_managed_events_with_redaction(
+            &writer,
+            "child155",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                vec![],
+                ManagedEventKind::ProviderRequest {
+                    request: request155(),
+                },
+            )],
+            &mut tracker,
+            &mut bindings,
+            &mut None,
+            None,
+            true,
+            Some(&requests),
+        );
+        let frames = frames155(&mut reader);
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(frames.iter().any(|frame| matches!(frame,WrapperToDaemon::ChildRequest { request } if request == &request155())),"la demande doit remonter : {frames:?}");
+        assert_eq!(bindings["message155"].state, "waiting_user_input");
+        assert_eq!(bindings["message155"].approval_requests, 0);
+        assert!(!dispatch_managed_child_request(
+            &writer,
+            &mut session,
+            &mut bindings,
+            &requests,
+            DaemonToWrapper::ChildRequestAnswer {
+                answer: answer155()
+            }
+        ));
+        assert_eq!(session.writes.lock().unwrap().as_slice(), &[answer155()]);
+        assert_eq!(bindings["message155"].state, "running");
+        assert!(frames155(&mut reader).iter().any(|frame| matches!(frame,WrapperToDaemon::ChildRequestAnswered { request_id,applied:true,.. } if request_id=="request155")));
+    }
+
+    #[test]
+    fn native155_wrapper_reponse_ancien_tour_refusee() {
+        let (writer, mut reader, requests, mut session, mut bindings) = fixture155();
+        for mismatch in ["turn", "session", "provider_id", "request_id"] {
+            let mut answer = answer155();
+            match mismatch {
+                "turn" => answer.turn_id = "old-turn".into(),
+                "session" => answer.provider_session = "old-session".into(),
+                "provider_id" => {
+                    answer.provider_request_id = ChildProviderRequestId::String("155".into())
+                }
+                _ => answer.request_id = "old-request".into(),
+            }
+            dispatch_managed_child_request(
+                &writer,
+                &mut session,
+                &mut bindings,
+                &requests,
+                DaemonToWrapper::ChildRequestAnswer { answer },
+            );
+            assert!(
+                frames155(&mut reader).iter().any(|frame| matches!(
+                    frame,
+                    WrapperToDaemon::ChildRequestAnswered { applied: false, .. }
+                )),
+                "{mismatch} doit être refusé"
+            );
+        }
+        assert!(session.writes.lock().unwrap().is_empty());
+        assert_eq!(bindings["message155"].state, "waiting_user_input");
+    }
+
+    #[test]
+    fn native155_wrapper_fermeture_puis_reponse_jamais_ecrite() {
+        let (writer, mut reader, requests, mut session, mut bindings) = fixture155();
+        dispatch_managed_child_request(
+            &writer,
+            &mut session,
+            &mut bindings,
+            &requests,
+            cancel155(),
+        );
+        let closed = frames155(&mut reader);
+        assert!(closed.iter().any(|frame| matches!(frame,WrapperToDaemon::ChildRequestClosed { request_id,state:ChildRequestClosedState::ClosedBeforeApply } if request_id=="request155")),"fermeture après refus fournisseur : {closed:?}");
+        let writes = session.writes.lock().unwrap().clone();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].decision, ChildRequestDecision::Decline);
+        assert_eq!(writes[0].answer, None);
+        dispatch_managed_child_request(
+            &writer,
+            &mut session,
+            &mut bindings,
+            &requests,
+            DaemonToWrapper::ChildRequestAnswer {
+                answer: answer155(),
+            },
+        );
+        assert_eq!(
+            *session.writes.lock().unwrap(),
+            writes,
+            "aucun accept après fermeture"
+        );
+        assert!(frames155(&mut reader).iter().any(|frame| matches!(
+            frame,
+            WrapperToDaemon::ChildRequestAnswered { applied: false, .. }
+        )));
+    }
+
+    #[test]
+    fn native155_wrapper_reponse_puis_fermeture_already_applied() {
+        let (writer, mut reader, requests, mut session, bindings) = fixture155();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let release = Arc::new(std::sync::Barrier::new(2));
+        session.entered = Some(entered_tx);
+        session.release = Some(release.clone());
+        let writes = session.writes.clone();
+        let writer_answer = writer.clone();
+        let requests_answer = requests.clone();
+        let mut answer_bindings = bindings.clone();
+        let answer_worker = thread::spawn(move || {
+            dispatch_managed_child_request(
+                &writer_answer,
+                &mut session,
+                &mut answer_bindings,
+                &requests_answer,
+                DaemonToWrapper::ChildRequestAnswer {
+                    answer: answer155(),
+                },
+            )
+        });
+        if entered_rx.recv_timeout(Duration::from_secs(1)).is_err() {
+            answer_worker.join().unwrap();
+            panic!("la réponse doit atteindre la session fournisseur avant la fermeture");
+        }
+        assert!(
+            requests.try_lock().is_err(),
+            "le même verrou doit couvrir l'écriture fournisseur"
+        );
+        let writer_cancel = writer.clone();
+        let requests_cancel = requests.clone();
+        let mut cancel_bindings = bindings;
+        let mut cancel_session = Session155 {
+            writes: writes.clone(),
+            ..Default::default()
+        };
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let cancel_worker = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            dispatch_managed_child_request(
+                &writer_cancel,
+                &mut cancel_session,
+                &mut cancel_bindings,
+                &requests_cancel,
+                cancel155(),
+            )
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        release.wait();
+        answer_worker.join().unwrap();
+        cancel_worker.join().unwrap();
+        assert_eq!(writes.lock().unwrap().as_slice(), &[answer155()]);
+        let frames = frames155(&mut reader);
+        assert!(frames.iter().any(|frame| matches!(
+            frame,
+            WrapperToDaemon::ChildRequestAnswered { applied: true, .. }
+        )));
+        assert!(
+            frames.iter().any(|frame| matches!(
+                frame,
+                WrapperToDaemon::ChildRequestClosed {
+                    state: ChildRequestClosedState::AlreadyApplied,
+                    ..
+                }
+            )),
+            "{frames:?}"
+        );
+    }
+
+    #[test]
+    fn native155_wrapper_renvoi_apres_reglement() {
+        for answered in [false, true] {
+            let (writer, mut reader, requests, mut session, mut bindings) = fixture155();
+            let first = if answered {
+                DaemonToWrapper::ChildRequestAnswer {
+                    answer: answer155(),
+                }
+            } else {
+                cancel155()
+            };
+            dispatch_managed_child_request(&writer, &mut session, &mut bindings, &requests, first);
+            let original: Vec<_> = frames155(&mut reader)
+                .into_iter()
+                .filter(|frame| {
+                    matches!(
+                        frame,
+                        WrapperToDaemon::ChildRequestAnswered { .. }
+                            | WrapperToDaemon::ChildRequestClosed { .. }
+                    )
+                })
+                .collect();
+            assert!(!original.is_empty(), "un règlement doit être accusé");
+            let writes = session.writes.lock().unwrap().clone();
+            let replay = if answered {
+                DaemonToWrapper::ChildRequestAnswer {
+                    answer: answer155(),
+                }
+            } else {
+                cancel155()
+            };
+            dispatch_managed_child_request(&writer, &mut session, &mut bindings, &requests, replay);
+            let replay: Vec<_> = frames155(&mut reader)
+                .into_iter()
+                .filter(|frame| {
+                    matches!(
+                        frame,
+                        WrapperToDaemon::ChildRequestAnswered { .. }
+                            | WrapperToDaemon::ChildRequestClosed { .. }
+                    )
+                })
+                .collect();
+            assert_eq!(
+                serde_json::to_value(&original).unwrap(),
+                serde_json::to_value(&replay).unwrap()
+            );
+            assert_eq!(
+                *session.writes.lock().unwrap(),
+                writes,
+                "le renvoi ne réécrit jamais au fournisseur"
+            );
+            assert_eq!(requests.lock().unwrap().settled.len(), 1);
+            assert!(requests.lock().unwrap().waiting.is_empty());
+        }
     }
 }

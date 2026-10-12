@@ -119,6 +119,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 - `bridget_delegate` — créer une tâche native et remettre sa mission en un appel ; `request_id`, `agent_type`, `model`, `task` et `cwd` absolu sont obligatoires. `posture` et `effort` sont facultatifs : `effort` seulement si le registre le déclare ; `posture` absente signifie héritage de la politique prouvée du parent. `reply_timeout` (entier, 60 à 86 400 secondes, défaut 3600) fixe le délai de réponse de la mission. `keep_alive_secs` (entier, 60 à 7 200) garde l'enfant après le résultat ; `brief` ajoute un dossier structuré facultatif. Ces champs font partie de l'enveloppe de rejeu.
 - `bridget_task_continue` — ouvrir la ronde suivante avec `task_id`, `request_id` et `task` ; `brief` facultatif. Même enfant, dossier, modèle et posture ; huit rondes au plus, première comprise. Aucune sélection de fournisseur ou de droits dans cet appel.
 - `bridget_task_status` — lire uniquement sa tâche durable avec `task_id`, sans lancer ni relancer un enfant ; `round`, `idle_deadline_at` et `continuable` décrivent la ronde courante.
+- `bridget_task_respond` — contrat155 : répondre aux questions de son enfant avec `task_id`, `request_id`, `decision` et `answer` facultatif ; aucune approbation par le parent.
 - `bridget_task_cancel` — annuler sa tâche et ses descendants actifs, avec `task_id` ; sur un résultat disponible avec garde, finir avec l'enfant en conservant l'état et le résultat.
 - `bridget_task_wait` — attendre de 1 à 16 tâches distinctes du parent, avec `task_ids` ; `wait_timeout` entier de 1 à 3600 secondes, défaut 600. Lecture pure, retour dès qu'une tâche termine.
 - `bridget_request_wait` — attendre sa demande suivie, avec `request_id` égal à l'`id` rendu par `bridget_send` avec `reply:true` ; mêmes bornes de `wait_timeout`. Lecture pure, sans nouvel envoi.
@@ -151,6 +152,87 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Demandes de l’enfant — contrat155
+
+Le contrat155 des outils, vues et listes sûres est couvert par les tests
+ciblés. La livraison reste distincte ; vérifier les capacités de la session.
+
+### Option de délégation et route
+
+`bridget_delegate.child_requests` est facultatif : `deny` par défaut, `forward`
+pour Codex app-server seulement. Le mode est figé et fait partie du rejeu.
+La politique enfant et la limite des droits hérités ne changent pas. Aucun
+accord humain ne dépasse ces droits. `approval_policy=never` reste inchangée ;
+`forward` ne fabrique aucune approbation ni route humaine.
+
+| Forme | Route ou refus155 |
+|---|---|
+| `user_input` complète et corrélée, `isSecret=false` (défaut normatif) | Parent propriétaire attesté, réponse d’information |
+| Commande `kind=command`, effets/durée établis et décision explicitement offerte | Human dans les droits figés, parent `dangerFullAccess` attesté et enfant non restreint ; `accept` courant seulement |
+| `fileChange` | `approval_method_unsupported`, ou `duration_unsupported` si `grantRoot` non nul |
+| `permissions`, `writeStdin`, méthode/effet inconnu | Refus fermé |
+| Tout formulaire MCP tiers | `approval_method_unsupported`, même typé/non vide ; aucune preuve structurée de non-secret/non-approbation |
+
+URL refusé ; exception historique formulaire vide Bridget distincte.
+Le parent ne répond jamais à une approbation. Une question monte d’un seul
+niveau, sans transfert au parent racine ni réponse à sa propre demande.
+
+### bridget_task_respond — forme fermée
+
+| Argument | Contrat |
+|---|---|
+| `task_id` | Chaîne requise, tâche appartenant au parent attesté |
+| `request_id` | Chaîne requise, identifiant lu dans l’avis ou la demande du statut |
+| `decision` | Chaîne requise, exactement `accept`, `decline` ou `cancel` |
+| `answer` | Objet facultatif, seulement question + `accept`, 8 Kio maximum ; `question_id` → tableau de chaînes |
+
+Aucune clé inconnue. `answer` absent/en trop/mal formé ou identifiant inconnu
+rend `answer_invalid`. `decision` durable ou non proposée rend
+`decision_not_offered`. Identité non propriétaire refusée. Parent révoqué :
+`permission_not_inherited`. Une approbation rend `parent_cannot_approve`.
+
+```json
+{"name":"bridget_task_respond","arguments":{"task_id":"<task_id>","request_id":"<request_id>","decision":"accept","answer":{"q1":["valeur"]}}}
+```
+
+Succès contractuel :
+
+```json
+{"version":1,"request_id":"…","state":"answered","outcome":"answered_by_parent","decision":"accept"}
+```
+
+`decline` et `cancel` omettent `answer`. Rejeu identique : état conservé ; autre
+décision après fermeture : `request_closed`. Demande inconnue : `request_unknown`.
+Décision tardive : `request_expired`.
+
+Le parent fournit `answer[qid]=[chaînes]`. Le transport seul le convertit en
+`{"answers":{"q1":{"answers":["valeur"]}}}` à la frontière Codex. `user_input`
+ne définit aucun `decline/cancel` natif ; refus et expiration utilisent l’erreur
+JSON-RPC `child_request_refused`, sans réponse d’accord inventée.
+
+### Fenêtres, vues et attente
+
+Catalogue : `child_requests_default=deny`, `child_requests_supported` selon
+fournisseur, `child_request_parent_window_secs=600` et
+`child_request_human_window_secs=3600`. Échéance plafonnée par
+`mission_deadline_at - 30 s` ; moins de 30 s restantes : `deadline_too_close`.
+
+Statut : `pending_requests` et dix dernières issues dans `recent_requests`,
+avec `delivery_state`. Les demandes Human sont visibles mais non répondables
+par le parent. `sent` sans accusé ne prouve ni remise ni annulation.
+
+Wait : `ready` terminal, `pending` identifiants nonterminaux. `pending_requests`
+est une clé à la racine du résultat, liste Parent/open/nonexpirée/actionnable
+avec `task_id` et projection de demande. Human en est exclu et ne déclenche pas
+le retour wait. `timed_out=false` si `ready` ou `pending_requests` est non vide ;
+vrai seulement à l’échéance wait si les deux sont vides. Une question déjà
+ouverte peut rendre immédiatement la main. Aucun état persistant de waiter
+ni mécanisme de consommation des demandes.
+
+Pause : `Respond` rend `referent_paused`. Une décision humaine pendant la pause
+est acquittée sans exécution ni accord différé. Une nouvelle demande sera
+nécessaire après reprise. L’humain ne répond pas à une question.
 
 ## Rondes et brief des missions natives (153)
 
@@ -289,6 +371,8 @@ les listes suivent l'ordre d'entrée. Il suffit qu'une tâche soit `result_avail
 `failed` ou `cancelled` pour rendre la main. Si aucune ne finit dans le délai,
 `timed_out: true` ; les missions continuent. Le statut garde `result` complet ;
 les entrées de `ready` l'omettent.
+
+L’extension155 décrite dans Demandes de l’enfant ajoute le retour sur une question Parent actionnable.
 
 L'attente et `bridget_task_status` sont des lectures pures. Aucune remise marquée,
 aucun message supprimé, aucun nettoyage ou purge. Un résultat peut être lu par

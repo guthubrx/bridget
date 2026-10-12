@@ -6188,6 +6188,7 @@ mod tests {
             notify_timeout_secs: 2,
             model: None,
             permissions: "allow".to_string(),
+            child_requests: false,
             provider_observation: None,
             thread_bootstrap: Default::default(),
             dynamic_tool_handler: None,

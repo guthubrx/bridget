@@ -10,13 +10,17 @@ use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
     ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
 };
-use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
+use crate::protocol::{
+    ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestDecision,
+    ChildRequestKind, PresenceMode, ProviderObservation, ProviderOperation,
+};
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -58,6 +62,17 @@ type SourceLines = Box<dyn Iterator<Item = std::io::Result<String>> + Send>;
 type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<ServerResponse, String>>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
 type PendingRequest = Arc<Mutex<Option<PendingProviderRequest>>>;
+/// Attentes RPC155 répondables, distinctes de la trace149 fingerprintée.
+/// O(4) pour lookup/fermeture ; aucun corps secret ni droit dans cette table.
+type ChildRequests = Arc<Mutex<Vec<PendingChildRequest>>>;
+
+struct PendingChildRequest {
+    request: ChildProviderRequest,
+    thread_id: String,
+    message_id: String,
+    approval: Value,
+    uncertain: bool,
+}
 /// Certains clients Codex exposent des outils comme requêtes app-server
 /// `item/tool/call`, y compris lorsqu'un serveur MCP statique est présent.
 /// Le daemon injecte ici l'exécuteur attesté correspondant : le pilote ne
@@ -92,6 +107,8 @@ pub struct CodexAppServerOptions {
     /// réglage refuse. Une demande `item/*/requestApproval` reçoit toujours
     /// une réponse JSON-RPC sans intervention humaine.
     pub permissions: String,
+    /// Mode155 figé par le wrapper ; faux conserve le chemin deny historique.
+    pub child_requests: bool,
     /// Baseline relevée avant lancement, absente pour un registre historique.
     pub provider_observation: Option<ProviderObservation>,
     /// Démarrage de fil demandé par Bridget après vérification de la baseline.
@@ -222,7 +239,7 @@ impl CodexActKind {
 }
 
 struct ReaderContext {
-    permission_observation:Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,
+    permission_observation: Arc<Mutex<Option<(String, Value, u64, Option<String>)>>>,
     cwd: String,
     waiters: Waiters,
     observations: Arc<(Mutex<Observations>, Condvar)>,
@@ -230,6 +247,9 @@ struct ReaderContext {
     journal: Journal,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     pending_request: PendingRequest,
+    child_requests: ChildRequests,
+    forward_child_requests: bool,
+    provider_session: String,
     pinned_model: Option<String>,
     active_detail: ActiveTurnDetail,
     writer: Writer,
@@ -255,7 +275,7 @@ fn sandbox_posture_from_args(args: &[String]) -> &'static str {
 }
 
 pub struct CodexAppServerTransport {
-    permission_observation:Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,
+    permission_observation: Arc<Mutex<Option<(String, Value, u64, Option<String>)>>>,
     connection_id: String,
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
@@ -271,6 +291,7 @@ pub struct CodexAppServerTransport {
     observations: Arc<(Mutex<Observations>, Condvar)>,
     active_detail: ActiveTurnDetail,
     journal: Journal,
+    child_requests: ChildRequests,
     provider_observation: Option<ProviderObservation>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
@@ -341,7 +362,8 @@ impl CodexAppServerTransport {
             ));
         }
         let mut command = Command::new(&options.command);
-        crate::protocol::recheck_frozen_inputs(&options.command,environment).map_err(TransportError::DeliveryFailed)?;
+        crate::protocol::recheck_frozen_inputs(&options.command, environment)
+            .map_err(TransportError::DeliveryFailed)?;
         validate_endpoint_bootstrap(&options, interactive_socket.is_some())?;
         command
             .args(&options.args)
@@ -408,6 +430,21 @@ impl CodexAppServerTransport {
                 .stdin
                 .take()
                 .ok_or_else(|| TransportError::Io("stdin Codex absent".to_string()))?;
+            // Même convention que le SocketWriter Codex : le noyau ne doit
+            // jamais retenir write_value sur un fournisseur vivant mais muet.
+            let fd = stdin.as_raw_fd();
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+            {
+                let error = std::io::Error::last_os_error();
+                crate::managed_session::stop_owned_child(&mut child, true, Duration::from_secs(4))
+                    .map_err(|stop| {
+                        TransportError::Io(format!("stdin Codex non bloquant: {error}; {stop}"))
+                    })?;
+                return Err(TransportError::Io(format!(
+                    "stdin Codex non bloquant: {error}"
+                )));
+            }
             let stdout = child
                 .stdout
                 .take()
@@ -434,12 +471,13 @@ impl CodexAppServerTransport {
             Condvar::new(),
         ));
         let pending_request = Arc::new(Mutex::new(None));
+        let child_requests: ChildRequests = Arc::new(Mutex::new(Vec::new()));
         let selected_thread = Arc::new(Mutex::new(None));
-        let permission_observation=Arc::new(Mutex::new(None));
+        let permission_observation = Arc::new(Mutex::new(None));
         let reader_handle = spawn_reader(
             lines,
             ReaderContext {
-                permission_observation:permission_observation.clone(),
+                permission_observation: permission_observation.clone(),
                 cwd: std::env::current_dir()
                     .ok()
                     .and_then(|p| p.into_os_string().into_string().ok())
@@ -450,6 +488,9 @@ impl CodexAppServerTransport {
                 journal: journal.clone(),
                 queue: queue.clone(),
                 pending_request: pending_request.clone(),
+                child_requests: child_requests.clone(),
+                forward_child_requests: options.child_requests && interactive_socket.is_none(),
+                provider_session: format!("codex-app-server-{pid}"),
                 pinned_model: options.model.clone(),
                 active_detail: active_detail.clone(),
                 writer: writer.clone(),
@@ -597,7 +638,7 @@ impl CodexAppServerTransport {
                         "thread/start Codex ne retourne pas thread.id".to_string(),
                     )
                 })?;
-            observe_native_permissions(&permission_observation,&thread_id,&thread.value);
+            observe_native_permissions(&permission_observation, &thread_id, &thread.value);
             if matches!(&options.thread_bootstrap,
                 CodexThreadBootstrap::Resume { thread_id: requested } if requested != &thread_id)
             {
@@ -644,7 +685,9 @@ impl CodexAppServerTransport {
         let child = Arc::new(Mutex::new(child));
         let busy = Arc::new(AtomicBool::new(false));
         let worker_handle = spawn_worker(Worker {
-            native_policy:std::env::var("BRIDGET_NATIVE_CHILD_POLICY").ok().and_then(|raw|serde_json::from_str(&raw).ok()),
+            native_policy: std::env::var("BRIDGET_NATIVE_CHILD_POLICY")
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok()),
             queue: queue.clone(),
             writer: writer.clone(),
             waiters: waiters.clone(),
@@ -657,6 +700,7 @@ impl CodexAppServerTransport {
             private_profile_instructions: private_profile_instructions.clone(),
             active_detail: active_detail.clone(),
             pending_request,
+            child_requests: child_requests.clone(),
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
             interactive: interactive_socket.is_some(),
         });
@@ -696,6 +740,7 @@ impl CodexAppServerTransport {
             observations,
             active_detail,
             journal,
+            child_requests,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
             interactive_socket: interactive_socket.map(Path::to_path_buf),
@@ -757,6 +802,10 @@ impl CodexAppServerTransport {
             return;
         }
         self.alive.store(false, Ordering::SeqCst);
+        self.child_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.observations.1.notify_all();
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -927,7 +976,128 @@ impl Transport for CodexAppServerTransport {
 }
 
 impl ManagedSession for CodexAppServerTransport {
-    fn provider_permissions(&self)->Option<(String,Value,u64,Option<String>)>{self.permission_observation.lock().unwrap_or_else(|e|e.into_inner()).clone()}
+    fn answer_provider_request(
+        &mut self,
+        answer: &ChildRequestAnswer,
+    ) -> Result<(), TransportError> {
+        if !self.alive.load(Ordering::SeqCst) {
+            return Err(TransportError::AgentDead);
+        }
+        let mut pending = self
+            .child_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let index = pending
+            .iter()
+            .position(|entry| {
+                entry.request.provider_session == answer.provider_session
+                    && entry.request.turn_id == answer.turn_id
+                    && entry.request.provider_request_id == answer.provider_request_id
+            })
+            .ok_or_else(|| TransportError::DeliveryFailed("request_unknown".into()))?;
+        let entry = &pending[index];
+        if entry.uncertain {
+            return Err(TransportError::Io(
+                "child_request_write_uncertain: attente déjà incertaine".into(),
+            ));
+        }
+        let linked = self
+            .active_detail
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|detail| {
+                detail.message_id == entry.message_id
+                    && detail.thread_id == entry.thread_id
+                    && detail.turn_id.as_deref() == Some(answer.turn_id.as_str())
+            });
+        if !linked {
+            return Err(TransportError::DeliveryFailed("request_unlinked".into()));
+        }
+        let id = serde_json::to_value(&answer.provider_request_id)
+            .map_err(|e| TransportError::DeliveryFailed(e.to_string()))?;
+        let reply = match entry.request.kind {
+            ChildRequestKind::ApprovalCommand => {
+                if answer.answer.is_some() {
+                    return Err(TransportError::DeliveryFailed("answer_invalid".into()));
+                }
+                let wanted = match answer.decision {
+                    ChildRequestDecision::Accept => "accept",
+                    ChildRequestDecision::Decline => "decline",
+                    ChildRequestDecision::Cancel => "cancel",
+                };
+                // Réemploi unique du repli T000. Une décision explicite offerte
+                // est isolée ; un refus peut seulement retomber sur cancel.
+                let mut original = entry.approval.clone();
+                if entry.request.offered.contains(&answer.decision) {
+                    original["params"]["availableDecisions"] = json!([wanted]);
+                } else if answer.decision == ChildRequestDecision::Accept {
+                    return Err(TransportError::DeliveryFailed(
+                        "decision_not_offered".into(),
+                    ));
+                }
+                let permission = if answer.decision == ChildRequestDecision::Accept {
+                    "allow"
+                } else {
+                    "deny"
+                };
+                approval_response(&original, permission)
+                    .ok_or_else(|| TransportError::DeliveryFailed("request_unknown".into()))?
+                    .0
+            }
+            ChildRequestKind::UserInput => {
+                if answer.decision != ChildRequestDecision::Accept {
+                    json!({"id":id,"error":{"code":-32000,"message":"child_request_refused"}})
+                } else {
+                    let input = answer
+                        .answer
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
+                    if serde_json::to_vec(input).map_or(true, |bytes| bytes.len() > 8192)
+                        || input.len() != entry.request.question_ids.len()
+                        || entry.request.question_ids.iter().any(|qid| {
+                            !input.get(qid).is_some_and(|value| {
+                                value
+                                    .as_array()
+                                    .is_some_and(|values| values.iter().all(Value::is_string))
+                            })
+                        })
+                    {
+                        return Err(TransportError::DeliveryFailed("answer_invalid".into()));
+                    }
+                    let nested: serde_json::Map<String, Value> = input
+                        .iter()
+                        .map(|(qid, values)| (qid.clone(), json!({"answers":values})))
+                        .collect();
+                    json!({"id":id,"result":{"answers":nested}})
+                }
+            }
+            _ => {
+                return Err(TransportError::DeliveryFailed(
+                    "approval_method_unsupported".into(),
+                ));
+            }
+        };
+        // Le verrou sérialise answer/fin/resolved. Une écriture partielle ne
+        // prouve aucun refus : garder l'incertitude et fermer l'admission.
+        if let Err(error) = write_value(&self.writer, reply) {
+            pending[index].uncertain = true;
+            self.alive.store(false, Ordering::SeqCst);
+            self.observations.1.notify_all();
+            return Err(TransportError::Io(format!(
+                "child_request_write_uncertain: {error}"
+            )));
+        }
+        pending.remove(index);
+        Ok(())
+    }
+    fn provider_permissions(&self) -> Option<(String, Value, u64, Option<String>)> {
+        self.permission_observation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
     fn select_runtime(
         &mut self,
         selection: crate::protocol::RuntimeSelection,
@@ -1086,6 +1256,10 @@ impl ManagedSession for CodexAppServerTransport {
             .as_ref()
             .filter(|active| active.message_id == message_id)
         {
+            self.child_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|entry| entry.message_id != message_id);
             let _ = active.cancel.send(reason.to_string());
             queue.steering_open = false;
             return true;
@@ -1118,10 +1292,18 @@ impl ManagedSession for CodexAppServerTransport {
         // cancel_delivery passe par le worker. shutdown ferme son alive avant
         // qu'il puisse lire ce canal : l'arrêt natif interrompt donc le tour
         // exact directement, tant que le writer fournisseur est encore ouvert.
-        let turn = self.active_detail.lock().unwrap_or_else(|e| e.into_inner())
-            .as_ref().filter(|detail| detail.message_id == message_id)
-            .and_then(|detail| detail.turn_id.clone()
-                .map(|turn| (detail.thread_id.clone(), turn)));
+        let turn = self
+            .active_detail
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|detail| detail.message_id == message_id)
+            .and_then(|detail| {
+                detail
+                    .turn_id
+                    .clone()
+                    .map(|turn| (detail.thread_id.clone(), turn))
+            });
         // Fermer l'admission avant le contrôle fournisseur : sa réponse ne
         // doit pas permettre au worker de prendre une nouvelle remise.
         self.alive.store(false, Ordering::SeqCst);
@@ -1130,8 +1312,11 @@ impl ManagedSession for CodexAppServerTransport {
         wake.notify_all();
         if let Some((thread_id, turn_id)) = turn {
             let _ = request_with_timeout(
-                &self.writer, &self.waiters, &self.next_id,
-                "turn/interrupt", json!({"threadId": thread_id, "turnId": turn_id}),
+                &self.writer,
+                &self.waiters,
+                &self.next_id,
+                "turn/interrupt",
+                json!({"threadId": thread_id, "turnId": turn_id}),
                 INTERRUPT_REQUEST_TIMEOUT,
             );
         }
@@ -1151,7 +1336,7 @@ impl ManagedSession for CodexAppServerTransport {
 }
 
 struct Worker {
-    native_policy:Option<Value>,
+    native_policy: Option<Value>,
     interactive: bool,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     writer: Writer,
@@ -1165,6 +1350,7 @@ struct Worker {
     private_profile_instructions: Arc<Mutex<Option<String>>>,
     active_detail: ActiveTurnDetail,
     pending_request: PendingRequest,
+    child_requests: ChildRequests,
     notify_timeout: Duration,
 }
 
@@ -1314,6 +1500,11 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     payload,
                 );
             }
+            worker
+                .child_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|entry| entry.message_id != message.id);
             push_internal(&worker.observations, event);
             worker.busy.store(false, Ordering::SeqCst);
             clear_active(&worker.queue);
@@ -1368,11 +1559,11 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
         "clientUserMessageId": message.id,
         "input": [{ "type": "text", "text": &prompt }],
     });
-    if let Some(policy)=&worker.native_policy {
-        params["approvalPolicy"]=policy["approval_policy"].clone();
-        params["approvalsReviewer"]=policy["approvals_reviewer"].clone();
-        params["sandboxPolicy"]=policy["sandbox_policy"].clone();
-        params["cwd"]=json!(std::env::current_dir().map_err(|_|"cwd_unavailable")?);
+    if let Some(policy) = &worker.native_policy {
+        params["approvalPolicy"] = policy["approval_policy"].clone();
+        params["approvalsReviewer"] = policy["approvals_reviewer"].clone();
+        params["sandboxPolicy"] = policy["sandbox_policy"].clone();
+        params["cwd"] = json!(std::env::current_dir().map_err(|_| "cwd_unavailable")?);
     }
     for attempt in 0..=SATURATION_RETRIES {
         match request(
@@ -1401,23 +1592,43 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     Err("saturation Codex persistante".to_string())
 }
 
-fn observe_native_permissions(observation:&Arc<Mutex<Option<(String,Value,u64,Option<String>)>>>,session:&str,value:&Value){
-    let mut observed=observation.lock().unwrap_or_else(|e|e.into_inner());
-    let previous=observed.as_ref().filter(|o|o.0==session);
-    let mut policy=previous.map(|o|o.1.clone()).unwrap_or_else(||json!({"kind":"codex"}));
-    for (field,source) in [("approval_policy","approvalPolicy"),("approvals_reviewer","approvalsReviewer"),("sandbox_policy","sandboxPolicy")]{
-        if let Some(value)=value.get(source).or_else(||if source=="sandboxPolicy"{value.get("sandbox")}else{None}){
-            policy[field]=value.clone();
+fn observe_native_permissions(
+    observation: &Arc<Mutex<Option<(String, Value, u64, Option<String>)>>>,
+    session: &str,
+    value: &Value,
+) {
+    let mut observed = observation.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = observed.as_ref().filter(|o| o.0 == session);
+    let mut policy = previous
+        .map(|o| o.1.clone())
+        .unwrap_or_else(|| json!({"kind":"codex"}));
+    for (field, source) in [
+        ("approval_policy", "approvalPolicy"),
+        ("approvals_reviewer", "approvalsReviewer"),
+        ("sandbox_policy", "sandboxPolicy"),
+    ] {
+        if let Some(value) = value.get(source).or_else(|| {
+            if source == "sandboxPolicy" {
+                value.get("sandbox")
+            } else {
+                None
+            }
+        }) {
+            policy[field] = value.clone();
         }
     }
-    let cwd=match value.get("cwd"){
-        Some(value)=>value.as_str().map(str::to_owned),
-        None=>previous.and_then(|o|o.3.clone()),
+    let cwd = match value.get("cwd") {
+        Some(value) => value.as_str().map(str::to_owned),
+        None => previous.and_then(|o| o.3.clone()),
     };
-    let complete=["approval_policy","approvals_reviewer","sandbox_policy"].iter().all(|k|policy.get(*k).is_some());
+    let complete = ["approval_policy", "approvals_reviewer", "sandbox_policy"]
+        .iter()
+        .all(|k| policy.get(*k).is_some());
     if complete {
-        let revision=previous.map(|o|o.2.saturating_add(u64::from(o.1!=policy||o.3!=cwd))).unwrap_or(1);
-        *observed=Some((session.into(),policy,revision,cwd));
+        let revision = previous
+            .map(|o| o.2.saturating_add(u64::from(o.1 != policy || o.3 != cwd)))
+            .unwrap_or(1);
+        *observed = Some((session.into(), policy, revision, cwd));
     }
 }
 
@@ -2189,6 +2400,337 @@ fn approval_text<'a>(value: &'a Value, method: &'a str) -> &'a str {
         .unwrap_or(method)
 }
 
+/// Frontière T002 : O(d+q), sans accès au disque ni interprétation de commande.
+/// Une information absente ne devient jamais une absence d'effet prouvée.
+fn normalize_child_provider_request(
+    value: &Value,
+    session: &str,
+) -> Result<(ChildProviderRequest, Value), &'static str> {
+    let id: ChildProviderRequestId =
+        serde_json::from_value(value.get("id").cloned().ok_or("request_unlinked")?)
+            .map_err(|_| "request_unlinked")?;
+    let method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or("approval_method_unsupported")?;
+    let params = value
+        .get("params")
+        .and_then(Value::as_object)
+        .ok_or("details_incomplete")?;
+    for field in ["threadId", "turnId", "itemId"] {
+        if !params
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty() && value.len() <= 1024)
+        {
+            return Err("details_incomplete");
+        }
+    }
+    let mut request = ChildProviderRequest {
+        version: 1,
+        provider_session: session.into(),
+        turn_id: params["turnId"].as_str().unwrap().into(),
+        provider_request_id: id,
+        kind: ChildRequestKind::UserInput,
+        details: Value::Null,
+        offered: Vec::new(),
+        question_ids: Vec::new(),
+        truncated: false,
+    };
+    let mut approval = json!({"id":value["id"],"method":method,"params":{}});
+    match method {
+        COMMAND_EXECUTION_APPROVAL_METHOD => {
+            if params.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "threadId"
+                        | "turnId"
+                        | "itemId"
+                        | "startedAtMs"
+                        | "approvalId"
+                        | "availableDecisions"
+                        | "command"
+                        | "commandActions"
+                        | "cwd"
+                        | "environmentId"
+                        | "additionalPermissions"
+                        | "networkApprovalContext"
+                        | "proposedExecpolicyAmendment"
+                        | "proposedNetworkPolicyAmendments"
+                        | "reason"
+                        | "kind"
+                )
+            }) || !params
+                .get("startedAtMs")
+                .is_some_and(|value| value.as_i64().is_some())
+                || ["approvalId", "cwd", "reason"].iter().any(|key| {
+                    params
+                        .get(*key)
+                        .is_some_and(|value| !value.is_null() && !value.is_string())
+                })
+                || params
+                    .get("commandActions")
+                    .is_some_and(|value| !value.is_null() && !value.is_array())
+            {
+                return Err("details_incomplete");
+            }
+            // Forward155 passe seulement par le processus STDIO privé attesté,
+            // jamais par un endpoint choisi dans ce champ fournisseur. "local"
+            // décrit ce contexte ; il n'accorde aucun droit ni confinement.
+            if params.get("kind").is_some_and(|value| value != "command")
+                || params
+                    .get("environmentId")
+                    .is_some_and(|value| !value.is_null() && value != "local")
+            {
+                return Err("approval_method_unsupported");
+            }
+            if [
+                "proposedExecpolicyAmendment",
+                "proposedNetworkPolicyAmendments",
+            ]
+            .iter()
+            .any(|key| params.get(*key).is_some_and(|value| !value.is_null()))
+            {
+                return Err("duration_unsupported");
+            }
+            let command = params
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or("details_incomplete")?;
+            // commandActions est best-effort : même read/list/search ne prouve
+            // jamais qu'une commande n'a ni effets shell ni accès fichiers.
+            let choices = params
+                .get("availableDecisions")
+                .and_then(Value::as_array)
+                .ok_or("details_incomplete")?;
+            for (name, decision) in [
+                ("accept", ChildRequestDecision::Accept),
+                ("decline", ChildRequestDecision::Decline),
+                ("cancel", ChildRequestDecision::Cancel),
+            ] {
+                if choices.iter().any(|value| value == name) {
+                    request.offered.push(decision);
+                }
+            }
+            if !request.offered.contains(&ChildRequestDecision::Accept)
+                || !request.offered.iter().any(|decision| {
+                    matches!(
+                        decision,
+                        ChildRequestDecision::Decline | ChildRequestDecision::Cancel
+                    )
+                })
+            {
+                return Err("duration_unsupported");
+            }
+            let mut network = false;
+            let mut file_write = false;
+            let mut paths = Vec::new();
+            if let Some(context) = params
+                .get("networkApprovalContext")
+                .filter(|value| !value.is_null())
+            {
+                let context = context.as_object().ok_or("details_incomplete")?;
+                if context.len() != 2
+                    || !context.get("host").is_some_and(Value::is_string)
+                    || !context
+                        .get("protocol")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| {
+                            matches!(value, "http" | "https" | "socks5Tcp" | "socks5Udp")
+                        })
+                {
+                    return Err("details_incomplete");
+                }
+                network = true;
+            }
+            if let Some(extra) = params
+                .get("additionalPermissions")
+                .filter(|value| !value.is_null())
+            {
+                let extra = extra.as_object().ok_or("details_incomplete")?;
+                if extra
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "network" | "fileSystem"))
+                {
+                    return Err("details_incomplete");
+                }
+                if let Some(net) = extra.get("network").filter(|value| !value.is_null()) {
+                    let net = net.as_object().ok_or("details_incomplete")?;
+                    if net.keys().any(|key| key != "enabled")
+                        || net
+                            .get("enabled")
+                            .is_some_and(|value| !value.is_null() && !value.is_boolean())
+                    {
+                        return Err("details_incomplete");
+                    }
+                    network |= net.get("enabled") == Some(&Value::Bool(true));
+                }
+                if let Some(files) = extra.get("fileSystem").filter(|value| !value.is_null()) {
+                    let files = files.as_object().ok_or("details_incomplete")?;
+                    if files.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "read" | "write" | "entries" | "globScanMaxDepth"
+                        )
+                    }) || files.get("entries").is_some_and(|value| {
+                        !value.is_null() && !value.as_array().is_some_and(Vec::is_empty)
+                    }) || files
+                        .get("globScanMaxDepth")
+                        .is_some_and(|value| !value.is_null())
+                    {
+                        return Err("details_incomplete");
+                    }
+                    // Listes simples seulement ; les portées glob/special ne
+                    // sont pas aplaties en racines locales prétendues sûres.
+                    for field in ["read", "write"] {
+                        if let Some(list) = files.get(field).filter(|value| !value.is_null()) {
+                            let list = list.as_array().ok_or("details_incomplete")?;
+                            if list.len() > 64
+                                || list.iter().any(|path| {
+                                    !path.as_str().is_some_and(|path| path.len() <= 1024)
+                                })
+                            {
+                                return Err("details_incomplete");
+                            }
+                            file_write |= field == "write" && !list.is_empty();
+                            paths.extend(list.iter().cloned());
+                        }
+                    }
+                }
+            }
+            request.kind = ChildRequestKind::ApprovalCommand;
+            // Dossier cité par le fournisseur, jamais résolu ni remplacé par
+            // celui de la session. L'absence reste explicitement null.
+            let cwd = params.get("cwd").unwrap_or(&Value::Null);
+            if cwd.as_str().is_some_and(|cwd| cwd.len() > 1024) {
+                return Err("details_incomplete");
+            }
+            request.truncated = command.len() > 1024;
+            let cited_command: String = command
+                .chars()
+                .scan(0usize, |bytes, ch| {
+                    *bytes += ch.len_utf8();
+                    (*bytes <= 1024).then_some(ch)
+                })
+                .collect();
+            request.details = json!({"method":method,"kind":"command","duration":"once","effects":{"command":true,"network":network,"file_write":file_write},
+                "complete":true,"secret":false,"command":cited_command,"cwd":cwd,"paths_cited":paths});
+            if let Some(reason) = params.get("reason").filter(|value| !value.is_null()) {
+                let reason = reason.as_str().ok_or("details_incomplete")?;
+                let clean: String = reason
+                    .chars()
+                    .filter(|ch| {
+                        !ch.is_control()
+                            && !matches!(*ch,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}')
+                    })
+                    .scan(0usize, |bytes, ch| {
+                        *bytes += ch.len_utf8();
+                        (*bytes <= 1024).then_some(ch)
+                    })
+                    .collect();
+                request.truncated |= reason.len() > 1024;
+                request.details["reason"] = json!(clean);
+            }
+            approval["params"]["availableDecisions"] =
+                serde_json::to_value(&request.offered).map_err(|_| "details_incomplete")?;
+        }
+        "item/tool/requestUserInput" => {
+            if params.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "threadId"
+                        | "turnId"
+                        | "itemId"
+                        | "isBlocking"
+                        | "autoResolutionMs"
+                        | "questions"
+                )
+            }) || !params.get("isBlocking").is_some_and(Value::is_boolean)
+                || params
+                    .get("autoResolutionMs")
+                    .is_some_and(|value| !value.is_null() && value.as_u64().is_none())
+            {
+                return Err("details_incomplete");
+            }
+            let questions = params
+                .get("questions")
+                .and_then(Value::as_array)
+                .filter(|questions| !questions.is_empty())
+                .ok_or("details_incomplete")?;
+            if serde_json::to_vec(questions).map_or(true, |bytes| bytes.len() > 4096) {
+                return Err("details_incomplete");
+            }
+            let mut seen = HashSet::new();
+            let mut normalized = Vec::new();
+            let mut secret = false;
+            for question in questions {
+                let question = question.as_object().ok_or("details_incomplete")?;
+                if question.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "id" | "header" | "question" | "isSecret" | "isOther" | "options"
+                    )
+                }) || ["id", "header", "question"]
+                    .iter()
+                    .any(|key| !question.get(*key).is_some_and(Value::is_string))
+                    || ["isSecret", "isOther"]
+                        .iter()
+                        .any(|key| question.get(*key).is_some_and(|value| !value.is_boolean()))
+                {
+                    return Err("details_incomplete");
+                }
+                let id = question["id"].as_str().unwrap();
+                if id.is_empty() || !seen.insert(id) {
+                    return Err("details_incomplete");
+                }
+                secret |= question.get("isSecret") == Some(&Value::Bool(true));
+                if let Some(options) = question.get("options").filter(|value| !value.is_null()) {
+                    let options = options.as_array().ok_or("details_incomplete")?;
+                    if options.iter().any(|option| {
+                        !option.as_object().is_some_and(|option| {
+                            option.len() == 2
+                                && ["label", "description"]
+                                    .iter()
+                                    .all(|key| option.get(*key).is_some_and(Value::is_string))
+                        })
+                    }) {
+                        return Err("details_incomplete");
+                    }
+                }
+                request.question_ids.push(id.to_string());
+                normalized.push(Value::Object(question.clone()));
+            }
+            if secret {
+                return Err("secret_not_forwardable");
+            }
+            request.offered = vec![
+                ChildRequestDecision::Accept,
+                ChildRequestDecision::Decline,
+                ChildRequestDecision::Cancel,
+            ];
+            request.details = json!({"method":method,"duration":"once","effects":{"command":false,"network":false,"file_write":false},"complete":true,"secret":false,"questions":normalized});
+        }
+        "item/fileChange/requestApproval" => {
+            return Err(
+                if params
+                    .get("grantRoot")
+                    .is_some_and(|value| !value.is_null())
+                {
+                    "duration_unsupported"
+                } else {
+                    "approval_method_unsupported"
+                },
+            );
+        }
+        _ => return Err("approval_method_unsupported"),
+    }
+    if serde_json::to_vec(&request.details).map_or(true, |bytes| bytes.len() > 4096) {
+        return Err("details_incomplete");
+    }
+    Ok((request, approval))
+}
+
 /// O(n), n décisions offertes : accept exige allow ; sinon decline, puis cancel.
 /// Aucun accord durable ni amendement. Sans décision fermée proposée, erreur
 /// JSON-RPC ; l'identifiant de la demande est repris tel quel.
@@ -2199,10 +2741,15 @@ fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)>
         .pointer("/params/availableDecisions")
         .and_then(Value::as_array)
         .and_then(|choices| {
-            ["accept", "decline", "cancel"].into_iter().find(|decision| {
-                (*decision != "accept" || permissions == "allow")
-                    && choices.iter().filter_map(Value::as_str).any(|choice| choice == *decision)
-            })
+            ["accept", "decline", "cancel"]
+                .into_iter()
+                .find(|decision| {
+                    (*decision != "accept" || permissions == "allow")
+                        && choices
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .any(|choice| choice == *decision)
+                })
         });
     let Some(decision) = decision else {
         return Some((
@@ -2689,14 +3236,79 @@ fn write_notification(writer: &Writer, method: &str, params: Value) -> Result<()
 }
 
 fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
-    let mut writer = writer
-        .lock()
-        .map_err(|error| TransportError::Io(error.to_string()))?;
-    let writer = writer.as_mut().ok_or(TransportError::AgentDead)?;
-    writeln!(writer, "{value}").map_err(|error| TransportError::Io(error.to_string()))?;
-    writer
-        .flush()
-        .map_err(|error| TransportError::Io(error.to_string()))
+    // Un budget TOTAL pour le verrou, les écritures STDIO partielles et flush.
+    // Le SocketWriter interactif conserve son propre flush borné à3s ; il
+    // peut ajouter ces3s après contention, sans prétendre au budget STDIO.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut bytes =
+        serde_json::to_vec(&value).map_err(|error| TransportError::Io(error.to_string()))?;
+    bytes.push(b'\n'); // mêmes octets JSON compacts + LF que writeln!("{value}").
+    let mut guard = loop {
+        if Instant::now() >= deadline {
+            return Err(TransportError::Io("budget writer Codex dépassé".into()));
+        }
+        match writer.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::Poisoned(error)) => {
+                return Err(TransportError::Io(error.to_string()));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let millis = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, 25) as i32;
+                if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() != std::io::ErrorKind::Interrupted {
+                        return Err(TransportError::Io(error.to_string()));
+                    }
+                }
+            }
+        }
+    };
+    let result = (|| {
+        let output = guard.as_mut().ok_or(TransportError::AgentDead)?;
+        let mut offset = 0;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(TransportError::Io("budget writer Codex dépassé".into()));
+            }
+            let progress = if offset < bytes.len() {
+                output.write(&bytes[offset..]).map(Some)
+            } else {
+                output.flush().map(|()| None)
+            };
+            match progress {
+                Ok(None) => return Ok(()),
+                Ok(Some(0)) => {
+                    return Err(TransportError::Io("écriture Codex sans progrès".into()));
+                }
+                Ok(Some(count)) => offset += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Box<dyn Write> ne donne aucun fd. poll sans descripteur
+                    // attend au plus25ms sous la MÊME échéance, sans busy-loop.
+                    let millis = deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .clamp(1, 25) as i32;
+                    if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::Interrupted {
+                            return Err(TransportError::Io(error.to_string()));
+                        }
+                    }
+                }
+                Err(error) => return Err(TransportError::Io(error.to_string())),
+            }
+        }
+    })();
+    // Une trame partielle n'est pas une réponse négative attestée. Fermer le
+    // canal empêche qu'une écriture suivante complète ses octets incertains.
+    if result.is_err() {
+        let _ = guard.take();
+    }
+    result
 }
 
 fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandle<()> {
@@ -2709,6 +3321,9 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
         journal,
         queue,
         pending_request,
+        child_requests,
+        forward_child_requests,
+        provider_session,
         pinned_model,
         active_detail,
         writer,
@@ -2755,6 +3370,23 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     .unwrap_or_else(|poison| poison.into_inner())
                     .remove(&id)
             {
+                // Le vrai résultat turn/start établit le tour avant de rendre
+                // le waiter : les callbacks qui le suivent ne gagnent pas une
+                // course artificielle contre le worker, et aucun id n'est deviné.
+                if forward_child_requests
+                    && let Some(turn_id) = value.pointer("/result/turn/id").and_then(Value::as_str)
+                {
+                    let message_id = queue
+                        .0
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .active
+                        .as_ref()
+                        .map(|active| active.message_id.clone());
+                    if let Some(message_id) = message_id {
+                        set_active_turn_id(&active_detail, &message_id, turn_id);
+                    }
+                }
                 let result = value
                     .get("error")
                     .map(|error| Err(provider_error_reason(error)))
@@ -2822,7 +3454,186 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 );
                 continue;
             }
+            if forward_child_requests
+                && value.get("id").is_some()
+                && method.is_some_and(|method| {
+                    is_approval_request(method)
+                        || is_mcp_elicitation_request(method)
+                        || method == "item/tool/requestUserInput"
+                })
+            {
+                let method = method.unwrap();
+                let message_id = {
+                    let state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                    state
+                        .active
+                        .as_ref()
+                        .filter(|_| !state.closed && state.steering_open)
+                        .map(|active| active.message_id.clone())
+                };
+                let linked = alive.load(Ordering::SeqCst)
+                    && active_detail
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_ref()
+                        .is_some_and(|detail| {
+                            message_id.as_deref() == Some(detail.message_id.as_str())
+                                && !detail.message_id.is_empty()
+                                && detail.turn_id.is_some()
+                                && source_matches_active_turn(detail, &value)
+                        });
+                let mut refusal = None;
+                let mut reply = None;
+                if is_mcp_elicitation_request(method) {
+                    let params = value.get("params").unwrap_or(&Value::Null);
+                    let mode = params.get("mode").and_then(Value::as_str);
+                    let empty_bridget = linked
+                        && params["serverName"] == "bridget"
+                        && mode == Some("form")
+                        && params
+                            .pointer("/requestedSchema/properties")
+                            .and_then(Value::as_object)
+                            .is_some_and(serde_json::Map::is_empty)
+                        && params
+                            .pointer("/requestedSchema/required")
+                            .is_none_or(|value| {
+                                value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+                            })
+                        && params.get("_meta").is_none_or(|value| {
+                            value.is_null()
+                                || value.as_object().is_some_and(serde_json::Map::is_empty)
+                        });
+                    if empty_bridget {
+                        // Exception149, réemploi du producteur de réponse natif.
+                        reply = mcp_elicitation_response(&value).map(|response| response.0);
+                    } else {
+                        refusal = Some(if !linked {
+                            "request_unlinked"
+                        } else if mode == Some("url") {
+                            "url_mode_unsupported"
+                        } else {
+                            "approval_method_unsupported"
+                        });
+                        reply = Some(json!({"id":value["id"],"result":{"action":"decline"}}));
+                    }
+                } else if !linked {
+                    refusal = Some("request_unlinked");
+                } else {
+                    match normalize_child_provider_request(&value, &provider_session) {
+                        Ok((request, approval)) => {
+                            let mut pending =
+                                child_requests.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(index) = pending.iter().position(|entry| {
+                                entry.request.provider_session == request.provider_session
+                                    && entry.request.turn_id == request.turn_id
+                                    && entry.request.provider_request_id
+                                        == request.provider_request_id
+                            }) {
+                                if pending[index].request != request {
+                                    // Une collision ne laisse pas l'ancienne
+                                    // question autoriser le nouveau corps RPC.
+                                    pending.remove(index);
+                                    refusal = Some("request_conflict");
+                                }
+                            } else if pending.len() >= 4 {
+                                refusal = Some("request_budget_exhausted");
+                            } else {
+                                pending.push(PendingChildRequest {
+                                    request: request.clone(),
+                                    thread_id: value["params"]["threadId"].as_str().unwrap().into(),
+                                    message_id: message_id.unwrap_or_default(),
+                                    approval,
+                                    uncertain: false,
+                                });
+                                // Aucun verrou table en émission : le wrapper peut
+                                // immédiatement répondre sans inversion/backpressure.
+                                drop(pending);
+                                let projected = serde_json::to_vec(
+                                    &json!({"id":value["id"],"method":method,"status":"forwarded"}),
+                                )
+                                .unwrap_or_default();
+                                push_source(
+                                    &observations,
+                                    projected,
+                                    ManagedEventKind::ProviderRequest { request },
+                                );
+                                continue;
+                            }
+                        }
+                        Err(code) => refusal = Some(code),
+                    }
+                }
+                if let Some(code) = refusal {
+                    if reply.is_none() {
+                        reply = Some(
+                            json!({"id":value["id"],"error":{"code":-32000,"message":"child_request_refused"}}),
+                        );
+                    }
+                    let diagnostic =
+                        json!({"id":value["id"],"method":method,"status":"refused","code":code});
+                    push_source(
+                        &observations,
+                        serde_json::to_vec(&diagnostic).unwrap_or_default(),
+                        ManagedEventKind::Diagnostic {
+                            code: code.into(),
+                            reference: provider_fingerprint(
+                                b"delegated-runtime",
+                                method.as_bytes(),
+                            ),
+                        },
+                    );
+                }
+                if let Some(reply) = reply
+                    && let Err(error) = write_value(&writer, reply)
+                {
+                    alive.store(false, Ordering::SeqCst);
+                    push_source(
+                        &observations,
+                        serde_json::to_vec(
+                            &json!({"id":value["id"],"method":method,"status":"unknown"}),
+                        )
+                        .unwrap_or_default(),
+                        ManagedEventKind::Error {
+                            detail: format!("child_request_write_uncertain: {error}"),
+                        },
+                    );
+                }
+                continue;
+            }
             match method {
+                Some("serverRequest/resolved") if forward_child_requests => {
+                    let thread_id = value.pointer("/params/threadId").and_then(Value::as_str);
+                    let request_id = value.pointer("/params/requestId").and_then(|value| {
+                        serde_json::from_value::<ChildProviderRequestId>(value.clone()).ok()
+                    });
+                    let mut pending = child_requests.lock().unwrap_or_else(|e| e.into_inner());
+                    let index = pending.iter().position(|entry| {
+                        Some(entry.thread_id.as_str()) == thread_id
+                            && Some(&entry.request.provider_request_id) == request_id.as_ref()
+                    });
+                    let projected = index.map(|index| {
+                        let entry = &pending[index];
+                        let raw = json!({"method":"serverRequest/resolved","params":{"threadId":thread_id,"requestId":request_id},
+                            "correlation":{"provider_session":entry.request.provider_session,"turn_id":entry.request.turn_id,"provider_request_id":entry.request.provider_request_id}});
+                        let code = if entry.uncertain { "child_request_outcome_unknown" } else { "child_request_closed" };
+                        if !entry.uncertain { pending.remove(index); }
+                        (raw,code)
+                    });
+                    drop(pending);
+                    if let Some((raw, code)) = projected {
+                        push_source(
+                            &observations,
+                            serde_json::to_vec(&raw).unwrap_or_default(),
+                            ManagedEventKind::Diagnostic {
+                                code: code.into(),
+                                reference: provider_fingerprint(
+                                    b"delegated-runtime",
+                                    b"serverRequest/resolved",
+                                ),
+                            },
+                        );
+                    }
+                }
                 Some("turn/started") if interactive => {
                     if let Some(turn_id) = value.pointer("/params/turn/id").and_then(Value::as_str)
                     {
@@ -2865,10 +3676,16 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .clone();
-                    if let Some(thread_id)=selected.as_deref(){
-                        if value.pointer("/params/threadId").and_then(Value::as_str)==Some(thread_id){
-                            if let Some(settings)=value.pointer("/params/threadSettings"){
-                                observe_native_permissions(&permission_observation,thread_id,settings);
+                    if let Some(thread_id) = selected.as_deref() {
+                        if value.pointer("/params/threadId").and_then(Value::as_str)
+                            == Some(thread_id)
+                        {
+                            if let Some(settings) = value.pointer("/params/threadSettings") {
+                                observe_native_permissions(
+                                    &permission_observation,
+                                    thread_id,
+                                    settings,
+                                );
                             }
                         }
                     }
@@ -3374,6 +4191,17 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                     let turn_id = value.pointer("/params/turn/id").and_then(Value::as_str);
                     let status = value.pointer("/params/turn/status").and_then(Value::as_str);
                     if let (Some(turn_id), Some(status)) = (turn_id, status) {
+                        if forward_child_requests {
+                            let thread_id =
+                                value.pointer("/params/threadId").and_then(Value::as_str);
+                            child_requests
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .retain(|entry| {
+                                    entry.request.turn_id != turn_id
+                                        || Some(entry.thread_id.as_str()) != thread_id
+                                });
+                        }
                         if interactive {
                             let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
                             if state.external_turn.as_deref() != Some(turn_id) {
@@ -3538,6 +4366,10 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
             }
         }
         alive.store(false, Ordering::SeqCst);
+        child_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         let pending =
             std::mem::take(&mut *waiters.lock().unwrap_or_else(|poison| poison.into_inner()));
         for (_, waiter) in pending {
@@ -3849,6 +4681,9 @@ mod tests {
                 journal: journal.clone(),
                 queue: queue.clone(),
                 pending_request: pending_request.clone(),
+                child_requests: Arc::new(Mutex::new(Vec::new())),
+                forward_child_requests: false,
+                provider_session: "codex-test".into(),
                 pinned_model: None,
                 active_detail: detail.clone(),
                 writer: Arc::new(Mutex::new(Some(Box::new(Capture(output.clone()))))),
@@ -4154,6 +4989,9 @@ mod tests {
                 journal: journal.clone(),
                 queue: queue.clone(),
                 pending_request: pending_request.clone(),
+                child_requests: Arc::new(Mutex::new(Vec::new())),
+                forward_child_requests: false,
+                provider_session: "codex-test".into(),
                 pinned_model: None,
                 active_detail: detail.clone(),
                 writer: Arc::new(Mutex::new(Some(Box::new(Capture(output.clone()))))),
@@ -4897,6 +5735,13 @@ for line in sys.stdin:
                                     printf '%s\n' "{\"method\":\"item/started\",\"params\":{\"threadId\":\"thread-native\",\"turnId\":\"turn-native\",\"startedAtMs\":1,\"item\":{\"id\":\"$provider_item_id\",\"clientId\":\"$steer_message_id\",\"type\":\"userMessage\",\"content\":[]}}}"
                                 fi
                             fi ;;
+                        *'"method":"native155/requests"'*) cat "$BRIDGET_CODEX_CHILD_REQUESTS_FILE" ;;
+                        *'"method":"native155/stall"'*)
+                            : > "$BRIDGET_CODEX_STALL_READY"
+                            while [ ! -f "$BRIDGET_CODEX_STALL_RELEASE" ]; do sleep 0.01; done
+                            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
+                            while :; do sleep 1; done ;;
+                        *'"method":"native155/finish"'*) printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}' ;;
                         *'"method":"turn/interrupt"'*)
                             interrupt_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
                             printf '%s\n' "{\"id\":$interrupt_id,\"result\":{}}"
@@ -4910,6 +5755,7 @@ for line in sys.stdin:
             thread_bootstrap: Default::default(),
             model: Some("gpt-5.6-terra".to_string()),
             permissions: "allow".to_string(),
+            child_requests: false,
             dynamic_tool_handler: None,
         }
     }
@@ -6611,10 +7457,25 @@ for line in sys.stdin:
             "sans id: aucune réponse inventée"
         );
         for (label, permissions, choices, expected) in [
-            ("deny sans decline", "deny", json!(["accept", "cancel"]), "cancel"),
-            ("allow sans accept", "allow", json!(["decline", "cancel"]), "decline"),
+            (
+                "deny sans decline",
+                "deny",
+                json!(["accept", "cancel"]),
+                "cancel",
+            ),
+            (
+                "allow sans accept",
+                "allow",
+                json!(["decline", "cancel"]),
+                "decline",
+            ),
             ("allow accept proposé", "allow", json!(["accept"]), "accept"),
-            ("allow refus prioritaire", "allow", json!(["cancel", "decline"]), "decline"),
+            (
+                "allow refus prioritaire",
+                "allow",
+                json!(["cancel", "decline"]),
+                "decline",
+            ),
             ("deny cancel proposé", "deny", json!(["cancel"]), "cancel"),
         ] {
             let offered = json!({
@@ -6623,15 +7484,35 @@ for line in sys.stdin:
                 "params": { "availableDecisions": choices }
             });
             let (reply, payload) = approval_response(&offered, permissions).expect(label);
-            assert_eq!(reply["id"], offered["id"], "{label}: identifiant repris tel quel");
+            assert_eq!(
+                reply["id"], offered["id"],
+                "{label}: identifiant repris tel quel"
+            );
             assert_eq!(reply["result"]["decision"], expected, "{label}");
-            assert!(reply.get("error").is_none(), "{label}: décision proposée et fermée");
-            assert_eq!(payload["decision"], expected, "{label}: diagnostic cohérent");
-            assert!(matches!(reply["result"]["decision"].as_str(), Some("accept" | "decline" | "cancel")));
+            assert!(
+                reply.get("error").is_none(),
+                "{label}: décision proposée et fermée"
+            );
+            assert_eq!(
+                payload["decision"], expected,
+                "{label}: diagnostic cohérent"
+            );
+            assert!(matches!(
+                reply["result"]["decision"].as_str(),
+                Some("accept" | "decline" | "cancel")
+            ));
         }
         for (label, permissions, choices) in [
-            ("deny acceptForSession seul", "deny", Some(json!(["acceptForSession"]))),
-            ("deny amendement seul", "deny", Some(json!(["acceptWithExecpolicyAmendment"]))),
+            (
+                "deny acceptForSession seul",
+                "deny",
+                Some(json!(["acceptForSession"])),
+            ),
+            (
+                "deny amendement seul",
+                "deny",
+                Some(json!(["acceptWithExecpolicyAmendment"])),
+            ),
             ("deny accept seul", "deny", Some(json!(["accept"]))),
             ("offre vide", "allow", Some(json!([]))),
             ("offre absente", "allow", None),
@@ -6645,10 +7526,19 @@ for line in sys.stdin:
                 offered["params"]["availableDecisions"] = choices;
             }
             let (reply, _) = approval_response(&offered, permissions).expect(label);
-            assert_eq!(reply["id"], offered["id"], "{label}: identifiant repris tel quel");
-            assert!(reply.get("result").is_none(), "{label}: aucun octroi inventé : {reply}");
+            assert_eq!(
+                reply["id"], offered["id"],
+                "{label}: identifiant repris tel quel"
+            );
+            assert!(
+                reply.get("result").is_none(),
+                "{label}: aucun octroi inventé : {reply}"
+            );
             assert_eq!(reply["error"]["code"], -32000, "{label}");
-            assert_eq!(reply["error"]["message"], "child_request_refused", "{label}");
+            assert_eq!(
+                reply["error"]["message"], "child_request_refused",
+                "{label}"
+            );
         }
     }
 
@@ -6784,6 +7674,684 @@ for line in sys.stdin:
             "PRESENCE: index de décision dans un univers non vide"
         );
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// T012 : présence réelle, absence de réponse automatique, puis nettoyage.
+    /// La fixture réutilise le serveur149. Son déclencheur ne part qu'après
+    /// l'observation du tour, sans course avec la réponse de turn/start.
+    #[test]
+    fn native155_transport_command_forward_borne_et_fin_tour() {
+        use crate::protocol::{ChildProviderRequestId, ChildRequestAnswer, ChildRequestDecision};
+        let root = root("155-command-forward");
+        let trace = root.join("trace.jsonl");
+        let requests_file = root.join("requests.jsonl");
+        let stall_ready = root.join("stdin-stalled");
+        let stall_release = root.join("emit-terminal");
+        let requests: Vec<Value> = (0..5)
+            .map(|index| {
+                json!({
+                    "id": if index == 0 { json!(i64::MIN) } else { json!(format!("cmd-{index}")) },
+                    "method":"item/commandExecution/requestApproval",
+                    "params":{"threadId":"thread-native","turnId":"turn-native",
+                        "itemId":format!("item-{index}"),"startedAtMs":1787686800000i64,
+                        "kind":"command","environmentId":"local",
+                        "command":"printf couleur","cwd":"/tmp",
+                        "commandActions":[{"type":"unknown","command":"printf couleur"}],
+                        "availableDecisions":["accept","cancel"]}
+                })
+            })
+            .collect();
+        // R2 : le cwd reste une citation exacte, contrôles et guillemets
+        // compris. Il ne transforme jamais la commande en effet confiné.
+        for cwd in [
+            json!("/source/non-verifie"),
+            json!("/source/\"citation\"\n\u{1b}[2J\r\u{202e}"),
+            Value::Null,
+        ] {
+            let mut source = requests[0].clone();
+            source["params"]["cwd"] = cwd.clone();
+            let normalized = normalize_child_provider_request(&source, "session-source155")
+                .unwrap()
+                .0;
+            assert_eq!(normalized.details.get("cwd"), Some(&cwd));
+            assert_eq!(normalized.details["effects"]["command"], true);
+        }
+        let mut absent = requests[0].clone();
+        absent["params"].as_object_mut().unwrap().remove("cwd");
+        assert_eq!(
+            normalize_child_provider_request(&absent, "session-source155")
+                .unwrap()
+                .0
+                .details
+                .get("cwd"),
+            Some(&Value::Null)
+        );
+        let mut too_long = requests[0].clone();
+        let cwd = format!("/{}", "é".repeat(512));
+        assert_eq!(cwd.len(), 1025, "borne en octets UTF-8, pas en caractères");
+        too_long["params"]["cwd"] = json!(cwd);
+        assert_eq!(
+            normalize_child_provider_request(&too_long, "session-source155").unwrap_err(),
+            "details_incomplete"
+        );
+        fs::write(
+            &requests_file,
+            requests
+                .iter()
+                .map(|value| format!("{value}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut options = fake_options(&trace);
+        options.child_requests = true;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+                (
+                    "BRIDGET_CODEX_CHILD_REQUESTS_FILE".into(),
+                    requests_file.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_STALL_READY".into(),
+                    stall_ready.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_STALL_RELEASE".into(),
+                    stall_release.to_string_lossy().into_owned(),
+                ),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("155-command-forward")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while transport
+            .provider_identity()
+            .unwrap()
+            .active_turn_id
+            .as_deref()
+            != Some("turn-native")
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            transport
+                .provider_identity()
+                .unwrap()
+                .active_turn_id
+                .as_deref(),
+            Some("turn-native")
+        );
+        write_value(&transport.writer, json!({"method":"native155/requests"})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut forwarded = Vec::new();
+        let mut frames = Vec::new();
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                if let ManagedEventKind::ProviderRequest { request } = event.kind {
+                    forwarded.push(request);
+                }
+            }
+            frames = fs::read_to_string(&trace)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .collect();
+            if forwarded.len() == 4
+                && frames
+                    .iter()
+                    .any(|frame| frame["id"] == "cmd-4" && frame.get("error").is_some())
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if forwarded.len() != 4 {
+            transport.stop();
+        }
+        assert_eq!(
+            forwarded.len(),
+            4,
+            "quatre attentes doivent remonter, reçues {forwarded:?}"
+        );
+        assert_eq!(
+            forwarded[0].provider_request_id,
+            ChildProviderRequestId::Number(i64::MIN)
+        );
+        assert!(forwarded.iter().all(|request| {
+            request.provider_session
+                == transport
+                    .provider_identity()
+                    .unwrap()
+                    .provider_session_id
+                    .as_deref()
+                    .unwrap()
+                && request.turn_id == "turn-native"
+        }));
+        for original in &requests[..4] {
+            assert!(
+                !frames.iter().any(|frame| frame["id"] == original["id"]
+                    && (frame.get("result").is_some() || frame.get("error").is_some())),
+                "une commande forward n'a aucune réponse automatique : {frames:?}"
+            );
+        }
+        assert!(frames.iter().any(|frame| frame
+            == &json!({"id":"cmd-4","error":{"code":-32000,"message":"child_request_refused"}})));
+        // H2 : le fournisseur reste vivant et cesse de lire stdin. La
+        // synchronisation fichier déclenche stdout APRES le writer saturé.
+        write_value(&transport.writer, json!({"method":"native155/stall"})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !stall_ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            stall_ready.is_file(),
+            "le faux fournisseur a fermé sa boucle de lecture stdin"
+        );
+        let writer = transport.writer.clone();
+        let (done, result) = mpsc::channel();
+        let writing_started = Instant::now();
+        let writing = thread::spawn(move || {
+            let outcome = write_value(
+                &writer,
+                json!({"method":"native155/full-pipe","params":{"text":"x".repeat(2 * 1024 * 1024)}}),
+            );
+            let _ = done.send(outcome);
+        });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while transport.writer.try_lock().is_ok() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let writing_locked = transport.writer.try_lock().is_err();
+        fs::write(&stall_release, b"terminal").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut finished = false;
+        let mut terminal_during_write = false;
+        while Instant::now() < deadline {
+            finished |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            });
+            if finished {
+                terminal_during_write = transport.writer.try_lock().is_err();
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let answer = ChildRequestAnswer {
+            request_id: "local-request".into(),
+            provider_session: forwarded[0].provider_session.clone(),
+            turn_id: forwarded[0].turn_id.clone(),
+            provider_request_id: forwarded[0].provider_request_id.clone(),
+            decision: ChildRequestDecision::Accept,
+            answer: None,
+            outcome: "accepted".into(),
+        };
+        let stale = transport.answer_provider_request(&answer);
+        let outcome = result.recv_timeout(Duration::from_secs(4));
+        let writing_elapsed = writing_started.elapsed();
+        let supplier_alive = transport
+            .child
+            .lock()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_none();
+        if outcome.is_err() {
+            // Filet RED : libérer notre propre groupe attesté si l'ancien
+            // writer reste bloqué. Helper149/154 borné TERM/INT, jamais KILL.
+            let mut child = transport.child.lock().unwrap();
+            crate::managed_session::stop_owned_child(&mut child, true, Duration::from_secs(4))
+                .unwrap();
+        }
+        writing.join().unwrap();
+        let stop_started = Instant::now();
+        transport.stop();
+        assert!(
+            writing_locked && terminal_during_write,
+            "stdout doit continuer pendant le pipe plein, sans attendre writer"
+        );
+        assert!(
+            supplier_alive,
+            "l'erreur n'est pas un simple EOF fournisseur"
+        );
+        assert!(
+            writing_elapsed < Duration::from_secs(4),
+            "le budget total STDIO de3s a dépassé sa marge de planification : {writing_elapsed:?}"
+        );
+        assert!(
+            matches!(outcome, Ok(Err(TransportError::Io(ref error))) if error.contains("budget")),
+            "pipe plein : erreur IO bornée attendue, reçu {outcome:?}"
+        );
+        assert!(
+            stop_started.elapsed() < Duration::from_secs(1),
+            "shutdown reste retenu derrière writer"
+        );
+        assert!(
+            finished,
+            "le lecteur traite la fin malgré quatre attentes ouvertes"
+        );
+        assert!(
+            stale.is_err(),
+            "la fin du tour retire les attentes répondables"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// T012 : les corps correspondent aux paramètres0.162.1. Ne pas inventer
+    /// des offres pour fileChange/permissions afin de fabriquer un refus.
+    #[test]
+    fn native155_transport_methodes_et_offres_refusees() {
+        let root = root("155-refus-command");
+        let trace = root.join("trace.jsonl");
+        let requests_file = root.join("requests.jsonl");
+        let command = json!({"threadId":"thread-native","turnId":"turn-native","itemId":"i",
+            "startedAtMs":1787686800000i64,"command":"printf couleur","cwd":"/tmp"});
+        let mut requests = vec![
+            json!({"id":"file","method":"item/fileChange/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"f","startedAtMs":1787686800000i64,"grantRoot":null}}),
+            json!({"id":"root","method":"item/fileChange/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"f","startedAtMs":1787686800000i64,"grantRoot":"/tmp"}}),
+            json!({"id":"permissions","method":"item/permissions/requestApproval","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"p","startedAtMs":1787686800000i64,"cwd":"/tmp","permissions":{"network":{"enabled":true}}}}),
+        ];
+        for (id, offered) in [
+            ("session", json!(["acceptForSession"])),
+            (
+                "amendment",
+                json!([{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["printf"]}}]),
+            ),
+            (
+                "network-rule",
+                json!([{"applyNetworkPolicyAmendment":{"network_policy_amendment":{"action":"allow","host":"example.com"}}}]),
+            ),
+        ] {
+            let mut params = command.clone();
+            params["availableDecisions"] = offered;
+            requests.push(
+                json!({"id":id,"method":"item/commandExecution/requestApproval","params":params}),
+            );
+        }
+        let mut foreign = command;
+        foreign["turnId"] = json!("foreign-turn");
+        foreign["availableDecisions"] = json!(["accept", "decline", "cancel"]);
+        requests.push(json!({"id":"foreign","method":"item/commandExecution/requestApproval","params":foreign}));
+        fs::write(
+            &requests_file,
+            requests
+                .iter()
+                .map(|value| format!("{value}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut options = fake_options(&trace);
+        options.child_requests = true;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+                (
+                    "BRIDGET_CODEX_CHILD_REQUESTS_FILE".into(),
+                    requests_file.to_string_lossy().into_owned(),
+                ),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("155-refus-command")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while transport
+            .provider_identity()
+            .unwrap()
+            .active_turn_id
+            .as_deref()
+            != Some("turn-native")
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            transport
+                .provider_identity()
+                .unwrap()
+                .active_turn_id
+                .as_deref(),
+            Some("turn-native")
+        );
+        write_value(&transport.writer, json!({"method":"native155/requests"})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        let mut replies = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            replies = fs::read_to_string(&trace)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|frame| {
+                    frame.get("method").is_none()
+                        && (frame.get("result").is_some() || frame.get("error").is_some())
+                })
+                .collect();
+            if replies.len() == requests.len() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        events.extend(transport.drain_events());
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.kind, ManagedEventKind::ProviderRequest { .. })),
+            "aucune méthode interdite ne remonte"
+        );
+        for request in requests {
+            assert_eq!(
+                replies.iter().find(|reply| reply["id"] == request["id"]),
+                Some(
+                    &json!({"id":request["id"],"error":{"code":-32000,"message":"child_request_refused"}})
+                ),
+                "refus fermé pour {request}"
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// T014 : aucun formulaire tiers ne devient une question Parent.
+    #[test]
+    fn native155_transport_mcp_tiers_et_exception_bridget() {
+        let root = root("155-mcp");
+        let trace = root.join("trace.jsonl");
+        let requests_file = root.join("requests.jsonl");
+        let mut requests = Vec::new();
+        for (id, mode, extra) in [
+            (
+                "typed",
+                "form",
+                json!({"message":"Choix","requestedSchema":{"type":"object","properties":{"colour":{"type":"string","enum":["bleu","vert"]}},"required":["colour"]}}),
+            ),
+            (
+                "empty",
+                "form",
+                json!({"message":"Vide","requestedSchema":{"type":"object","properties":{}}}),
+            ),
+            (
+                "metadata",
+                "form",
+                json!({"message":"Choix","requestedSchema":{"type":"object","properties":{}},"_meta":{"unknown":true}}),
+            ),
+            (
+                "openai",
+                "openai/form",
+                json!({"message":"Choix","requestedSchema":{}}),
+            ),
+            (
+                "alias",
+                "openaiForm",
+                json!({"message":"Choix","requestedSchema":{}}),
+            ),
+            (
+                "verify",
+                "openai/userVerification",
+                json!({"challenge":"opaque","description":"Vérifier","title":"Validation"}),
+            ),
+            (
+                "url",
+                "url",
+                json!({"message":"Lien","elicitationId":"e","url":"https://example.com"}),
+            ),
+        ] {
+            let mut params = extra;
+            params["serverName"] = json!("third-party");
+            params["threadId"] = json!("thread-native");
+            params["turnId"] = json!("turn-native");
+            params["mode"] = json!(mode);
+            requests
+                .push(json!({"id":id,"method":"mcpServer/elicitation/request","params":params}));
+        }
+        requests.push(json!({"id":"bridget","method":"mcpServer/elicitation/request","params":{"serverName":"bridget","threadId":"thread-native","turnId":"turn-native","mode":"form","message":"Vide","requestedSchema":{"type":"object","properties":{}}}}));
+        fs::write(
+            &requests_file,
+            requests
+                .iter()
+                .map(|value| format!("{value}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut options = fake_options(&trace);
+        options.child_requests = true;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+                (
+                    "BRIDGET_CODEX_CHILD_REQUESTS_FILE".into(),
+                    requests_file.to_string_lossy().into_owned(),
+                ),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("155-mcp")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while transport
+            .provider_identity()
+            .unwrap()
+            .active_turn_id
+            .as_deref()
+            != Some("turn-native")
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            transport
+                .provider_identity()
+                .unwrap()
+                .active_turn_id
+                .as_deref(),
+            Some("turn-native")
+        );
+        write_value(&transport.writer, json!({"method":"native155/requests"})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut events = Vec::new();
+        let mut replies = Vec::new();
+        while Instant::now() < deadline {
+            events.extend(transport.drain_events());
+            replies = fs::read_to_string(&trace)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|frame| frame.get("method").is_none())
+                .collect();
+            if replies.len() == requests.len() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        events.extend(transport.drain_events());
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.kind, ManagedEventKind::ProviderRequest { .. }))
+        );
+        for request in &requests[..requests.len() - 1] {
+            assert_eq!(
+                replies.iter().find(|reply| reply["id"] == request["id"]),
+                Some(&json!({"id":request["id"],"result":{"action":"decline"}})),
+                "tiers refusé sans content : {request}"
+            );
+            let expected_code = if request["params"]["mode"] == "url" {
+                "url_mode_unsupported"
+            } else {
+                "approval_method_unsupported"
+            };
+            let expected_reference =
+                provider_fingerprint(b"delegated-runtime", b"mcpServer/elicitation/request");
+            assert!(
+                events.iter().any(|event| {
+                    serde_json::from_slice::<Value>(&event.raw)
+                        .ok()
+                        .is_some_and(|source| source["id"] == request["id"])
+                        && matches!(&event.kind, ManagedEventKind::Diagnostic { code, reference }
+                        if code == expected_code && reference == &expected_reference)
+                }),
+                "motif {expected_code} attesté pour {request}"
+            );
+        }
+        assert_eq!(
+            replies.iter().find(|reply| reply["id"] == "bridget"),
+            Some(&json!({"id":"bridget","result":{"action":"accept","content":{}}}))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// T014 : secret normatif, puis enveloppe fournisseur distincte de l'API.
+    #[test]
+    fn native155_transport_user_input_secret_et_reponses() {
+        use crate::protocol::{ChildRequestAnswer, ChildRequestDecision};
+        let root = root("155-input");
+        let trace = root.join("trace.jsonl");
+        let requests_file = root.join("requests.jsonl");
+        let requests: Vec<Value> = ["secret", "accept", "decline", "cancel"].into_iter().map(|id| json!({
+            "id":id,"method":"item/tool/requestUserInput","params":{"threadId":"thread-native","turnId":"turn-native","itemId":id,"isBlocking":true,
+                "questions":[{"id":"q1","header":"Choix","question":"Quelle couleur","isSecret":id == "secret","isOther":false,"options":[{"label":"bleu","description":"Couleur"}]}]}
+        })).collect();
+        fs::write(
+            &requests_file,
+            requests
+                .iter()
+                .map(|value| format!("{value}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let mut options = fake_options(&trace);
+        options.child_requests = true;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+                (
+                    "BRIDGET_CODEX_CHILD_REQUESTS_FILE".into(),
+                    requests_file.to_string_lossy().into_owned(),
+                ),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("155-input")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while transport
+            .provider_identity()
+            .unwrap()
+            .active_turn_id
+            .as_deref()
+            != Some("turn-native")
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            transport
+                .provider_identity()
+                .unwrap()
+                .active_turn_id
+                .as_deref(),
+            Some("turn-native")
+        );
+        write_value(&transport.writer, json!({"method":"native155/requests"})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut forwarded = Vec::new();
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                if let ManagedEventKind::ProviderRequest { request } = event.kind {
+                    forwarded.push(request);
+                }
+            }
+            if forwarded.len() == 3 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        if forwarded.len() != 3 {
+            transport.stop();
+        }
+        assert_eq!(
+            forwarded.len(),
+            3,
+            "seules les trois questions non secrètes remontent"
+        );
+        for (request, decision) in forwarded.iter().zip([
+            ChildRequestDecision::Accept,
+            ChildRequestDecision::Decline,
+            ChildRequestDecision::Cancel,
+        ]) {
+            assert_eq!(request.question_ids, vec!["q1"]);
+            let answer = ChildRequestAnswer {
+                request_id: "local-request".into(),
+                provider_session: request.provider_session.clone(),
+                turn_id: request.turn_id.clone(),
+                provider_request_id: request.provider_request_id.clone(),
+                decision,
+                answer: if decision == ChildRequestDecision::Accept {
+                    Some(json!({"q1":["bleu"]}))
+                } else {
+                    None
+                },
+                outcome: "answered".into(),
+            };
+            transport
+                .answer_provider_request(&answer)
+                .expect("réponse fournisseur écrite");
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut replies = Vec::new();
+        while Instant::now() < deadline {
+            replies = fs::read_to_string(&trace)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|frame| frame.get("method").is_none())
+                .collect();
+            if replies.len() == 4 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        assert_eq!(
+            replies.iter().find(|reply| reply["id"] == "accept"),
+            Some(&json!({"id":"accept","result":{"answers":{"q1":{"answers":["bleu"]}}}}))
+        );
+        for id in ["secret", "decline", "cancel"] {
+            assert_eq!(
+                replies.iter().find(|reply| reply["id"] == id),
+                Some(&json!({"id":id,"error":{"code":-32000,"message":"child_request_refused"}}))
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
 

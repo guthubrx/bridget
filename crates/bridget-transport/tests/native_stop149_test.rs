@@ -119,6 +119,7 @@ fn demarrer(f: &Fournisseur) -> CodexAppServerTransport {
         notify_timeout_secs: 3,
         model: Some("gpt-5.6-terra".to_string()),
         permissions: "allow".to_string(),
+        child_requests: false,
         provider_observation: None,
         thread_bootstrap: Default::default(),
         dynamic_tool_handler: None,

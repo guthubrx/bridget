@@ -1,0 +1,661 @@
+{
+  "kind": "targeted_post_audit_delta",
+  "verdict": "PASS_TARGETED_CWD",
+  "is_converge_pass": false,
+  "review_completed_at_utc": "2026-10-12T03:40:11.968590+00:00",
+  "capture_at_utc": "2026-10-12T03:34:03.674256+00:00",
+  "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant",
+  "metadata": {
+    "directory": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/capture-final",
+    "sha256": {
+      "manifest.json": "19b237e4cab90828df37b7df3750b260f60f2d4ed31c31d65d21e162b78fd973",
+      "scope-files.json": "90aeda07d5862e7ee580350d2b3dae38c24b3038fa1940048f5bd60fec1952f1",
+      "delta155-vs154-preparation.patch": "993b6c5d19843ad8b6eb47d5fde8dc9b30f2ed5a6a124fd7d171de994c3e3066"
+    }
+  },
+  "p3_historical": {
+    "json": "/Users/moi/.cache/bridget-delivery155.um4xccv4/converge155-p3.json",
+    "json_sha256": "74a0df9585f1d32b0811c54ed289a6e5d857370b1eaf65a195827d6ad9dce129",
+    "md": "/Users/moi/.cache/bridget-delivery155.um4xccv4/converge155-p3.md",
+    "md_sha256": "073c9e177997a34b925630b3103aa35e26610cbbe1b667ae9eb2a800c39192fa",
+    "note": "Trois passages clos avantcwd. Matrice33FR/14SC/7US non réexécutée ; contrôle ciblé FR019 et SC002/SC014."
+  },
+  "source_guard": {
+    "receipt_before": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-auditfix-r1.json",
+    "receipt_after": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-cwd-r1.json",
+    "receipt_after_sha256": "ecfcc94c9c1ab832dbeeb0bf709b3a92d0bd4abfec19578de43214969c7af0e9",
+    "code_sources": 214,
+    "changed_code_sources": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "before_sha256": "b1fbdbbe7f3856f1109bfcec9a6129cbbcf9decf2760519d5753276c5473d662",
+        "after_sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs",
+        "before_sha256": "708955001eb445c9449f78e5d136a34c9bc1d8782a637509732e5eba6d4fa886",
+        "after_sha256": "8ef88dd8edd1c7c388e66607316fec62599e1cd0e21e49a6c5715ff89bff36e4"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+        "before_sha256": "18428af435a1aa782d5351b33c94bb2c66f9815b2afa88d5398722f4dcf14933",
+        "after_sha256": "a710580b06d7f147662eb733439a7c513ff6b93c0b08482b9dac83adca064742"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs",
+        "before_sha256": "db3fba7b0026a2ff95fe53f40d0e77ca610bd7bf7294a7436375e640bcbed9bc",
+        "after_sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+        "before_sha256": "6c8852d7293d620252368820f80e54e0d4171d042b336c43856a42cefcb906b9",
+        "after_sha256": "ac13e0cfd0becdec45a3e24ae7973ddbb94c18e74b00ce40ddf0a93fca76c5e8"
+      }
+    ],
+    "unchanged_code_sources": 209,
+    "all214_current_match_receipt": true,
+    "scope_sources_before_after_stable": 61,
+    "changed_scope_files_since_precwd": [
+      "crates/bridget-daemon/src/daemon/native_child_requests.rs",
+      "crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs",
+      "crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+      "crates/bridget-daemon/src/native_permissions.rs",
+      "crates/bridget-transport/src/codex_app_server.rs",
+      "docs/delegation-native.md",
+      "specs/155-demandes-enfant/adversarial-review-claude.md",
+      "specs/155-demandes-enfant/contracts/child-requests155.md",
+      "specs/155-demandes-enfant/contracts/codex-requests.md",
+      "specs/155-demandes-enfant/implementation.md",
+      "specs/155-demandes-enfant/spec.md",
+      "specs/155-demandes-enfant/validation/recette.md",
+      "specs/155-demandes-enfant/validation/tests-155.md"
+    ],
+    "unchanged_scope_files_since_precwd": 48,
+    "tasks_sha256": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+    "tasks_unchanged": true
+  },
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+      "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+      "ranges": [
+        [
+          266,
+          338
+        ],
+        [
+          377,
+          386
+        ],
+        [
+          516,
+          560
+        ],
+        [
+          596,
+          643
+        ],
+        [
+          903,
+          938
+        ]
+      ],
+      "read_ranges": [
+        [
+          266,
+          338
+        ],
+        [
+          377,
+          386
+        ],
+        [
+          516,
+          560
+        ],
+        [
+          596,
+          643
+        ],
+        [
+          903,
+          938
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+      "ranges": [
+        [
+          1383,
+          1389
+        ],
+        [
+          1481,
+          1501
+        ],
+        [
+          2398,
+          2405
+        ]
+      ],
+      "read_ranges": [
+        [
+          1383,
+          1389
+        ],
+        [
+          1481,
+          1501
+        ],
+        [
+          2398,
+          2405
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs",
+      "sha256": "8f1ffbee487469e0927c57e2463c6528c789fa9d506d50820808b6eb5732565d",
+      "ranges": [
+        [
+          538,
+          682
+        ]
+      ],
+      "read_ranges": [
+        [
+          538,
+          682
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "ac13e0cfd0becdec45a3e24ae7973ddbb94c18e74b00ce40ddf0a93fca76c5e8",
+      "ranges": [
+        [
+          2440,
+          2502
+        ],
+        [
+          2540,
+          2623
+        ],
+        [
+          7690,
+          7755
+        ]
+      ],
+      "read_ranges": [
+        [
+          2440,
+          2502
+        ],
+        [
+          2540,
+          2623
+        ],
+        [
+          7690,
+          7755
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+      "ranges": [
+        [
+          42,
+          95
+        ],
+        [
+          97,
+          120
+        ],
+        [
+          174,
+          236
+        ]
+      ],
+      "read_ranges": [
+        [
+          42,
+          95
+        ],
+        [
+          97,
+          120
+        ],
+        [
+          174,
+          236
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/plan.md",
+      "sha256": "6b91085460e2d197220d2ba30aebfa8e235094ae939a421a856aac37bf60a30e",
+      "ranges": [
+        [
+          101,
+          111
+        ]
+      ],
+      "read_ranges": [
+        [
+          101,
+          111
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+      "sha256": "a710580b06d7f147662eb733439a7c513ff6b93c0b08482b9dac83adca064742",
+      "ranges": [
+        [
+          410,
+          430
+        ],
+        [
+          476,
+          532
+        ]
+      ],
+      "read_ranges": [
+        [
+          410,
+          430
+        ],
+        [
+          476,
+          532
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs",
+      "sha256": "8ef88dd8edd1c7c388e66607316fec62599e1cd0e21e49a6c5715ff89bff36e4",
+      "ranges": [
+        [
+          39,
+          69
+        ]
+      ],
+      "read_ranges": [
+        [
+          39,
+          69
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/spec.md",
+      "sha256": "4ea08fcb82ee8b13a3cd4ae679b107ab8439fb75137625d702a8718212741c71",
+      "ranges": [
+        [
+          255,
+          272
+        ],
+        [
+          335,
+          367
+        ]
+      ],
+      "read_ranges": [
+        [
+          255,
+          272
+        ],
+        [
+          335,
+          367
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/contracts/codex-requests.md",
+      "sha256": "1e61b236f47139f314b0061313f8c9807863fb6d62c1538d1cfba9f9a9cda6a5",
+      "ranges": [
+        [
+          1,
+          35
+        ],
+        [
+          40,
+          107
+        ],
+        [
+          180,
+          223
+        ]
+      ],
+      "read_ranges": [
+        [
+          1,
+          35
+        ],
+        [
+          40,
+          107
+        ],
+        [
+          180,
+          223
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/contracts/child-requests155.md",
+      "sha256": "859fba14e7fcd8b195b450de4984003d4b52c0b63cad88ff254c65dc0c543c0b",
+      "ranges": [
+        [
+          135,
+          153
+        ],
+        [
+          170,
+          194
+        ],
+        [
+          286,
+          294
+        ],
+        [
+          319,
+          325
+        ]
+      ],
+      "read_ranges": [
+        [
+          135,
+          153
+        ],
+        [
+          170,
+          194
+        ],
+        [
+          286,
+          294
+        ],
+        [
+          319,
+          325
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/docs/delegation-native.md",
+      "sha256": "6a745bf1adfcbc390a793adc6839f4856265032a465356b9981ff169aa387c86",
+      "ranges": [
+        [
+          193,
+          201
+        ]
+      ],
+      "read_ranges": [
+        [
+          193,
+          201
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/adversarial-review-claude.md",
+      "sha256": "154c41ed95cc03eda3dfd54edcb29da4f5bbf32c2ff7c896be9fa9920476faf7",
+      "ranges": [
+        [
+          219,
+          236
+        ]
+      ],
+      "read_ranges": [
+        [
+          219,
+          236
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/implementation.md",
+      "sha256": "7e66fb69093eb5e9e3291f0d99da758ac2c0ea5851775d3960854e5098d7a3b3",
+      "ranges": [
+        [
+          356,
+          364
+        ]
+      ],
+      "read_ranges": [
+        [
+          356,
+          364
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/recette.md",
+      "sha256": "e2674cf2687ecc5146075c2e7535d46d7c77e95d5ed6d105674a1dd54805709b",
+      "ranges": [
+        [
+          228,
+          232
+        ],
+        [
+          244,
+          249
+        ]
+      ],
+      "read_ranges": [
+        [
+          228,
+          232
+        ],
+        [
+          244,
+          249
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/tests-155.md",
+      "sha256": "9127059fb91f519991b459622d777c1eb014bdba32ad2e7a32337f70320961f4",
+      "ranges": [
+        [
+          388,
+          396
+        ]
+      ],
+      "read_ranges": [
+        [
+          388,
+          396
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T03:40:11.968590+00:00",
+      "semantic_audit": true,
+      "context_only": false
+    }
+  ],
+  "checks": [
+    {
+      "requirement": "FR019 / contrats fournisseur et enfant",
+      "status": "PASS_TARGETED",
+      "proofs": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+          "line": 2603,
+          "sha256": "ac13e0cfd0becdec45a3e24ae7973ddbb94c18e74b00ce40ddf0a93fca76c5e8",
+          "evidence": "            // Dossier cité par le fournisseur, jamais résolu ni remplacé par\n            // celui de la session. L'absence reste explicitement null.\n            let cwd = params.get(\"cwd\").unwrap_or(&Value::Null);\n            if cwd.as_str().is_some_and(|cwd| cwd.len() > 1024) {\n                return Err(\"details_incomplete\");\n            }"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs",
+          "line": 73,
+          "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+          "evidence": "        || details.get(\"cwd\").is_some_and(|cwd| match cwd {\n            Value::Null => false,\n            Value::String(cwd) => cwd.len() > 1024,\n            _ => true,\n        })\n    {\n        return deny(\"details_incomplete\");"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+          "line": 529,
+          "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+          "evidence": "        let cwd = request.details[\"cwd\"]\n            .as_str()\n            .map(|cwd| format!(\"{cwd:?}\"));\n        let mut facts=json!({\"method\":quoted_text(request.details[\"method\"].as_str().unwrap_or(\"unsupported\"),128),\n            \"duration\":if request.details[\"duration\"]==\"once\"{\"once\"}else{\"unsupported\"},\n            \"command\":command,\n            \"cwd\":cwd,\"cwd_verified\":false,"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+          "line": 542,
+          "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+          "evidence": "        if raw_command.len() > 1024 || facts.len() > 4096 {\n            verdict = ChildRequestVerdict::Forbidden;\n            code = Some(\"details_incomplete\");\n            facts=json!({\"method\":\"unsupported\",\"verdict_code\":\"details_incomplete\",\"question_ids\":[]}).to_string();\n        }"
+        }
+      ],
+      "evidence": "cwd conservé chaîne/null ; absent→null,1024octetsUTF8 ; autres typesfermés. Debugentier sans fallback, cwd_verifiedfalse et facts4096."
+    },
+    {
+      "requirement": "SC002/SC014 aucun droit issu du cwd",
+      "status": "PASS_TARGETED",
+      "proofs": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs",
+          "line": 201,
+          "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+          "evidence": "    if file_write && !full {\n        return deny(\"file_confinement_unproven\");\n    }\n    if network && !full && sandbox.get(\"networkAccess\") != Some(&Value::Bool(true)) {\n        return deny(\"network_not_granted\");\n    }\n    if command && !full {\n        return deny(\"command_unbounded\");"
+        }
+      ],
+      "evidence": "Gardes command/file_write WSW restentfermées. Cwd ne crée aucune permission/racine/durée/décision."
+    },
+    {
+      "requirement": "Oracles existants Human/T032/transport",
+      "status": "SOURCE_READ_ROOT_TEST_PASS",
+      "proofs": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+          "line": 487,
+          "sha256": "a710580b06d7f147662eb733439a7c513ff6b93c0b08482b9dac83adca064742",
+          "evidence": "            let raw_cwd = request.details[\"cwd\"].as_str().unwrap();\n            assert!(raw_cwd.len() > 600 && raw_cwd.len() <= 1024);\n            let cwd = facts[\"cwd\"].as_str().unwrap();\n            assert_eq!(cwd, format!(\"{raw_cwd:?}\"));\n            assert!(cwd.contains(\"FIN_CWD155\") && cwd.contains(\"\\\\n\") && cwd.contains(\"\\\\u{202e}\"));\n            assert!(!cwd.chars().any(bridget_core::is_disallowed_control));\n            assert_eq!(facts[\"cwd_verified\"], false);"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs",
+          "line": 61,
+          "sha256": "8ef88dd8edd1c7c388e66607316fec62599e1cd0e21e49a6c5715ff89bff36e4",
+          "evidence": "    assert!(context[\"facts\"][\"cwd\"].is_null());\n    assert_eq!(context[\"facts\"][\"cwd_verified\"], false);\n    assert_eq!(context[\"facts\"][\"parent_sandbox\"], \"dangerFullAccess\");"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+          "line": 7731,
+          "sha256": "ac13e0cfd0becdec45a3e24ae7973ddbb94c18e74b00ce40ddf0a93fca76c5e8",
+          "evidence": "        let cwd = format!(\"/{}\", \"é\".repeat(512));\n        assert_eq!(cwd.len(), 1025, \"borne en octets UTF-8, pas en caractères\");\n        too_long[\"params\"][\"cwd\"] = json!(cwd);\n        assert_eq!(\n            normalize_child_provider_request(&too_long, \"session-source155\").unwrap_err(),\n            \"details_incomplete\"\n        );"
+        }
+      ],
+      "evidence": "cwdhostilecomplet>600, Debugcontrôles/bidi, nullHuman, absent/nulltransport,1025octetsUTF8refusés."
+    },
+    {
+      "requirement": "H3/q²/LOW082",
+      "status": "UNCHANGED_RECHECKED",
+      "proofs": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+          "line": 611,
+          "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+          "evidence": "    })();\n    if let Some((config, summary)) = human_notification {\n        // Le programme externe ne détient jamais le verrou métier. Seule la\n        // consignation locale de sa tentative reprend brièvement state.\n        let pushed = crate::human_inbox::push_to_channel(&config, &summary);"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1385,
+          "sha256": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+          "evidence": "            // O(log tâches + log demandes + q² + B), réponse<=8Kio ; même propriétaire\n            // direct que recover_owner, sans écriture pour un refus ou un rejeu.\n            if [task_id, request_id].iter().any(|id| {"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs",
+          "line": 538,
+          "sha256": "8f1ffbee487469e0927c57e2463c6528c789fa9d506d50820808b6eb5732565d",
+          "evidence": "/// Lance le canal avec un budget commun de3s pour stdin, stderr et attente.\n/// L'échec devient une tentative consignée. SIGTERM ajoute au plus250ms de\n/// récolte ; un enfant qui l'ignore peut survivre, sans retenir l'appelant.\npub fn push_to_channel(\n    config: &HumanChannelConfig,"
+        }
+      ],
+      "evidence": "H3reste horsstate avec3s+250ms ; q²exactdocumenté ; LOW082persiste1sparémission."
+    }
+  ],
+  "root_validation": {
+    "file": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-cwd-r1.json",
+    "sha256": "ecfcc94c9c1ab832dbeeb0bf709b3a92d0bd4abfec19578de43214969c7af0e9",
+    "rc": 0,
+    "pass": 71,
+    "fail": 0,
+    "seconds": 64.81,
+    "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-cwd-r1.log",
+    "log_sha256": "2be93808d3211bfe126877fec072bae9eba5c2d8652f575ac3c353a531d7ba16",
+    "log_hash_verified": true,
+    "sources_stable_count": 214,
+    "execution_owner": "root",
+    "execution_by_this_reviewer": false
+  },
+  "findings_new": [],
+  "limits": [
+    "Contrôlecwd ciblé après audit ; aucune quatrième passe globaleConverge, aucun code/test exécuté.",
+    "209SHAinchangés prouvent absence de delta, pas nouvelle lecture intégrale.",
+    "1025octetsUTF8 couvert par oraclelu ; typesinvalides et budgetfacts4096 prouvés par gardessources, aucun nouveau test spécifique revendiqué.",
+    "8docs changés lus dans leurs passagescwd/provenance, pas intégralement.",
+    "Recette4/4,087/STDIO4PASS et FULL2259/15/72 restentpré-cwd. Aucun75PASSfinal niGREENglobal."
+  ]
+}

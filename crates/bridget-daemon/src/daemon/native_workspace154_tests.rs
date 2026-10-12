@@ -421,7 +421,7 @@ fn native154_partage_discovery_termine_et_statut_compatibles150() {
         "message_id":task.mission,"agent_type":"native-test","model":"custom/model","effort":"high", "cwd":task.cwd,
         "posture":"development","mission_deadline_at":null,"round":1,"idle_deadline_at":null,"continuable":false,
         "result":null,"error":null,"work_state":"working","summary":null,"summary_truncated":false,"result_bytes":null,
-        "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0});
+        "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0,"pending_requests":[],"recent_requests":[]});
     assert_eq!(first, expected, "contrat courant 150 complété par 152/153");
     assert_eq!(serde_json::to_vec(&first).unwrap(), serde_json::to_vec(&expected).unwrap());
     let mut expected_status = expected.clone();

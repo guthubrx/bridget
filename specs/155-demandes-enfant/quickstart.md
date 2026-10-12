@@ -1,7 +1,7 @@
 # Vérification rapide - Session155
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant`.
 
 ## Environnement de test (obligatoire)
 
@@ -36,8 +36,9 @@ Suite complète avant clôture : même environnement,
 13. Non-régression : filtres `native148`, `native149`, `native150`, `delegation149`,
     `spec_087`, `elicitation`, `approval_response`, et le test `claude_native_permissions_test`.
 
-## Recette manuelle (T037, avec l'utilisateur)
+## Recette manuelle (T040, avec l'utilisateur)
 
+Exige la validation explicite de l’utilisateur avant de cocher T040.
 Sans relancer de service. Utiliser un daemon de test isolé (`BRIDGET_HOME` privé).
 
 1. Déléguer à un enfant Codex avec `child_requests: "forward"` et une tâche qui pose
@@ -51,3 +52,20 @@ Sans relancer de service. Utiliser un daemon de test isolé (`BRIDGET_HOME` priv
    accès réseau que le parent n'a pas : refus automatique, aucun item.
 6. Ne pas répondre : après 600 s (question), l'issue est `expired` et l'enfant a reçu un refus.
 6. Consigner le résultat dans `specs/155-demandes-enfant/validation/recette.md`.
+
+## Gate fournisseur avant T003
+
+Version courante :0.162.1 ; 0.161.0 était l’hypothèse historique. Schéma primaire
+généré par root dans /Users/moi/.cache/bridget-delivery155.um4xccv4/codex-schema155-0.162.1.
+T001 acquise 180 PASS/0 FAIL ; T002 final PASS attestée dans validation/gate-schema155.json ; protocole/store en validation.
+La recette n’exige aucune seconde génération ni test supplémentaire.
+
+fileChange réelle est refusée en v1 (approval_method_unsupported), grantRoot
+non nul duration_unsupported. Le cas classifier synthétique DF→Human n’est pas
+une preuve de route Human fileChange. permissions reçoit une erreur JSON-RPC,
+jamais decision:decline. user_input est adapté en answers{qid:{answers:[string]}} ;
+refus/expiration utilisent child_request_refused, faute de decline/cancel natif.
+Élicitation MCP tierce : refus v1 approval_method_unsupported pour tout formulaire, même classique/typé/non vide ; URL reste url_mode_unsupported. user_input seul est routable Parent. Exception vide Bridget distincte.
+La recette commande demande kind=command, offre explicite et droits compatibles ;
+approval_policy=never ne crée aucune demande ou route humaine. T040 reste
+conditionnée à la validation explicite utilisateur.

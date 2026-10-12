@@ -4,6 +4,9 @@
 //! `handle_locked` est utilisé volontairement : aucun tick, donc aucun
 //! lancement caché — chaque `spawn_task` reste explicite dans le test.
 
+#[path = "native_child_requests155_tests.rs"]
+mod native_child_requests155_tests;
+
 use super::*;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -173,6 +176,7 @@ pub(super) fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, po
         reply_timeout: None,
         keep_alive_secs: None,
         brief: None,
+        child_requests: None,
         workspace: None,
     }
 }
@@ -180,6 +184,372 @@ pub(super) fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, po
 pub(super) fn insert_fact(st: &mut DaemonState, fact: bridget_transport::protocol::ProviderPermissions, scope: Option<&str>) {
     st.native_permission_facts
         .insert("conn-1".into(), (fact, scope.map(str::to_owned)));
+}
+
+#[test]
+fn native155_admission_forward_codex() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("fwd155");
+    let cwd = st
+        .fixture_root
+        .as_ref()
+        .unwrap()
+        .0
+        .join("project-149")
+        .canonicalize()
+        .unwrap();
+    insert_fact(
+        &mut st,
+        codex_fact(
+            cwd.to_str().unwrap(),
+            json!({"type":"dangerFullAccess"}),
+            "never",
+        ),
+        None,
+    );
+    let mut request = delegate_request(
+        "native-test",
+        "fwd155",
+        cwd.to_str().unwrap(),
+        Some(SpawnPosture::Development),
+    );
+    if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+        *child_requests = Some("forward".into());
+    }
+    let receipt = handle_locked("conn-1", request, &mut st).unwrap();
+    let mut task = st
+        .delegation_store
+        .get(receipt["task_id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.child_requests.as_deref(), Some("forward"));
+    spawn_task(&mut st, &mut task).unwrap();
+    let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+        panic!("lancement attendu")
+    };
+    assert_eq!(
+        prepared
+            .env
+            .get(crate::wrapper::NATIVE_CHILD_REQUESTS_ENV)
+            .and_then(|value| value.to_str()),
+        Some("forward")
+    );
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native155_admission_forward_non_supporte() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("non155");
+    let cwd = st
+        .fixture_root
+        .as_ref()
+        .unwrap()
+        .0
+        .join("project-149")
+        .canonicalize()
+        .unwrap();
+    insert_fact(
+        &mut st,
+        codex_fact(
+            cwd.to_str().unwrap(),
+            json!({"type":"dangerFullAccess"}),
+            "never",
+        ),
+        None,
+    );
+    let mut request = delegate_request(
+        "claude-child",
+        "non155",
+        cwd.to_str().unwrap(),
+        Some(SpawnPosture::Development),
+    );
+    if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+        *child_requests = Some("forward".into());
+    }
+    assert_eq!(
+        handle_locked("conn-1", request, &mut st).unwrap_err(),
+        "child_requests_unsupported"
+    );
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(rx.try_recv().is_err());
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native155_admission_auto_review_refuse() {
+    for case in [
+        "auto_review",
+        "reviewer_absent",
+        "policy_incomplete",
+        "parent_absent",
+    ] {
+        let (mut st, config, rx, _reader) = fixture_with_reader("auto155");
+        let cwd = st
+            .fixture_root
+            .as_ref()
+            .unwrap()
+            .0
+            .join("project-149")
+            .canonicalize()
+            .unwrap();
+        let mut fact = codex_fact(
+            cwd.to_str().unwrap(),
+            json!({"type":"dangerFullAccess"}),
+            "never",
+        );
+        match case {
+            "auto_review" => fact.provider_policy["approvals_reviewer"] = json!("auto_review"),
+            "reviewer_absent" => {
+                fact.provider_policy
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("approvals_reviewer");
+            }
+            "policy_incomplete" => {
+                fact.provider_policy
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("approval_policy");
+            }
+            _ => {}
+        }
+        if case != "parent_absent" {
+            insert_fact(&mut st, fact, None);
+        }
+        let mut request = delegate_request(
+            "native-test",
+            "auto155",
+            cwd.to_str().unwrap(),
+            Some(SpawnPosture::Development),
+        );
+        if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+            *child_requests = Some("forward".into());
+        }
+        assert_eq!(
+            handle_locked("conn-1", request, &mut st).unwrap_err(),
+            "child_requests_reviewer_unsupported",
+            "{case}"
+        );
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        let _ = fs::remove_file(&config.db_path);
+    }
+}
+
+#[test]
+fn native155_admission_guardian_subagent_refuse() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("guard155");
+    let cwd = st
+        .fixture_root
+        .as_ref()
+        .unwrap()
+        .0
+        .join("project-149")
+        .canonicalize()
+        .unwrap();
+    let mut fact = codex_fact(
+        cwd.to_str().unwrap(),
+        json!({"type":"dangerFullAccess"}),
+        "never",
+    );
+    fact.provider_policy["approvals_reviewer"] = json!("guardian_subagent");
+    insert_fact(&mut st, fact, None);
+    let mut request = delegate_request(
+        "native-test",
+        "guard155",
+        cwd.to_str().unwrap(),
+        Some(SpawnPosture::Development),
+    );
+    if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+        *child_requests = Some("forward".into());
+    }
+    assert_eq!(
+        handle_locked("conn-1", request, &mut st).unwrap_err(),
+        "child_requests_reviewer_unsupported"
+    );
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(rx.try_recv().is_err());
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native155_admission_octets_canoniques_inchanges() {
+    let request = delegate_request("native-test", "canonical155", "/tmp", None);
+    let canonical = serde_json::to_vec(&request).unwrap();
+    assert_eq!(canonical.as_slice(), br#"{"operation":"delegate","request_id":"canonical155","agent_type":"native-test","model":"custom/model","effort":"high","task":"Mission fixture 149","cwd":"/tmp","posture":null}"#);
+    let mut explicit = request;
+    if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut explicit {
+        *child_requests = Some("deny".into());
+    }
+    let explicit = serde_json::to_vec(&explicit).unwrap();
+    assert_ne!(canonical, explicit);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&explicit).unwrap()["child_requests"],
+        "deny"
+    );
+}
+
+#[test]
+fn native155_admission_rejeu_autre_valeur_envelope_mismatch() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("replay155");
+    let cwd = st
+        .fixture_root
+        .as_ref()
+        .unwrap()
+        .0
+        .join("project-149")
+        .canonicalize()
+        .unwrap();
+    insert_fact(
+        &mut st,
+        codex_fact(
+            cwd.to_str().unwrap(),
+            json!({"type":"dangerFullAccess"}),
+            "never",
+        ),
+        None,
+    );
+    let mut request = delegate_request(
+        "native-test",
+        "replay155",
+        cwd.to_str().unwrap(),
+        Some(SpawnPosture::Development),
+    );
+    let receipt = handle_locked("conn-1", request.clone(), &mut st).unwrap();
+    let id = receipt["task_id"].as_str().unwrap();
+    assert_eq!(
+        handle_locked("conn-1", request.clone(), &mut st).unwrap()["task_id"],
+        id
+    );
+    for mode in ["deny", "forward"] {
+        if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+            *child_requests = Some(mode.into());
+        }
+        assert_eq!(
+            handle_locked("conn-1", request.clone(), &mut st).unwrap_err(),
+            "envelope_mismatch"
+        );
+    }
+    let task = st.delegation_store.get(id).unwrap().unwrap();
+    assert_eq!(task.child_requests, None);
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+    assert!(rx.try_recv().is_err());
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native155_admission_politique_enfant_inchangee() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("policy155");
+    let cwd = st
+        .fixture_root
+        .as_ref()
+        .unwrap()
+        .0
+        .join("project-149")
+        .canonicalize()
+        .unwrap();
+    let fact = codex_fact(
+        cwd.to_str().unwrap(),
+        json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[cwd.to_str().unwrap()]}),
+        "never",
+    );
+    insert_fact(&mut st, fact.clone(), None);
+    let mut policies = Vec::new();
+    for (key, mode) in [
+        ("policy155-deny", None),
+        ("policy155-forward", Some("forward")),
+    ] {
+        let mut request = delegate_request(
+            "native-test",
+            key,
+            cwd.to_str().unwrap(),
+            Some(SpawnPosture::Development),
+        );
+        if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+            *child_requests = mode.map(str::to_owned);
+        }
+        let receipt = handle_locked("conn-1", request, &mut st).unwrap();
+        let task = st
+            .delegation_store
+            .get(receipt["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        policies.push(task.permission_snapshot.unwrap().child_policy);
+    }
+    assert_eq!(policies[0], policies[1]);
+    assert_eq!(policies[1], fact.provider_policy);
+    assert_eq!(policies[1]["approval_policy"], "never");
+    assert_eq!(policies[1]["approvals_reviewer"], "user");
+    assert!(rx.try_recv().is_err());
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native155_denyenv_absent_et_heritage_forward_retire() {
+    for mode in [None, Some("deny")] {
+        let (mut st, config, rx, _reader) = fixture_with_reader("deny155");
+        let cwd = st
+            .fixture_root
+            .as_ref()
+            .unwrap()
+            .0
+            .join("project-149")
+            .canonicalize()
+            .unwrap();
+        let fact = codex_fact(
+            cwd.to_str().unwrap(),
+            json!({"type":"dangerFullAccess"}),
+            "never",
+        );
+        insert_fact(&mut st, fact.clone(), None);
+        let mut request = delegate_request(
+            "native-test",
+            "deny155",
+            cwd.to_str().unwrap(),
+            Some(SpawnPosture::Development),
+        );
+        if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request {
+            *child_requests = mode.map(str::to_owned);
+        }
+        let receipt = handle_locked("conn-1", request, &mut st).unwrap();
+        let mut task = st
+            .delegation_store
+            .get(receipt["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        spawn_task(&mut st, &mut task).unwrap();
+        let ManagedSupervisorCommand::Start { mut prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("lancement attendu")
+        };
+        assert!(
+            !prepared
+                .env
+                .contains_key(crate::wrapper::NATIVE_CHILD_REQUESTS_ENV)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                prepared.env[crate::native_permissions::CHILD_POLICY_ENV]
+                    .to_str()
+                    .unwrap()
+            )
+            .unwrap(),
+            fact.provider_policy
+        );
+        prepared.env.insert(
+            crate::wrapper::NATIVE_CHILD_REQUESTS_ENV.into(),
+            "forward".into(),
+        );
+        native_child_env(&task, &mut prepared).unwrap();
+        assert!(
+            !prepared
+                .env
+                .contains_key(crate::wrapper::NATIVE_CHILD_REQUESTS_ENV)
+        );
+        assert_eq!(
+            task.permission_snapshot.unwrap().child_policy,
+            fact.provider_policy
+        );
+        let _ = fs::remove_file(&config.db_path);
+    }
 }
 
 #[test]
@@ -205,6 +575,9 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
         clés,
         [
             "brief_max_bytes",
+            "child_request_human_window_secs",
+            "child_request_parent_window_secs",
+            "child_requests_default",
             "cwd_root",
             "cwd_scope",
             "keep_alive_max_secs",
@@ -229,7 +602,14 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
     assert_eq!(catalogue["keep_alive_min_secs"], 60);
     assert_eq!(catalogue["keep_alive_max_secs"], 7200);
     assert_eq!(catalogue["max_rounds"], 8);
+    assert_eq!(catalogue["child_requests_default"], "deny");
+    assert_eq!(catalogue["child_request_parent_window_secs"], 600);
+    assert_eq!(catalogue["child_request_human_window_secs"], 3600);
     for entry in fixture_entries(&catalogue) {
+        assert_eq!(
+            entry["child_requests_supported"],
+            entry["protocol"] == "codex_app_server"
+        );
         assert_eq!(entry["inherit"], true, "{}", entry["agent_type"]);
         assert_eq!(entry["development"], true, "{}", entry["agent_type"]);
         assert!(entry["inherit_refusal"].is_null());
@@ -379,6 +759,7 @@ fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefin
         mission_issued_at: None,
         restart_resumes: 0,
         cancel_stopped: Vec::new(),
+        child_requests: None,
         workspace: None,
         workspace_report_mission: None,
     }

@@ -1,0 +1,43 @@
+{
+  "captured_at": "2026-10-12T02:14:56.827837+00:00",
+  "namespace": "/private/tmp/b155.2s2_gkz3/ns",
+  "task": {
+    "task_id": "8de7fceb-855b-4788-acd6-04ec8a367e83",
+    "state": "result_available",
+    "result": "Je lance la demande de couleur avec l’outil prévu et j’attends ta réponse.\nMission recette155 terminée. Couleur reçue : Bleu.",
+    "error": null,
+    "round": 1,
+    "mission_deadline_at": 1791772510
+  },
+  "request": {
+    "request_id": "b3dddb7f6ab0951725df7de723736a00",
+    "task_id": "8de7fceb-855b-4788-acd6-04ec8a367e83",
+    "child_instance": "b1a16f3b-5086-4e76-8054-97f7f5b05817",
+    "provider_session": "codex-app-server-99095",
+    "turn_id": "01a12dbf-da99-73d1-98c2-1923eb638cbe",
+    "provider_request_id": "0",
+    "content_hash": "d78e064a83b5d942933fbdb52545aa2e1de75e58788bba9db66e4153a4894534",
+    "kind": "user_input",
+    "verdict": "parent",
+    "state": "answered",
+    "outcome": "answered_by_parent",
+    "summary": "Demande user_input de l'enfant",
+    "facts_json": "{\"child_posture\":\"development\",\"command\":\"\",\"duration\":\"once\",\"method\":\"item/tool/requestUserInput\",\"network\":false,\"parent_sandbox\":\"dangerFullAccess\",\"paths_cited\":[],\"paths_verified\":false,\"question_ids\":[\"couleur155\"],\"verdict_code\":null}",
+    "model_text": " Quelle couleur pour la recette155 ?",
+    "offered_json": "[\"accept\",\"decline\",\"cancel\"]",
+    "created_at": 1791768917,
+    "deadline_at": 1791769517,
+    "decision": "accept",
+    "answer_json": "{\"couleur155\":[\"Bleu\"]}",
+    "decided_by": "parent",
+    "decided_at": 1791768944,
+    "delivery_state": "delivered",
+    "void_reason": null,
+    "sent_at": 1791768944,
+    "delivered_at": 1791768944,
+    "inbox_item_id": null,
+    "inbox_settled": 0
+  },
+  "real_provider": "Codex0.162.1",
+  "source_note": "real run before environmentId local fix; user_input path unchanged"
+}

@@ -70,7 +70,9 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
             last_reminded_at INTEGER
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_human_inbox_open_dedup
-            ON human_inbox(dedup_key) WHERE state = 'open';",
+            ON human_inbox(dedup_key) WHERE state = 'open';
+        CREATE INDEX IF NOT EXISTS idx_human_inbox_exact_dedup
+            ON human_inbox(dedup_key,created_at,id);",
         kinds = HumanInboxKind::sql_in_clause(),
         states = state_in_clause(),
         producers = producer_in_clause(),
@@ -190,6 +192,19 @@ pub fn get(conn: &Connection, item_id: &str) -> rusqlite::Result<Option<HumanInb
     conn.query_row(
         &format!("{SELECT_ITEM} WHERE id = ?1"),
         params![item_id],
+        row_to_frame,
+    )
+    .optional()
+}
+
+/// O(log n+B), clé EXACTE ; un item résolu reste réutilisable après une panne.
+pub(crate) fn find_by_dedup_key(
+    conn: &Connection,
+    key: &str,
+) -> rusqlite::Result<Option<HumanInboxItemFrame>> {
+    conn.query_row(
+        &format!("{SELECT_ITEM} WHERE dedup_key=?1 ORDER BY created_at,id LIMIT 1"),
+        [key],
         row_to_frame,
     )
     .optional()
@@ -520,13 +535,22 @@ pub fn channel_summary(
     }
 }
 
-/// Lance la commande du canal avec le résumé JSON sur stdin. Ne bloque jamais
-/// le dépôt : tout échec devient une tentative consignée.
+/// Lance le canal avec un budget commun de3s pour stdin, stderr et attente.
+/// L'échec devient une tentative consignée. SIGTERM ajoute au plus250ms de
+/// récolte ; un enfant qui l'ignore peut survivre, sans retenir l'appelant.
 pub fn push_to_channel(
     config: &HumanChannelConfig,
     summary: &ChannelSummary,
 ) -> Result<(), String> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_secs(3);
     let payload = serde_json::to_vec(summary).map_err(|error| error.to_string())?;
+    if Instant::now() >= deadline {
+        return Err("délai canal dépassé avant lancement".into());
+    }
     let mut child = Command::new(&config.command[0])
         .args(&config.command[1..])
         .stdin(Stdio::piped())
@@ -534,24 +558,128 @@ pub fn push_to_channel(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("lancement: {error}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(&payload)
-            .map_err(|error| format!("stdin: {error}"))?;
+    let result = (|| -> Result<(), String> {
+        let input = child.stdin.take().ok_or("stdin canal indisponible")?;
+        let mut stderr = child.stderr.take().ok_or("stderr canal indisponible")?;
+        for fd in [input.as_raw_fd(), stderr.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+            {
+                return Err(format!(
+                    "canal non bloquant indisponible: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+        let mut stdin = Some(input);
+        let mut written = 0;
+        let mut retained = Vec::with_capacity(1024);
+        let mut stderr_eof = false;
+        let mut status = None;
+        loop {
+            if Instant::now() >= deadline {
+                return Err("délai canal dépassé".into());
+            }
+            if let Some(input) = stdin.as_mut() {
+                match input.write(&payload[written..]) {
+                    Ok(0) => return Err("stdin: écriture interrompue".into()),
+                    Ok(count) => written += count,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => return Err(format!("stdin: {error}")),
+                }
+                if written == payload.len() {
+                    // EOF attendu par le canal ; aucun write_all bloquant.
+                    drop(stdin.take());
+                }
+            }
+            if !stderr_eof {
+                let mut buffer = [0_u8; 8192];
+                match stderr.read(&mut buffer) {
+                    Ok(0) => stderr_eof = true,
+                    Ok(count) => {
+                        let keep = count.min(1024_usize.saturating_sub(retained.len()));
+                        retained.extend_from_slice(&buffer[..keep]);
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => return Err(format!("stderr: {error}")),
+                }
+            }
+            if status.is_none() {
+                status = child
+                    .try_wait()
+                    .map_err(|error| format!("attente: {error}"))?;
+            }
+            if let Some(status) = status.as_ref()
+                && stderr_eof
+                && stdin.is_none()
+            {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "sortie {}: {}",
+                        status.code().unwrap_or(-1),
+                        String::from_utf8_lossy(&retained)
+                            .chars()
+                            .take(200)
+                            .collect::<String>()
+                    ))
+                };
+            }
+            // Une lecture et une écriture au plus par tour ; le surplus stderr
+            // est drainé sans allocation ni thread lecteur à rejoindre.
+            std::thread::sleep(
+                Duration::from_millis(1).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    })();
+    if let Err(cause) = result {
+        // Les pipes de la closure sont déjà fermés. Seul le Child de ce spawn
+        // reçoit SIGTERM ; jamais un groupe ni un processus découvert ailleurs.
+        let stopped = (|| -> Result<(), String> {
+            if child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                return Ok(());
+            }
+            if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error.to_string());
+                }
+            }
+            let deadline = Instant::now() + Duration::from_millis(250);
+            while Instant::now() < deadline {
+                if child
+                    .try_wait()
+                    .map_err(|error| error.to_string())?
+                    .is_some()
+                {
+                    return Ok(());
+                }
+                std::thread::sleep(
+                    Duration::from_millis(5)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err("enfant canal non arrêté après SIGTERM".into())
+        })();
+        return Err(match stopped {
+            Ok(()) => cause,
+            Err(error) => format!("{cause}; arrêt: {error}"),
+        });
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("attente: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "sortie {}: {}",
-            output.status.code().unwrap_or(-1),
-            stderr.chars().take(200).collect::<String>()
-        ))
-    }
+    Ok(())
 }
 
 /// Dépose puis pousse vers le canal si un item a été créé ; l'échec de la
@@ -872,6 +1000,47 @@ mod tests {
             open_count(&conn).unwrap(),
             1,
             "l'échec du canal ne perd rien"
+        );
+
+        // Même oracle087 : stdin rempli et stderr continu ne prolongent pas
+        // le budget commun. Le shell est le seul enfant et respecte SIGTERM.
+        let blocked = HumanChannelConfig {
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "trap 'exit 0' TERM; while :; do printf 'canal bloque\\n' >&2; done".to_string(),
+            ],
+            reminder_after_secs: 3600,
+        };
+        let large_options = vec!["x".repeat(256 * 1024)];
+        let started = std::time::Instant::now();
+        let blocked_item = deposit_and_notify(
+            &conn,
+            DepositRequest {
+                dedup_key: "canal-bloque",
+                ..request(&subject, &large_options)
+            },
+            Some(&blocked),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "stdin et stderr doivent rendre la main après le budget du canal"
+        );
+        let attempts = notify_attempts(&conn, &blocked_item.item_id).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(!attempts[0].ok);
+        let error = attempts[0].error.as_deref().unwrap_or("");
+        assert!(error.contains("délai canal dépassé"));
+        assert!(
+            !error.contains("; arrêt:"),
+            "le canal factice doit être récolté après SIGTERM"
+        );
+        assert_eq!(
+            open_count(&conn).unwrap(),
+            2,
+            "le dépôt bloqué reste durable"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

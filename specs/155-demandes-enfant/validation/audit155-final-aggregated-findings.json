@@ -1,0 +1,1932 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T03:41:05.716397+00:00",
+    "start_timestamp": "2026-10-12T02:41:23.463559+00:00",
+    "end_timestamp": "2026-10-12T03:41:05.716397+00:00",
+    "duration_ms": 3582252,
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant",
+    "audit_mode": "fix",
+    "audit_grid": "all",
+    "cycle": "cycle-scoring",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "release_blocked": false,
+    "repository": {
+      "files_count": 284,
+      "all_files_discovered": 2538,
+      "languages": [
+        "python",
+        "rust",
+        "typescript"
+      ],
+      "language_files": {
+        "rust": 209,
+        "python": 56,
+        "typescript": 19
+      },
+      "frameworks": [
+        "serde",
+        "SQLite/rusqlite",
+        "tungstenite"
+      ],
+      "type": "cli-daemon-mcp-native-providers",
+      "has_ui": false,
+      "ui_scope": "T3/UI exclus explicitement",
+      "has_llm_integration": true,
+      "db_type": "sqlite",
+      "ci_system": "none_detected",
+      "container": false,
+      "workspace_members": [
+        "crates/bridget-core",
+        "crates/bridget-transport",
+        "crates/bridget-daemon"
+      ]
+    },
+    "source_reports": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_complexite.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_duplication.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_minimalisme.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_performance.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_qualite.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_securite.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_tests.json"
+    ],
+    "baseline": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/baseline.json",
+      "exists": false,
+      "entries_consulted": 0
+    },
+    "score_global": "A",
+    "score_numeric": 99.85,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "performance": "A",
+      "complexity": "A",
+      "quality": "A",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "ux": "N/A"
+    }
+  },
+  "execution_metrics": {
+    "files_scanned": 30,
+    "files_total": 61,
+    "lines_analyzed": 6149,
+    "scope_hunks_total": 244,
+    "hunks_semantically_read": 67,
+    "coverage_estimate_percent": 27.46,
+    "read_ranges_by_file": {
+      "crates/bridget-daemon/src/attach.rs": [
+        [
+          6188,
+          6194
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          1,
+          7
+        ],
+        [
+          2045,
+          2137
+        ],
+        [
+          3709,
+          3715
+        ],
+        [
+          5238,
+          5244
+        ],
+        [
+          9896,
+          9974
+        ],
+        [
+          14913,
+          14921
+        ],
+        [
+          15148,
+          15156
+        ],
+        [
+          18848,
+          18880
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_child_requests.rs": [
+        [
+          266,
+          338
+        ],
+        [
+          377,
+          386
+        ],
+        [
+          485,
+          560
+        ],
+        [
+          596,
+          643
+        ],
+        [
+          903,
+          1002
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs": [
+        [
+          1,
+          117
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation.rs": [
+        [
+          1383,
+          1389
+        ],
+        [
+          1481,
+          1501
+        ],
+        [
+          2398,
+          2405
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs": [
+        [
+          398,
+          543
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs": [
+        [
+          1,
+          638
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs": [
+        [
+          1,
+          219
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation.rs": [
+        [
+          1,
+          210
+        ],
+        [
+          275,
+          600
+        ],
+        [
+          724,
+          763
+        ],
+        [
+          910,
+          1279
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_lineage.rs": [
+        [
+          1,
+          32
+        ],
+        [
+          228,
+          248
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_mcp.rs": [
+        [
+          4,
+          12
+        ],
+        [
+          65,
+          79
+        ],
+        [
+          102,
+          113
+        ],
+        [
+          145,
+          215
+        ],
+        [
+          407,
+          413
+        ]
+      ],
+      "crates/bridget-daemon/src/human_inbox.rs": [
+        [
+          538,
+          682
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          627,
+          633
+        ],
+        [
+          2531,
+          2550
+        ],
+        [
+          3858,
+          3864
+        ],
+        [
+          4143,
+          4149
+        ]
+      ],
+      "crates/bridget-daemon/src/native_permissions.rs": [
+        [
+          1,
+          236
+        ]
+      ],
+      "crates/bridget-daemon/src/native_permissions155_tests.rs": [
+        [
+          1,
+          272
+        ]
+      ],
+      "crates/bridget-daemon/src/t3code.rs": [
+        [
+          5176,
+          5182
+        ]
+      ],
+      "crates/bridget-daemon/src/wrapper.rs": [
+        [
+          396,
+          402
+        ],
+        [
+          3779,
+          3786
+        ],
+        [
+          4071,
+          4077
+        ],
+        [
+          4167,
+          4175
+        ],
+        [
+          4320,
+          4326
+        ],
+        [
+          4332,
+          4338
+        ],
+        [
+          4350,
+          4382
+        ],
+        [
+          4518,
+          4535
+        ],
+        [
+          4576,
+          4582
+        ],
+        [
+          4594,
+          4599
+        ],
+        [
+          4602,
+          4626
+        ],
+        [
+          4635,
+          4641
+        ],
+        [
+          4810,
+          4816
+        ],
+        [
+          5090,
+          5096
+        ],
+        [
+          5115,
+          5121
+        ],
+        [
+          5354,
+          5698
+        ],
+        [
+          6320,
+          6368
+        ],
+        [
+          6398,
+          6438
+        ],
+        [
+          6708,
+          6840
+        ],
+        [
+          11077,
+          11492
+        ]
+      ],
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+        [
+          976,
+          1145
+        ]
+      ],
+      "crates/bridget-transport/src/codex_app_server.rs": [
+        [
+          430,
+          450
+        ],
+        [
+          1082,
+          1093
+        ],
+        [
+          2390,
+          2508
+        ],
+        [
+          2540,
+          2625
+        ],
+        [
+          3238,
+          3311
+        ],
+        [
+          7690,
+          7788
+        ]
+      ],
+      "crates/bridget-transport/src/managed_session.rs": [
+        [
+          6,
+          14
+        ],
+        [
+          140,
+          165
+        ],
+        [
+          278,
+          310
+        ],
+        [
+          380,
+          443
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2010,
+          2145
+        ],
+        [
+          2948,
+          2966
+        ],
+        [
+          3902,
+          3920
+        ],
+        [
+          8049,
+          8055
+        ]
+      ],
+      "docs/decisions/155-remontee-des-demandes-de-l-enfant.md": [
+        [
+          1,
+          161
+        ]
+      ],
+      "specs/155-demandes-enfant/contracts/child-requests155.md": [
+        [
+          135,
+          154
+        ]
+      ],
+      "specs/155-demandes-enfant/contracts/codex-requests.md": [
+        [
+          46,
+          60
+        ]
+      ],
+      "specs/155-demandes-enfant/data-model.md": [
+        [
+          150,
+          207
+        ]
+      ],
+      "specs/155-demandes-enfant/implementation.md": [
+        [
+          327,
+          381
+        ]
+      ],
+      "specs/155-demandes-enfant/plan.md": [
+        [
+          101,
+          111
+        ]
+      ],
+      "specs/155-demandes-enfant/research.md": [
+        [
+          94,
+          128
+        ]
+      ],
+      "specs/155-demandes-enfant/reuse-audit.md": [
+        [
+          1,
+          213
+        ]
+      ],
+      "specs/155-demandes-enfant/spec.md": [
+        [
+          258,
+          270
+        ]
+      ]
+    },
+    "coverage_basis": "hunks réels contenus dans lectures fraîches ou héritées seulement si SHAinitial/final exactementinchangé, sans date d’origine réécrite",
+    "fresh_read_ranges_by_file": {
+      "crates/bridget-daemon/src/daemon/native_child_requests.rs": [
+        [
+          266,
+          338
+        ],
+        [
+          377,
+          386
+        ],
+        [
+          485,
+          560
+        ],
+        [
+          596,
+          643
+        ],
+        [
+          903,
+          1002
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation.rs": [
+        [
+          1383,
+          1389
+        ],
+        [
+          1481,
+          1501
+        ],
+        [
+          2398,
+          2405
+        ]
+      ],
+      "crates/bridget-daemon/src/human_inbox.rs": [
+        [
+          538,
+          682
+        ]
+      ],
+      "crates/bridget-transport/src/codex_app_server.rs": [
+        [
+          430,
+          450
+        ],
+        [
+          1082,
+          1093
+        ],
+        [
+          2390,
+          2508
+        ],
+        [
+          2540,
+          2625
+        ],
+        [
+          3238,
+          3311
+        ],
+        [
+          7690,
+          7788
+        ]
+      ],
+      "crates/bridget-daemon/src/native_permissions.rs": [
+        [
+          1,
+          236
+        ]
+      ],
+      "specs/155-demandes-enfant/plan.md": [
+        [
+          101,
+          111
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs": [
+        [
+          398,
+          543
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs": [
+        [
+          1,
+          117
+        ]
+      ],
+      "crates/bridget-daemon/src/wrapper.rs": [
+        [
+          4367,
+          4379
+        ],
+        [
+          4611,
+          4623
+        ],
+        [
+          396,
+          402
+        ],
+        [
+          3779,
+          3786
+        ],
+        [
+          4071,
+          4077
+        ],
+        [
+          4167,
+          4175
+        ],
+        [
+          4320,
+          4326
+        ],
+        [
+          4332,
+          4338
+        ],
+        [
+          4350,
+          4382
+        ],
+        [
+          4518,
+          4535
+        ],
+        [
+          4576,
+          4582
+        ],
+        [
+          4594,
+          4599
+        ],
+        [
+          4602,
+          4626
+        ],
+        [
+          4635,
+          4641
+        ],
+        [
+          4810,
+          4816
+        ],
+        [
+          5090,
+          5096
+        ],
+        [
+          5115,
+          5121
+        ],
+        [
+          5354,
+          5698
+        ],
+        [
+          6320,
+          6368
+        ],
+        [
+          6398,
+          6438
+        ],
+        [
+          6708,
+          6840
+        ],
+        [
+          11077,
+          11492
+        ]
+      ],
+      "specs/155-demandes-enfant/contracts/codex-requests.md": [
+        [
+          46,
+          60
+        ]
+      ],
+      "specs/155-demandes-enfant/contracts/child-requests155.md": [
+        [
+          135,
+          154
+        ]
+      ],
+      "specs/155-demandes-enfant/spec.md": [
+        [
+          258,
+          270
+        ]
+      ],
+      "specs/155-demandes-enfant/implementation.md": [
+        [
+          327,
+          381
+        ]
+      ]
+    },
+    "inherited_unchanged_read_ranges_by_file": {
+      "crates/bridget-daemon/src/attach.rs": [
+        [
+          6188,
+          6194
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          1,
+          7
+        ],
+        [
+          2045,
+          2137
+        ],
+        [
+          3709,
+          3715
+        ],
+        [
+          5238,
+          5244
+        ],
+        [
+          9896,
+          9974
+        ],
+        [
+          14913,
+          14921
+        ],
+        [
+          15148,
+          15156
+        ],
+        [
+          18848,
+          18880
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation.rs": [
+        [
+          1,
+          210
+        ],
+        [
+          275,
+          600
+        ],
+        [
+          724,
+          763
+        ],
+        [
+          910,
+          1279
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_lineage.rs": [
+        [
+          1,
+          32
+        ],
+        [
+          228,
+          248
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_mcp.rs": [
+        [
+          4,
+          12
+        ],
+        [
+          65,
+          79
+        ],
+        [
+          102,
+          113
+        ],
+        [
+          145,
+          215
+        ],
+        [
+          407,
+          413
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          627,
+          633
+        ],
+        [
+          2531,
+          2550
+        ],
+        [
+          3858,
+          3864
+        ],
+        [
+          4143,
+          4149
+        ]
+      ],
+      "crates/bridget-daemon/src/t3code.rs": [
+        [
+          5176,
+          5182
+        ]
+      ],
+      "crates/bridget-daemon/src/wrapper.rs": [
+        [
+          396,
+          402
+        ],
+        [
+          3779,
+          3786
+        ],
+        [
+          4071,
+          4077
+        ],
+        [
+          4167,
+          4175
+        ],
+        [
+          4320,
+          4326
+        ],
+        [
+          4332,
+          4338
+        ],
+        [
+          4350,
+          4382
+        ],
+        [
+          4518,
+          4535
+        ],
+        [
+          4576,
+          4582
+        ],
+        [
+          4594,
+          4599
+        ],
+        [
+          4602,
+          4626
+        ],
+        [
+          4635,
+          4641
+        ],
+        [
+          4810,
+          4816
+        ],
+        [
+          5090,
+          5096
+        ],
+        [
+          5115,
+          5121
+        ],
+        [
+          5354,
+          5698
+        ],
+        [
+          6320,
+          6368
+        ],
+        [
+          6398,
+          6438
+        ],
+        [
+          6708,
+          6840
+        ],
+        [
+          11077,
+          11492
+        ]
+      ],
+      "crates/bridget-transport/src/managed_session.rs": [
+        [
+          6,
+          14
+        ],
+        [
+          140,
+          165
+        ],
+        [
+          278,
+          310
+        ],
+        [
+          380,
+          443
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2010,
+          2145
+        ],
+        [
+          2948,
+          2966
+        ],
+        [
+          3902,
+          3920
+        ],
+        [
+          8049,
+          8055
+        ]
+      ],
+      "specs/155-demandes-enfant/research.md": [
+        [
+          94,
+          128
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs": [
+        [
+          1,
+          638
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs": [
+        [
+          1,
+          219
+        ]
+      ],
+      "crates/bridget-daemon/src/native_permissions155_tests.rs": [
+        [
+          1,
+          272
+        ]
+      ],
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+        [
+          976,
+          1145
+        ]
+      ],
+      "specs/155-demandes-enfant/reuse-audit.md": [
+        [
+          1,
+          213
+        ]
+      ],
+      "docs/decisions/155-remontee-des-demandes-de-l-enfant.md": [
+        [
+          1,
+          161
+        ]
+      ],
+      "specs/155-demandes-enfant/data-model.md": [
+        [
+          150,
+          207
+        ]
+      ]
+    },
+    "global_source_files": 284,
+    "aggregate_start_timestamp": "2026-10-12T03:41:05.401763+00:00",
+    "aggregate_end_timestamp": "2026-10-12T03:41:05.716397+00:00",
+    "aggregate_duration_ms": 314,
+    "audit_duration_basis": "heure réelle de préparation du manifeste jusqu'à l'agrégation",
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "10",
+      "12"
+    ],
+    "phases_pending": [],
+    "phases_not_established_by_aggregator": [
+      "09"
+    ],
+    "thematic_cycles_executed": 1,
+    "scoring_cycles_executed": 1,
+    "independent_scoring_review_attested_by_caller": true,
+    "correction_actions_executed_by_aggregator": 0,
+    "counter_audit_status": "not_required_no_critical_or_high",
+    "max_cycles": 1,
+    "auto_commit": false,
+    "T040": "validated_four_cases_with_explicit_user_consent",
+    "tools_used": [
+      "fingerprint.py --batch"
+    ],
+    "warnings": [
+      "Agrégateur : aucun test, build, modèle, service ou validate_session exécuté.",
+      "T040 validated_four_cases_with_explicit_user_consent,42/42 vérifiés ; trois captures runtime antérieures restent historiques, aucun GREEN global final déduit.",
+      "child_request_followups reste O(n+B) ; LIMIT512 borne la projection, pas le travail SQL. Aucun EXPLAIN exécuté.",
+      "q² reste borné par les données ; le commentaire exact corrige PERF-041, sans convertir cette lecture en recommandation d’optimisation.",
+      "Actualisation ciblée du delta cwd sur capture03:34 ; un seul cycle thématique1. La passe précédente est historique et archivée, jamais redatée comme fraîche.",
+      "read_manifest :10 entrées fraîchement lues après capture et12 héritées du C1 canonique uniquement si SHA inchangé, dates/ranges initiales intactes et provenance absolue vérifiée.",
+      "Les fichiers modifiés depuis C1 ne gardent aucun crédit d’ancienne lecture ; leurs seules plages fraîches du présent delta sont comptées. La couverture peut donc différer de la passe pré-cwd.",
+      "Aucun test, build, Cargo, lint, scanner, modèle, service, Git en écriture, script de préparation ou agrégation exécuté par ce lecteur.",
+      "Aucun score global, couverture exhaustive, complexité cyclomatique ou duplication globale calculés.",
+      "Reçu post-cwd native155-cwd-r1 RC0,71PASS,214sources stables. Les quatre régressions canal/STDIO et recette réelle T0404/4 conservent leurs provenances antérieures à cwd. Aucun total75 sur dernier snapshot.",
+      "T040 validée et42/42 ; suite complète unique antérieure2259PASS/15FAIL/72ignored, baseline180PASS, sept nouveaux échecs corrigés ciblés et huit historiques conservés. Aucun nouveauFULL ni GREEN global.",
+      "DUP-001 LOW c0dcaaf9b24b persiste ; preuve exacte13lignes/2branches relue sur snapshot courant. Aucun JSCPD exécuté.",
+      "PERF-082 reste LOW/THEORETICAL : k budgets individuels peuvent s’accumuler ; aucun benchmark ni optimisation supplémentaire demandés.",
+      "Le canal humain qui ignore SIGTERM peut survivre. L’arrêt forcé et le groupe de processus ne sont pas utilisés.",
+      "71PASS post-cwd sont attribués au principal ;4régressions additionnelles et recette4/4 restentpré-cwd. AucunGREENglobal.",
+      "Revalidation post-cwd ciblée seulement, sans nouveau cycle thématique. Les lectures pré-cwd ne sont pas réétiquetées fraîches ; elles restent archivées séparément.",
+      "Aucun test, Cargo, build, scanner, service, modèle ou Git exécuté par ce lecteur. ROOT seul a exécuté native155-cwd-r1 :71PASS/0FAIL/RC0/64,81s,214sources stables.",
+      "Les lectures héritées viennent exclusivement des rapports C1 canoniques archivés, avec SHAinitial/final identiques, ranges et dates originales exacts. Leurs dates read_at_utc absentes restent absentes ; vérification SHA datée séparément.",
+      "61 fichiers/244hunks inventoriés ne sont pas une lecture.284sources globales seulement du contexte. La couverture baisse car les fichiers changés exigent les seules plages relues, pas une reconduction de leur ancienne lecture entière.",
+      "Full historique avant correctifs2259PASS/15FAIL/72ignored,180baseline PASS ; sept nouveaux échecs repris en PASS ciblé, huit historiques conservés. Aucun FULL sur le dernier hash ni GREEN global.",
+      "Les quatre régressions et la recette T040 réelle antérieures ne sont pas déclarées sur le dernier code cwd. T040 consentement explicite/quatre cas reste une preuve historique identifiée avec ses réutilisations, sans nouvelle recette par ce lecteur.",
+      "Résolutions SEC-001/REL-001 et R2-cwd établies par relecture statique fraîche et reçusROOT cités ; aucun exploit ou banc supplémentaire exécuté par le lecteur.",
+      "Le STDIO est borné à3s ; le SocketWriter interactif conserve un flush distinct pouvant ajouter3s après contention, limite explicite de la source.",
+      "M2 : source post-cwd relue sans permis avant write=>sent réessayable ; erreur avec permis=>unknown. Son nom exact PASS appartient au reçuROOTcwd, sans nouvelle exécution.",
+      "H3 : appel du canal hors state relu aprèscwd. La borne du programme externe3s+250msTERM et sa survie possible en ignorantTERM restent une preuve pré-cwd àSHAinchangé, pas une nouvelle lecture sémantique de human_inbox.rs dans cette revalidation.",
+      "Couverture basse 27.46% : hunks entièrement couverts par des ranges explicites ; inventaire exclu.",
+      "Aucun CRITICAL/HIGH actif : aucun contre-audit supplémentaire requis.",
+      "Inventaire uniquement : couverture sémantique zéro, aucun cycle, finding ou score.",
+      "Script154 réutilisé pour la forme ; aucun résultat d’audit154 transposé.",
+      "Aucun test, build, service, changement Git ou activation produit par ce script.",
+      "Diff limité155 ; T3/UI et travaux étrangers exclus.",
+      "Workspace complet antérieur aux correctifs : 2259PASS/15FAIL/72ignored ; aucun GREEN global final.",
+      "Sept nouveaux échecs corrigés et rejoués RC0 ; huit échecs historiques conservés.",
+      "Baseline180 PASS acquise dans le passage complet antérieur ; aucun rejeu180 indépendant final.",
+      "Native155-postfix71PASS et HTTP099-final-r2 1PASS restent des preuves ciblées distinctes.",
+      "T040 validated_four_cases_with_explicit_user_consent,42/42 : quatre cas et consentement explicite vérifiés par le reçu canonique ; trois captures antérieures restent identifiées.",
+      "Converge attesté par --after-converge à l’appel ; aucun Converge exécuté par cette préparation.",
+      "Capture finale séparée : les métadonnées et rapports cycle1 restent byte-identiques ; aucun ancien read_manifest transformé en lecture fraîche."
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 2,
+    "total": 2,
+    "by_category": {
+      "performance": 1,
+      "quality": 1
+    }
+  },
+  "findings": [
+    {
+      "id": "PERF-082",
+      "category": "performance",
+      "subcategory": "sequential_ipc_budget",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/daemon/native_child_requests.rs",
+      "line": 907,
+      "title": "Le tick renouvelle une seconde pour chaque émission séquentielle",
+      "description": "Le lot de followups est borné à512 lignes, mais chaque appel emit recrée son propre budget d’une seconde. Le tick natif attend la fin de cette boucle avant ses propres transitions. Plusieurs writers lents peuvent donc accumuler leur attente. La condition de saturation n’a pas été mesurée ; les timeouts et la fermeture des sockets limitent chaque émission.",
+      "evidence": "for (id, conn, writer, frame) in outgoing {\n    emit(state, &id, &conn, &writer, &frame, false);\n}",
+      "exploitability": "THEORETICAL",
+      "impact": "Retard potentiel du tick natif et des échéances. Le budget nominal des attentes IPC peut cumuler jusqu’à k secondes, k<=512 ; les relectures sources/SQL ont un coût distinct non mesuré. Ce n’est pas une durée runtime observée.",
+      "path_type": "hot",
+      "remediation": "Conserver ce risque comme limite connue. Avant toute optimisation, utiliser les logs de tick existants pour établir une baseline réelle ; si un retard est observé, borner le budget du lot tout en conservant les claims et les recontrôles FR027. Aucun patch de confort demandé dans cette lecture.",
+      "verification": "Lecture finale907–909/929 et native_delegation2402. Aucun délai mesuré ni benchmark.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "references": [
+        "crates/bridget-daemon/src/daemon/native_child_requests.rs:907",
+        "crates/bridget-daemon/src/daemon/native_child_requests.rs:929",
+        "crates/bridget-daemon/src/daemon/native_delegation.rs:2402"
+      ],
+      "fingerprint": "19cf86e44509"
+    },
+    {
+      "id": "DUP-001",
+      "category": "quality",
+      "subcategory": "duplication",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "line": 4367,
+      "title": "Renvoi après reconnexion copié dans deux branches",
+      "description": "Les lignes4367–4379 et4611–4623 sont identiques : elles relisent les demandes waiting, excluent uncertain et remettent les trames au daemon. Les deux chemins terminent une reconnexion avec le même writer et le même état. Aucun helper équivalent de ce renvoi collectif n’a été trouvé ; send_wrapper_message reste le point unique d’envoi d’une trame.",
+      "evidence": "                if forward_child_requests {\n                    let pending: Vec<_> = child_requests\n                        .lock()\n                        .unwrap_or_else(|e| e.into_inner())\n                        .waiting\n                        .iter()\n                        .filter(|entry| !entry.uncertain)\n                        .map(|entry| entry.request.clone())\n                        .collect();\n                    for request in pending {\n                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });\n                    }\n                }",
+      "exploitability": "N/A",
+      "impact": "Une évolution du filtre ou de la remise doit être reportée dans deux copies ; risque de divergence de maintenance. Aucun défaut runtime actuel ni taux global de duplication n’est déduit.",
+      "path_type": "cold",
+      "remediation": "Réunir ce seul bloc dans une fermeture locale au parcours géré, appelée après les deux reconnexions. Garder les deux branches et leurs contrôles. Aucun module, export, framework, table ou outil neuf.",
+      "verification": "Les deux appels doivent conserver le filtre !uncertain et envoyer le même tuple ; rejouer les tests existants native155_wrapper et la reconnexion149 concernés, sans nouveau scénario.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "duplication_type": "STRICT",
+      "duplication_lines": 13,
+      "occurrences_count": 2,
+      "all_locations": [
+        "crates/bridget-daemon/src/wrapper.rs:4367",
+        "crates/bridget-daemon/src/wrapper.rs:4611"
+      ],
+      "fingerprint": "c0dcaaf9b24b"
+    }
+  ],
+  "suppressed": [],
+  "positive_findings": [
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1385 — q² et borne8Kio annoncés exactement.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:529 — Debugcwd borné1024octets, facts4096.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:73 — cwd chaîne<=1024octets ou null ; autre forme refusée sans I/O ni changement des droits.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:529 — cwd cité entier avec Debug ou null, cwd_verified=false ; budgetglobal4096 maintenu.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2605 — absence conservée comme null, aucun fallback vers dossier session/parent.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:487 — fixture existante vérifie fin du dossier et contrôles visibles, sans confondre citation et confinement.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:611 — Le canal Human reste horsstate aprèscwd.",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs:549 — Budgetcommun3s et stderr retenu1024octets maintenus.",
+    "native_child_requests.rs:521–546 : commande/cwd entiers cités avec Debug, cwd_verified=false, effets complets et refusfacts>4096.",
+    "native_permissions.rs:50–80 et codex_app_server.rs:2463–2475,2602–2618 : cwd string/null exact, forme invalide et1025octets refusés ; aucun gain de droit149.",
+    "native_child_requests.rs:920–1002 : contrôle avantwrite et reprise M2 restent conservateurs aprèsdelta.",
+    "codex_app_server.rs:429–452,1082–1093,3238–3310 : O_NONBLOCK, budgetSTDIO3s partagé et incertitude conservés aprèsdelta.",
+    "chain155:398–543, human155:1–117, codex:7705–7737 : oracles existants inspectés pourcwd complet/null/contrôles/1025octets ; leurs noms PASS recoupés dansROOTcwd.",
+    "native155-cwd-r1.json/log :71PASS=63daemon+1E2E+7transport,214sources stables et SHA égaux à la capture finale ; aucun full final déduit."
+  ],
+  "contextual_evidence": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/workspace155-final-r1-comparison.json",
+      "sha256": "06ec9f61963880ec12baec7fa223afd0342a716a1e8180669c29d0b6ab99c594",
+      "kind": "validation_workspace_archivée_R1_par_principal",
+      "workspace_totals": {
+        "passed": 2259,
+        "failed": 15,
+        "ignored": 72
+      },
+      "failure_comparison": {
+        "actual_count": 15,
+        "legacy_present": 8,
+        "new_count": 7,
+        "same_failure_targets_and_names": false,
+        "new": [
+          {
+            "target": "Running tests/core_089_skill_test.rs",
+            "name": "exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon"
+          },
+          {
+            "target": "Running unittests src/lib.rs",
+            "name": "daemon::native_delegation::native_workspace154_tests::native154_partage_discovery_termine_et_statut_compatibles150"
+          },
+          {
+            "target": "Running unittests src/lib.rs",
+            "name": "daemon::native_delegation::tests::native152_rouge_annulation_multi_ticks"
+          },
+          {
+            "target": "Running unittests src/lib.rs",
+            "name": "daemon::native_delegation::tests::native152_rouge_annulation_partielle"
+          },
+          {
+            "target": "Running unittests src/lib.rs",
+            "name": "mcp::tests::matrice_fr009_couvre_les_quinze_cas"
+          },
+          {
+            "target": "Running unittests src/lib.rs",
+            "name": "mcp::tests::native151_ack_facade_schema_ferme_bornes_et_annotations"
+          },
+          {
+            "target": "Running unittests src/lib.rs",
+            "name": "t3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation"
+          }
+        ],
+        "absent_baseline_failures": [],
+        "utc154_fixture_is_never_legacy": true,
+        "utc154_observed": [
+          {
+            "target": "Running tests/core_089_attach_test.rs",
+            "status": "ok",
+            "annotation": null
+          }
+        ]
+      },
+      "baseline180": {
+        "index": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/baseline155-index.json",
+        "index_sha256": "d563d09a587da6279d9c0b279430548fff082d1c5e0cf1422783c552a18f20ab",
+        "matched": 180,
+        "missing": 0,
+        "regressions": 0,
+        "duplicates": 0,
+        "wrong_target": 0,
+        "scope": "executed in the one full run before corrective patches"
+      },
+      "scope_limit": "Passage complet avant correctifs ; aucune validation globale du gel final."
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/final155-cumulative-gate.json",
+      "sha256": "61d9fbc874c0db43e712e3a35ba84c11e32c57515e74ad57d129baf0af43106c",
+      "kind": "preuves_cumulatives_ciblées_T039_par_principal",
+      "resolved_count": 7,
+      "new_failures_resolved": [
+        {
+          "target": "Running tests/core_089_skill_test.rs",
+          "name": "exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "skill089-postfix-r1"
+          ],
+          "authoritative_replay": "skill089-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/skill089-postfix-r1.json",
+          "receipt_sha256": "a6a5d7c4646a407070f79e30ed2d6b88b74d4324e3013ba624c253d7c7fd1077",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/skill089-postfix-r1.log",
+          "log_sha256": "5fe14050bd619cef0e7bb9bba5272d150ea0080245fbfd10ad2201003b2c0b88",
+          "full_after_patch_proof": false
+        },
+        {
+          "target": "Running unittests src/lib.rs",
+          "name": "daemon::native_delegation::native_workspace154_tests::native154_partage_discovery_termine_et_statut_compatibles150",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "workspace154-schema-postfix-r1"
+          ],
+          "authoritative_replay": "workspace154-schema-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/workspace154-schema-postfix-r1.json",
+          "receipt_sha256": "9681c33c5516b7bcf75fd3d8b4cc87ace18b524cc4d9a18937f3675a17a7ae21",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/workspace154-schema-postfix-r1.log",
+          "log_sha256": "e4d3496a06d155915e9f37d362e2f4381b3c09a5239480b022d86174a5a8605b",
+          "full_after_patch_proof": false
+        },
+        {
+          "target": "Running unittests src/lib.rs",
+          "name": "daemon::native_delegation::tests::native152_rouge_annulation_multi_ticks",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "annulation152-postfix-r1"
+          ],
+          "authoritative_replay": "annulation152-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/annulation152-postfix-r1.json",
+          "receipt_sha256": "0299fe453425d5caea94ac27e4da4b7afce05d3ac07d32bffd15fdd39838a7e4",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/annulation152-postfix-r1.log",
+          "log_sha256": "ff7cf7a01970f9eebe72010870609cd723d06d342ec08f3618f908dfa678c797",
+          "full_after_patch_proof": false
+        },
+        {
+          "target": "Running unittests src/lib.rs",
+          "name": "daemon::native_delegation::tests::native152_rouge_annulation_partielle",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "annulation152-postfix-r1"
+          ],
+          "authoritative_replay": "annulation152-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/annulation152-postfix-r1.json",
+          "receipt_sha256": "0299fe453425d5caea94ac27e4da4b7afce05d3ac07d32bffd15fdd39838a7e4",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/annulation152-postfix-r1.log",
+          "log_sha256": "ff7cf7a01970f9eebe72010870609cd723d06d342ec08f3618f908dfa678c797",
+          "full_after_patch_proof": false
+        },
+        {
+          "target": "Running unittests src/lib.rs",
+          "name": "mcp::tests::matrice_fr009_couvre_les_quinze_cas",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "mcp155-matrix-postfix-r1"
+          ],
+          "authoritative_replay": "mcp155-matrix-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/mcp155-matrix-postfix-r1.json",
+          "receipt_sha256": "25aeaec3f8983465a0481cf107e7f80f8d3da5ddf83c63b9e7636fa84dec4a30",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/mcp155-matrix-postfix-r1.log",
+          "log_sha256": "7773f131a339c9488872b988f1cfeb14538292c729a117f957dc9dbc1a2dd610",
+          "full_after_patch_proof": false
+        },
+        {
+          "target": "Running unittests src/lib.rs",
+          "name": "mcp::tests::native151_ack_facade_schema_ferme_bornes_et_annotations",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "mcp151-schema-postfix-r1"
+          ],
+          "authoritative_replay": "mcp151-schema-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/mcp151-schema-postfix-r1.json",
+          "receipt_sha256": "620a26e0d01da6bb1e803a07d12523255b682b432f55b83105e20ae676e6a0b4",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/mcp151-schema-postfix-r1.log",
+          "log_sha256": "4d659031417a57bbdc631d05a79f2a76b62c6dee4949cb7cbc2eadc3812b85f6",
+          "full_after_patch_proof": false
+        },
+        {
+          "target": "Running unittests src/lib.rs",
+          "name": "t3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation",
+          "before_full_status": "FAILED",
+          "after_targeted_status": "ok",
+          "successful_replays": [
+            "regressions155-replay-r1",
+            "http099-final-r2"
+          ],
+          "authoritative_replay": "http099-final-r2",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/http099-final-r2.json",
+          "receipt_sha256": "839c64342edd2cd2683f1786df17b8fc1feb1f6b7ed49f784f016282d2294ea5",
+          "log": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/http099-final-r2.log",
+          "log_sha256": "921491c64f310cc59536276260e1fb16667bb9d684dd5c2744c5df2965de708d",
+          "full_after_patch_proof": false
+        }
+      ],
+      "native155_named_pass_count": 71,
+      "native155_breakdown": {
+        "daemon_library": 63,
+        "native_e2e": 1,
+        "transport_library": 7
+      },
+      "targeted_replays": [
+        {
+          "label": "native155-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/native155-postfix-r1.json",
+          "receipt_sha256": "20f23d4ccfee42a487e8581c8639975a58b0d4d72e293cbd5c292e999bc61cc8",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 71,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "annulation152-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/annulation152-postfix-r1.json",
+          "receipt_sha256": "0299fe453425d5caea94ac27e4da4b7afce05d3ac07d32bffd15fdd39838a7e4",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "annulation148-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/annulation148-postfix-r1.json",
+          "receipt_sha256": "39d9a92cf36d31fe4987d0e3010eb7305dcb4e627db36e9d15b939358a014940",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "mcp155-matrix-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/mcp155-matrix-postfix-r1.json",
+          "receipt_sha256": "25aeaec3f8983465a0481cf107e7f80f8d3da5ddf83c63b9e7636fa84dec4a30",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "mcp151-schema-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/mcp151-schema-postfix-r1.json",
+          "receipt_sha256": "620a26e0d01da6bb1e803a07d12523255b682b432f55b83105e20ae676e6a0b4",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "workspace154-schema-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/workspace154-schema-postfix-r1.json",
+          "receipt_sha256": "9681c33c5516b7bcf75fd3d8b4cc87ace18b524cc4d9a18937f3675a17a7ae21",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "skill089-postfix-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/skill089-postfix-r1.json",
+          "receipt_sha256": "a6a5d7c4646a407070f79e30ed2d6b88b74d4324e3013ba624c253d7c7fd1077",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "regressions155-replay-r1",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/regressions155-replay-r1.json",
+          "receipt_sha256": "6581d49315832ab51b2360bc7896451cd87b60902b81b6c656a1bc09b4b136c3",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "label": "http099-final-r2",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/http099-final-r2.json",
+          "receipt_sha256": "839c64342edd2cd2683f1786df17b8fc1feb1f6b7ed49f784f016282d2294ea5",
+          "rc": 0,
+          "sources_stable": true,
+          "totals": {
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        }
+      ],
+      "final_http099": {
+        "label": "http099-final-r2",
+        "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/http099-final-r2.json",
+        "receipt_sha256": "839c64342edd2cd2683f1786df17b8fc1feb1f6b7ed49f784f016282d2294ea5",
+        "passed": 1,
+        "failed": 0,
+        "rc": 0
+      },
+      "workspace_global_green": false,
+      "T040": "validated_four_cases_with_explicit_user_consent",
+      "scope_limit": "Replays ciblés distincts ; aucun test exécuté ni nouveau total workspace calculé ici."
+    },
+    {
+      "kind": "T040_validation_humaine_vérifiée",
+      "status": "validated_four_cases_with_explicit_user_consent",
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/recette155-postfix-final.json",
+      "receipt_sha256": "153b70cbbbaa94315b87f192a8fa67fc217f607eb1cc70c5e9ea5b047b6cc9f3",
+      "user_validation": {
+        "at_utc": "2026-10-12T03:02:02.400752+00:00",
+        "answer": "Oui, accepter et valider si les quatre cas réussissent",
+        "scope": "printf RECETTE155_HUMAN isolated daemon; T040 conditional on four planned cases success",
+        "executed": true
+      },
+      "user_validation_before_accept": {
+        "at_utc": "2026-10-12T03:02:02.400752+00:00",
+        "answer": "Oui, accepter et valider si les quatre cas réussissent",
+        "scope": "printf RECETTE155_HUMAN isolated daemon; T040 conditional on four planned cases success",
+        "executed": false
+      },
+      "cases": [
+        {
+          "name": "question_parent",
+          "pass": true,
+          "evidence": "question155-runtime.json",
+          "reused_prior_runtime": true
+        },
+        {
+          "name": "human_approval",
+          "pass": true,
+          "reused_prior_runtime": false
+        },
+        {
+          "name": "workspace_outside_limit",
+          "pass": true,
+          "evidence": "recette155-final-runtime-open.json",
+          "reused_prior_runtime": true
+        },
+        {
+          "name": "expiry_600s",
+          "pass": true,
+          "evidence": "expiry155-r3-runtime.json",
+          "reused_prior_runtime": true
+        }
+      ],
+      "scope_limit": "Les trois chemins nominaux déjà exercés sont conservés. Le correctif modifie la présentation Human, les écritures bloquées et le règlement avant écriture ; leurs scénarios concernés passent sur les sources finales. Aucun second FULL ni nouveau délai de600s lancé. Les trois captures précédentes ne sont pas présentées comme runtime du binaire final.",
+      "tasks_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/tasks.md",
+      "tasks_sha256": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+      "tasks_total": 42,
+      "tasks_checked": 42,
+      "t040_checked": true
+    }
+  ],
+  "source_hashes_checked": {
+    "crates/bridget-daemon/src/attach.rs": "32790ecda05e4e1c18e5ff3d5a863cb5c5b8639f77dcd3364be0b6a7e3601068",
+    "crates/bridget-daemon/src/daemon.rs": "e4b467b44d7b5b8f9278fb5f6f566ef55b29614c674aa9bc837bc7a909ee39e3",
+    "crates/bridget-daemon/src/daemon/native_child_requests.rs": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+    "crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs": "802c3847ee12834f5938915d47a9d62506223c350f8edfc230cf82555045cba1",
+    "crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs": "8ef88dd8edd1c7c388e66607316fec62599e1cd0e21e49a6c5715ff89bff36e4",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+    "crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs": "a710580b06d7f147662eb733439a7c513ff6b93c0b08482b9dac83adca064742",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "dd7fa5ed8699c89f86986ad57dad84fe8f9dd6e11e035cd0d54e6be56470421a",
+    "crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs": "c02c19d8a53426e2c435613a2553f9ace114193a4278173ef82c09c2b3cb4dc8",
+    "crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs": "44beabbf6c043e393adbd0955bc8fbcfe8ac9cfb244ac128f021742a899181d0",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "59bb085fedfce68179007bc08df2aa9e101ffdcd9fe989df342c3796445d831c",
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "df7c9bdab3ffc4de038ddd4558ee5a69fd118866b29c71c6232d0e4450a027db",
+    "crates/bridget-daemon/src/delegation.rs": "01336553b359e82c6231d8ff8aa18575a9f818bd4043f15a040b89384012660a",
+    "crates/bridget-daemon/src/delegation_lineage.rs": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "53aa02b185ff638ae1afa37f2eb4328c76f112703a910619d145f083fddfedf7",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "34bb99255382fc3b6947331f18e31f64f86b5cd9d5719df600aa94ffaa4e2ad9",
+    "crates/bridget-daemon/src/human_inbox.rs": "8f1ffbee487469e0927c57e2463c6528c789fa9d506d50820808b6eb5732565d",
+    "crates/bridget-daemon/src/mcp.rs": "cf910df7fa09e9df03c7b4c04254fab20628b9dd0affb8fee0e4cdada14bb3cd",
+    "crates/bridget-daemon/src/native_permissions.rs": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+    "crates/bridget-daemon/src/native_permissions149_tests.rs": "0c97143753cc1fd1f7b254538c239188f45b757ef9ddef8a3251216424020558",
+    "crates/bridget-daemon/src/native_permissions155_tests.rs": "21801437aeb8a0348b05ce079e0440caeeeff9ddfb23ac094474b0b9c33c3a8f",
+    "crates/bridget-daemon/src/t3code.rs": "df87e858f675681cd7d9f495a5e37fc831c0e0d12825d519e629a8fe4a95e858",
+    "crates/bridget-daemon/src/wrapper.rs": "659a1e09f6ac4c351d6d906e1065f4614680e016cf36cd0c066b039df074278d",
+    "crates/bridget-daemon/tests/claude_native_permissions_test.rs": "554c3278754a00a2cd336171d7be210efeaf39315a385b4da5a82f3cda501fe3",
+    "crates/bridget-daemon/tests/core_089_skill_test.rs": "b89f224efd07a5b4869830a87b833b086ae8eb37cd6d6dfd8211036b7dbb0738",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "7d6ff9420938b4766fe90eae6ebb352e8c84ba23cb44713b04cffd92fb070401",
+    "crates/bridget-transport/src/codex_app_server.rs": "ac13e0cfd0becdec45a3e24ae7973ddbb94c18e74b00ce40ddf0a93fca76c5e8",
+    "crates/bridget-transport/src/managed_session.rs": "f6d267d41adaacbd825fbab33c0589c55f268c1c3de13d753e911f576349f513",
+    "crates/bridget-transport/src/protocol.rs": "46189835fde25ed0178d2f770ddabfd46f1b2fabcb2e3bd4217082f329af0d55",
+    "crates/bridget-transport/tests/native_alias149_test.rs": "b1ce2ae5d6af28a9857f40a72ae9dfbc30587cc7fdc68f928be3a6d7e855b3e1",
+    "crates/bridget-transport/tests/native_stop149_test.rs": "f22d7d1ddd1f55900cec6a64fa7d41afcb73e86f4803c9da493644268a63c094",
+    "docs/decisions/155-remontee-des-demandes-de-l-enfant.md": "4c53caa7cf01745ef13c572fcfb3f85fe1cca363daf06362b5e77247080d8b1b",
+    "docs/delegation-native.md": "6a745bf1adfcbc390a793adc6839f4856265032a465356b9981ff169aa387c86",
+    "skills/bridget/SKILL.md": "c37a739e22b2602814fde0e0f71f13436af43dd9256a43509816278e7c24d695",
+    "skills/bridget/references/commandes.md": "c71cac1d846d59f0a0edc684b4901ed76cb145191410a9824526d05b55f76050",
+    "specs/155-demandes-enfant/adversarial-review-claude.md": "154c41ed95cc03eda3dfd54edcb29da4f5bbf32c2ff7c896be9fa9920476faf7",
+    "specs/155-demandes-enfant/analyze-report.md": "b64c5179fe6535acf17e89207321470063802d671496c9c8bad0e7d7f420c011",
+    "specs/155-demandes-enfant/contracts/child-requests155.md": "859fba14e7fcd8b195b450de4984003d4b52c0b63cad88ff254c65dc0c543c0b",
+    "specs/155-demandes-enfant/contracts/codex-requests.md": "1e61b236f47139f314b0061313f8c9807863fb6d62c1538d1cfba9f9a9cda6a5",
+    "specs/155-demandes-enfant/data-model.md": "3d09be866abaa45a7eaa34d03be0465751c0702b1be703be16e53d8587e88446",
+    "specs/155-demandes-enfant/implementation.md": "7e66fb69093eb5e9e3291f0d99da758ac2c0ea5851775d3960854e5098d7a3b3",
+    "specs/155-demandes-enfant/plan.md": "6b91085460e2d197220d2ba30aebfa8e235094ae939a421a856aac37bf60a30e",
+    "specs/155-demandes-enfant/quickstart.md": "cb2d14c24323baa71382a61431566fd4dd54d3ab21264580a9cb5f9e0e7acae0",
+    "specs/155-demandes-enfant/research.md": "79a3d81141a88b0490212bf47a8b3860895db6c5ca3cc9781e4e76225cd8c26f",
+    "specs/155-demandes-enfant/reuse-audit.md": "61284d63cb4bbbfe3209730aa50806f8c0c91c0ed7e647353168649eacd330c6",
+    "specs/155-demandes-enfant/spec.md": "4ea08fcb82ee8b13a3cd4ae679b107ab8439fb75137625d702a8718212741c71",
+    "specs/155-demandes-enfant/tasks.md": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+    "specs/155-demandes-enfant/validation/admission155.md": "d52bdc69df182262c16ae7ccdd84a10e1adf747cfa89ade1eae8ce98da6fa5ba",
+    "specs/155-demandes-enfant/validation/baseline.md": "960a8aad88b3f5f2695356b4927efe05fd2a98603de6d3e1f9a3cb1e1230fb13",
+    "specs/155-demandes-enfant/validation/core155-green-futurs-red.md": "9e9ebc75d1d61d7bdd00f1182a9152dc0da63085530694f5a63cba6ee090fbec",
+    "specs/155-demandes-enfant/validation/final155-cumulative-gate.md": "9c38a7d5e4563390c904405378deb5064ea5825a112a10093f4365fc55219c41",
+    "specs/155-demandes-enfant/validation/foundation155.md": "3b5d929061076f1e949f6d247efcd72cd6505f75ac35130b38d15d0a7cdd3182",
+    "specs/155-demandes-enfant/validation/recette.md": "e2674cf2687ecc5146075c2e7535d46d7c77e95d5ed6d105674a1dd54805709b",
+    "specs/155-demandes-enfant/validation/rights155-green.md": "4706805b8fddd01ef09fc6e416b230367714aef1b1b73fa5f8c7e4c5d9d55a61",
+    "specs/155-demandes-enfant/validation/rights155-red.md": "c455778c312361b7e19cf19ed6b711148373e67758aa6934edc743344129b4e3",
+    "specs/155-demandes-enfant/validation/schema155.md": "75610221ab5521e63494911c7ddc8ad7e745f180cff1459c9344995eed6ed292",
+    "specs/155-demandes-enfant/validation/tests-155.md": "9127059fb91f519991b459622d777c1eb014bdba32ad2e7a32337f70320961f4",
+    "specs/155-demandes-enfant/validation/transport155-green.md": "e9b441ead2460c2c631556f3c3c9fd84104f42473894cd6e0e2fab29a3cb4db3",
+    "specs/155-demandes-enfant/validation/transport155-red.md": "ce189e99e3c86c2b78495404d4e9673b873245dfe3620f4f3519832b326ee330",
+    "specs/155-demandes-enfant/validation/typonotices.md": "c686471e4c64c425cb829956e8395ecc49faac137dcd3a6a92b4754bef604fa9",
+    "specs/155-demandes-enfant/validation/workspace155-final-r1-comparison.md": "d961f8911c444589465894c55de197d95391f043cf0b2b5aa600580b81de4075"
+  },
+  "resolved_findings": [
+    {
+      "original_id": "PERF-041",
+      "original_fingerprint": "6f75818e3962",
+      "original": {
+        "id": "PERF-041",
+        "category": "performance",
+        "subcategory": "algorithmic_complexity",
+        "severity": "MEDIUM",
+        "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "line": 1385,
+        "title": "Respond annonce un coût linéaire mais compare les IDs en O(q²)",
+        "description": "Le commentaire du chemin Respond annonce O(log tâches + log demandes + B). La validation parcourt les clés de réponse et recherche chacune dans la liste des IDs attendus. Cette partie coûte O(q²+B), sous le verrou métier ; q reste borné par les limites de projection et de réponse. Le problème retenu est l’annotation inexacte, pas un ralentissement runtime démontré.",
+        "evidence": "|| input\n    .keys()\n    .any(|key| !ids.iter().any(|id| id.as_str() == Some(key.as_str())))\n|| ids.iter().any(|id| {\n    id.as_str().is_none_or(|id| {",
+        "exploitability": "N/A",
+        "impact": "L’annotation sous-estime le coût de vérification ; les limites4096/8192 octets empêchent une croissance non bornée sur le chemin normalisé.",
+        "path_type": "hot",
+        "remediation": "Corriger uniquement le commentaire existant en O(log tâches + log demandes + q² + B), en citant les bornes déjà présentes. Aucun nouvel index, helper ou scénario.",
+        "verification": "Relire le commentaire contre les boucles existantes et les limites à codex_app_server.rs:2605 et native_delegation.rs:1486 ; vérification documentaire sans nouveau test.",
+        "effort": "XS",
+        "regression_risk": "LOW",
+        "complexity_current": "O(log t + log n + q² + B)",
+        "complexity_target": "Même code et mêmes bornes ; annotation exacte",
+        "references": [
+          "Constitution Article XVIII",
+          "audit-code-v14 module04",
+          "crates/bridget-transport/src/codex_app_server.rs:2605",
+          "crates/bridget-daemon/src/daemon/native_delegation.rs:1486"
+        ],
+        "fingerprint": "6f75818e3962"
+      },
+      "status": "resolved",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "line": 1385,
+        "sha256": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+        "evidence": "            // O(log tâches + log demandes + q² + B), réponse<=8Kio ; même propriétaire\n            // direct que recover_owner, sans écriture pour un refus ou un rejeu.\n            if [task_id, request_id].iter().any(|id| {"
+      }
+    },
+    {
+      "original_id": "PERF-081",
+      "original_fingerprint": "41c2c45e2996",
+      "original": {
+        "id": "PERF-081",
+        "category": "performance",
+        "subcategory": "blocking_io_under_business_lock",
+        "severity": "HIGH",
+        "counter_audit": "CONFIRMED",
+        "file": "crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "line": 527,
+        "title": "Le canal humain peut garder le verrou commun sans limite",
+        "description": "receive garde le MutexGuard DaemonState pendant publish_human. Le nouveau dépôt Human appelle daemon_deposit_human_inbox puis deposit_and_notify, qui attend synchroniquement le processus du canal via write_all et wait_with_output. La transaction du dépôt est déjà committée ; le problème porte sur le verrou métier commun. Précondition : canal valide configuré et processus externe qui ne termine pas. La lecture indépendante de root et audit_performance151 confirme le flux ; aucun blocage runtime n’a été reproduit.",
+        "evidence": "if verdict == ChildRequestVerdict::Human {\n    publish_human(&st, &task, &row)?;\n} else {\n    publish_parent(&mut st, &task, &row, &mut controls)?;\n    st.delegation_store.wait_epoch().bump();\n}",
+        "exploitability": "LIKELY",
+        "impact": "Sous cette précondition, une demande Human peut empêcher les autres lecteurs, les réponses, les échéances et le contrôle du daemon d’acquérir DaemonState. Aucun temps de blocage mesuré.",
+        "path_type": "hot",
+        "remediation": "Séparer le dépôt/la liaison durable de la notification. Réutiliser deposit_and_notify avec canal None sous state, préparer le résumé, puis appeler push_to_channel après libération de state et enregistrer la tentative après reprise brève du verrou. Conserver les clés, le CAS et les recontrôles ; aucun nouvel outil ou framework. Root fournit le raccord final dans les fonctions existantes.",
+        "remediation_code": "// Dans la section existante de dépôt, sous state :\nlet deposited = crate::human_inbox::deposit_and_notify(\n    st.store.connection(), request, None,\n).map_err(|error| error.to_string())?\n .map_err(|refusal| format!(\"human_inbox_refused:{refusal:?}\"))?;\nst.delegation_store.link_child_inbox(&row.request_id, &deposited.item_id)?;\n// Si deposited.created : préparer (config, summary, item_id, now)\n// dans la liste locale de notifications, sans lancer le canal ici.\n// Après la fin du bloc qui détient state :\nfor (config, summary, item_id, now) in human_notifications {\n    let result = crate::human_inbox::push_to_channel(&config, &summary);\n    let st = state.lock().unwrap_or_else(|error| error.into_inner());\n    let _ = crate::human_inbox::record_notify_attempt(\n        st.store.connection(), &item_id,\n        &crate::human_inbox::NotifyAttempt {\n            at: now, ok: result.is_ok(), error: result.err(),\n        },\n    );\n}",
+        "verification": "Root : étendre le scénario Human existant avec le canal privé déjà utilisé ; pendant l’attente du canal, une lecture/échéance indépendante doit acquérir state. Vérifier le même item lié et la même trace de tentative après retour ; aucune exécution faite par cet auditeur.",
+        "effort": "S",
+        "regression_risk": "MEDIUM",
+        "references": [
+          "audit-code-v14 module08 checklist DB/I-O",
+          "crates/bridget-daemon/src/daemon/native_child_requests.rs:344",
+          "crates/bridget-daemon/src/daemon/native_child_requests.rs:278",
+          "crates/bridget-daemon/src/daemon.rs:9943",
+          "crates/bridget-daemon/src/human_inbox.rs:157",
+          "crates/bridget-daemon/src/human_inbox.rs:545",
+          "crates/bridget-daemon/src/human_inbox.rs:557"
+        ],
+        "counter_audit_evidence": {
+          "source": "Message du principal du2026-10-12 : contre-lecture root et audit_performance151 confirmée ; rapport cache counter-audit155-channel.md/json annoncé en clôture.",
+          "scope": "Flux/verrou confirmés par lecture ; canal configuré et non-terminaison conditionnels, aucun runtime reproduit."
+        },
+        "fingerprint": "41c2c45e2996"
+      },
+      "status": "resolved",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "line": 611,
+        "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+        "evidence": "    })();\n    if let Some((config, summary)) = human_notification {\n        // Le programme externe ne détient jamais le verrou métier. Seule la\n        // consignation locale de sa tentative reprend brièvement state.\n        let pushed = crate::human_inbox::push_to_channel(&config, &summary);"
+      }
+    },
+    {
+      "original_id": "SEC-001",
+      "original_fingerprint": "573cf471637c",
+      "original": {
+        "id": "SEC-001",
+        "category": "security",
+        "subcategory": "incomplete_human_authorization_facts",
+        "severity": "HIGH",
+        "counter_audit": "CONFIRMED",
+        "file": "crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "line": 457,
+        "title": "Human reçoit des faits tronqués sans indication de perte",
+        "description": "Une commande source de513–1024 octets passe la normalisation, puis sa projection Human conserve512 octets. Les contrôles et chemins peuvent aussi être transformés ou coupés ; effects.command/file_write sont omis. L’accord répond au callback fournisseur original, donc porte sur une demande plus complète que les faits présentés. La chaîne est confirmée statiquement ; aucun rendu ou exploit runtime observé.",
+        "exploitability": "LIKELY",
+        "exploitation_scenario": "Demande commandExecution valide sous dangerFullAccess, avec suffixe significatif après512 octets et offre accept/decline. Human voit une commande recoupée sans marqueur ; accept s’applique au callback original. Aucune commande exécutée par l’audit.",
+        "impact": "L’humain peut autoriser un effet absent de sa présentation. Le plafond de droits149 reste inchangé.",
+        "path_type": "hot",
+        "remediation": "Refuser avec details_incomplete avant Human si la projection change ou coupe une commande/chemin. Copier les trois effets normalisés dans facts sous la garde4096 existante. Réutiliser les gardes et fonctions existantes.",
+        "remediation_code": "let display_changed = request.details[\"command\"].as_str().is_some_and(|raw| quoted_text(raw,512) != raw)\n    || request.details[\"paths_cited\"].as_array().is_some_and(|raw| raw.len() != paths.len()\n        || raw.iter().zip(&paths).any(|(value,shown)| value.as_str() != Some(shown.as_str())));\nif verdict == ChildRequestVerdict::Human && display_changed {\n    verdict = ChildRequestVerdict::Forbidden;\n    code = Some(\"details_incomplete\");\n}\nlet mut presented: Value = serde_json::from_str(&facts).map_err(|error| error.to_string())?;\npresented[\"effects\"] = request.details[\"effects\"].clone();\nfacts = presented.to_string();\n// Insérer avant la garde facts.len()>4096 existante et avant toute publication Human.",
+        "verification": "Contre-relire absence de publication Human lors de transformation/perte et copie des trois effets. Réemployer les oracles155 existants de faits et texte hostile ; aucun nouveau test exécuté ici.",
+        "effort": "S",
+        "regression_risk": "MEDIUM",
+        "references": [
+          "counter-audit155-display-stdio.json:H1",
+          "codex_app_server.rs:2553–2562,1012–1027",
+          "native_child_requests.rs:13–26,443–467,276–290"
+        ],
+        "runtime_reproduced": false,
+        "status": "open",
+        "evidence": "        let mut facts=json!({\"method\":quoted_text(request.details[\"method\"].as_str().unwrap_or(\"unsupported\"),128),\n            \"duration\":if request.details[\"duration\"]==\"once\"{\"once\"}else{\"unsupported\"},\n            \"command\":quoted_text(request.details[\"command\"].as_str().unwrap_or(\"\"),512),\n            \"paths_cited\":paths,\"paths_verified\":false,\"network\":request.details[\"effects\"][\"network\"].as_bool().unwrap_or(false),\n            \"child_posture\":if snapshot.child_policy[\"sandbox_policy\"][\"type\"]==\"readOnly\"{\"read_only\"}else{\"development\"},\n            \"parent_sandbox\":snapshot.parent.provider_policy[\"sandbox_policy\"][\"type\"],\"verdict_code\":code,\n            \"question_ids\":if verdict==ChildRequestVerdict::Parent{request.question_ids.clone()}else{Vec::new()}}).to_string();",
+        "counter_audit_evidence": {
+          "path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/counter-audit155-display-stdio.json",
+          "sha256": "85f7de19475ff0b8bedc4da6f13cb83bf1d09aa0107ca22f07cde02f4c97d91b",
+          "method": "independent static source review",
+          "runtime_reproduced": false
+        },
+        "path_type_basis": "sensitive callback path; runtime frequency not measured",
+        "fingerprint": "573cf471637c"
+      },
+      "status": "resolved",
+      "proof": {
+        "file": "crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "line": 521,
+        "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+        "evidence": "        let raw_command = request.details[\"command\"].as_str().unwrap_or(\"\");\n        // Debug rend les contrôles et caractères de direction visibles, sans\n        // modifier ni couper la commande qui sera exécutée par le fournisseur.\n        let command = if raw_command.is_empty() {\n            String::new()\n        } else {\n            format!(\"{raw_command:?}\")\n        };\n        let cwd = request.details[\"cwd\"]\n            .as_str()\n            .map(|cwd| format!(\"{cwd:?}\"));\n        let mut facts=json!({\"method\":quoted_text(request.details[\"method\"].as_str().unwrap_or(\"unsupported\"),128),\n            \"duration\":if request.details[\"duration\"]==\"once\"{\"once\"}else{\"unsupported\"},\n            \"command\":command,\n            \"cwd\":cwd,\"cwd_verified\":false,\n            \"paths_cited\":paths,\"paths_verified\":false,\"paths_cited_truncated\":paths_cited_truncated,\"paths_cited_changed\":paths_cited_changed,\n            \"effects\":{\"command\":request.details[\"effects\"][\"command\"].as_bool(),\"file_write\":request.details[\"effects\"][\"file_write\"].as_bool(),\"network\":request.details[\"effects\"][\"network\"].as_bool()},\n            \"network\":request.details[\"effects\"][\"network\"].as_bool(),\n            \"child_posture\":if snapshot.child_policy[\"sandbox_policy\"][\"type\"]==\"readOnly\"{\"read_only\"}else{\"development\"},\n            \"parent_sandbox\":snapshot.parent.provider_policy[\"sandbox_policy\"][\"type\"],\"verdict_code\":code,\n            \"question_ids\":if verdict==ChildRequestVerdict::Parent{request.question_ids.clone()}else{Vec::new()}}).to_string();\n        if raw_command.len() > 1024 || facts.len() > 4096 {\n            verdict = ChildRequestVerdict::Forbidden;\n            code = Some(\"details_incomplete\");\n            facts=json!({\"method\":\"unsupported\",\"verdict_code\":\"details_incomplete\",\"question_ids\":[]}).to_string();\n        }",
+        "reviewed_at_utc": "2026-10-12T03:37:28.083936+00:00"
+      }
+    },
+    {
+      "original_id": "REL-001",
+      "original_fingerprint": "a33380318509",
+      "original": {
+        "id": "REL-001",
+        "category": "reliability",
+        "subcategory": "unbounded_private_stdio_callback",
+        "severity": "HIGH",
+        "counter_audit": "CONFIRMED",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "line": 1065,
+        "title": "Le callback155 peut rester bloqué sur le STDIO privé",
+        "description": "answer_provider_request tient la table transport pendant write_value ; le wrapper tient aussi sa table dans son lecteur de commandes. ChildStdin est bloquant et writeln/flush n’ont pas d’échéance. shutdown attend les mêmes table/writer. write_value est une dette héritée dont le callback155 étend l’impact ; le scénario reste conditionnel et non reproduit.",
+        "exploitability": "LIKELY",
+        "exploitation_scenario": "Fournisseur vivant qui ne lit plus stdin ; pipe plein pendant une réponse. L’écriture attend sans borne et bloque le lecteur géré, ses contrôles et la progression de l’arrêt. Aucun banc de saturation exécuté.",
+        "impact": "Une session peut rester sans ACK ni clôture sûre. Aucune élévation de droits ou panne globale du daemon n’est affirmée.",
+        "path_type": "hot",
+        "remediation": "Borner le verrou writer et les écritures réelles du pipe avec une échéance absolue et mode non bloquant selon le patron existant. Préserver la sérialisation, l’incertitude de ligne partielle, alive=false et l’absence de replay. request_with_timeout seul ne borne pas le write préalable.",
+        "remediation_code": "use std::os::fd::AsRawFd;\nlet fd = stdin.as_raw_fd();\nlet flags = unsafe { libc::fcntl(fd,libc::F_GETFL) };\nif flags < 0 || unsafe { libc::fcntl(fd,libc::F_SETFL,flags|libc::O_NONBLOCK) } < 0 {\n    return Err(TransportError::Io(std::io::Error::last_os_error().to_string()));\n}\n// Avant boxing du STDIO. Réemploi du write_value existant, avec le même deadline\n// avant writer.try_lock() et chaque write, offset conservé, WouldBlock/Interrupted\n// traités jusqu'à expiration ; aucune réinitialisation du délai par fragment.\n// Sur tout échec partiel conserver le chemin existant :\npending[index].uncertain = true;\nself.alive.store(false, Ordering::SeqCst);\nself.observations.1.notify_all();\nreturn Err(TransportError::Io(format!(\"child_request_write_uncertain: {error}\")));\n// Adapter l'acquisition du writer dans write_value à try_lock jusqu'au deadline.\n// Garder la sérialisation answer/cancel. Le writer socket garde sa propre borne.\n// Proposition d'intégration non compilée, pas un patch exécuté.",
+        "verification": "Contre-relire O_NONBLOCK avant boxing, acquisition/écriture bornées par la même horloge et échec partiel uncertain sans ACK. Réemployer les oracles callback/answer-cancel155 existants ; aucun nouveau scénario de confort exécuté.",
+        "effort": "M",
+        "regression_risk": "MEDIUM",
+        "references": [
+          "counter-audit155-display-stdio.json:H2",
+          "codex_app_server.rs:427–437,967–1074,3177–3185,781–789,1272–1293",
+          "wrapper.rs:408–425,4521–4530,5560–5617"
+        ],
+        "runtime_reproduced": false,
+        "status": "open",
+        "evidence": "        // Le verrou sérialise answer/fin/resolved. Une écriture partielle ne\n        // prouve aucun refus : garder l'incertitude et fermer l'admission.\n        if let Err(error) = write_value(&self.writer, reply) {\n            pending[index].uncertain = true;\n            self.alive.store(false, Ordering::SeqCst);\n            self.observations.1.notify_all();\n            return Err(TransportError::Io(format!(\n                \"child_request_write_uncertain: {error}\"",
+        "counter_audit_evidence": {
+          "path": "/Users/moi/.cache/bridget-delivery155.um4xccv4/counter-audit155-display-stdio.json",
+          "sha256": "85f7de19475ff0b8bedc4da6f13cb83bf1d09aa0107ca22f07cde02f4c97d91b",
+          "method": "independent static source review",
+          "runtime_reproduced": false
+        },
+        "path_type_basis": "sensitive callback path; runtime frequency not measured",
+        "fingerprint": "a33380318509"
+      },
+      "status": "resolved",
+      "proof": {
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "line": 3238,
+        "sha256": "ac13e0cfd0becdec45a3e24ae7973ddbb94c18e74b00ce40ddf0a93fca76c5e8",
+        "evidence": "fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {\n    // Un budget TOTAL pour le verrou, les écritures STDIO partielles et flush.\n    // Le SocketWriter interactif conserve son propre flush borné à3s ; il\n    // peut ajouter ces3s après contention, sans prétendre au budget STDIO.\n    let deadline = Instant::now() + Duration::from_secs(3);\n    let mut bytes =\n        serde_json::to_vec(&value).map_err(|error| TransportError::Io(error.to_string()))?;\n    bytes.push(b'\\n'); // mêmes octets JSON compacts + LF que writeln!(\"{value}\").\n    let mut guard = loop {\n        if Instant::now() >= deadline {\n            return Err(TransportError::Io(\"budget writer Codex dépassé\".into()));\n        }\n        match writer.try_lock() {\n            Ok(guard) => break guard,\n            Err(std::sync::TryLockError::Poisoned(error)) => {\n                return Err(TransportError::Io(error.to_string()));\n            }\n            Err(std::sync::TryLockError::WouldBlock) => {\n                let millis = deadline\n                    .saturating_duration_since(Instant::now())\n                    .as_millis()\n                    .clamp(1, 25) as i32;\n                if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {\n                    let error = std::io::Error::last_os_error();\n                    if error.kind() != std::io::ErrorKind::Interrupted {\n                        return Err(TransportError::Io(error.to_string()));\n                    }\n                }\n            }\n        }\n    };\n    let result = (|| {\n        let output = guard.as_mut().ok_or(TransportError::AgentDead)?;\n        let mut offset = 0;\n        loop {\n            if Instant::now() >= deadline {\n                return Err(TransportError::Io(\"budget writer Codex dépassé\".into()));\n            }\n            let progress = if offset < bytes.len() {\n                output.write(&bytes[offset..]).map(Some)\n            } else {\n                output.flush().map(|()| None)\n            };\n            match progress {\n                Ok(None) => return Ok(()),\n                Ok(Some(0)) => {\n                    return Err(TransportError::Io(\"écriture Codex sans progrès\".into()));\n                }\n                Ok(Some(count)) => offset += count,\n                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,\n                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {\n                    // Box<dyn Write> ne donne aucun fd. poll sans descripteur\n                    // attend au plus25ms sous la MÊME échéance, sans busy-loop.\n                    let millis = deadline\n                        .saturating_duration_since(Instant::now())\n                        .as_millis()\n                        .clamp(1, 25) as i32;\n                    if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {\n                        let error = std::io::Error::last_os_error();\n                        if error.kind() != std::io::ErrorKind::Interrupted {\n                            return Err(TransportError::Io(error.to_string()));\n                        }\n                    }\n                }\n                Err(error) => return Err(TransportError::Io(error.to_string())),\n            }\n        }\n    })();\n    // Une trame partielle n'est pas une réponse négative attestée. Fermer le\n    // canal empêche qu'une écriture suivante complète ses octets incertains.\n    if result.is_err() {\n        let _ = guard.take();\n    }",
+        "reviewed_at_utc": "2026-10-12T03:37:28.083936+00:00"
+      }
+    }
+  ],
+  "persistent_history": [
+    {
+      "original_id": "DUP-001",
+      "original_fingerprint": "c0dcaaf9b24b",
+      "original": {
+        "id": "DUP-001",
+        "category": "quality",
+        "subcategory": "duplication",
+        "severity": "LOW",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "line": 4367,
+        "title": "Renvoi après reconnexion copié dans deux branches",
+        "description": "Les lignes4367–4379 et4611–4623 sont identiques : elles relisent les demandes waiting, excluent uncertain et remettent les trames au daemon. Les deux chemins terminent une reconnexion avec le même writer et le même état. Aucun helper équivalent de ce renvoi collectif n’a été trouvé ; send_wrapper_message reste le point unique d’envoi d’une trame.",
+        "evidence": "                if forward_child_requests {\n                    let pending: Vec<_> = child_requests\n                        .lock()\n                        .unwrap_or_else(|e| e.into_inner())\n                        .waiting\n                        .iter()\n                        .filter(|entry| !entry.uncertain)\n                        .map(|entry| entry.request.clone())\n                        .collect();\n                    for request in pending {\n                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });\n                    }\n                }",
+        "exploitability": "N/A",
+        "impact": "Une évolution du filtre ou de la remise doit être reportée dans deux copies ; risque de divergence de maintenance. Aucun défaut runtime actuel ni taux global de duplication n’est déduit.",
+        "path_type": "cold",
+        "remediation": "Réunir ce seul bloc dans une fermeture locale au parcours géré, appelée après les deux reconnexions. Garder les deux branches et leurs contrôles. Aucun module, export, framework, table ou outil neuf.",
+        "verification": "Les deux appels doivent conserver le filtre !uncertain et envoyer le même tuple ; rejouer les tests existants native155_wrapper et la reconnexion149 concernés, sans nouveau scénario.",
+        "effort": "XS",
+        "regression_risk": "LOW",
+        "duplication_type": "STRICT",
+        "duplication_lines": 13,
+        "occurrences_count": 2,
+        "all_locations": [
+          "crates/bridget-daemon/src/wrapper.rs:4367",
+          "crates/bridget-daemon/src/wrapper.rs:4611"
+        ],
+        "fingerprint": "c0dcaaf9b24b"
+      },
+      "status": "persisting",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs",
+        "line": 4367,
+        "sha256": "659a1e09f6ac4c351d6d906e1065f4614680e016cf36cd0c066b039df074278d",
+        "evidence": "                if forward_child_requests {\n                    let pending: Vec<_> = child_requests\n                        .lock()\n                        .unwrap_or_else(|e| e.into_inner())\n                        .waiting\n                        .iter()\n                        .filter(|entry| !entry.uncertain)\n                        .map(|entry| entry.request.clone())\n                        .collect();\n                    for request in pending {\n                        send_wrapper_message(&writer, WrapperToDaemon::ChildRequest { request });\n                    }\n                }"
+      },
+      "current_id": "DUP-001",
+      "current_fingerprint": "c0dcaaf9b24b"
+    },
+    {
+      "original_id": "PERF-082",
+      "original_fingerprint": "19cf86e44509",
+      "original": {
+        "id": "PERF-082",
+        "category": "performance",
+        "subcategory": "sequential_ipc_budget",
+        "severity": "LOW",
+        "file": "crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "line": 811,
+        "title": "Le tick renouvelle une seconde pour chaque émission séquentielle",
+        "description": "Le lot de followups est borné à512 lignes, mais chaque appel emit recrée son propre budget d’une seconde. Le tick natif attend la fin de cette boucle avant ses propres transitions. Plusieurs writers lents peuvent donc accumuler leur attente. La condition de saturation n’a pas été mesurée ; les timeouts et la fermeture des sockets limitent chaque émission.",
+        "evidence": "for (id, conn, writer, frame) in outgoing {\n    emit(state, &id, &conn, &writer, &frame, false);\n}",
+        "exploitability": "THEORETICAL",
+        "impact": "Retard potentiel du tick natif et des échéances. Le budget nominal des attentes IPC peut cumuler jusqu’à k secondes, k<=512 ; les relectures sources/SQL ont un coût distinct non mesuré. Ce n’est pas une durée runtime observée.",
+        "path_type": "hot",
+        "remediation": "Conserver ce risque comme limite connue. Avant toute optimisation, utiliser les logs de tick existants pour établir une baseline réelle ; si un retard est observé, borner le budget du lot tout en conservant les claims et les recontrôles FR027. Aucun patch de confort demandé dans cette lecture.",
+        "verification": "Vérification structurelle : budget renouvelé à :833 et appel préalable au tick natif à native_delegation.rs:2402. Une éventuelle mesure future réutilise les logs existants ; aucun benchmark ou scénario exécuté ici.",
+        "effort": "S",
+        "regression_risk": "MEDIUM",
+        "references": [
+          "crates/bridget-daemon/src/daemon/native_child_requests.rs:833",
+          "crates/bridget-daemon/src/daemon/native_delegation.rs:2402",
+          "audit-code-v14 module08 profiling-first"
+        ],
+        "fingerprint": "19cf86e44509"
+      },
+      "status": "persisting",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "line": 907,
+        "sha256": "3be800076fe7523adc083dce913f4d38988dc7da540fb6d4fa6bc3c2adb2af51",
+        "evidence": "    for (id, conn, writer, frame) in outgoing {\n        emit(state, &id, &conn, &writer, &frame, false);\n    }"
+      },
+      "current_id": "PERF-082",
+      "current_fingerprint": "19cf86e44509"
+    }
+  ],
+  "final_capture": {
+    "captured_at_utc": "2026-10-12T03:34:03.674256+00:00",
+    "source_receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-cwd-r1.json",
+    "source_receipt_sha256": "ecfcc94c9c1ab832dbeeb0bf709b3a92d0bd4abfec19578de43214969c7af0e9",
+    "source_receipt_rc": 0,
+    "initial_archive": "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original",
+    "initial_archive_index_sha256": "a016295deddf35354e13bccb00179a8fff07f8b492e9625b63f17d2bf4f30fd0",
+    "initial_audit_start": "2026-10-12T02:41:23.463559+00:00",
+    "cycle1_immutable": true,
+    "new_thematic_cycle": false
+  },
+  "T040_validation": {
+    "status": "validated_four_cases_with_explicit_user_consent",
+    "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/recette155-postfix-final.json",
+    "receipt_sha256": "153b70cbbbaa94315b87f192a8fa67fc217f607eb1cc70c5e9ea5b047b6cc9f3",
+    "user_validation": {
+      "at_utc": "2026-10-12T03:02:02.400752+00:00",
+      "answer": "Oui, accepter et valider si les quatre cas réussissent",
+      "scope": "printf RECETTE155_HUMAN isolated daemon; T040 conditional on four planned cases success",
+      "executed": true
+    },
+    "user_validation_before_accept": {
+      "at_utc": "2026-10-12T03:02:02.400752+00:00",
+      "answer": "Oui, accepter et valider si les quatre cas réussissent",
+      "scope": "printf RECETTE155_HUMAN isolated daemon; T040 conditional on four planned cases success",
+      "executed": false
+    },
+    "cases": [
+      {
+        "name": "question_parent",
+        "pass": true,
+        "evidence": "question155-runtime.json",
+        "reused_prior_runtime": true
+      },
+      {
+        "name": "human_approval",
+        "pass": true,
+        "reused_prior_runtime": false
+      },
+      {
+        "name": "workspace_outside_limit",
+        "pass": true,
+        "evidence": "recette155-final-runtime-open.json",
+        "reused_prior_runtime": true
+      },
+      {
+        "name": "expiry_600s",
+        "pass": true,
+        "evidence": "expiry155-r3-runtime.json",
+        "reused_prior_runtime": true
+      }
+    ],
+    "scope_limit": "Les trois chemins nominaux déjà exercés sont conservés. Le correctif modifie la présentation Human, les écritures bloquées et le règlement avant écriture ; leurs scénarios concernés passent sur les sources finales. Aucun second FULL ni nouveau délai de600s lancé. Les trois captures précédentes ne sont pas présentées comme runtime du binaire final.",
+    "tasks_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/tasks.md",
+    "tasks_sha256": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+    "tasks_total": 42,
+    "tasks_checked": 42,
+    "t040_checked": true
+  },
+  "input_sha256_checked": {
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/archive-sha256.json": "a016295deddf35354e13bccb00179a8fff07f8b492e9625b63f17d2bf4f30fd0",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/01_Decouverte.md": "b28a5607fa0a4d726a2a5438d85b5cbf5ea4bd8d5ec3834ddf0e495f84f2f178",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/01_Decouverte.md": "b28a5607fa0a4d726a2a5438d85b5cbf5ea4bd8d5ec3834ddf0e495f84f2f178",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/delta155-vs154-preparation.patch": "ee51653a5d2b02e532e731659e78131c0883cea2e5249af7070d45962cce781b",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/delta155-vs154-preparation.patch": "ee51653a5d2b02e532e731659e78131c0883cea2e5249af7070d45962cce781b",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/diff_files.txt": "bf748e73d37337ca29f20e0c0048c9f2751b87d888bb0d0796a27ce80fe1f845",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/diff_files.txt": "bf748e73d37337ca29f20e0c0048c9f2751b87d888bb0d0796a27ce80fe1f845",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/scope-files.json": "89ead371d096f4a785e03c85390de64b9565a506007ba7453715271e026690ed",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/scope-files.json": "89ead371d096f4a785e03c85390de64b9565a506007ba7453715271e026690ed",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/manifest.json": "536e531a9f7c087ed679fece22da753469675ca3c1826c7ae5f8c5b9b826af28",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/manifest.json": "536e531a9f7c087ed679fece22da753469675ca3c1826c7ae5f8c5b9b826af28",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/00_Configuration_Chargee.md": "0a95463d16024aa502af4699a314d1006ebbe626b1aaaf1bb3816ad4d9955650",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/00_Configuration_Chargee.md": "0a95463d16024aa502af4699a314d1006ebbe626b1aaaf1bb3816ad4d9955650",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/rapport05-07-12-cycle1.md": "99cb78b9151541f90ef90505136242195dd9ca24d410ad620e62c4e9fd988747",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/rapport05-07-12-cycle1.md": "99cb78b9151541f90ef90505136242195dd9ca24d410ad620e62c4e9fd988747",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_performance.json": "b7abbecf58ea5f01bedeb707b6ea695b0dcf4ded6db2d7df8495e1261cc07abe",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_performance.json": "b7abbecf58ea5f01bedeb707b6ea695b0dcf4ded6db2d7df8495e1261cc07abe",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_complexite.json": "a9df7d6de9891a92f5fd610f37b6f58d621ef970f3abff4a915d905cd8052528",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_complexite.json": "a9df7d6de9891a92f5fd610f37b6f58d621ef970f3abff4a915d905cd8052528",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/rapport03-06-cycle1.md": "d3ceedc3841f58ae6292049ee94fafa52fbc063c191c03ab450a9bfc74a3fa6b",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/rapport03-06-cycle1.md": "d3ceedc3841f58ae6292049ee94fafa52fbc063c191c03ab450a9bfc74a3fa6b",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_qualite.json": "33665e3ac17f2b2075828c18463e535dd1f610634748a0aef0489b2d6a907681",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_qualite.json": "33665e3ac17f2b2075828c18463e535dd1f610634748a0aef0489b2d6a907681",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_duplication.json": "f0854812db049cac9159f00dc909b1994bea4c23da4e93aea3c3ee82ebcdcbe9",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_duplication.json": "f0854812db049cac9159f00dc909b1994bea4c23da4e93aea3c3ee82ebcdcbe9",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_tests.json": "63b7d5534c0cf16a387c61fa0cc3d1837482717b6bd244ab92c47f9302a47839",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_tests.json": "63b7d5534c0cf16a387c61fa0cc3d1837482717b6bd244ab92c47f9302a47839",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/rapport04-08-cycle1.md": "43607d50a632081589dcb34a6184650de8616c115dea78473bc46a33927c83fd",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/rapport04-08-cycle1.md": "43607d50a632081589dcb34a6184650de8616c115dea78473bc46a33927c83fd",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_securite.json": "7b71455133b3dca315fedf2f912d5bcf1e7313eedb16c1ffa81495f82fcad77a",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_securite.json": "7b71455133b3dca315fedf2f912d5bcf1e7313eedb16c1ffa81495f82fcad77a",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/aggregated-findings.json": "c831e7a10f706e5ef23b10125643ec9938a7b7abb63772010a09333eef5384ab",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/aggregated-findings.json": "c831e7a10f706e5ef23b10125643ec9938a7b7abb63772010a09333eef5384ab",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/audit155-cycle1-original/cycle-1/findings_minimalisme.json": "18d2f8ad4e622967607ea20a213422710e983801d8b18d1a5f8a279d13d58728",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-1/findings_minimalisme.json": "18d2f8ad4e622967607ea20a213422710e983801d8b18d1a5f8a279d13d58728",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-cwd-r1.json": "ecfcc94c9c1ab832dbeeb0bf709b3a92d0bd4abfec19578de43214969c7af0e9",
+    "/Users/moi/.cache/bridget-delivery155.um4xccv4/recette155-postfix-final.json": "153b70cbbbaa94315b87f192a8fa67fc217f607eb1cc70c5e9ea5b047b6cc9f3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/tasks.md": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/capture-final/manifest.json": "19b237e4cab90828df37b7df3750b260f60f2d4ed31c31d65d21e162b78fd973",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/capture-final/scope-files.json": "90aeda07d5862e7ee580350d2b3dae38c24b3038fa1940048f5bd60fec1952f1",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/capture-final/delta155-vs154-preparation.patch": "993b6c5d19843ad8b6eb47d5fde8dc9b30f2ed5a6a124fd7d171de994c3e3066",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_complexite.json": "3495be661ecbf948953491813c8519b6959383861294c04c065294a63cae91dd",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_duplication.json": "b72ca02a4e2878c525a49adc5203e2c6eddf43d3903029ac49ee97879560cdaf",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_minimalisme.json": "abed5c5460fc3b92cfc3ed30954dfd6ebaff326e43ada27f6acf83b9e518a519",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_performance.json": "eabc1536cae8013c262a641abc126d7d4c51a0f37bcd4115469ee0ba832820be",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_qualite.json": "c4681879609e26c31ad9360689ab19918bb5dfcff7e53fd7d02572e238c74987",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_securite.json": "aa813252df4c14aa229b9e46f3ea88314427a1ccc86ec3ba0478418346b87e56",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/audits/2026-10-12/session-2026-10-12-spec-155-01/cycle-scoring/findings_tests.json": "cb0e95834ac4cf5f83883c2938d7eb77db07736b337a87fd1b300b93dcc63812"
+  }
+}

@@ -5,11 +5,261 @@ use crate::registry::AgentDefinition;
 use serde_json::{Value,json};
 use std::path::{Path,PathBuf};
 
-pub(crate) const CHILD_POLICY_ENV:&str="BRIDGET_NATIVE_CHILD_POLICY";
-pub(crate) const CHILD_SOURCES_ENV:&str="BRIDGET_NATIVE_PERMISSION_SOURCES";
-const TRANSPARENT_GCLAUDE:&str="sha256:dd8dee5677e46fde677f6ba940cbc07294f50ff690a76878c1883b6805872a8e";
-fn unavailable()->String{"permission_source_unavailable".into()}
-fn changed()->String{"settings_revision_changed".into()}
+/// O(d+q+p), d détails, q questions, p politiques ; aucune lecture de fichier.
+/// Les effets sont normalisés par le transport. Les droits restent ceux149.
+pub(crate) fn classify_request(
+    frozen: &NativePermissionSnapshot,
+    request: &bridget_transport::protocol::ChildProviderRequest,
+    parent_available: bool,
+) -> (
+    bridget_transport::protocol::ChildRequestVerdict,
+    Option<&'static str>,
+) {
+    use bridget_transport::protocol::{
+        ChildRequestDecision, ChildRequestKind, ChildRequestVerdict,
+    };
+    let deny = |code| (ChildRequestVerdict::Forbidden, Some(code));
+    if !parent_available {
+        return deny("parent_unavailable");
+    }
+    if request.kind == ChildRequestKind::ElicitationForm {
+        return deny(if request.details["mode"] == "url" {
+            "url_mode_unsupported"
+        } else {
+            "approval_method_unsupported"
+        });
+    }
+    let method = request.details["method"].as_str();
+    let supported = match request.kind {
+        ChildRequestKind::UserInput => method == Some("item/tool/requestUserInput"),
+        ChildRequestKind::ApprovalCommand => {
+            method == Some("item/commandExecution/requestApproval")
+                && request.details["kind"] == "command"
+        }
+        // Effet synthétique établi du classifier ; le transport155 refuse les
+        // vraies demandes fileChange0.162.1 avant tout événement forward.
+        ChildRequestKind::ApprovalFile => method == Some("item/fileChange/requestApproval"),
+        ChildRequestKind::ElicitationForm => false,
+    };
+    if !supported {
+        return deny("approval_method_unsupported");
+    }
+    let Some(details) = request.details.as_object() else {
+        return deny("details_incomplete");
+    };
+    if request.version != 1
+        || request.truncated
+        || details.get("complete") != Some(&Value::Bool(true))
+        || details.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "method"
+                    | "kind"
+                    | "duration"
+                    | "effects"
+                    | "complete"
+                    | "secret"
+                    | "command"
+                    | "cwd"
+                    | "paths_cited"
+                    | "questions"
+                    | "mode"
+                    | "reason"
+            )
+        })
+        || details
+            .get("reason")
+            .is_some_and(|reason| !reason.is_string() && !reason.is_null())
+        || details.get("cwd").is_some_and(|cwd| match cwd {
+            Value::Null => false,
+            Value::String(cwd) => cwd.len() > 1024,
+            _ => true,
+        })
+    {
+        return deny("details_incomplete");
+    }
+    let Some(effects) = details.get("effects").and_then(Value::as_object) else {
+        return deny("details_incomplete");
+    };
+    if effects.len() != 3
+        || ["command", "network", "file_write"]
+            .iter()
+            .any(|key| !effects.get(*key).is_some_and(Value::is_boolean))
+    {
+        return deny("details_incomplete");
+    }
+    let command = effects["command"] == true;
+    let network = effects["network"] == true;
+    let file_write = effects["file_write"] == true;
+    if request.details["duration"] != "once" {
+        return deny("duration_unsupported");
+    }
+    if frozen.version != 1
+        || frozen.source != frozen.parent.source
+        || frozen.owner_agent_id.is_empty()
+        || frozen.owner_instance_id != frozen.parent.provider_instance_id
+        || !Path::new(&frozen.project_cwd).is_absolute()
+        || bridget_transport::protocol::validate_permissions(
+            &frozen.parent,
+            frozen.parent.source == "provider_turn",
+        )
+        .is_err()
+        || frozen.parent.provider_policy["approvals_reviewer"] != "user"
+    {
+        return deny("parent_limit_unknown");
+    }
+    // Valider le schéma complet de la politique enfant avec le validateur pur
+    // existant, sans recapturer le contexte ni relire les fichiers149.
+    let mut child = frozen.parent.clone();
+    child.driver = "codex_app_server".into();
+    child.provider_policy = frozen.child_policy.clone();
+    if bridget_transport::protocol::validate_permissions(&child, child.source == "provider_turn")
+        .is_err()
+        || child.provider_policy["approvals_reviewer"] != "user"
+    {
+        return deny("parent_limit_unknown");
+    }
+    if request.kind == ChildRequestKind::UserInput {
+        if command || network || file_write {
+            return deny("details_incomplete");
+        }
+        let Some(questions) = details.get("questions").and_then(Value::as_array) else {
+            return deny("details_incomplete");
+        };
+        if questions.is_empty() || questions.len() != request.question_ids.len() {
+            return deny("details_incomplete");
+        }
+        let mut ids = std::collections::HashSet::new();
+        let mut secret = false;
+        for (index, question) in questions.iter().enumerate() {
+            let Some(question) = question.as_object() else {
+                return deny("details_incomplete");
+            };
+            if question.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "id" | "header" | "question" | "isSecret" | "isOther" | "options"
+                )
+            }) || ["id", "header", "question"]
+                .iter()
+                .any(|key| !question.get(*key).is_some_and(Value::is_string))
+                || ["isSecret", "isOther"]
+                    .iter()
+                    .any(|key| question.get(*key).is_some_and(|value| !value.is_boolean()))
+            {
+                return deny("details_incomplete");
+            }
+            let id = question["id"].as_str().unwrap_or("");
+            if id.is_empty() || request.question_ids[index] != id || !ids.insert(id) {
+                return deny("details_incomplete");
+            }
+            if let Some(options) = question.get("options").filter(|value| !value.is_null()) {
+                let Some(options) = options.as_array() else {
+                    return deny("details_incomplete");
+                };
+                if options.iter().any(|option| {
+                    !option.as_object().is_some_and(|option| {
+                        option.len() == 2
+                            && ["label", "description"]
+                                .iter()
+                                .all(|key| option.get(*key).is_some_and(Value::is_string))
+                    })
+                }) {
+                    return deny("details_incomplete");
+                }
+            }
+            // Défaut false normatif UserInput, jamais déduit du texte libre.
+            secret |= question.get("isSecret") == Some(&Value::Bool(true));
+        }
+        if secret {
+            return deny("secret_not_forwardable");
+        }
+        if details.get("secret") != Some(&Value::Bool(false)) {
+            return deny("details_incomplete");
+        }
+        return (ChildRequestVerdict::Parent, None);
+    }
+    if details.get("secret") != Some(&Value::Bool(false))
+        || !request.offered.contains(&ChildRequestDecision::Accept)
+        || !request.offered.iter().any(|decision| {
+            matches!(
+                decision,
+                ChildRequestDecision::Decline | ChildRequestDecision::Cancel
+            )
+        })
+    {
+        return deny("details_incomplete");
+    }
+    if child.provider_policy["sandbox_policy"]["type"] == "readOnly" {
+        return deny("child_restricted");
+    }
+    let sandbox = &frozen.parent.provider_policy["sandbox_policy"];
+    let full = sandbox["type"] == "dangerFullAccess";
+    if !full && sandbox["type"] != "workspaceWrite" {
+        return deny("parent_limit_unknown");
+    }
+    if file_write && !full {
+        return deny("file_confinement_unproven");
+    }
+    if network && !full && sandbox.get("networkAccess") != Some(&Value::Bool(true)) {
+        return deny("network_not_granted");
+    }
+    if command && !full {
+        return deny("command_unbounded");
+    }
+    if !command && !network && !file_write {
+        return deny("details_incomplete");
+    }
+    (ChildRequestVerdict::Human, None)
+}
+
+/// O(b), b octets parcourus des64 premières valeurs ; sortie<=4096octets UTF-8.
+/// Affichage seulement : aucune permission, résolution ni lecture de chemin.
+pub(crate) fn format_cited_paths(paths: &[String]) -> String {
+    const LIMIT: usize = 4096;
+    const TRUNCATED: &str = " ; … liste tronquée";
+    let mut result = String::from("Chemins cités (non vérifiés) : ");
+    let budget = LIMIT - TRUNCATED.len();
+    let mut truncated = paths.len() > 64;
+    for (index, path) in paths.iter().take(64).enumerate() {
+        if index > 0 {
+            if result.len() + 3 > budget {
+                truncated = true;
+                break;
+            }
+            result.push_str(" ; ");
+        }
+        for character in path
+            .chars()
+            .filter(|character| !bridget_core::is_disallowed_control(*character))
+        {
+            if result.len() + character.len_utf8() > budget {
+                truncated = true;
+                break;
+            }
+            result.push(character);
+        }
+        if result.len() >= budget {
+            truncated |= index + 1 < paths.len();
+            break;
+        }
+    }
+    if truncated {
+        result.push_str(TRUNCATED);
+    }
+    result
+}
+
+pub(crate) const CHILD_POLICY_ENV: &str = "BRIDGET_NATIVE_CHILD_POLICY";
+pub(crate) const CHILD_SOURCES_ENV: &str = "BRIDGET_NATIVE_PERMISSION_SOURCES";
+const TRANSPARENT_GCLAUDE: &str =
+    "sha256:dd8dee5677e46fde677f6ba940cbc07294f50ff690a76878c1883b6805872a8e";
+fn unavailable() -> String {
+    "permission_source_unavailable".into()
+}
+fn changed() -> String {
+    "settings_revision_changed".into()
+}
 
 pub(crate) fn source_revision(path:&Path)->Result<String,String>{
     bridget_transport::protocol::permission_source_revision(path,16*1024*1024)

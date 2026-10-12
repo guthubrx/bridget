@@ -4,7 +4,9 @@ use crate::communication::client::{
     unexpected_response,
 };
 use crate::mcp_identity::ResolvedIdentity;
-use bridget_transport::protocol::{NativeDelegationRequest, SpawnPosture, WorkspaceRequest};
+use bridget_transport::protocol::{
+    ChildRequestDecision, NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -69,8 +71,9 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     ]});
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"brief":brief_schema},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"brief":brief_schema},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_wait","description":"Attend le résultat d'une ou plusieurs de ses tâches natives, sans polling ni modification de la remise. Une expiration n'annule aucun enfant. Le message de résultat peut arriver après ce retour.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}},"wait_timeout":{"type":"integer","minimum":1,"maximum":WAIT_TIMEOUT_MAX_SECS,"default":WAIT_TIMEOUT_DEFAULT_SECS}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_task_ack","description":"Déclare avoir lu le résultat ou l'échec de ses tâches natives. Cet accusé est informatif ; il ne remplace pas le message normal et ne modifie ni remise, ni nettoyage, ni rétention.","inputSchema":{"type":"object","properties":{"task_ids":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1}}},"required":["task_ids"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
@@ -99,10 +102,12 @@ pub(crate) fn execute(
             "posture",
             "reply_timeout",
             "workspace",
+            "child_requests",
             "keep_alive_secs",
             "brief",
         ],
         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
+        "bridget_task_respond" => &["task_id", "request_id", "decision", "answer"],
         "bridget_task_status" | "bridget_task_cancel" => &["task_id"],
         "bridget_task_wait" => &["task_ids", "wait_timeout"],
         "bridget_task_ack" => &["task_ids"],
@@ -146,10 +151,20 @@ pub(crate) fn execute(
                 Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
                 _ => return Err(ClientError::InvalidParams("reply_timeout invalide".into())),
             },
-            workspace: args.get("workspace").map(|value| {
-                serde_json::from_value::<WorkspaceRequest>(value.clone())
-                    .map_err(|_| ClientError::InvalidParams("workspace invalide".into()))
-            }).transpose()?,
+            child_requests: match args.get("child_requests") {
+                None => None,
+                Some(Value::String(mode)) if matches!(mode.as_str(), "deny" | "forward") => {
+                    Some(mode.clone())
+                }
+                _ => return Err(ClientError::InvalidParams("child_requests invalide".into())),
+            },
+            workspace: args
+                .get("workspace")
+                .map(|value| {
+                    serde_json::from_value::<WorkspaceRequest>(value.clone())
+                        .map_err(|_| ClientError::InvalidParams("workspace invalide".into()))
+                })
+                .transpose()?,
             keep_alive_secs: match args.get("keep_alive_secs") {
                 None => None,
                 Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
@@ -162,6 +177,36 @@ pub(crate) fn execute(
             request_id: string("request_id")?,
             task: string("task")?,
             brief: args.get("brief").cloned(),
+        },
+        "bridget_task_respond" => NativeDelegationRequest::Respond {
+            task_id: string("task_id")?,
+            request_id: string("request_id")?,
+            decision: match args.get("decision").and_then(Value::as_str) {
+                Some("accept") => ChildRequestDecision::Accept,
+                Some("decline") => ChildRequestDecision::Decline,
+                Some("cancel") => ChildRequestDecision::Cancel,
+                _ => {
+                    return Err(ClientError::Technical {
+                        code: "native_delegation_refused",
+                        message: "decision_not_offered".into(),
+                    });
+                }
+            },
+            answer: match args.get("answer") {
+                None => None,
+                Some(value)
+                    if value.is_object()
+                        && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 8192) =>
+                {
+                    Some(value.clone())
+                }
+                _ => {
+                    return Err(ClientError::Technical {
+                        code: "native_delegation_refused",
+                        message: "answer_invalid".into(),
+                    });
+                }
+            },
         },
         "bridget_task_status" => NativeDelegationRequest::Status {
             task_id: string("task_id")?,
@@ -362,7 +407,7 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
-        assert_eq!(tools(brief_schema).len(), 7);
+        assert_eq!(tools(brief_schema).len(), 8);
     }
 
     #[test]

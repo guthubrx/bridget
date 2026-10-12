@@ -73,6 +73,57 @@ processus chargés en version 149. Leur présence dans les sources ne prouve pas
 activation dans la session. Le suivi humain passe par `bridget lineage` dans un
 terminal, avec `--t3-thread` et `--project-root` ; ce n'est pas un outil MCP.
 
+### Demandes de l’enfant — contrat155
+
+Le contrat155 des outils et vues est couvert par les tests ciblés. La
+livraison reste distincte. Employer ces formes seulement si la session expose
+les capacités et outils correspondants.
+
+`bridget_delegate.child_requests` vaut `deny` par défaut. `forward` concerne
+seulement Codex app-server, sans modifier la politique de l’enfant ni les droits
+hérités. Garder exactement ce mode et l’enveloppe sur rejeu. Un parent
+`approval_policy=never` reste `never` : aucune route humaine si le fournisseur
+ne pose aucune approbation.
+
+Le parent reçoit seulement `user_input` complète, corrélée, `isSecret=false`
+(défaut normatif). L’humain décide seulement des commandes `kind=command`
+aux faits/durée établis, avec décision explicitement offerte ; `accept` vaut
+pour l’opération courante. Le parent doit avoir `dangerFullAccess` attesté et
+l’enfant doit être non restreint. La limite des droits figés reste absolue.
+Le parent n’approuve jamais une action. `fileChange`, `permissions`, `writeStdin`
+et toutes formes inconnues restent refusées. Tout formulaire MCP tiers est
+refusé, même typé : aucun heuristique de texte ou de bool/enum ne prouve une
+question sans secret ni approbation. L’exception vide Bridget reste distincte.
+
+Lire l’avis ou `bridget_task_status`, puis appeler `bridget_task_respond` avec
+`task_id`, `request_id` et `decision` (`accept`, `decline`, `cancel`). `answer`
+est autorisé seulement pour `accept` sur une question : objet de 8 Kio au plus,
+avec identifiants de question exacts et tableaux de chaînes. Champs inconnus
+refusés ; aucun argument d’identité ou de droits.
+
+```json
+{"name":"bridget_task_respond","arguments":{"task_id":"<task_id>","request_id":"<request_id>","decision":"accept","answer":{"<question_id>":["<réponse>"]}}}
+```
+
+Refuser par `decline` ou `cancel` sans `answer`. Une approbation rend
+`parent_cannot_approve`. Le transport adapte `answer[qid]=[chaînes]` en
+`answers[qid].answers` ; ne pas fournir l’enveloppe fournisseur dans `answer`.
+Il n’invente pas de refus natif `user_input` : refus/expiration sont JSON-RPC
+`child_request_refused`.
+
+Fenêtres 600 s Parent et 3600 s Human, bornées par `mission_deadline_at - 30 s` ;
+moins de 30 s restantes : `deadline_too_close`. Le statut rend `pending_requests`
+et `recent_requests` avec `delivery_state`. Human reste visible, sans réponse
+possible par le parent. Une décision enregistrée n’est pas une remise prouvée.
+
+L’attente garde `ready` terminal et `pending` nonterminal. `pending_requests`
+à la racine du résultat wait contient les questions Parent actionnables avec
+`task_id`, jamais Human. Une question déjà ouverte peut rendre immédiatement.
+`timed_out=false` si `ready` ou `pending_requests` est non vide ; vrai seulement
+à l’échéance wait avec les deux vides. Aucune consommation ou mémoire de waiter.
+Pendant la pause, réponse parent refusée ; décision humaine acquittée sans
+exécution. Après reprise, traiter une nouvelle demande, jamais l’accord invalidé.
+
 ### Espace de travail — contrat 154
 
 Vérifier workspace_strategies et worktree/worktree_refusal dans le catalogue
@@ -215,6 +266,7 @@ l'appel d'attente ; il ne remplace pas le `reply_timeout` de la mission ou de l'
 `bridget_task_wait` rend `ready`, les tâches terminées à cet instant, et `pending`,
 les autres ids, dans l'ordre demandé. Il revient dès qu'une tâche termine. Sans
 résultat avant le délai, `timed_out` vaut `true` ; aucun enfant n'est annulé.
+L’extension155 ajoute le retour sur une question Parent actionnable, décrit dans Demandes de l’enfant.
 Les entrées `ready` omettent `result`. Lire le texte entier par `bridget_task_status`.
 L'attente et le statut sont des lectures pures : ni preuve de remise, ni suppression
 de message, ni nettoyage, ni purge. Le résultat peut arriver deux fois : résumé,

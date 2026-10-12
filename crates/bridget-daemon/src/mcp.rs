@@ -627,6 +627,7 @@ fn execute_tool_at_with_identity(
         "bridget_capabilities"
         | "bridget_delegate"
         | "bridget_task_continue"
+        | "bridget_task_respond"
         | "bridget_task_status"
         | "bridget_task_wait"
         | "bridget_task_ack"
@@ -2534,12 +2535,12 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_task_ack")
             .expect("outil ACK informatif publié");
-        assert_eq!(catalogue.len(), 28);
+        assert_eq!(catalogue.len(), 29);
         let brief_schema = &catalogue
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
-        assert_eq!(crate::delegation_mcp::tools(brief_schema).len(), 7);
+        assert_eq!(crate::delegation_mcp::tools(brief_schema).len(), 8);
         let schema = &ack["inputSchema"];
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["task_ids"]));
@@ -3857,7 +3858,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    28
+                    29
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -4142,6 +4143,7 @@ mod tests {
             "bridget_capabilities",
             "bridget_delegate",
             "bridget_task_continue",
+            "bridget_task_respond",
             "bridget_task_status",
             "bridget_task_wait",
             "bridget_task_ack",

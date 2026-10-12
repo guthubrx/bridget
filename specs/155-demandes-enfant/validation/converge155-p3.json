@@ -1,0 +1,1418 @@
+{
+  "phase": "Converge155",
+  "passage": 3,
+  "last_allowed_passage": true,
+  "verdict": "CONVERGED",
+  "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant",
+  "code_gap_confirmed": false,
+  "tasks_added": 0,
+  "proposed_tasks": [],
+  "started_at_utc": "2026-10-12T03:17:10Z",
+  "caller_go_at_utc": "2026-10-12T03:14:00Z",
+  "deadline_at_utc": "2026-10-12T03:24:00Z",
+  "completed_at_utc": "2026-10-12T03:23:00.323800+00:00",
+  "tasks": {
+    "checked": 42,
+    "total": 42,
+    "open": [],
+    "sha256_before": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+    "sha256_after": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+    "byte_identical": true,
+    "checked_by": "principal avant GO P3",
+    "pipeline_status": "In Progress",
+    "implementation_complete": true,
+    "delivered": false
+  },
+  "human_gate": {
+    "task": "T040",
+    "status": "VALIDATED",
+    "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/recette155-postfix-final.json",
+    "copy": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/validation/recette155-postfix-final.json",
+    "sha256": "153b70cbbbaa94315b87f192a8fa67fc217f607eb1cc70c5e9ea5b047b6cc9f3",
+    "copy_byte_identical": true,
+    "explicit_user_consent": {
+      "at_utc": "2026-10-12T03:02:02.400752+00:00",
+      "answer": "Oui, accepter et valider si les quatre cas réussissent",
+      "scope": "printf RECETTE155_HUMAN isolated daemon; T040 conditional on four planned cases success",
+      "executed": true
+    },
+    "prior_validation_snapshot": {
+      "at_utc": "2026-10-12T03:02:02.400752+00:00",
+      "answer": "Oui, accepter et valider si les quatre cas réussissent",
+      "scope": "printf RECETTE155_HUMAN isolated daemon; T040 conditional on four planned cases success",
+      "executed": false
+    },
+    "state_note": "Le snapshot de validation avant acceptation portait executed=false. La commande est désormais prouvée par le reçu CLI et les événements fournisseur ci-dessous.",
+    "cases": [
+      {
+        "name": "question_parent",
+        "pass": true,
+        "evidence": "question155-runtime.json",
+        "reused_prior_runtime": true
+      },
+      {
+        "name": "human_approval",
+        "pass": true,
+        "reused_prior_runtime": false
+      },
+      {
+        "name": "workspace_outside_limit",
+        "pass": true,
+        "evidence": "recette155-final-runtime-open.json",
+        "reused_prior_runtime": true
+      },
+      {
+        "name": "expiry_600s",
+        "pass": true,
+        "evidence": "expiry155-r3-runtime.json",
+        "reused_prior_runtime": true
+      }
+    ],
+    "fresh_human": {
+      "outcome": "answered_by_human",
+      "delivery_state": "delivered",
+      "inbox_settled": 1,
+      "command_rc": 0,
+      "parent_cannot_approve": true
+    },
+    "reuse_basis": "Les trois chemins nominaux déjà exercés sont conservés. Le correctif modifie la présentation Human, les écritures bloquées et le règlement avant écriture ; leurs scénarios concernés passent sur les sources finales. Aucun second FULL ni nouveau délai de600s lancé. Les trois captures précédentes ne sont pas présentées comme runtime du binaire final.",
+    "runtime_performed_by": "principal, aucun modèle lancé par ce lecteur"
+  },
+  "matrix_counts": {
+    "FR": 33,
+    "SC": 14,
+    "US": 7
+  },
+  "matrix": [
+    {
+      "id": "FR-001",
+      "title": "Option figée et enveloppe",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:2122",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:863",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:178"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:190",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:392",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:8218"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-002",
+      "title": "Fournisseur/relecteur et catalogue",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:936",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1309"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:240",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:278",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:339"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-003",
+      "title": "Compatibilité deny et repli fermé T000",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2681",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1724"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7291",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:487"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-004",
+      "title": "Politique inchangée",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1724"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:440",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs:980"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-005",
+      "title": "Whitelist fournisseur",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2355",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:3328"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7503",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7666",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7786",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7940"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-006",
+      "title": "Lecteur non bloqué",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:3328",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:4059"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7503"
+      ],
+      "proof": "H2 : STDIO privé O_NONBLOCK + échéance3s writer/write/flush, flux coupé sur incertitude ; fin de tour observée pendant saturation dans oracle existant PASS.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3.",
+      "fresh_p3_evidence": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:433",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:3232",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7808"
+      ]
+    },
+    {
+      "id": "FR-007",
+      "title": "Bornes 4/32",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:3328"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:319"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-008",
+      "title": "Tour actif et incarnation liée",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:3328",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:31"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:232",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7666"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-009",
+      "title": "Verdict pur dans le daemon",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:10",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:9",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:285"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-010",
+      "title": "Limite absolue",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:10"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:9",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:147"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-011",
+      "title": "Chemins cités sans autorité",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:212",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:147",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:227"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-012",
+      "title": "Trois décisions et réponses par méthode",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:2037",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:960",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2681"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:209",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7666",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7940"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-013",
+      "title": "Routes Parent/Human séparées",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:81",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:440"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-014",
+      "title": "Respond fermé",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_mcp.rs:178",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:2134",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:8",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:54",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:249",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:348",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:8231"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-015",
+      "title": "Liste MCP native",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:5090",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_mcp.rs:74"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/claude_native_permissions_test.rs:402",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/mcp.rs:4143"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-016",
+      "title": "Autorité et rejeu",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:87"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:108",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:167",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:290",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:322"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-017",
+      "title": "Pause sans accord différé",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:502",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:556",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:842"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-018",
+      "title": "Tentative d'avis système idempotent",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:301"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:443"
+      ],
+      "proof": "fixture réellement remise ; succès non garanti sous les gardes149",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-019",
+      "title": "Faits et citation hostile séparés",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:212"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:343",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:227"
+      ],
+      "proof": "H1 : commande entière échappée, effets booleans/null, marqueurs chemins, dépassement fermé ; oracle hostile existant étendu et PASS dans native155-auditfix-r1.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3.",
+      "fresh_p3_evidence": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:467",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:398"
+      ]
+    },
+    {
+      "id": "FR-020",
+      "title": "Statut additif",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:245"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:366",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:444",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs:6"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-021",
+      "title": "Dépôt humain exact et idempotent",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:266",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs:200",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon.rs:9922"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:499",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:537",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:9"
+      ],
+      "proof": "H3 : dépôt/lien durable avant notification hors DaemonState ; canal3s et récolte TERM250ms, sans promesse de tuer un enfant hostile ; oracle087 existant PASS.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3.",
+      "fresh_p3_evidence": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:266",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:608",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs:538"
+      ]
+    },
+    {
+      "id": "FR-022",
+      "title": "Relève par identifiant et abandon",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:423"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:115",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:282",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:402"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-023",
+      "title": "Fenêtres et marge mission",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:8"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:390"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-024",
+      "title": "Expiration fermée",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:5524",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:960"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:797",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7940"
+      ],
+      "proof": "fixture + recette expiration réelle600s ; aucun test exécuté par ce lecteur",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-025",
+      "title": "Issues durables visibles",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:508",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:245",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:1034",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:366",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:842"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-026",
+      "title": "Invalidation et fermeture avant nettoyage",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:946",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:3154"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:842",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:741",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:115"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-027",
+      "title": "SENT avant write et contrôles frais",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:541",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:818",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:87"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:581",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:765",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:721"
+      ],
+      "proof": "M2 : had_emit_permit avant drop, aucune transition unknown avant première écriture possible ; sent suivi sous FR027, incertitude conservée après permis. Oracle verrou tenu jusqu’au timeout1s PASS.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3.",
+      "fresh_p3_evidence": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:910",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:581"
+      ]
+    },
+    {
+      "id": "FR-027b",
+      "title": "Fermeture sérialisée et anneau64",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:5488",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:5524"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:11332",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:11368",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:11438",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:952"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-028",
+      "title": "Tuple typé, empreinte et ACK incarné",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:161",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:371",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon.rs:18848"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:232",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:581",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:973",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:1014"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-029",
+      "title": "Un saut, aucun ownself, politique directe",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:31",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:301",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:6",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:108"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-030",
+      "title": "Ligne SQLite durable, pas de secret",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:45",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:303",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:973",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:1034",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:343",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7940"
+      ],
+      "proof": "T041 réalisée par le principal ; paragraphe Journal relu en P3 : provider_request pending/fingerprint, outcome/decided_by SQLite.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-031",
+      "title": "Purge transactionnelle",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage.rs:234",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:3209"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage_tests.rs:1074",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage_tests.rs:1198",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:115"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "FR-032",
+      "title": "Documentation et ADR",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/docs/delegation-native.md:154",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/skills/bridget/SKILL.md:73",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/docs/decisions/155-remontee-des-demandes-de-l-enfant.md:1"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/core_089_skill_test.rs:149"
+      ],
+      "proof": "diff documentaire T038 antérieur + forme de l'exemple testée ; pas exécution Respond dans ce banc089",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-001",
+      "title": "Accord d'approbation seulement après décision",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:818",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:5524",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:960"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:9",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:581",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs:980"
+      ],
+      "proof": "faux fournisseur et lignes SQLite ; question Parent distincte d'une approbation",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-002",
+      "title": "Table≥24 et refus hors limite",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:10"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:9",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:285"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-003",
+      "title": "Aucun accord durable/amendement",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2681",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2355"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7666",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:209"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-004",
+      "title": "Issue terminale au tick",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:797",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:402"
+      ],
+      "proof": "oracles au tick + recette600s ; latence maximale globale1s non mesurée ici",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-005",
+      "title": "Compatibilité et octets",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:2122",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1724"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:8218",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:375",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:487"
+      ],
+      "proof": "180 noms baseline vus dans l'unique workspace avant correctifs ; impact/replays cumulés, pas GREEN global",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-006",
+      "title": "Chaîne native trois niveaux",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:31",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:6"
+      ],
+      "proof": "vraies admissions/identités/liaisons natives de fixture ; aucun modèle ni trois processus fournisseur déduits",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-007",
+      "title": "Fin de tour malgré attentes",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:3328",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:4059"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7503"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-008",
+      "title": "Purge sans orphelins",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage.rs:234"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation_lineage_tests.rs:1074"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-009",
+      "title": "Course fermeture/application et unknown",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:5524",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:818"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:11332",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/wrapper.rs:11368",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:952",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:997",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:721"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-010",
+      "title": "250 décisions obsolètes",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:282"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-011",
+      "title": "Recette faux serveur et Human",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:960",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs:980",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:9"
+      ],
+      "proof": "E2E faux Codex reste distinct. T040 : consentement explicite conditionnel exécuté ; reçu réel4/4, Human fraîche et trois anciens runtime honnêtement réutilisés.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-012",
+      "title": "Aucun accord expiré pending/sent",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:818",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:541"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:765",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:322",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/delegation.rs:1223"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-013",
+      "title": "T000 fermé deny/forward",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:2681"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7291",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:7666"
+      ],
+      "proof": "tests T000 existants/cumulatif ; aucune nouvelle exécution ici",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "SC-014",
+      "title": "Écritures workspaceWrite refusées",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:10"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:147",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:9"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US1",
+      "title": "Question→parent→enfant",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs:960"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:8",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs:980"
+      ],
+      "proof": "fixture + recette question PASS",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US2",
+      "title": "Approbation→humain",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:266",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs:9",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs:980"
+      ],
+      "proof": "Fixture Human authentifiée PASS et recette Human fraîche : answered_by_human/delivered, commande exécutée RC0, consentement utilisateur enregistré et exécuté.",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US3",
+      "title": "Hors limite→refus sans boîte",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:10",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:336"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions155_tests.rs:9",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:285",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/tests/native_delegation_e2e.rs:980"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US4",
+      "title": "Délai/silence/fin→issue",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:634",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:946"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:797",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:842",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:721"
+      ],
+      "proof": "fixtures + recette600s PASS",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US5",
+      "title": "Pas de boucle/élévation",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs:31",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1378",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/native_permissions.rs:10"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:6",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs:343",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:108"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US6",
+      "title": "Statut et attente",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:245",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:708"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:366",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs:444",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs:6"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    },
+    {
+      "id": "US7",
+      "title": "Sans option inchangé",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:2122",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs:1724"
+      ],
+      "test": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/protocol.rs:8218",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:440",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs:487"
+      ],
+      "proof": "lecture + tests de fixtures dans le reçu cumulatif",
+      "status": "REALISE",
+      "reference_snapshot": "P1 historical anchors, P2 T041 correction",
+      "provenance": "Matrice P1/P2 héritée après garde des hashes ; régions changées revalidées par les lectures ciblées P3."
+    }
+  ],
+  "matrix_provenance": {
+    "p1": "/Users/moi/.cache/bridget-delivery155.um4xccv4/converge155-p1.json",
+    "p1_sha256": "918add7561c5ee5e3bec55959502342c08bb46f6b8e6ff7b41b15a579fd65c77",
+    "p2": "/Users/moi/.cache/bridget-delivery155.um4xccv4/converge155-p2.json",
+    "p2_sha256": "9c77dc98c3f40a3f9da51d4a29f703aea0f6aabd962419a61f0914e0c092ecb0",
+    "prior_partial_read_limits_preserved": [
+      "Lecture arrêtée à la borne15min sur instruction du principal ; pas de collecte prolongée.",
+      "La matrice exhaustive des exigences ne signifie pas que chaque hunk de chaque grand fichier a été relu intégralement fraîchement ; six fichiers du manifeste restent partiels.",
+      "La fixture E2E Human résout SQLite ; le test Human unitaire utilise le principal authentifié. Aucun des deux remplace la validation utilisateur de T040.",
+      "Pas de nouveau défaut de code confirmé. DOC-001 est une contradiction contractuelle, pas un manque de trace durable FR030.",
+      "Aucun fichier du dépôt modifié par cette phase ; seuls les deux rapports cache autorisés sont écrits."
+    ],
+    "unchanged_files_guarded": 28,
+    "changed_files_reread_targeted": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+        "p1_sha256": "89ca8436ec81e74c3dac79d58c658eca7a4e5d5aae620fe130ae1633ad519707",
+        "current_sha256": "b1fbdbbe7f3856f1109bfcec9a6129cbbcf9decf2760519d5753276c5473d662"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+        "p1_sha256": "96be315b4fc6ad8f4586972ac83b0e0c4a996f5a3956d98c675c5d6e958d8c31",
+        "current_sha256": "802c3847ee12834f5938915d47a9d62506223c350f8edfc230cf82555045cba1"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs",
+        "p1_sha256": "e04b0b97814e31782bd530d019704fe9abd726edd2a92b14fc20615eee7ffb44",
+        "current_sha256": "708955001eb445c9449f78e5d136a34c9bc1d8782a637509732e5eba6d4fa886"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "p1_sha256": "5ae4247f880462295d04d0c29899644a378ecf8c1138045f0df14365164337e3",
+        "current_sha256": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+        "p1_sha256": "315df6fd2d0f94793c96e6419f65fe38a8dc129113c6a4931419afdc128b0ee1",
+        "current_sha256": "18428af435a1aa782d5351b33c94bb2c66f9815b2afa88d5398722f4dcf14933"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs",
+        "p1_sha256": "2dec4111483fbefdff3131d782188c0e8772a33c29004875094658813c178b41",
+        "current_sha256": "8f1ffbee487469e0927c57e2463c6528c789fa9d506d50820808b6eb5732565d"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+        "p1_sha256": "7a2d99698b12576fc51e71607ccc39038ad2238e1d58d716cad06743c85bfeed",
+        "current_sha256": "6c8852d7293d620252368820f80e54e0d4171d042b336c43856a42cefcb906b9"
+      }
+    ],
+    "exact_p1_reconstruction": "Sept fichiers reconstruits en mémoire depuis le patchP1 ; SHA conforme au manifesteP1. Quatre fichiers neufs par additions ; trois suivis depuis la base ROOT contrôlée par base_sha256 puis hunks vérifiés. Aucune écriture/Git/apply.",
+    "not_claimed": "Pas de nouvelle revue intégrale des six grands fichiers partiellement lus enP1 ; pas de couverture100%."
+  },
+  "artefacts_read_full": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/implementation.md",
+      "sha256_before": "49101662a7d41c89166a037502b32f2e712ed35c54db76d04662a2c380a91c8f",
+      "sha256_after": "49101662a7d41c89166a037502b32f2e712ed35c54db76d04662a2c380a91c8f",
+      "ranges": [
+        [
+          1,
+          322
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/tasks.md",
+      "sha256_before": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+      "sha256_after": "8d63662e3d278cdbb5f04d725344c27ab250b324c5e99bd64ef17ae35b0225bb",
+      "ranges": [
+        [
+          1,
+          141
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/plan.md",
+      "sha256_before": "6b91085460e2d197220d2ba30aebfa8e235094ae939a421a856aac37bf60a30e",
+      "sha256_after": "6b91085460e2d197220d2ba30aebfa8e235094ae939a421a856aac37bf60a30e",
+      "ranges": [
+        [
+          1,
+          287
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/reuse-audit.md",
+      "sha256_before": "61284d63cb4bbbfe3209730aa50806f8c0c91c0ed7e647353168649eacd330c6",
+      "sha256_after": "61284d63cb4bbbfe3209730aa50806f8c0c91c0ed7e647353168649eacd330c6",
+      "ranges": [
+        [
+          1,
+          213
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/spec.md",
+      "sha256_before": "7c8cee0dd7e85d63ec01e02c44fd478f4ebface7620c002921b6f37559763dd3",
+      "sha256_after": "7c8cee0dd7e85d63ec01e02c44fd478f4ebface7620c002921b6f37559763dd3",
+      "ranges": [
+        [
+          1,
+          431
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/checklists/requirements.md",
+      "sha256_before": "4eea8a5cc20513bb4beb3c4e1640110f3124bcf023d2422296d575e0230add28",
+      "sha256_after": "4eea8a5cc20513bb4beb3c4e1640110f3124bcf023d2422296d575e0230add28",
+      "ranges": [
+        [
+          1,
+          35
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/contracts/child-requests155.md",
+      "sha256_before": "5bbb52b062415f9304dd1bc2d70bed7a66126ce24d1a2ac8103496fd8ecf6d0d",
+      "sha256_after": "5bbb52b062415f9304dd1bc2d70bed7a66126ce24d1a2ac8103496fd8ecf6d0d",
+      "ranges": [
+        [
+          1,
+          270
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/specs/155-demandes-enfant/contracts/codex-requests.md",
+      "sha256_before": "5afe4e360933ebcac852e308ce43b206fcf29696172cb88197350f59b9dfd1a0",
+      "sha256_after": "5afe4e360933ebcac852e308ce43b206fcf29696172cb88197350f59b9dfd1a0",
+      "ranges": [
+        [
+          1,
+          301
+        ]
+      ],
+      "reading": "lecture intégrale fraîche P3 ; cat complet, fin implementation relue après troncature de sortie"
+    }
+  ],
+  "source_read_manifest_fresh": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests.rs",
+      "sha256_before": "b1fbdbbe7f3856f1109bfcec9a6129cbbcf9decf2760519d5753276c5473d662",
+      "sha256_after": "b1fbdbbe7f3856f1109bfcec9a6129cbbcf9decf2760519d5753276c5473d662",
+      "ranges": [
+        [
+          260,
+          338
+        ],
+        [
+          366,
+          425
+        ],
+        [
+          467,
+          638
+        ],
+        [
+          904,
+          1002
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+      "sha256_before": "802c3847ee12834f5938915d47a9d62506223c350f8edfc230cf82555045cba1",
+      "sha256_after": "802c3847ee12834f5938915d47a9d62506223c350f8edfc230cf82555045cba1",
+      "ranges": [
+        [
+          575,
+          720
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_child_requests_human155_tests.rs",
+      "sha256_before": "708955001eb445c9449f78e5d136a34c9bc1d8782a637509732e5eba6d4fa886",
+      "sha256_after": "708955001eb445c9449f78e5d136a34c9bc1d8782a637509732e5eba6d4fa886",
+      "ranges": [
+        [
+          1,
+          118
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+      "sha256_before": "18428af435a1aa782d5351b33c94bb2c66f9815b2afa88d5398722f4dcf14933",
+      "sha256_after": "18428af435a1aa782d5351b33c94bb2c66f9815b2afa88d5398722f4dcf14933",
+      "ranges": [
+        [
+          278,
+          530
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256_before": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+      "sha256_after": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+      "ranges": [
+        [
+          1380,
+          1395
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-daemon/src/human_inbox.rs",
+      "sha256_before": "8f1ffbee487469e0927c57e2463c6528c789fa9d506d50820808b6eb5732565d",
+      "sha256_after": "8f1ffbee487469e0927c57e2463c6528c789fa9d506d50820808b6eb5732565d",
+      "ranges": [
+        [
+          538,
+          682
+        ],
+        [
+          950,
+          1045
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256_before": "6c8852d7293d620252368820f80e54e0d4171d042b336c43856a42cefcb906b9",
+      "sha256_after": "6c8852d7293d620252368820f80e54e0d4171d042b336c43856a42cefcb906b9",
+      "ranges": [
+        [
+          230,
+          282
+        ],
+        [
+          412,
+          450
+        ],
+        [
+          1288,
+          1324
+        ],
+        [
+          1555,
+          1640
+        ],
+        [
+          2732,
+          2750
+        ],
+        [
+          3230,
+          3305
+        ],
+        [
+          3668,
+          3686
+        ],
+        [
+          7448,
+          7538
+        ],
+        [
+          7790,
+          7916
+        ]
+      ],
+      "reading": "lecture fraîche ciblée code/oracles P3, pas fichier historique intégral"
+    }
+  ],
+  "source_guard": {
+    "reference": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-auditfix-r1.json",
+    "reference_sha256": "dce1cb0bdffdf88e5753f97d76970401a2047c7960183009457e8fc9c1c09b84",
+    "source_count": 214,
+    "hashes_before_match_reference": true,
+    "hashes_after_match_reference": true,
+    "changed_during_p3": [],
+    "source_hashes_digest_sha256": "6080ec87b6ece987753e2e2c4649e7446cdaa6eb2310ce8a541aa660f8a69d12"
+  },
+  "verification_proofs": [
+    {
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-auditfix-r1.json",
+      "sha256": "dce1cb0bdffdf88e5753f97d76970401a2047c7960183009457e8fc9c1c09b84",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/native155-auditfix-r1.log",
+      "log_sha256": "5428eb4ed0e3ffb17091f1be18683094003eaaa490a8a58898004bf8f46b113d",
+      "rc": 0,
+      "passed": 71,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 60.68,
+      "unique_names": 71,
+      "source_count": 214,
+      "sources_stable": true,
+      "matches_current_sources": true,
+      "executed_by": "principal",
+      "own_execution": false
+    },
+    {
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/channel087-auditfix-r1.json",
+      "sha256": "8bd2cbadefa543e95012a737d50c79a3d1cb873abd92e48b8111450d78757a15",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/channel087-auditfix-r1.log",
+      "log_sha256": "ec912932bc2bf13fac58c68d15ca050d868a13fe557e1746a7134a0a1225283d",
+      "rc": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 7.57,
+      "unique_names": 1,
+      "source_count": 214,
+      "sources_stable": true,
+      "matches_current_sources": true,
+      "executed_by": "principal",
+      "own_execution": false
+    },
+    {
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/stdio-sequence-auditfix-r1.json",
+      "sha256": "b74a53dd51ed29494fd9709f39cc5df2c78e3ec2f59141e0662c861a4a583dca",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/stdio-sequence-auditfix-r1.log",
+      "log_sha256": "ee18028c445d3febaa8c26c0ba042897ea979ab8fa9fa5f328b2ba4f4d990812",
+      "rc": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 13.39,
+      "unique_names": 1,
+      "source_count": 214,
+      "sources_stable": true,
+      "matches_current_sources": true,
+      "executed_by": "principal",
+      "own_execution": false
+    },
+    {
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/stdio-approval-auditfix-r1.json",
+      "sha256": "faaebb7406721a905b9a624500d1ce2767e4fe6a2d978fc56fc8025592aa4e6d",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/stdio-approval-auditfix-r1.log",
+      "log_sha256": "6c9a6bca566595647921c0eaa6a326d6543aee0e238e348ca60c82b7c30cb767",
+      "rc": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.75,
+      "unique_names": 1,
+      "source_count": 214,
+      "sources_stable": true,
+      "matches_current_sources": true,
+      "executed_by": "principal",
+      "own_execution": false
+    },
+    {
+      "receipt": "/Users/moi/.cache/bridget-delivery155.um4xccv4/stdio-permissions-auditfix-r1.json",
+      "sha256": "aaa93f3e9e38c23aa34c27eb1f05f35a3c193b05ad17bcdc0f961673f808e478",
+      "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/stdio-permissions-auditfix-r1.log",
+      "log_sha256": "caab0ce817c3e7b61c9a6583b0fbbf277f1370d1ac8c4c538ab81086122f7225",
+      "rc": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": 0.7,
+      "unique_names": 1,
+      "source_count": 214,
+      "sources_stable": true,
+      "matches_current_sources": true,
+      "executed_by": "principal",
+      "own_execution": false
+    }
+  ],
+  "counters": {
+    "native155_passed": 71,
+    "other_distinct_passed": 4,
+    "targeted_passed_total": 75,
+    "own_tests_executed": 0,
+    "workspace_global_green": false,
+    "full_before_corrections": {
+      "passed": 2259,
+      "failed": 15,
+      "ignored": 72
+    },
+    "baseline_matched": 180,
+    "historical_failures": 8,
+    "new_failures_targeted_resolved": 7
+  },
+  "articles_XIX_XX": [
+    "Nécessité : questions Parent et approbations Human sous droits149, avec décision/validité/CAS/clôture séparés.",
+    "Simplicité : H1 conserve les faits structurés entiers ; H2 réutilise writer et son budget ; H3 réutilise dépôt/summary/tentatives et sépare la notification ; M2 évite SQL/marker/API neufs.",
+    "Hypothèses : STDIO privé attesté, effets/durée établis, provenance figée, instances/session/tour exacts ; champs inconnus et effets non établis restent fermés.",
+    "Vérifié : huit artefacts, sept deltas ciblés et oracles concernés ;214 hashes conformes aux cinq reçus75PASS ; consentement et recette4/4 lus.",
+    "Non vérifié : pas de nouvelle exécution personnelle, de seconde suite, benchmark, mutation/coverage ni validation production/T3. Les trois recettes anciennes ne sont pas présentées comme runtime du binaire final.",
+    "Suppressible connu :0 ligne supplémentaire prouvée sur le périmètre relu ; ni helper nouveau, test de confort, tâche ni extension hors scope."
+  ],
+  "accepted_residuals": [
+    "PERF-082 LOW : budget du tick renouvelé par émission, aucune latence globale1s mesurée.",
+    "DUP-001 LOW : duplication locale reconnexion, sans refactor de confort.",
+    "due_child_requests et format_cited_paths gardés car exigences T005/T009 ; aucun lint GREEN général revendiqué.",
+    "Les anciens statuts/recettesT040 ouverte dans les annexes décrivent leurs snapshots ; état courant déterminé par tasks42/42 et checkpoints finaux spec/plan/implementation."
+  ],
+  "limits": [
+    "CONVERGED ne vaut pas audit final, revueClaudeR2, validation grade ni livraison.",
+    "Aucune mutation dans le dépôt ni cochage, Cargo/test/Git/service/modèle/sous-agent pendant P3.",
+    "La matrice est exhaustive en exigences, pas en nouvelle lecture de tout hunk. Les ancres P1 dans ses lignes sont historiques ; les preuvesP3 fraîches ont leurs plages etSHA.",
+    "H3 borne les appels mais ne garantit pas la terminaison d’un programme hostile qui ignore SIGTERM.",
+    "Les budgets fonctionnels et les oracles au tick ne sont pas des SLO de production mesurés."
+  ]
+}
