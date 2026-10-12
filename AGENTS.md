@@ -1,4 +1,13 @@
 <!-- SPECKIT START -->
+Session157 livrée et nettoyée le 2026-10-12 : 26/26 tâches, CONVERGED passage2.
+Sources8f21dfd7b553e822fcabe0a0e7eabc6741a8e45b intégrées et poussées github/main.
+Binaire signé SHA256 f45b261a57ebaa6c4cd53e9195ceec66709de54b4fa394fa947e1a758ee1697d installé et actif.
+Daemon5528 et pont5638 activés à10:33:52/55 CEST ; T3 60116/60228 inchangé.
+FULL unique2396PASS/9FAIL/74ignored, oracle154 corrigé1PASS et quota13PASS séparés ; huit échecs hérités conservés.
+Audit A100 sur couverture source4,4095%, aucun succès global déduit.
+Worktree et branche157 retirés ; 317243392 octets logiques du stage retirés, preuves et sauvegarde156 conservées.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/validation/livraison157.md.
+
 Session156 livrée et active le2026-10-12 :32/32, ConvergeP2, audit0C/0H/1M/4L, validateur conforme.
 Sources cf498755dc87 fusionnées/poussées github/main ; binaire signé SHA2152455f09cd, daemon55530/pont55643, T3 inchangé.
 Worktree/branche156 retirés, archives/rollback conservés. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/156-guidage-file/validation/livraison156.md.

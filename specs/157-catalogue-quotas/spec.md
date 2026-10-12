@@ -5,10 +5,10 @@
 
 Spec: 157-catalogue-quotas
 Titre: Catalogue fiable, quotas visibles et remplacement explicite
-Statut: Implemented (26/26 ; Converge, revue, audit et livraison à exécuter)
+Statut: Livrée (26/26 ; Converge passage 2, revue et audit validés ; intégration, push, installation, activation et nettoyage terminés)
 Priorité: P1
 Tâches: 26/26 validées
-Tests: 44 tests native157 PASS dans FULL ; 2396PASS/9FAIL/74ignored Cargo ; oracle154 corrigé/rejoué1PASS ; huit échecs hérités conservés ; aucun succès global
+Tests: 44 tests native157 PASS dans FULL ; 2396PASS/9FAIL/74ignored Cargo ; oracle154 corrigé/rejoué1PASS ; correctif quota validé séparément par 13PASS ; huit échecs hérités conservés ; aucun succès global
 
 Résumé:
 - Contexte: `bridget_capabilities` annonce des capacités que `bridget_delegate` refuse ensuite pour le même appelant (scénario de code associé au signalement du2026-10-11 : `discovery: true` pour `codex-pro`, puis refus `permission_source_unavailable` depuis un fil T3 Claude ; aucun fait runtime corrélé retrouvé). Le catalogue ne dit ni si le binaire existe, ni quel quota reste. Si un fournisseur est indisponible, le parent n'a aucun moyen sûr de demander une alternative.
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-157-catalogue-quotas`
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Livrée
 **Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-150
 

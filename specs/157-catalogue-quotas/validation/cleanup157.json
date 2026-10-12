@@ -1,0 +1,27 @@
+{
+  "at": "2026-10-12T08:35:15.985119+00:00",
+  "stage": "/Users/moi/.cache/bridget-build-157.qa_ax57z",
+  "stage_before_bytes": 372314112,
+  "stage_after_bytes": 55070720,
+  "stage_removed_bytes": 317243392,
+  "command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/build.py",
+    "installed",
+    "--target",
+    "/Users/moi/.cache/bridget-build-157.qa_ax57z",
+    "--binary",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+  ],
+  "rc": 0,
+  "stdout": "",
+  "stderr": "[build Bridget] cache supprimé : 0.29 Gio dans /Users/moi/.cache/bridget-build-157.qa_ax57z/release\n[build Bridget] Nettoyage : 0.29 Gio de caches ; 31.38 Gio restants (tailles logiques, clones APFS compris)\n[build Bridget] budget dépassé : caches protégés conservés, aucune suppression forcée\n",
+  "worktree_removed": true,
+  "branch_removed": true,
+  "cleanup_complete_at": "2026-10-12T08:36:41.633245+00:00",
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+  "branch": "session-157-catalogue-quotas",
+  "foreign_paths_removed": false,
+  "backup156_preserved": "/Users/moi/.cache/bridget-delivery157-preparation-20261012/rollback156-bridget",
+  "archive_preserved": "/Users/moi/.cache/bridget-delivery157-preparation-20261012/validation157-all.tgz"
+}

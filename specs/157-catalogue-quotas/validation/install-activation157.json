@@ -1,0 +1,88 @@
+{
+  "source_commit": "8f21dfd7b553e822fcabe0a0e7eabc6741a8e45b",
+  "stage": "/Users/moi/.cache/bridget-build-157.qa_ax57z",
+  "operations": [
+    {
+      "at": "2026-10-12T08:33:51.958384+00:00",
+      "action": "T3_before",
+      "processes": {
+        "60116": "60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+        "60228": "60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+      }
+    },
+    {
+      "at": "2026-10-12T08:33:52.012250+00:00",
+      "action": "backup156",
+      "path": "/Users/moi/.cache/bridget-delivery157-preparation-20261012/rollback156-bridget",
+      "sha256": "2152455f09cd963250a58ae4b6034b5b83a94c09bb28638e8c11d564b57d2717"
+    },
+    {
+      "at": "2026-10-12T08:33:52.050229+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T08:33:52.078540+00:00",
+      "action": "installed157",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+      "sha256": "f45b261a57ebaa6c4cd53e9195ceec66709de54b4fa394fa947e1a758ee1697d"
+    },
+    {
+      "at": "2026-10-12T08:33:52.100502+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T08:33:52.107154+00:00",
+      "action": "before_individual_SIGTERM",
+      "label": "com.bridget.daemon",
+      "pid": 55530,
+      "process": "55530 Mon Oct 12 08:38:09 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon"
+    },
+    {
+      "at": "2026-10-12T08:33:55.128521+00:00",
+      "action": "replacement",
+      "label": "com.bridget.daemon",
+      "old_pid": 55530,
+      "new_pid": 5528,
+      "new_process": "5528 Mon Oct 12 10:33:52 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon"
+    },
+    {
+      "at": "2026-10-12T08:33:55.148485+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T08:33:55.152855+00:00",
+      "action": "before_individual_SIGTERM",
+      "label": "com.bridget.t3",
+      "pid": 55643,
+      "process": "55643 Mon Oct 12 08:38:12 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve"
+    },
+    {
+      "at": "2026-10-12T08:33:58.172127+00:00",
+      "action": "replacement",
+      "label": "com.bridget.t3",
+      "old_pid": 55643,
+      "new_pid": 5638,
+      "new_process": "5638 Mon Oct 12 10:33:55 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve"
+    },
+    {
+      "at": "2026-10-12T08:33:58.395334+00:00",
+      "action": "status",
+      "rc": 0,
+      "stdout": "Daemon: en ligne\nMachine du daemon: monordinateur\nSocket: /Users/moi/.cache/bridget-core/bridget.sock\nBase de données du daemon: /Users/moi/.cache/bridget-core/bridget.db\nAgents connectés: 32\nMessages en base: total non publié par le daemon — consulter ledger\nBuild-id daemon: 8f21dfd7b553\n",
+      "stderr": ""
+    },
+    {
+      "at": "2026-10-12T08:33:58.403635+00:00",
+      "action": "T3_after_unchanged",
+      "processes": {
+        "60116": "60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+        "60228": "60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+      }
+    }
+  ],
+  "complete": true,
+  "installed_sha256": "f45b261a57ebaa6c4cd53e9195ceec66709de54b4fa394fa947e1a758ee1697d"
+}
