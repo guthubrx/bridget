@@ -1,0 +1,31 @@
+{
+  "started_at_utc": "2026-10-12T06:35:57.444951+00:00",
+  "ended_at_utc": "2026-10-12T06:38:02.084930+00:00",
+  "elapsed_seconds": 124.63893758296035,
+  "argv": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/build.py",
+    "cargo",
+    "build",
+    "--locked",
+    "--offline",
+    "--release",
+    "-p",
+    "bridget-daemon"
+  ],
+  "env_selected": {
+    "CARGO_TARGET_DIR": "/Users/moi/.cache/bridget-build-156._35j9eiz",
+    "CARGO_BUILD_JOBS": "2",
+    "BRIDGET_BUILD_CACHE_GIB": "40",
+    "BRIDGET_BUILD_ID": "cf498755dc87"
+  },
+  "rc": 0,
+  "source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+  "stage": "/Users/moi/.cache/bridget-build-156._35j9eiz",
+  "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/release156-build.log",
+  "log_sha256": "9bdf45971e85694a3d5d3c2e36938f8eb67e53eb015093c33e3ccb58abc9db07",
+  "git_head_unchanged": true
+}

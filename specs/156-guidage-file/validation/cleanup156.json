@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-12T06:39:02.072071+00:00",
+  "worktree_removed": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file",
+  "branch_removed": "session-156-guidage-file",
+  "source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+  "remote_verified": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+  "archive": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/validation156-all.tgz",
+  "archive_sha256": "0be4e956e51c3347dfb65b9acdf28fa2e46ade0ac522c5c9c5ce638ca812d95c",
+  "cwd_checked": true,
+  "T3_parent_and_review_binding_root_verified": true,
+  "rollback_preserved": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/rollback155-bridget",
+  "cache_budget_gib": 40
+}

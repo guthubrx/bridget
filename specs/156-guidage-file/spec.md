@@ -5,7 +5,7 @@
 
 Spec: 156-guidage-file
 Titre: Guidage et interruption exposés aux agents, droits complets, lecture de la file
-Statut: Implemented (32/32 ; Converge passage2, audit et livraison à suivre)
+Statut: Completed (32/32 ; livré, actif et nettoyé le2026-10-12)
 Priorité: P1
 Tâches: 32/32 (T001–T032 validées par le principal)
 Tests: suite unique 2350 PASS Cargo + 3 PASS enfants séparés / 11 FAIL / 73 ignored ; 80 unitaires156 et 3 E2E inclus, trois fixtures corrigées par reprises 2+1 PASS ; huit échecs hérités, aucun GREEN global
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-156-guidage-file`
 **Created**: 2026-10-11
-**Status**: Implemented
+**Status**: Completed
 **Priority**: P1
 **Dependencies**: SPEC-150 (acquis supposés livrés), SPEC-148, SPEC-149
 

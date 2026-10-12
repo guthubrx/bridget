@@ -1,4 +1,9 @@
 <!-- SPECKIT START -->
+Session156 livrée et active le2026-10-12 :32/32, ConvergeP2, audit0C/0H/1M/4L, validateur conforme.
+Sources cf498755dc87 fusionnées/poussées github/main ; binaire signé SHA2152455f09cd, daemon55530/pont55643, T3 inchangé.
+Worktree/branche156 retirés, archives/rollback conservés. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/156-guidage-file/validation/livraison156.md.
+Les checkpoints précédents sont historiques.
+
 Session 155 livrée et activée le 2026-10-12 : 42/42 ; trois Converge puis contrôle cwd ciblé, pas passage 4.
 Source 59da3968c7d14dbd7acd1370875dd9d135ba7dcb intégrée/poussée github/main ; build 133,80 s RC0.
 Binaire signé installé/actif SHA 4d3ff43d6a82de02b4ed115f1af422703ca584d1ce7f4843dcda41179ac748a7.

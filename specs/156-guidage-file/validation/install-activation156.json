@@ -1,0 +1,158 @@
+{
+  "source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+  "stage": "/Users/moi/.cache/bridget-build-156._35j9eiz",
+  "operations": [
+    {
+      "at": "2026-10-12T06:38:09.537223+00:00",
+      "action": "T3_before",
+      "processes": {
+        "60116": "60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+        "60228": "60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+      }
+    },
+    {
+      "at": "2026-10-12T06:38:09.621902+00:00",
+      "action": "command",
+      "argv": [
+        "codesign",
+        "--force",
+        "--sign",
+        "-",
+        "/Users/moi/.cache/bridget-build-156._35j9eiz/release/bridget"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "/Users/moi/.cache/bridget-build-156._35j9eiz/release/bridget: replacing existing signature\n"
+    },
+    {
+      "at": "2026-10-12T06:38:09.639661+00:00",
+      "action": "command",
+      "argv": [
+        "codesign",
+        "--verify",
+        "--strict",
+        "--verbose=2",
+        "/Users/moi/.cache/bridget-build-156._35j9eiz/release/bridget"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "/Users/moi/.cache/bridget-build-156._35j9eiz/release/bridget: valid on disk\n/Users/moi/.cache/bridget-build-156._35j9eiz/release/bridget: satisfies its Designated Requirement\n"
+    },
+    {
+      "at": "2026-10-12T06:38:09.651244+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T06:38:09.695599+00:00",
+      "action": "backup155",
+      "path": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/rollback155-bridget",
+      "sha256": "4d3ff43d6a82de02b4ed115f1af422703ca584d1ce7f4843dcda41179ac748a7"
+    },
+    {
+      "at": "2026-10-12T06:38:09.706500+00:00",
+      "action": "command",
+      "argv": [
+        "install",
+        "-m",
+        "755",
+        "/Users/moi/.cache/bridget-build-156._35j9eiz/release/bridget",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/.bridget-install156"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "at": "2026-10-12T06:38:09.725287+00:00",
+      "action": "command",
+      "argv": [
+        "codesign",
+        "--verify",
+        "--strict",
+        "--verbose=2",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/.bridget-install156"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/.bridget-install156: valid on disk\n/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/.bridget-install156: satisfies its Designated Requirement\n"
+    },
+    {
+      "at": "2026-10-12T06:38:09.753624+00:00",
+      "action": "command",
+      "argv": [
+        "codesign",
+        "--verify",
+        "--strict",
+        "--verbose=2",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget: valid on disk\n/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget: satisfies its Designated Requirement\n"
+    },
+    {
+      "at": "2026-10-12T06:38:09.763055+00:00",
+      "action": "installed156",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+      "sha256": "2152455f09cd963250a58ae4b6034b5b83a94c09bb28638e8c11d564b57d2717"
+    },
+    {
+      "at": "2026-10-12T06:38:09.776541+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T06:38:09.790236+00:00",
+      "action": "before_individual_SIGTERM",
+      "label": "com.bridget.daemon",
+      "pid": 69512,
+      "process": "69512 Mon Oct 12 05:47:08 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon"
+    },
+    {
+      "at": "2026-10-12T06:38:12.819761+00:00",
+      "action": "replacement",
+      "label": "com.bridget.daemon",
+      "old_pid": 69512,
+      "new_pid": 55530,
+      "new_process": "55530 Mon Oct 12 08:38:09 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon"
+    },
+    {
+      "at": "2026-10-12T06:38:12.834135+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T06:38:12.845898+00:00",
+      "action": "before_individual_SIGTERM",
+      "label": "com.bridget.t3",
+      "pid": 69652,
+      "process": "69652 Mon Oct 12 05:47:11 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve"
+    },
+    {
+      "at": "2026-10-12T06:38:15.892833+00:00",
+      "action": "replacement",
+      "label": "com.bridget.t3",
+      "old_pid": 69652,
+      "new_pid": 55643,
+      "new_process": "55643 Mon Oct 12 08:38:12 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve"
+    },
+    {
+      "at": "2026-10-12T06:38:16.020718+00:00",
+      "action": "status",
+      "rc": 0,
+      "stdout": "Daemon: en ligne\nMachine du daemon: monordinateur\nSocket: /Users/moi/.cache/bridget-core/bridget.sock\nBase de données du daemon: /Users/moi/.cache/bridget-core/bridget.db\nAgents connectés: 26\nMessages en base: total non publié par le daemon — consulter ledger\nBuild-id daemon: cf498755dc87\n",
+      "stderr": ""
+    },
+    {
+      "at": "2026-10-12T06:38:16.033938+00:00",
+      "action": "T3_after_unchanged",
+      "processes": {
+        "60116": "60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+        "60228": "60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+      }
+    }
+  ],
+  "complete": true,
+  "installed_sha256": "2152455f09cd963250a58ae4b6034b5b83a94c09bb28638e8c11d564b57d2717"
+}

@@ -4,7 +4,7 @@
 **Branche** : `session-156-guidage-file`
 **Worktree** : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file` (créé par root après livraison155 ; base livrée appliquée, aucune création par cet owner)
 **Date** : 2026-10-11 (révisé après contre-revue Codex : ronde 1 BLOCKED, 11 points ; ronde 2, 4 points)
-**Statut de clôture** : Implemented, 32/32 ; T032 FR016 validée par RED, 93 PASS ciblés et 3 E2E, après Converge passage1. Suite unique 2350 PASS Cargo, 3 PASS enfants séparés, 11 FAIL, 73 ignored ; reprises ciblées 2+1 PASS. Aucun GREEN global, Converge ou livraison annoncé.
+**Statut de clôture** : Completed,32/32 ; CONVERGED passage2 ; livraison Git, binaire signé, activation Bridget et nettoyage prouvés dans validation/livraison156.md. Aucun GREEN global.
 
 ## Résumé
 
