@@ -15,7 +15,7 @@ Tests : suite complète unique avant T0322350PASS Cargo+3PASS enfants séparés/
 
 L’audit initial couvre90,99% des hunks sur les sources inchangées. La relecture indépendante finale couvre4,65% des hunks entiers et13,03% des lignes de hunks. Sa noteA concerne cet échantillon ; aucune couverture complète ou de tests n’est déduite. Cinq remarques nonbloquantes conservées dans audit156-final-root.json. Le titre31/31 sans Converge dans implementation.md est le checkpointT031 avant T032 ; le statut courant est32/32 et ConvergeP2. Les captures historiques restent inchangées.
 
-Worktree156 propre, fusionné, poussé et sanscwd actif : retiré sans force. Branche session-156-guidage-file retirée par branch-d. Aucun travail étranger supprimé. Stage installé : intermédiaires retirés par scripts/build.py ; binaire/verrous conservés. Le premier entretien installed a utilisé son budget par défaut et conservé les caches protégés ; second entretien installé avec budget40Gio, sans purge forcée.
+Worktree156 propre, fusionné, poussé et sanscwd actif : retiré sans force. Branche session-156-guidage-file retirée par branch-d. Aucun travail étranger supprimé. Stage installé : intermédiaires retirés par scripts/build.py ; binaire/verrous conservés. La commande installed purge uniquement les intermédiaires du stage avec un seuil local de zéro ; son avertissement porte sur le total des caches protégés conservés. Ce total est25,42Gio, sous le budget global40Gio. Aucune purge forcée.
 
 Archives conservées :
 /Users/moi/.cache/bridget-delivery156.iuy6stuo/audit156-final.tgz
