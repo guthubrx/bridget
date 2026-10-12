@@ -155,10 +155,10 @@ pub struct DeliveryExecutionLink {
 
 /// Projection de stockage : la colonne `message_bytes` reste nullable pour
 /// les lignes héritées de v1, classées `indeterminate` par la migration v2.
-struct StoredSendDelivery {
-    delivery_id: String,
-    recipient_instance_id: String,
-    delivery_generation: u64,
+pub(crate) struct StoredSendDelivery {
+    pub(crate) delivery_id: String,
+    pub(crate) recipient_instance_id: String,
+    pub(crate) delivery_generation: u64,
     expires_at: i64,
     phase: String,
     message_bytes: Option<Vec<u8>>,
@@ -404,6 +404,7 @@ pub enum IdempotencyError {
     InvalidIssuerScope,
     InvalidIdempotencyKey,
     CanonicalTooLarge,
+    CliWakeRateLimited { retry_after_secs: u64 },
     InvalidIssuedAt,
     InvalidHorizon,
     InvalidTransition { from: RecordState, to: RecordState },
@@ -424,6 +425,10 @@ impl std::fmt::Display for IdempotencyError {
             Self::Schema(error) => write!(formatter, "{error}"),
             Self::InvalidIssuerScope => write!(formatter, "issuer_scope invalide"),
             Self::InvalidIdempotencyKey => write!(formatter, "clé d'idempotence invalide"),
+            Self::CliWakeRateLimited { retry_after_secs } => write!(
+                formatter,
+                "rate_limited: retry_after_secs={retry_after_secs}"
+            ),
             Self::CanonicalTooLarge => write!(formatter, "enveloppe canonique trop grande"),
             Self::InvalidIssuedAt => write!(formatter, "issued_at invalide"),
             Self::InvalidHorizon => write!(formatter, "horizon d'idempotence invalide"),
@@ -884,6 +889,143 @@ impl IdempotencyStore {
         Ok(())
     }
 
+    /// O(log r+c+B), c lignes CLI retenues. Rejeu/collision avant quota, COUNT et INSERT même TX.
+    pub(crate) fn reserve_cli_wake(
+        &mut self,
+        id: &str,
+        owner: &str,
+        target: &bridget_transport::protocol::WakeTarget,
+        label: &str,
+        owner_project: Option<&bridget_transport::protocol::CommunicationProject>,
+        now: i64,
+    ) -> Result<(Reservation, crate::wake_schedules::FrozenWake), IdempotencyError> {
+        use crate::wake_schedules::{CLI_WAKE_SCOPE, FrozenWake, WakePhase, WakeSource};
+        let key = IdempotencyKey::new(CLI_WAKE_SCOPE, OperationKind::Send, id)?;
+        if owner.is_empty() || label.len() > 2048 {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(record) = load_record_from(&tx, &key)? {
+            let mut frozen: FrozenWake = serde_json::from_slice(&record.canonical_bytes)
+                .map_err(|_| IdempotencyError::CorruptRecord("canon wake CLI"))?;
+            let record_issued_at:i64=tx.query_row("SELECT issued_at FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind='send' AND idempotency_key=?2",params![CLI_WAKE_SCOPE,id],|r|r.get(0))?;
+            if frozen.version != 1
+                || frozen.source != WakeSource::CliOnce
+                || frozen.id != id
+                || frozen.issued_at != record_issued_at
+            {
+                return Err(IdempotencyError::CorruptRecord("domaine wake CLI"));
+            }
+            frozen.canonical_bytes = record.canonical_bytes.clone();
+            let result = if record.expires_at <= now {
+                Reservation::IdempotencyExpired
+            } else if frozen.owner != owner || &frozen.target != target || frozen.label != label {
+                Reservation::EnvelopeMismatch
+            } else {
+                Reservation::Replayed(record.lookup_result()?)
+            };
+            return Ok((result, frozen));
+        }
+        let count:i64=tx.query_row("SELECT count(*) FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind='send' AND issued_at>?2",params![CLI_WAKE_SCOPE,now.saturating_sub(60)],|r|r.get(0))?;
+        if count >= 60 {
+            let oldest:i64=tx.query_row("SELECT min(issued_at) FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind='send' AND issued_at>?2",params![CLI_WAKE_SCOPE,now.saturating_sub(60)],|r|r.get(0))?;
+            return Err(IdempotencyError::CliWakeRateLimited {
+                retry_after_secs: oldest.saturating_add(60).saturating_sub(now).max(1) as u64,
+            });
+        }
+        let expires_at = now
+            .checked_add(7 * 86400)
+            .ok_or(IdempotencyError::InvalidHorizon)?;
+        let mut frozen = FrozenWake {
+            version: 1,
+            source: WakeSource::CliOnce,
+            target: target.clone(),
+            owner: owner.into(),
+            owner_project: owner_project.cloned(),
+            owner_native: None,
+            due_at: now,
+            issued_at: now,
+            grace_until: now
+                .checked_add(600)
+                .ok_or(IdempotencyError::InvalidIssuedAt)?,
+            id: id.into(),
+            label: label.into(),
+            body: format!("Réveil déclenché par {owner}\n{label}"),
+            canonical_bytes: Vec::new(),
+            thread_operation_id: matches!(
+                target,
+                bridget_transport::protocol::WakeTarget::Thread { .. }
+            )
+            .then(|| uuid::Uuid::new_v4().to_string()),
+            delivery_id: None,
+            phase: WakePhase::Prepared,
+        };
+        frozen
+            .freeze_canonical()
+            .map_err(|_| IdempotencyError::InvalidDelivery)?;
+        validate_canonical_bytes(&frozen.canonical_bytes)?;
+        tx.execute("INSERT INTO idempotency_records(issuer_scope,operation_kind,idempotency_key,canonical_bytes,state,issued_at,expires_at) VALUES(?1,'send',?2,?3,'prepared',?4,?5)",params![CLI_WAKE_SCOPE,id,frozen.canonical_bytes,now,expires_at])?;
+        tx.commit()?;
+        Ok((Reservation::Prepared { expires_at }, frozen))
+    }
+    /// O(log r+B). Lecture fermée du seul domaine CLI, aucune nouvelle identité.
+    pub(crate) fn cli_wake(
+        &self,
+        id: &str,
+    ) -> Result<Option<(crate::wake_schedules::FrozenWake, RecordState, i64)>, IdempotencyError>
+    {
+        let key = IdempotencyKey::new(
+            crate::wake_schedules::CLI_WAKE_SCOPE,
+            OperationKind::Send,
+            id,
+        )?;
+        let Some(record) = self.load_record(&key)? else {
+            return Ok(None);
+        };
+        let (issued_at,): (i64,)=self.conn.query_row("SELECT issued_at FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind='send' AND idempotency_key=?2",params![key.issuer_scope,id],|r|Ok((r.get(0)?,)))?;
+        let mut frozen: crate::wake_schedules::FrozenWake =
+            serde_json::from_slice(&record.canonical_bytes)
+                .map_err(|_| IdempotencyError::CorruptRecord("canon wake CLI"))?;
+        if frozen.version != 1
+            || frozen.source != crate::wake_schedules::WakeSource::CliOnce
+            || frozen.id != id
+            || frozen.issued_at != issued_at
+        {
+            return Err(IdempotencyError::CorruptRecord("domaine wake CLI"));
+        }
+        frozen.canonical_bytes = record.canonical_bytes;
+        Ok(Some((frozen, record.state, record.expires_at)))
+    }
+    /// O(c+128B), c lignes CLI retenues ; les lignes soldées sortent du scan ; aucun parsing de body.
+    pub(crate) fn pending_cli_wakes(
+        &self,
+        now: i64,
+        after: Option<(i64, String)>,
+    ) -> Result<Vec<(crate::wake_schedules::FrozenWake, RecordState, i64)>, IdempotencyError> {
+        let mut statement=self.conn.prepare("SELECT r.idempotency_key FROM idempotency_records r WHERE r.issuer_scope=?1 AND r.operation_kind='send' AND r.state IN ('prepared','dispatching') AND r.expires_at>?2 AND (?3 IS NULL OR r.issued_at>?3 OR (r.issued_at=?3 AND r.idempotency_key>?4)) ORDER BY r.issued_at,r.idempotency_key LIMIT 128")?;
+        let (after_at, after_id) = after.map_or((None, None), |(at, id)| (Some(at), Some(id)));
+        let ids = statement
+            .query_map(
+                params![
+                    crate::wake_schedules::CLI_WAKE_SCOPE,
+                    now,
+                    after_at,
+                    after_id
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| self.cli_wake(&id)?.ok_or(IdempotencyError::MissingRecord))
+            .collect()
+    }
+    /// O(log d), preuve par scope interne de la remise, pas par texte cité.
+    pub(crate) fn is_wake_delivery(&self, delivery_id: &str) -> Result<bool, IdempotencyError> {
+        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM send_deliveries WHERE delivery_id=?1 AND operation_kind='send' AND issuer_scope IN (?2,?3,?4))",params![delivery_id,crate::wake_schedules::CLI_WAKE_SCOPE,crate::wake_schedules::SCHEDULED_WAKE_SCOPE,crate::wake_schedules::MISSED_SUMMARY_SCOPE],|r|r.get(0)).map_err(Into::into)
+    }
+
     pub fn reserve(
         &self,
         key: &IdempotencyKey,
@@ -1276,3 +1418,124 @@ fn to_sql_error(error: IdempotencyError) -> rusqlite::Error {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod wake158b_tests {
+    use super::*;
+    use bridget_transport::protocol::WakeTarget;
+    #[test]
+    fn wake158B_groupe7_cli_quota_rejeu_collision_et_reprise() {
+        let dir =
+            std::env::temp_dir().join(format!("bridget-wake-cli158B-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(
+            &dir,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .unwrap();
+        let path = dir.join("cli.sqlite");
+        let mut store = IdempotencyStore::open(&path).unwrap();
+        let target = WakeTarget::Thread {
+            id: uuid::Uuid::new_v4().to_string(),
+        };
+        let (result, first) = store
+            .reserve_cli_wake("cli0", "owner", &target, "entier", None, 1000)
+            .unwrap();
+        assert!(matches!(result, Reservation::Prepared { .. }));
+        assert!(first.thread_operation_id.is_some());
+        assert_eq!(first.issued_at, 1000);
+        for i in 1..60 {
+            assert!(matches!(
+                store
+                    .reserve_cli_wake(&format!("cli{i}"), "owner", &target, "entier", None, 1000)
+                    .unwrap()
+                    .0,
+                Reservation::Prepared { .. }
+            ));
+        }
+        assert!(matches!(
+            store.reserve_cli_wake("cli60", "owner", &target, "entier", None, 1000),
+            Err(IdempotencyError::CliWakeRateLimited {
+                retry_after_secs: 60
+            })
+        ));
+        let (replay, original) = store
+            .reserve_cli_wake("cli0", "owner", &target, "entier", None, 1001)
+            .unwrap();
+        assert!(matches!(replay, Reservation::Replayed(_)));
+        assert_eq!(original, first);
+        assert!(matches!(
+            store
+                .reserve_cli_wake("cli0", "owner", &target, "différent", None, 1001)
+                .unwrap()
+                .0,
+            Reservation::EnvelopeMismatch
+        ));
+        assert_eq!(store.record_count().unwrap(), 60);
+        drop(store);
+        let mut store = IdempotencyStore::open(&path).unwrap();
+        assert_eq!(store.cli_wake("cli0").unwrap().unwrap().0, first);
+        assert_eq!(store.pending_cli_wakes(1001, None).unwrap().len(), 60);
+        let key = IdempotencyKey::new(
+            crate::wake_schedules::CLI_WAKE_SCOPE,
+            OperationKind::Send,
+            "cli0",
+        )
+        .unwrap();
+        store
+            .transition(&key, RecordState::Prepared, RecordState::Dispatching)
+            .unwrap();
+        store
+            .finalize(
+                &key,
+                PublicResult::Accepted {
+                    expires_at: 1000 + 7 * 86400,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            store
+                .reserve_cli_wake("cli0", "owner", &target, "entier", None, 1002)
+                .unwrap()
+                .0,
+            Reservation::Replayed(LookupResult::Accepted { .. })
+        ));
+        assert_eq!(store.pending_cli_wakes(1002, None).unwrap().len(), 59);
+        assert!(matches!(
+            store
+                .reserve_cli_wake("cli60", "owner", &target, "entier", None, 1060)
+                .unwrap()
+                .0,
+            Reservation::Prepared { .. }
+        ));
+        for i in 61..130 {
+            store
+                .reserve_cli_wake(
+                    &format!("cli{i}"),
+                    "owner",
+                    &target,
+                    "entier",
+                    None,
+                    1060 + ((i - 60) / 60) * 60,
+                )
+                .unwrap();
+        }
+        let page = store.pending_cli_wakes(1120, None).unwrap();
+        assert_eq!(page.len(), 128);
+        let last = &page.last().unwrap().0;
+        let second = store
+            .pending_cli_wakes(1120, Some((last.issued_at, last.id.clone())))
+            .unwrap();
+        assert_eq!(second.len(), 1);
+        assert_ne!(page[0].0.id, second[0].0.id);
+        assert!(matches!(
+            store
+                .reserve_cli_wake("cli0", "owner", &target, "entier", None, 1000 + 7 * 86400)
+                .unwrap()
+                .0,
+            Reservation::IdempotencyExpired
+        ));
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

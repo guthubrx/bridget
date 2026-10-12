@@ -1,0 +1,56 @@
+{
+  "patch": "/Users/moi/.cache/bridget-docs158B-20261012/R2-return-clock-and-deferred-amendment.patch",
+  "patch_sha256": "418627b70a9381e19e75eacfa3ba58187e6c2646183c1f93a6e1dde8b07fca11",
+  "files": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+      "base_sha256": "1ba8d9e3b2afb5421064d0dcb5a06234abf0cf4847536d1db867400131404e5e",
+      "candidate_sha256": "7cc8bb42e44ebf14533e48173aaa5015f43675dfac9514153a8a58e7bc876c8e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/tests-158B.md",
+      "base_sha256": "5b109ec8877bffd0d4ec2dbd2ecbf9f66d0edd72ba2edc7fd34310f71c2ee110",
+      "candidate_sha256": "18b11fcb6ff17d3b675d63684b7da5624f713e883aab16ced0b08da44f8e9e26"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/adversarial-review-code158B-r2-responses.md",
+      "base_sha256": "89aeb816816c597536f553c496fe7f2c869aad3b77b54db3664bcd8b2ca3b20b",
+      "candidate_sha256": "e556c2cdd5f00e8a1a134aea6e5cd5472ab2cf17061f8274f23629dbadcc45da"
+    }
+  ],
+  "receipt": "/Users/moi/.cache/bridget-tests158B-20261012/T109-T117-return-clock-order-GREEN.json",
+  "receipt_sha256": "c3feb4ada748ebd22470b9cbdf5192031e322f0b3591b28cfe1ca0fe0ae77e4b",
+  "log": "/Users/moi/.cache/bridget-tests158B-20261012/T109-T117-return-clock-order-GREEN.log",
+  "log_sha256": "a7fda2d6fa2a47e7556e4ef18fdef988b7ddb36552dbd727e48afe6ce982b5fd",
+  "new_daemon_sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+  "old_daemon_sha256": "42a95a02f22c7b223eb6d433bab741f7e4722d771dd05f204f9331685a0316ec",
+  "verified_sources_stable": true,
+  "source_count": 221,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "4",
+      "0",
+      "0"
+    ]
+  ],
+  "seconds": 22.51,
+  "observer_call_lines": [
+    6568,
+    7091,
+    21459,
+    24903,
+    24955,
+    24963,
+    24974,
+    25084,
+    25132
+  ],
+  "limits": [
+    "Ancien verdict D limité à la boucle ; deux autres chemins corrigés",
+    "Terminalisation à un passage ultérieur non testée ; curseur128 interdit promesse prochain tick",
+    "Historiques E42 conservés et nouvelle preuve2124 distincte",
+    "Aucune WT/source/tâche écrite ; aucun test/Cargo/Git/service exécuté"
+  ]
+}

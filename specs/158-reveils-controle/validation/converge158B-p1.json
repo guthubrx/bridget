@@ -1,0 +1,721 @@
+{
+  "phase": "Converge158B-pass1",
+  "read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+  "verdict": "NOT_CONVERGED",
+  "reason": "Un manque FR103 confirmé ; T123 minimale proposée par instruction ROOT. FULLT121 et reçuT122 encore attendus, aucune GLOBALGREEN.",
+  "scope": "158B FR101–107,US5–US7 ; US8 reportée. Aucune nouvelleSCB définie dans la spec ; SC001–008 appartiennent158A et restent régressions.",
+  "requirements_matrix": [
+    {
+      "requirement": "FR101",
+      "tasks": [
+        "T102",
+        "T103",
+        "T104",
+        "T105",
+        "T106",
+        "T110"
+      ],
+      "status": "STATIC_PRESENT",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wake_schedules.rs",
+          "line": 113
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs",
+          "line": 27
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/protocol.rs",
+          "line": 2395
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158B_groupe1_domaine_ferme_et_bornes",
+        "wake158B_groupe1_sql_limites_physiques_et_annulees",
+        "wake158B_groupe2_calendrier_trou_fold_tz_et_date",
+        "wake158B_protocol_objets_fermes"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR102",
+      "tasks": [
+        "T107",
+        "T108",
+        "T109"
+      ],
+      "status": "STATIC_PRESENT",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+          "line": 133
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2503
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2302
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158b_daemon_g4_g5_pause_et_grace_avant_depart"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR103",
+      "tasks": [
+        "T104",
+        "T106",
+        "T108",
+        "T109",
+        "T112",
+        "T117"
+      ],
+      "status": "GAP_REPRISE_102",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs",
+          "line": 171
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2116
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2129
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2179
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158B_groupe3_intervalle_gel_restart_et_frontieres",
+        "wake158b_daemon_g6_fil_commit_uuid_et_revalidation",
+        "wake158B_groupe7_cli_quota_rejeu_collision_et_reprise"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR104",
+      "tasks": [
+        "T107",
+        "T108",
+        "T109",
+        "T110",
+        "T113"
+      ],
+      "status": "STATIC_PRESENT",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+          "line": 173
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+          "line": 215
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 1710
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 1876
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2282
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158b_mcp_surface_wake_et_arguments_fermes",
+        "wake158b_daemon_g4_g5_pause_et_grace_avant_depart",
+        "wake158b_daemon_g6_fil_commit_uuid_et_revalidation",
+        "mcp158_scopes_couvrent_tous_les_outils"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR105",
+      "tasks": [
+        "T111",
+        "T112",
+        "T113"
+      ],
+      "status": "STATIC_PRESENT_WITH_FR103_DEPENDENCY",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/cli.rs",
+          "line": 952
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/communication/client.rs",
+          "line": 943
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2008
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency.rs",
+          "line": 893
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158b_cli_g7_formes_fermees_et_identifiant_retry",
+        "wake158B_groupe7_cli_quota_rejeu_collision_et_reprise"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR106",
+      "tasks": [
+        "T114",
+        "T115",
+        "T116",
+        "T117",
+        "T118"
+      ],
+      "status": "STATIC_PRESENT",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 51
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 169
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 305
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 449
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2843
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 9434
+        }
+      ],
+      "existing_oracle_names": [
+        "observation158b_g8_provenance_once_writer_et_transaction",
+        "observation158b_g9_bornes_bytes_ttl_proprietaires_et_lacunes",
+        "observation158b_g10_retour_cutoff_resume_uuid_et_ack_cas",
+        "wake158b_daemon_g8_g10_once_worker_et_retour_ack"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR107",
+      "tasks": [
+        "T114",
+        "T115",
+        "T116",
+        "T117",
+        "T118"
+      ],
+      "status": "STATIC_PRESENT",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/observation.rs",
+          "line": 516
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 218
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 335
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 362
+        }
+      ],
+      "existing_oracle_names": [
+        "observation158b_g9_bornes_bytes_ttl_proprietaires_et_lacunes",
+        "wake158b_mcp_events_missed_passe_par_identite_attestee"
+      ],
+      "test_execution_by_this_reader": false
+    }
+  ],
+  "user_stories": {
+    "US5": "Présent avec manque FR103 à réparer",
+    "US6": "Présent avec dépendance reprise CLI-fil FR103",
+    "US7": "Présent statiquement ; tests exécutés/rootdiff frais restent nécessaires"
+  },
+  "gaps": [
+    {
+      "id": "CONV158B-001",
+      "requirements": [
+        "FR103",
+        "US5",
+        "US6"
+      ],
+      "status": "CONFIRMED_BY_SOURCE_AND_ROOT_COUNTER_READING",
+      "runtime_reproduced": false,
+      "title": "Le reçu post102 committé n’est pas recherché avant grâce et gardes mutables",
+      "contract": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/spec.md",
+          "line": 227
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+          "line": 99
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+          "line": 104
+        }
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2129
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2144
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2179
+        }
+      ],
+      "trigger": "Post102 committé puis perte de finalize099 CLI ou settle_wake_occurrence. Reprise après grâce600s, pause ou retrait de droits : résultat ancien committé masqué par garde de création. Aucun nouvel effet nécessaire pour lire sa preuve.",
+      "reuse": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/threads.rs",
+          "line": 369
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/threads.rs",
+          "line": 988
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/threads.rs",
+          "line": 1020
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/threads.rs",
+          "line": 971
+        }
+      ],
+      "closed_canonical_parts": [
+        "post",
+        "v1",
+        "thread_id",
+        "wake.body",
+        "all",
+        "reply_to",
+        "ack"
+      ],
+      "minimal_repair": "Rendre pub(crate) le digest existant, reconstruire ce seul canon fermé inline, relire thread_operation_replay avec owner/UUID/hash avant les gardes d’un nouvel effet. Replayed(posted,thread_id exact) clôture CommittedThread et099 CLI sans repost. None applique les gardes existantes. Mismatch, reçu invalide ou erreurSQL ferment. Même preuve à utiliser avant annulation/lifecycle qui solderaient l’occurrence comme absence.",
+      "proposed_task": "- [ ] T123 Réparer la reprise du post102 déjà committé avant grâce/gardes de création pour FR103/US5/US6, par digest et thread_operation_replay existants. Étendre seulement l’oracle G6 existant aux frontières de perte de clôture ; préserver membre/projet avant tout post neuf. ROOT recompile après arrêt de compilation et poursuit l’unique FULL T121 réelle ; la tentative14.37s de compilation/0tests n’est pas une FULL de régression. Consigner preuves et relectureT122.",
+      "project_tasks_mutated": false,
+      "new_standalone_test": false,
+      "new_framework": false
+    }
+  ],
+  "summary_scope_review": {
+    "finding": false,
+    "scope_interpretation": "NativeTask/instance figées FR104 concernent les programmations. Les résumés sont des lectures/état propre OwnState ; aucun ajout de politique de programmation à ces résumés.",
+    "proof": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+        "line": 125
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+        "line": 33
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+        "line": 3000
+      }
+    ],
+    "limit": "Résumé persiste owner/UUID/body/issued_at/cutoffs/génération. Son FrozenWake reconstruit owner_project au départ et owner_native=None. Le départ recontrôle le projet capturé et ferme une origine native aujourd’hui terminale via wake_native_origin ; aucune preuve native figée historique du résumé revendiquée. Pas de gain d’autorité client ni mutation du cutoff sansACK. Immutabilité du canon099 après réservation protégée par comparaison099 ; pas de garantie additionnelle sur le snapshot projet avant première réservation revendiquée."
+  },
+  "self_review_T122": {
+    "necessity": [
+      "Domaine calendrier et occurrence figée justifiés FR101/103 ; deux modulesSQL justifiés par les trois tables bornées exigées et Store existant.",
+      "Worker unique étendu avec provenance et retour64, sans nouvelle boucle/service ni journal universel.",
+      "deliver_frozen_wake a trois sources réelles scheduled/cli_once/missed_summary ; wake_target_guard a admission/gel/départ ; wake_native_origin a admission/gel/départ."
+    ],
+    "simplicity": [
+      "SocketUnix,099,102,Store,garde087,tableScopes existants réemployés.",
+      "Calendrier libc borné2881x8 horsmutex ; CAS timezone/next/date paire.",
+      "Bornes16/128,60CLI/min,64/sub,8192facts/owners,16KiBfacts/résumé,64KiBpage,5sworker/1sIO/600sgrâce/7jours rétention visibles dans code."
+    ],
+    "hypotheses": [
+      "ADR011 borne mêmeUID ; aucune isolationOS forte revendiquée.",
+      "Fuseaux minutes entières dans +/-24h seulement ; pas un inverse universel libc.",
+      "ACKwrapper ne prouve pas lecturemodèle ; résultat inconnu n’est pas absence.",
+      "Perte connue après crash reste honnête ; aucune exactement-unefois fournisseur."
+    ],
+    "avoided": [
+      "Pas scheduler/worker/outbox/quota universels nouveaux.",
+      "Pas autostart fournisseur,HTTP,secretUS8,modèle ou outil supplémentaire.",
+      "Pas nouveau test/scanner/benchmark ni optimisation de confort."
+    ],
+    "removable_production_lines_estimate": 0,
+    "removable_estimate_limit": "Aucune ligne suppressible établie dans les plages relues, pas une preuve de minimalité de tout le diff.",
+    "T122_limit": "Relecture ciblée des exigences et trois modules nouveaux de production ; le diff entier/tests complets/30oracles n’ont pas été tous relus ici. T122 et son implementation-158B.md/diff-158B.patch restent une livraison ROOT distincte. Aucun crédit de revue complète inventé."
+  },
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256": "47193259f92bd0f6957dfcbd6374f051ed5d490399d6ca0f5960bbcc1c0c0297",
+      "ranges": [
+        [
+          180,
+          268
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/plan-158B.md",
+      "sha256": "c2c488adbe45ea756bfa139da8e3e825800408ec483b2db388dc72ad33cc6116",
+      "ranges": [
+        [
+          1,
+          111
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/tasks.md",
+      "sha256": "6af7dd12f1f594fab0d10ea1076d99e414c89898988c9918e5d13a4a026691fa",
+      "ranges": [
+        [
+          86,
+          172
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+      "sha256": "29e83f5a1917c1aea7a25e22e5cc6e5667a06e7dacd03d60dec2baf14ece1ecf",
+      "ranges": [
+        [
+          1,
+          140
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "6a57d2fbcd10d28377693630c31500871bcacb2893d159bac3d7f81ac2f3cd52",
+      "ranges": [
+        [
+          1,
+          43
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/quickstart-158B.md",
+      "sha256": "f09c6094ad7e24637d9fb43f2bb384a83e1c607b9059ae1bfce3e32a527ef250",
+      "ranges": [
+        [
+          1,
+          59
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/tests-158B.md",
+      "sha256": "a7ecf223a7b2964fbb445d0bf6e8c3015ba0fdf3168c104d604c673b25f43dab",
+      "ranges": [
+        [
+          1,
+          122
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "8a07c6e6bd06e881310ffb7005afc399891422fdbaad8252de5593ba8494dd1e",
+      "ranges": [
+        [
+          1710,
+          2649
+        ],
+        [
+          2670,
+          3035
+        ],
+        [
+          9434,
+          9495
+        ],
+        [
+          17345,
+          17455
+        ],
+        [
+          17690,
+          17720
+        ],
+        [
+          17995,
+          18045
+        ],
+        [
+          24073,
+          24307
+        ],
+        [
+          24310,
+          24599
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wake_schedules.rs",
+      "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+      "ranges": [
+        [
+          1,
+          350
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs",
+      "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+      "ranges": [
+        [
+          1,
+          297
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+      "sha256": "b86e155470fe76a2fa8f4fdc3178581c423957611cb96f8a683f83b9bfaa7fa5",
+      "ranges": [
+        [
+          1,
+          629
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "ranges": [
+        [
+          890,
+          1027
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/observation.rs",
+      "sha256": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+      "ranges": [
+        [
+          90,
+          113
+        ],
+        [
+          488,
+          538
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+      "ranges": [
+        [
+          112,
+          146
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+      "ranges": [
+        [
+          707,
+          788
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+      "ranges": [
+        [
+          1,
+          125
+        ],
+        [
+          163,
+          260
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/communication/client.rs",
+      "sha256": "b71a47ac6cb3d4b0d15dc31471111127defe36a733c543eb14629823fc4b3268",
+      "ranges": [
+        [
+          925,
+          975
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "sha256": "639bd796bf7cf0913063abf12f7d651cefe98679179bdf052625ad9fe6036104",
+      "ranges": [
+        [
+          952,
+          1074
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/protocol.rs",
+      "sha256": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+      "ranges": [
+        [
+          2350,
+          2466
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/threads.rs",
+      "sha256": "7675231ea83720d4d87c52a3d7dd88d12aead9047fd8940a8ffab9cb4fd1c43d",
+      "ranges": [
+        [
+          369,
+          375
+        ],
+        [
+          931,
+          1075
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/threads.rs",
+      "sha256": "1e34ef1b3d5b6059e2846010c1cbb44d623b49685f16f9e09072e658c89a93e6",
+      "ranges": [
+        [
+          67,
+          86
+        ],
+        [
+          620,
+          670
+        ],
+        [
+          969,
+          985
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "sha_captured_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "limits": "SHA capturé à la clôture ; pas de hash préalable à la première lecture revendiqué. Gel ROOT déclaré. Lecture ciblée, pas diff complet."
+    }
+  ],
+  "evidence_limits": [
+    "Tests non exécutés par ce lecteur. Noms source et reçus ROOT séparés.",
+    "T107-T117-affected-GREEN-r2 historique :3PASS/1FAIL/RC101, source propre à ce reçu. Ne représente pas le dernier code formaté.",
+    "ROOT annonce G3/G6/CLI ciblés puis uniqueFULL ; résultats finaux non reçus et non déduits.",
+    "TentativeFULL14.37s compilation/0tests selon ROOT ; aucune régression exécutée dans cette tentative.",
+    "Les hashes ci-dessous sont une capture de clôture, pas une capture avant la toute première lecture.",
+    "Les recherches simples pour maintenance docs/testnoms ne deviennent pas une couverture sémantique complète.",
+    "Pas Analyze supplémentaire/auditglobal/grade/GO livraison."
+  ],
+  "tasks_sha256_before_output": "6af7dd12f1f594fab0d10ea1076d99e414c89898988c9918e5d13a4a026691fa",
+  "root_only_execution": true,
+  "source_mutations": 0,
+  "task_mutations": 0,
+  "hash_guard_at_close": {
+    "checked_at_utc": "2026-10-12T12:04:57.443002+00:00",
+    "all_read_files_unchanged_during_output": true,
+    "tasks_sha256_after_output": "6af7dd12f1f594fab0d10ea1076d99e414c89898988c9918e5d13a4a026691fa",
+    "tasks_unchanged_during_output": true
+  }
+}

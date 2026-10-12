@@ -2362,6 +2362,20 @@ pub enum ObservationKind {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ObservationRequest {
     Types {},
+    Missed {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        limit: Option<u32>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        after_seq: Option<u64>,
+    },
     Sub {
         event: ObservationKind,
         agent: Option<String>,
@@ -2378,6 +2392,79 @@ pub enum ObservationRequest {
 
 /// Session 102 — fils inter-agents. Version fixée par le client, refusée si
 /// inconnue ; chaque variante rejette les champs inconnus.
+pub const WAKE_CONTRACT_VERSION: u16 = 1;
+
+/// Cible explicite ; self est résolu depuis l'identité authentifiée du daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WakeTarget {
+    #[serde(rename = "self")]
+    SelfTarget {},
+    Agent {
+        id: String,
+    },
+    Thread {
+        id: String,
+    },
+}
+
+/// Les valeurs métier (60 s, heure et jours) sont validées avant admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WakeCadence {
+    Interval { seconds: u64 },
+    At { time: String, weekdays: Vec<u8> },
+}
+
+/// Actions fermées : la connexion, jamais un booléen client, donne l'autorité.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WakeAction {
+    Schedule {
+        target: WakeTarget,
+        cadence: WakeCadence,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        label: Option<String>,
+    },
+    List {},
+    Cancel {
+        schedule_id: String,
+    },
+    CliOnce {
+        target: String,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        label: Option<String>,
+        id: String,
+    },
+    AdminList {},
+    AdminCancel {
+        schedule_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WakeRequest {
+    pub version: u16,
+    pub request: WakeAction,
+}
+
+/// Même projection métier versionnée que ThreadResult, sans enum gratuit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WakeResult {
+    pub version: u16,
+    pub result: serde_json::Value,
+}
+
 pub const THREAD_CONTRACT_VERSION: u16 = 1;
 
 pub const HUMAN_THREAD_VIEW_VERSION: u16 = 1;
@@ -2992,6 +3079,9 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    WakeRequest {
+        request: WakeRequest,
+    },
     ChildRequest {
         request: ChildProviderRequest,
     },
@@ -3972,6 +4062,9 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    WakeResult {
+        result: WakeResult,
+    },
     /// Projection publique156 bornée à200 par le daemon ; aucune file privée.
     QueueListResult {
         entries: Vec<serde_json::Value>,
@@ -8478,10 +8571,23 @@ mod spec104_search_contract_tests {
     #[test]
     fn control158_transport_six_variantes_aller_retour() {
         for request in [
-            WrapperToDaemon::DelegationOverviewRead { version:1, state:"active".into(), limit:50 },
-            WrapperToDaemon::DelegationHaltSet { version:1, command_id:"halt158".into(), halted:true,
-                reason:Some("essai".into()), cancel_active:false },
-            WrapperToDaemon::DelegationCancel { version:1, task_id:"task158".into(), request_id:"cancel158".into() },
+            WrapperToDaemon::DelegationOverviewRead {
+                version: 1,
+                state: "active".into(),
+                limit: 50,
+            },
+            WrapperToDaemon::DelegationHaltSet {
+                version: 1,
+                command_id: "halt158".into(),
+                halted: true,
+                reason: Some("essai".into()),
+                cancel_active: false,
+            },
+            WrapperToDaemon::DelegationCancel {
+                version: 1,
+                task_id: "task158".into(),
+                request_id: "cancel158".into(),
+            },
         ] {
             let value = serde_json::to_value(&request).unwrap();
             let reread: WrapperToDaemon = serde_json::from_value(value.clone()).unwrap();
@@ -8495,23 +8601,52 @@ mod spec104_search_contract_tests {
                 reason: None,
                 items: vec![serde_json::json!({
                 "task_id":"task158","owner":"parent158","child":"child158","state":"working",
-                "age_secs":10,"deadline_in_secs":590,"parent_task_id":null })], total_active:1 },
-            DaemonToWrapper::DelegationHaltState { halted:true, since:Some(100), by:Some("cli".into()),
-                reason:Some("essai".into()), generation:1, cancelled:0, replayed:false },
-            DaemonToWrapper::DelegationControlRejected { reason:DelegationControlRefusal::HumanActorRequired },
+                "age_secs":10,"deadline_in_secs":590,"parent_task_id":null })],
+                total_active: 1,
+            },
+            DaemonToWrapper::DelegationHaltState {
+                halted: true,
+                since: Some(100),
+                by: Some("cli".into()),
+                reason: Some("essai".into()),
+                generation: 1,
+                cancelled: 0,
+                replayed: false,
+            },
+            DaemonToWrapper::DelegationControlRejected {
+                reason: DelegationControlRefusal::HumanActorRequired,
+            },
         ] {
             let value = serde_json::to_value(&response).unwrap();
             let reread: DaemonToWrapper = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(serde_json::to_value(reread).unwrap(), value);
         }
         for (reason, code) in [
-            (DelegationControlRefusal::UnsupportedVersion, "unsupported_version"),
+            (
+                DelegationControlRefusal::UnsupportedVersion,
+                "unsupported_version",
+            ),
             (DelegationControlRefusal::InvalidRequest, "invalid_request"),
-            (DelegationControlRefusal::NegotiationRequired, "negotiation_required"),
-            (DelegationControlRefusal::CapabilityNotNegotiated, "capability_not_negotiated"),
-            (DelegationControlRefusal::HumanActorRequired, "human_actor_required"),
-            (DelegationControlRefusal::TaskUnavailable, "task_unavailable"),
-            (DelegationControlRefusal::StoreUnavailable, "store_unavailable"),
+            (
+                DelegationControlRefusal::NegotiationRequired,
+                "negotiation_required",
+            ),
+            (
+                DelegationControlRefusal::CapabilityNotNegotiated,
+                "capability_not_negotiated",
+            ),
+            (
+                DelegationControlRefusal::HumanActorRequired,
+                "human_actor_required",
+            ),
+            (
+                DelegationControlRefusal::TaskUnavailable,
+                "task_unavailable",
+            ),
+            (
+                DelegationControlRefusal::StoreUnavailable,
+                "store_unavailable",
+            ),
         ] {
             assert_eq!(
                 serde_json::to_value(&reason).unwrap(),
@@ -8531,5 +8666,108 @@ mod spec104_search_contract_tests {
         let historical = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
         let request: NativeDelegationRequest = serde_json::from_slice(historical).unwrap();
         assert_eq!(serde_json::to_vec(&request).unwrap(), historical);
+    }
+}
+
+#[cfg(test)]
+mod wake158b_protocol_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn wake158B_protocol_objets_fermes() {
+        let schedule = json!({"version":1,"request":{"action":"schedule","target":{"kind":"self"},"cadence":{"kind":"interval","seconds":60}}});
+        let parsed: WakeRequest = serde_json::from_value(schedule.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), schedule);
+        for target in [
+            json!({"kind":"agent","id":"15800000-0000-4000-8000-000000000001"}),
+            json!({"kind":"thread","id":"15800000-0000-4000-8000-000000000002"}),
+        ] {
+            let mut value = schedule.clone();
+            value["request"]["target"] = target;
+            assert!(serde_json::from_value::<WakeRequest>(value).is_ok());
+        }
+        let mut at = schedule.clone();
+        at["request"]["cadence"] = json!({"kind":"at","time":"09:00","weekdays":[1,2,3,4,5]});
+        assert!(serde_json::from_value::<WakeRequest>(at).is_ok());
+        for field in ["owner", "from", "issued_at", "scope", "human"] {
+            let mut invalid = schedule.clone();
+            invalid["request"][field] = json!("forged");
+            assert!(
+                serde_json::from_value::<WakeRequest>(invalid).is_err(),
+                "{field}"
+            );
+        }
+        for target in [
+            json!({"kind":"self","owner":"forged"}),
+            json!({"kind":"agent","id":1}),
+            json!({"kind":"other"}),
+        ] {
+            let mut invalid = schedule.clone();
+            invalid["request"]["target"] = target;
+            assert!(serde_json::from_value::<WakeRequest>(invalid).is_err());
+        }
+        for cadence in [
+            json!({"kind":"interval","seconds":"60"}),
+            json!({"kind":"interval","seconds":60,"owner":"forged"}),
+            json!({"kind":"at","time":"09:00","weekdays":null}),
+        ] {
+            let mut invalid = schedule.clone();
+            invalid["request"]["cadence"] = cadence;
+            assert!(serde_json::from_value::<WakeRequest>(invalid).is_err());
+        }
+        let mut null = schedule;
+        null["request"]["label"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<WakeRequest>(null).is_err());
+        for request in [
+            json!({"action":"list","owner":"forged"}),
+            json!({"action":"admin_list","human":true}),
+            json!({"action":"cli_once","target":"known","id":"k","issued_at":1}),
+        ] {
+            assert!(serde_json::from_value::<WakeAction>(request).is_err());
+        }
+        let missed = json!({"action":"missed","limit":64,"after_seq":123});
+        assert!(matches!(
+            serde_json::from_value::<ObservationRequest>(missed).unwrap(),
+            ObservationRequest::Missed {
+                limit: Some(64),
+                after_seq: Some(123)
+            }
+        ));
+        assert!(
+            serde_json::from_value::<ObservationRequest>(
+                json!({"action":"missed","owner":"forged"})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wake158B_protocol_legacy_octets_preserves() {
+        assert_eq!(
+            serde_json::to_string(&ObservationRequest::Types {}).unwrap(),
+            "{\"action\":\"types\"}"
+        );
+        let request = WakeRequest {
+            version: WAKE_CONTRACT_VERSION,
+            request: WakeAction::List {},
+        };
+        let wire = encode(&WrapperToDaemon::WakeRequest { request }).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::WakeRequest {
+                request: WakeRequest {
+                    version: 1,
+                    request: WakeAction::List {}
+                }
+            }
+        ));
+        let result = WakeResult {
+            version: 1,
+            result: json!({"status":"listed","schedules":[]}),
+        };
+        let wire = encode(&DaemonToWrapper::WakeResult { result }).unwrap();
+        let parsed = decode::<DaemonToWrapper>(&wire).unwrap();
+        assert!(!parsed.allowed_for_attach());
     }
 }

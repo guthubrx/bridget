@@ -1,0 +1,16 @@
+{
+  "at": "2026-10-12T10:34:50.892739+00:00",
+  "base": "9a94334a109b4d5f939a8ebea464530abc28f4d6",
+  "sources158A": "80b43407936110526b28f2c38ea72e1b34055154",
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle",
+  "branch": "session-158B-reveils-controle",
+  "sync_rc": 0,
+  "setup_plan_rc": 127,
+  "setup_plan_error": "setup-plan.sh absent",
+  "fallback": "Manuel selon speckit-plan, artefactsB complémentaires sous feature158 sans réécrire preuvesA",
+  "selection": "ID explicite158 prioritaire, SPECIFY_FEATURE=158-reveils-controle ; feature.json151 historique inchangé",
+  "tasksA_completed": 22,
+  "tasksB_generated": false,
+  "root_binding": "main, attached:false, travail explicite en WT manuel",
+  "authorized_scope": "US5–US7 FR101–107 ; US8 reportée suivant condition du consommateur existante ; livraison/push/cleanup autorisés"
+}

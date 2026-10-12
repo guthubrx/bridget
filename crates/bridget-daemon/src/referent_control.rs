@@ -117,6 +117,8 @@ pub enum AutonomousEffect {
     NativeMissionDispatch,
     /// Guidage explicite ou implicite effectué par un agent (session156).
     AgentGuidance,
+    /// Occurrence programmée ou résumé au retour ; aucun effet pendant la pause.
+    ScheduledWake,
 }
 
 /// Verdict de la garde unique.
@@ -138,7 +140,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
         | AutonomousEffect::Continuation
         | AutonomousEffect::NativeDelegation
         | AutonomousEffect::NativeMissionDispatch
-        | AutonomousEffect::AgentGuidance => Admission::Admitted,
+        | AutonomousEffect::AgentGuidance
+        | AutonomousEffect::ScheduledWake => Admission::Admitted,
     }
 }
 
@@ -149,7 +152,9 @@ pub(crate) fn admit_native_delegation(
     halt: &crate::delegation::HaltState,
 ) -> Admission {
     if halt.halted {
-        Admission::Deferred { motif: "delegations_halted" }
+        Admission::Deferred {
+            motif: "delegations_halted",
+        }
     } else {
         admit_autonomous_effect(AutonomousEffect::NativeDelegation, control)
     }
@@ -894,9 +899,21 @@ mod tests {
         let mut control = read(&conn()).unwrap();
         for (paused, halted, expected) in [
             (false, false, Admission::Admitted),
-            (true, false, Admission::Deferred { motif:"pause" }),
-            (false, true, Admission::Deferred { motif:"delegations_halted" }),
-            (true, true, Admission::Deferred { motif:"delegations_halted" }),
+            (true, false, Admission::Deferred { motif: "pause" }),
+            (
+                false,
+                true,
+                Admission::Deferred {
+                    motif: "delegations_halted",
+                },
+            ),
+            (
+                true,
+                true,
+                Admission::Deferred {
+                    motif: "delegations_halted",
+                },
+            ),
         ] {
             control.paused = paused;
             let halt = crate::delegation::HaltState {

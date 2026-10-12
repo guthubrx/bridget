@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-12T13:13:44.005932+00:00",
+  "command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01",
+    "--block-on",
+    "CRITICAL,HIGH"
+  ],
+  "exit_code": 0,
+  "stdout": "\n0 erreur(s), 0 warning(s) — session conforme\n",
+  "stderr": "",
+  "errors": 0,
+  "warnings": 0,
+  "sources_sha256_stable_after_validation": true,
+  "daemon_sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+  "tasks_sha256": "fe186b77e076ed5a7cf085b0e34b37835dea6d4942c6e78b7524019859268e0a",
+  "validator_sha256": "7dd21947154113bd049bfdc7ece00de45840e8d5b2ea04ff62c82003eff9ba05",
+  "limitations": "Conformité artefacts audit ;pasGLOBALGREEN/Cargo/runtime/provider/T3 niGitwrite de cetowner."
+}

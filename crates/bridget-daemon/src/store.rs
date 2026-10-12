@@ -5,9 +5,11 @@
 //! n'est ouverte pour résoudre une demande ou publier son événement.
 
 mod ledger_requests;
+pub(crate) mod observation_missed;
 mod project_compat;
 mod service_events;
 pub(crate) mod threads;
+mod wake_schedules;
 
 pub(crate) use ledger_requests::search as ledger_search;
 pub use ledger_requests::{LedgerEntry, TrackedRequest, UsageDashboardRow};
@@ -139,6 +141,8 @@ impl Store {
     }
 
     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
+        wake_schedules::ensure_schema(conn)?;
+        observation_missed::ensure_schema(conn)?;
         crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         // `result_bytes` a été retirée du schéma canonique : `reply_bytes`

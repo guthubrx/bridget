@@ -1,0 +1,848 @@
+{
+  "phase": "Converge158B-pass2",
+  "captured_before_utc": "2026-10-12T12:07:51.735983+00:00",
+  "closed_at_utc": "2026-10-12T12:11:15.565759+00:00",
+  "verdict": "CONVERGED",
+  "verdict_scope": "Convergence CODE/contrat FR101–107 et US5–US7. Ne vaut ni fin des tâchesT121/T122 ni gates de contre-revue/audit/livraison ni GLOBALGREEN.",
+  "requirements_matrix": [
+    {
+      "requirement": "FR101",
+      "tasks": [
+        "T102",
+        "T103",
+        "T104",
+        "T105",
+        "T106",
+        "T110"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wake_schedules.rs",
+          "line": 113
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs",
+          "line": 27
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/protocol.rs",
+          "line": 2395
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 1927
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 1971
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158B_groupe1_domaine_ferme_et_bornes",
+        "wake158B_groupe1_sql_limites_physiques_et_annulees",
+        "wake158B_groupe2_calendrier_trou_fold_tz_et_date",
+        "wake158B_protocol_objets_fermes"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR102",
+      "tasks": [
+        "T107",
+        "T108",
+        "T109"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+          "line": 133
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2360
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2599
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158b_daemon_g4_g5_pause_et_grace_avant_depart"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR103",
+      "tasks": [
+        "T104",
+        "T106",
+        "T108",
+        "T109",
+        "T112",
+        "T117",
+        "T123"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs",
+          "line": 171
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2116
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2473
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2673
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158B_groupe3_intervalle_gel_restart_et_frontieres",
+        "wake158b_daemon_g6_fil_commit_uuid_et_revalidation",
+        "wake158B_groupe7_cli_quota_rejeu_collision_et_reprise"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR104",
+      "tasks": [
+        "T107",
+        "T108",
+        "T109",
+        "T110",
+        "T113"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+          "line": 173
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+          "line": 215
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 1710
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 1876
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2340
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158b_mcp_surface_wake_et_arguments_fermes",
+        "wake158b_daemon_g4_g5_pause_et_grace_avant_depart",
+        "wake158b_daemon_g6_fil_commit_uuid_et_revalidation",
+        "mcp158_scopes_couvrent_tous_les_outils"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR105",
+      "tasks": [
+        "T111",
+        "T112",
+        "T113"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/cli.rs",
+          "line": 952
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/communication/client.rs",
+          "line": 943
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency.rs",
+          "line": 893
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2008
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2704
+        }
+      ],
+      "existing_oracle_names": [
+        "wake158b_cli_g7_formes_fermees_et_identifiant_retry",
+        "wake158B_groupe7_cli_quota_rejeu_collision_et_reprise"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR106",
+      "tasks": [
+        "T114",
+        "T115",
+        "T116",
+        "T117",
+        "T118"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 51
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 169
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 305
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 449
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2833
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2939
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 9530
+        }
+      ],
+      "existing_oracle_names": [
+        "observation158b_g8_provenance_once_writer_et_transaction",
+        "observation158b_g9_bornes_bytes_ttl_proprietaires_et_lacunes",
+        "observation158b_g10_retour_cutoff_resume_uuid_et_ack_cas",
+        "wake158b_daemon_g8_g10_once_worker_et_retour_ack"
+      ],
+      "test_execution_by_this_reader": false
+    },
+    {
+      "requirement": "FR107",
+      "tasks": [
+        "T114",
+        "T115",
+        "T116",
+        "T117",
+        "T118"
+      ],
+      "status": "CODE_MAPPED_NO_NEW_GAP",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/observation.rs",
+          "line": 516
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 218
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 335
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+          "line": 362
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2877
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2943
+        }
+      ],
+      "existing_oracle_names": [
+        "observation158b_g9_bornes_bytes_ttl_proprietaires_et_lacunes",
+        "wake158b_mcp_events_missed_passe_par_identite_attestee"
+      ],
+      "test_execution_by_this_reader": false
+    }
+  ],
+  "user_stories": {
+    "US5": "CODE_CONVERGED",
+    "US6": "CODE_CONVERGED",
+    "US7": "CODE_CONVERGED",
+    "US8": "REPORTÉE inchangée"
+  },
+  "resolved_gaps": [
+    {
+      "original_id": "CONV158B-001",
+      "status": "RESOLVED",
+      "task": "T123",
+      "source": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2116
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2123
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2134
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2137
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2141
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2473
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2480
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2492
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+          "line": 2517
+        }
+      ],
+      "proof": "Canon post/v1/thread/body/all/reply_to/ack comparé au reçu existant. Replayed posted/thread_id exact prime les gardes de tout nouvel effet, aussi cancellation/lifecycle. Aucun repost. None seul suit les gardes. Mismatch/SQL ferment. CLI clôture099 avec expires_at enregistré. G6 étendu vérifie collision, panneSQL, grâce dépassée/projet retiré, ID/UUID/issued_at/canon et nombre de contributions stables.",
+      "oracle": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+        "name": "wake158b_daemon_g6_fil_commit_uuid_et_revalidation",
+        "ranges": [
+          [
+            24364,
+            24471
+          ]
+        ]
+      },
+      "green_current_daemon_matches": true,
+      "runtime_scope": "Fixture isolée exécutée ROOT ; aucun fournisseur réel revendiqué."
+    }
+  ],
+  "new_gaps": [],
+  "proposed_tasks": [],
+  "tests_root_evidence": [
+    {
+      "file": "/Users/moi/.cache/bridget-tests158B-20261012/T123-G6-postcommit-RED.json",
+      "sha256": "bea21e38b9855641c0ed02be2cf40002805d4b234030a26d7b82015576cc6ec7",
+      "label": "T123-G6-postcommit-RED",
+      "seconds": 36.42,
+      "rc": 101,
+      "test_results": [
+        [
+          "FAILED",
+          "0",
+          "1",
+          "0"
+        ]
+      ],
+      "log": "/Users/moi/.cache/bridget-tests158B-20261012/T123-G6-postcommit-RED.log",
+      "log_sha256": "c2ad0ae07ee3a3626e48ce109e2c08d7d69f7451957c5cd32a95e3bae523dbf8",
+      "sources_stable_reported": true,
+      "source_hash_count": 221,
+      "source_maps_equal": true,
+      "daemon_sha256": "4785a8c9d952b4568f9da2a4f567588d234dafac2d5642f9c88515990a067bc6",
+      "run_by": "ROOT",
+      "run_by_this_reader": false
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-tests158B-20261012/T123-G6-postcommit-GREEN.json",
+      "sha256": "d7664c7de2e918b22f73c278f56e505235b60caf11afe47fcf0ba97320d04a4a",
+      "label": "T123-G6-postcommit-GREEN",
+      "seconds": 43.11,
+      "rc": 0,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/Users/moi/.cache/bridget-tests158B-20261012/T123-G6-postcommit-GREEN.log",
+      "log_sha256": "23ca3585e8f11df1c909fb8c687ba49f0980d44ac21a0110a1dbf33766ad424a",
+      "sources_stable_reported": true,
+      "source_hash_count": 221,
+      "source_maps_equal": true,
+      "daemon_sha256": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+      "run_by": "ROOT",
+      "run_by_this_reader": false
+    }
+  ],
+  "tasks_guard": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/tasks.md",
+    "sha256_before": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+    "sha256_after": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+    "byte_identical": true,
+    "task_mutations_by_reader": 0
+  },
+  "source_guard": {
+    "before_capture_file": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p2-before.json",
+    "before_capture_sha256": "34b197a419e30a9fa61a4fe79c03d5afc09462fae575fded94a2b34a6ad031e6",
+    "files_checked": 23,
+    "changed": [],
+    "hashes_after": {
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/cli.rs": "639bd796bf7cf0913063abf12f7d651cefe98679179bdf052625ad9fe6036104",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/communication/client.rs": "b71a47ac6cb3d4b0d15dc31471111127defe36a733c543eb14629823fc4b3268",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency.rs": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/lib.rs": "3906b579c76e55093970bd9069e5f1b6ef023c2e9cda20b3513dc4d0e8d9038c",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp.rs": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/observation.rs": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/referent_control.rs": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store.rs": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs": "b86e155470fe76a2fa8f4fdc3178581c423957611cb96f8a683f83b9bfaa7fa5",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/threads.rs": "1e34ef1b3d5b6059e2846010c1cbb44d623b49685f16f9e09072e658c89a93e6",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/threads.rs": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wake_schedules.rs": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/protocol.rs": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/checklists/requirements.md": "6a57d2fbcd10d28377693630c31500871bcacb2893d159bac3d7f81ac2f3cd52",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md": "29e83f5a1917c1aea7a25e22e5cc6e5667a06e7dacd03d60dec2baf14ece1ecf",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/plan-158B.md": "c2c488adbe45ea756bfa139da8e3e825800408ec483b2db388dc72ad33cc6116",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/quickstart-158B.md": "f09c6094ad7e24637d9fb43f2bb384a83e1c607b9059ae1bfce3e32a527ef250",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/spec.md": "47193259f92bd0f6957dfcbd6374f051ed5d490399d6ca0f5960bbcc1c0c0297",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/tasks.md": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/tests-158B.md": "a7ecf223a7b2964fbb445d0bf6e8c3015ba0fdf3168c104d604c673b25f43dab"
+    }
+  },
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256_before": "47193259f92bd0f6957dfcbd6374f051ed5d490399d6ca0f5960bbcc1c0c0297",
+      "sha256_after": "47193259f92bd0f6957dfcbd6374f051ed5d490399d6ca0f5960bbcc1c0c0297",
+      "ranges": [
+        [
+          180,
+          191
+        ],
+        [
+          193,
+          265
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/plan-158B.md",
+      "sha256_before": "c2c488adbe45ea756bfa139da8e3e825800408ec483b2db388dc72ad33cc6116",
+      "sha256_after": "c2c488adbe45ea756bfa139da8e3e825800408ec483b2db388dc72ad33cc6116",
+      "ranges": [
+        [
+          1,
+          111
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/tasks.md",
+      "sha256_before": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+      "sha256_after": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+      "ranges": [
+        [
+          173,
+          178
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+      "sha256_before": "29e83f5a1917c1aea7a25e22e5cc6e5667a06e7dacd03d60dec2baf14ece1ecf",
+      "sha256_after": "29e83f5a1917c1aea7a25e22e5cc6e5667a06e7dacd03d60dec2baf14ece1ecf",
+      "ranges": [
+        [
+          1,
+          140
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/checklists/requirements.md",
+      "sha256_before": "6a57d2fbcd10d28377693630c31500871bcacb2893d159bac3d7f81ac2f3cd52",
+      "sha256_after": "6a57d2fbcd10d28377693630c31500871bcacb2893d159bac3d7f81ac2f3cd52",
+      "ranges": [
+        [
+          1,
+          43
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/quickstart-158B.md",
+      "sha256_before": "f09c6094ad7e24637d9fb43f2bb384a83e1c607b9059ae1bfce3e32a527ef250",
+      "sha256_after": "f09c6094ad7e24637d9fb43f2bb384a83e1c607b9059ae1bfce3e32a527ef250",
+      "ranges": [
+        [
+          1,
+          59
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/tests-158B.md",
+      "sha256_before": "a7ecf223a7b2964fbb445d0bf6e8c3015ba0fdf3168c104d604c673b25f43dab",
+      "sha256_after": "a7ecf223a7b2964fbb445d0bf6e8c3015ba0fdf3168c104d604c673b25f43dab",
+      "ranges": [
+        [
+          1,
+          122
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "sha256_before": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+      "sha256_after": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+      "ranges": [
+        [
+          1710,
+          2093
+        ],
+        [
+          2110,
+          2746
+        ],
+        [
+          2766,
+          3138
+        ],
+        [
+          9530,
+          9591
+        ],
+        [
+          24300,
+          24516
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wake_schedules.rs",
+      "sha256_before": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+      "sha256_after": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+      "ranges": [
+        [
+          1,
+          350
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/wake_schedules.rs",
+      "sha256_before": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+      "sha256_after": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+      "ranges": [
+        [
+          1,
+          297
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/observation_missed.rs",
+      "sha256_before": "b86e155470fe76a2fa8f4fdc3178581c423957611cb96f8a683f83b9bfaa7fa5",
+      "sha256_after": "b86e155470fe76a2fa8f4fdc3178581c423957611cb96f8a683f83b9bfaa7fa5",
+      "ranges": [
+        [
+          1,
+          629
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency.rs",
+      "sha256_before": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "sha256_after": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "ranges": [
+        [
+          890,
+          1027
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/observation.rs",
+      "sha256_before": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+      "sha256_after": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+      "ranges": [
+        [
+          90,
+          113
+        ],
+        [
+          488,
+          538
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/referent_control.rs",
+      "sha256_before": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+      "sha256_after": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+      "ranges": [
+        [
+          112,
+          146
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp.rs",
+      "sha256_before": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+      "sha256_after": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+      "ranges": [
+        [
+          707,
+          788
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256_before": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+      "sha256_after": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+      "ranges": [
+        [
+          1,
+          125
+        ],
+        [
+          163,
+          260
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/communication/client.rs",
+      "sha256_before": "b71a47ac6cb3d4b0d15dc31471111127defe36a733c543eb14629823fc4b3268",
+      "sha256_after": "b71a47ac6cb3d4b0d15dc31471111127defe36a733c543eb14629823fc4b3268",
+      "ranges": [
+        [
+          925,
+          975
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/cli.rs",
+      "sha256_before": "639bd796bf7cf0913063abf12f7d651cefe98679179bdf052625ad9fe6036104",
+      "sha256_after": "639bd796bf7cf0913063abf12f7d651cefe98679179bdf052625ad9fe6036104",
+      "ranges": [
+        [
+          952,
+          1074
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/protocol.rs",
+      "sha256_before": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+      "sha256_after": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+      "ranges": [
+        [
+          2350,
+          2466
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/threads.rs",
+      "sha256_before": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+      "sha256_after": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+      "ranges": [
+        [
+          369,
+          375
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/threads.rs",
+      "sha256_before": "1e34ef1b3d5b6059e2846010c1cbb44d623b49685f16f9e09072e658c89a93e6",
+      "sha256_after": "1e34ef1b3d5b6059e2846010c1cbb44d623b49685f16f9e09072e658c89a93e6",
+      "ranges": [
+        [
+          67,
+          86
+        ],
+        [
+          620,
+          670
+        ],
+        [
+          969,
+          985
+        ]
+      ],
+      "read_mode": "inherited_initial_unchanged_sha",
+      "provenance_report": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p1.json",
+      "provenance_report_sha256": "f8ed8d430e56b50798d55797f52f85ee70566ed0e9637e97ee8a7e0dfe48c838",
+      "original_read_at_utc": "2026-10-12T12:04:57.412155+00:00",
+      "verified_unchanged_at_utc": "2026-10-12T12:11:15.565759+00:00"
+    }
+  ],
+  "summary_scope_review": {
+    "finding": false,
+    "scope_interpretation": "NativeTask/instance figées FR104 concernent les programmations. Les résumés sont des lectures/état propre OwnState ; aucun ajout de politique de programmation à ces résumés.",
+    "proof": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+        "line": 3096
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+        "line": 3105
+      }
+    ],
+    "limit": "Résumé persiste owner/UUID/body/issued_at/cutoffs/génération. Son FrozenWake reconstruit owner_project au départ et owner_native=None. Le départ recontrôle le projet capturé et ferme une origine native aujourd’hui terminale via wake_native_origin ; aucune preuve native figée historique du résumé revendiquée. Pas de gain d’autorité client ni mutation du cutoff sansACK. Immutabilité du canon099 après réservation protégée par comparaison099 ; pas de garantie additionnelle sur le snapshot projet avant première réservation revendiquée."
+  },
+  "self_review_T122": {
+    "necessity": [
+      "Domaine calendrier et occurrence figée justifiés FR101/103 ; deux modulesSQL justifiés par les trois tables bornées exigées et Store existant.",
+      "Worker unique étendu avec provenance et retour64, sans nouvelle boucle/service ni journal universel.",
+      "deliver_frozen_wake a trois sources réelles scheduled/cli_once/missed_summary ; wake_target_guard a admission/gel/départ ; wake_native_origin a admission/gel/départ."
+    ],
+    "simplicity": [
+      "SocketUnix,099,102,Store,garde087,tableScopes existants réemployés.",
+      "Calendrier libc borné2881x8 horsmutex ; CAS timezone/next/date paire.",
+      "Bornes16/128,60CLI/min,64/sub,8192facts/owners,16KiBfacts/résumé,64KiBpage,5sworker/1sIO/600sgrâce/7jours rétention visibles dans code."
+    ],
+    "hypotheses": [
+      "ADR011 borne mêmeUID ; aucune isolationOS forte revendiquée.",
+      "Fuseaux minutes entières dans +/-24h seulement ; pas un inverse universel libc.",
+      "ACKwrapper ne prouve pas lecturemodèle ; résultat inconnu n’est pas absence.",
+      "Perte connue après crash reste honnête ; aucune exactement-unefois fournisseur."
+    ],
+    "avoided": [
+      "Pas scheduler/worker/outbox/quota universels nouveaux.",
+      "Pas autostart fournisseur,HTTP,secretUS8,modèle ou outil supplémentaire.",
+      "Pas nouveau test/scanner/benchmark ni optimisation de confort."
+    ],
+    "removable_production_lines_estimate": 0,
+    "removable_estimate_limit": "Aucune ligne suppressible établie dans les plages relues, pas une preuve de minimalité de tout le diff.",
+    "T122_limit": "Relecture ciblée des exigences et trois modules nouveaux de production ; le diff entier/tests complets/30oracles n’ont pas été tous relus ici. T122 et son implementation-158B.md/diff-158B.patch restent une livraison ROOT distincte. Aucun crédit de revue complète inventé.",
+    "post_fix": "digest existant rendupubcrate et deux appels inline ; pas nouveau helper/registre/APItransport/scénario. Petite duplication de7parts fermées dans deux puits de reprise, aucun cadre générique. La comparaisonhash avant clôture remplace toute confianceUUIDseul."
+  },
+  "limits": [
+    "18 fichiersRust dans le diff (15suivis+3nouveaux) inventoriés seulement ; énorme reformatage inclus. Aucun crédit de lecture de toushunks.",
+    "Les trois nouveauxmodules production sont héritésP1 après SHAidentique : domaine wake_schedules et deuxStores ; leurs tests complets ne deviennent pas relusP2.",
+    "T122 implementation-158B.md et validation/diff-158B.patch absents àcapturebefore ; preuvesROOT àproduire sansnouvelletâchedeconfort.",
+    "T121 FULLréelle est en cours/àpoursuivre parROOT. Tentative14.37sRC101compilation/0tests distincte. AucuneFULLGREEN déduite.",
+    "Dixgroupes et30régressions restent oraclespréexistants ; noms etpreuvesP1/r1/r2/r3 ont leurs SHApropres, pas résultatfraiscopié.",
+    "P1spec/plan/contract/checklist/quickstart/store/protocoleetc retenus uniquement après SHAidentique.",
+    "Aucun test/Cargo/build/service/DB/Gitwrite/source/doc/tâche modifié par ce lecteur."
+  ]
+}

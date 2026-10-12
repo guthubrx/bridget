@@ -220,6 +220,129 @@ nouvelle spec ; le plafond n’est pas élargi pendant cette implémentation.
 Les conditions de reprise d’un budget de tours sont dans l’ADR158 ; la mention
 « budgets de tokens ou de coût (session158) » de150 est levée par cette décision.
 
+## Réveils et faits manqués — contrat 158B prévu
+
+Cette section décrit US5–US7. Elle ne prouve pas une livraison 158B, un test vert
+ou une fonction chargée. Le reçu 158A reste distinct. Vérifier la version du
+binaire et le catalogue MCP chargés avant d’utiliser ces nouvelles surfaces.
+US8, secrets et HTTP restent hors implémentation.
+
+### Programmer ou déclencher
+
+L’outil `bridget_wake` a trois actions : `schedule`, `list`, `cancel`.
+Une programmation prend `target`, `cadence` et un `label` facultatif de 2048 octets
+UTF-8 au plus, sans troncature. Cible fermée : `{"kind":"self"}`,
+`{"kind":"agent","id":"UUID"}` ou `{"kind":"thread","id":"UUID"}`.
+Cadence : `{"kind":"interval","seconds":60}` au minimum, ou
+`{"kind":"at","time":"09:00","weekdays":[1,2,3,4,5]}`. Les jours vont de 1 à 7,
+sans doublon ; l’heure suit le fuseau du daemon. `list` et `cancel` portent
+seulement sur les programmations de l’appelant ; cancel prend `schedule_id`.
+Aucun owner, from, scope ou horodatage libre. Champs inconnus et null explicite
+à la place d’une valeur facultative sont refusés.
+
+Base de l’outil : `sends`, `readOnlyHint:false`. `schedule self` et la gestion
+propre sont `writes_own_state`. Programmer vers agent ou fil reste `sends`,
+même si son UUID est celui de l’appelant. Un enfant discovery peut utiliser
+self et sa gestion propre, avec son origine native gelée à l’admission.
+La tâche, l’instance, les ancêtres, la mission et l’exécution sont revérifiés
+au gel et au départ. Sa fin de vie connue annule les futures occurrences et
+solde les préparées non parties `owner_unavailable`. Une preuve disparue ou
+une erreur de magasin ferme le départ ; aucun repli ordinaire, processus ou
+nouvelle ronde native n’est créé.
+
+Une création schedule n’est pas idempotente : chaque admission crée un UUID
+neuf. Si la réponse est perdue, relire list avant de recommencer. Les bornes
+physiques sont 16 programmations par propriétaire et 128 au total, annulées
+comprises. Seules les anciennes annulées sans occurrence en attente/en vol
+peuvent être retirées pour admettre une nouvelle ligne. Sinon schedule_limit.
+Cancel d’une ligne connue déjà annulée rend already_cancelled. Après retrait,
+son UUID refuse target_unknown ; cela ne prouve pas l’échec de son annulation.
+
+```sh
+bridget wake AGENT_CONNU --label 'Point de reprise' --id rappel-1
+bridget wake UUID_DU_FIL --label 'Point de reprise' --id rappel-fil-1
+bridget wake list --all
+bridget wake cancel UUID_PROGRAMMATION
+```
+
+Le déclencheur CLI est unitaire, utilisable depuis un script sans terminal
+interactif. La cible doit être connue ; une ambiguïté refuse. Réutiliser le
+même `--id` et le même contenu au retry. ID omis : une clé neuve. Le reçu099
+conserve le canon et issued_at initial pendant 7 jours, sans renouvellement.
+Rejeu/collision passent avant le quota global de 60 nouveaux IDs CLI par minute
+glissante ; COUNT et réservation sont transactionnels. Programmations et
+appels MCP n’utilisent pas ce quota. Un reçu expiré refuse le rejeu.
+
+Vers un fil, le script hérite le contexte réel `BRIDGET_AGENT_ID_FILE` et
+`BRIDGET_AGENT_INSTANCE_ID`, avec credential, membre et projet attestés.
+Sans ce contexte, refus avant réservation ; jamais de `--from` ou faux auteur.
+La vue CLI globale `list --all` et l’annulation administrative utilisent
+ControlStateV1 et l’acteur humain ; la mutation exige un terminal interactif.
+Aucun flag administratif n’est exposé par MCP. `list` sans `--all` utilise
+l’identité authentifiée et reste limité aux programmations propres.
+
+### Temps, remise et incertitude
+
+Pendant la pause, aucune nouvelle occurrence programmée n’est gelée. À sa
+levée, un intervalle rattrape seulement sa dernière échéance due ; la prochaine
+est strictement future. Une heure fixe retardée de plus de 600 s est sautée.
+Une occurrence déjà préparée conserve sa grâce initiale 600 s, sans prolongation.
+Une CLI unitaire expirée ne crée aucun rattrapage. Halt-delegations, même avec
+cancel-active, vise les délégations et n’annule pas les programmations.
+
+Le fuseau du daemon est annoncé par list. Heure inexistante : sautée ; heure
+double, DST ou autre changement d’offset : premier instant UTC correspondant,
+une seule occurrence par date civile. Domaine supporté : offsets en minutes
+entières entre −24h et +24h ; sinon calendar_unavailable, aucune approximation.
+Un changement de fuseau observé recalcule les échéances futures non gelées,
+sans modifier les occurrences/canons préparés ou effacer leur date précédente.
+
+Agent : aucun modèle hors ligne n’est lancé. Route, DND, capacité, pause et
+circuit-breaker existant sont revérifiés au départ ; le propriétaire est son
+expéditeur logique (défaut 8 échanges/180s par couple, sans quota B supplémentaire).
+La notificationSystem attribue « Réveil programmé par <propriétaire attesté> »
+puis le label entier. Le label est une donnée d’agent, jamais une autorité.
+Prepared/deferred ne prouve pas une réception. Après départ099, ACK corrélé ou
+outcome_unknown ; unknown est terminal pour cette occurrence, sans renvoi.
+
+Fil : contribution attribuée au membre propriétaire, avec label entier et
+préfixe court. Son UUID102 est gelé avant réservation099 éventuelle. Le commit
+de la contribution et des intentions102 prouve la remise au fil, pas sa lecture.
+Ses alertes partagées conservent les règles102 ; elles n’expirent pas à 600s.
+Le reçu099 de commande CLI-fil n’est pas une remise socket vers un agent.
+
+### Relire les faits manqués
+
+`bridget_events` avec `action:"missed"` est Reads. Paramètres facultatifs :
+`limit` et `after_seq` (séquence de fait, pas UUID ou horodatage). Owner implicite
+issu de l’identité ; aucun owner libre. Pagination bornée, null explicite
+refusé. Lire n’efface aucun fait et n’avance pas le seuil d’accusé de réception.
+
+Conservation :8192 faits globaux, pending compris,64 par abonnement,7 jours.
+Chaque fait structuré et chaque résumé font 16384 octets au plus. Un fait trop
+gros devient une lacune datée et un compteur, sans corps ni troncature. La
+provenance survit à once ; sa consommation et la sauvegarde du fait/gap sont
+transactionnelles. Le worker existant garde son budget 1s et une deadline
+durable observed_at+5s non renouvelée. Écriture incertaine reste write_unknown,
+jamais une preuve que rien n’a été écrit. Journal_only et throttle volontaires
+ne sont pas des pertes.
+
+Les métadonnées sont bornées à 8192 propriétaires et une ligne globale fixe.
+Les propriétaires avec faits ou résumé non terminal restent protégés. Si tous
+sont protégés, une nouvelle attribution crée une lacune globale datée, aucune
+8193e ligne. La lacune globale ne contient aucun UUID ni corps d’un autre
+propriétaire. TTL/évictions ne reconstituent pas une histoire perdue.
+
+Register confirmé et DNDlevé du même retour font un épisode, pas deux résumés.
+Le gel attend tous les pending_write du propriétaire soldés à leur deadline 5s.
+Puis il fige génération, canon, UUID, issued_at et cutoff. Le résumé est un
+agrégat de compteurs/types/périodes/lacunes, jamais la concaténation8192 faits.
+Seul ACK099 validé et corrélé avance les seuils gelés ; ni missed en lecture,
+ni unknown. Un résumé préparé expire après 600s depuis son gel. Unknown terminal
+n’est pas renvoyé ; une nouvelle génération attend un nouveau retour réel,
+avec l’incertitude précédente annoncée. Un ACK ancien ne touche pas une
+identité recréée. Un fait que le daemon n’a jamais observé n’est pas inventé.
+
 ## Espace de travail — contrat 154
 
 Ce contrat exige un catalogue et des processus chargés qui annoncent

@@ -251,6 +251,7 @@ fn run_with_args(args: Vec<String>) {
         "journal" => cmd_journal(&args[2..]),
         "events" => cmd_events(&args[2..]),
         "thread" => cmd_thread(&args[2..]),
+        "wake" => cmd_wake(&args[2..]),
         "handoff" => cmd_handoff(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
@@ -681,6 +682,7 @@ fn print_usage() {
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            journal <UUID>         Extrait [--tail N | --from-seq N] [--to UUID] [--reply]\n  \
            events <OP>            types | sub EVENEMENT [--agent UUID] [--file MOTIF] [--once] [--ttl S] | list | unsub ID\n  \
+           wake <CIBLE>           Réveil local [--label T] [--id K] ; list [--all] ; cancel UUID\n  \
            thread <OP>            Fils partagés : create | add-members | list | show | post | read | ack | history | close (thread --help)\n  \
            handoff <OP>           Dossier de passation : preview | send, objet JSON sur stdin (--json-stdin [--json])\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
@@ -945,6 +947,131 @@ Après lecture complète et ack, refaire le même read sur le même fil jusqu'à
 --from-seq et --to-seq sont réservés à history ; history ne fait pas avancer le repère de lecture.\n\
 --id est une clé de rejeu à préparer avant l'appel (uuidgen) et à réutiliser à l'identique après une coupure.\n\
 Sorties JSON ; code de sortie 0 succès, 2 validation ou refus, 1 panne technique.";
+
+/// Grammaire CLI158B fermée ; validation avant tout socket ou contrôle TTY.
+fn parse_wake_args(args: &[String]) -> Result<bridget_transport::protocol::WakeAction, String> {
+    use bridget_transport::protocol::WakeAction;
+    let usage = "wake : <agent|fil> [--label T] [--id K] | list [--all] | cancel <UUID>";
+    match args.first().map(String::as_str) {
+        Some("list") if args.len() == 1 => return Ok(WakeAction::List {}),
+        Some("list") if args.len() == 2 && args[1] == "--all" => {
+            return Ok(WakeAction::AdminList {});
+        }
+        Some("cancel") if args.len() == 2 => {
+            let id = crate::threads::require_uuid(&args[1], "schedule_id")
+                .map_err(|_| "wake cancel : UUID invalide".to_string())?;
+            return Ok(WakeAction::AdminCancel { schedule_id: id });
+        }
+        Some("list" | "cancel") | None => return Err(usage.into()),
+        _ => {}
+    }
+    let target = args[0].clone();
+    if target.is_empty()
+        || target.starts_with('-')
+        || target.len() > 256
+        || target.chars().any(char::is_control)
+    {
+        return Err("wake : cible invalide".into());
+    }
+    let mut label = None;
+    let mut id = None;
+    let mut index = 1;
+    while index < args.len() {
+        let option = args[index].as_str();
+        index += 1;
+        let value = args.get(index).ok_or_else(|| usage.to_string())?;
+        match option {
+            "--label" if label.is_none() && value.len() <= 2048 => label = Some(value.clone()),
+            "--id"
+                if id.is_none()
+                    && !value.is_empty()
+                    && value.len() <= 256
+                    && !value.chars().any(char::is_control) =>
+            {
+                id = Some(value.clone())
+            }
+            _ => return Err(unknown_argument("wake", option)),
+        }
+        index += 1;
+    }
+    Ok(WakeAction::CliOnce {
+        target,
+        label,
+        id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+    })
+}
+
+fn cmd_wake(args: &[String]) {
+    use bridget_transport::protocol::{WAKE_CONTRACT_VERSION, WakeAction, WakeRequest};
+    let action = parse_wake_args(args).unwrap_or_else(|error| exit_argument_error(&error));
+    if matches!(&action, WakeAction::AdminCancel { .. })
+        && !require_interactive_terminal("wake cancel")
+    {
+        std::process::exit(2);
+    }
+    let request = WakeRequest {
+        version: WAKE_CONTRACT_VERSION,
+        request: action,
+    };
+    let result = if matches!(
+        &request.request,
+        WakeAction::AdminList {} | WakeAction::AdminCancel { .. }
+    ) {
+        match send_control_request(WrapperToDaemon::WakeRequest { request }) {
+            Ok(DaemonToWrapper::WakeResult { result })
+                if result.version == WAKE_CONTRACT_VERSION =>
+            {
+                Ok(result)
+            }
+            Ok(other) => Err(format!("wake : réponse inattendue : {other:?}")),
+            Err(error) => Err(error),
+        }
+    } else {
+        let identity = match crate::mcp_identity::resolve_current_identity() {
+            Ok(identity) => Some(identity),
+            Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly) => {
+                eprintln!("wake : un sous-agent interne doit utiliser la façade MCP");
+                std::process::exit(2);
+            }
+            Err(error)
+                if matches!(&request.request, WakeAction::List {})
+                    || std::env::var_os("BRIDGET_AGENT_ID_FILE").is_some()
+                    || std::env::var_os("BRIDGET_AGENT_INSTANCE_ID").is_some() =>
+            {
+                eprintln!("wake : {} : {}", error.code(), error.remediation());
+                std::process::exit(2);
+            }
+            Err(crate::mcp_identity::IdentityError::IdentityNotFound) => None,
+            Err(error) => {
+                eprintln!("wake : {} : {}", error.code(), error.remediation());
+                std::process::exit(2);
+            }
+        };
+        crate::communication::client::wake_request(
+            identity
+                .as_ref()
+                .map(|identity| (identity.name.as_str(), identity.instance_id.as_str())),
+            &socket_path(),
+            request,
+        )
+        .map_err(|error| error.to_string())
+    };
+    match result {
+        Ok(result) => {
+            let status = result.result["status"].as_str();
+            println!("{}", result.result);
+            match status {
+                Some("refused") => std::process::exit(2),
+                Some("error") => std::process::exit(1),
+                _ => {}
+            }
+        }
+        Err(error) => {
+            eprintln!("bridget wake : {error}");
+            std::process::exit(1);
+        }
+    }
+}
 
 /// Session 102 : famille `bridget thread`, même contrat que l'outil MCP.
 fn cmd_thread(args: &[String]) {
@@ -6103,9 +6230,14 @@ fn parse_delegation_control(args: &[String]) -> Result<(WrapperToDaemon, bool), 
             }
             let task_id = crate::threads::require_uuid(&args[2], "task_id")
                 .map_err(|_| "control delegations cancel : UUID invalide".to_string())?;
-            Ok((WrapperToDaemon::DelegationCancel {
-                version: 1, task_id, request_id: uuid::Uuid::new_v4().to_string(),
-            }, false))
+            Ok((
+                WrapperToDaemon::DelegationCancel {
+                    version: 1,
+                    task_id,
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                },
+                false,
+            ))
         }
         Some("delegations") => {
             let mut state = "active".to_string();
@@ -6143,7 +6275,14 @@ fn parse_delegation_control(args: &[String]) -> Result<(WrapperToDaemon, bool), 
                 }
                 index += 1;
             }
-            Ok((WrapperToDaemon::DelegationOverviewRead { version: 1, state, limit }, json))
+            Ok((
+                WrapperToDaemon::DelegationOverviewRead {
+                    version: 1,
+                    state,
+                    limit,
+                },
+                json,
+            ))
         }
         Some("halt-delegations") => {
             let mut reason = None;
@@ -6153,29 +6292,50 @@ fn parse_delegation_control(args: &[String]) -> Result<(WrapperToDaemon, bool), 
                 match args[index].as_str() {
                     "--reason" if reason.is_none() => {
                         index += 1;
-                        reason = Some(args.get(index).filter(|value| !value.is_empty() && !value.starts_with("--"))
-                            .ok_or_else(|| usage.to_string())?.clone());
+                        reason = Some(
+                            args.get(index)
+                                .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                                .ok_or_else(|| usage.to_string())?
+                                .clone(),
+                        );
                     }
                     "--cancel-active" if !cancel_active => cancel_active = true,
                     _ => return Err(usage.into()),
                 }
                 index += 1;
             }
-            Ok((WrapperToDaemon::DelegationHaltSet {
-                version: 1, command_id: uuid::Uuid::new_v4().to_string(),
-                halted: true, reason, cancel_active,
-            }, false))
+            Ok((
+                WrapperToDaemon::DelegationHaltSet {
+                    version: 1,
+                    command_id: uuid::Uuid::new_v4().to_string(),
+                    halted: true,
+                    reason,
+                    cancel_active,
+                },
+                false,
+            ))
         }
-        Some("resume-delegations") if args.len() == 1 => Ok((WrapperToDaemon::DelegationHaltSet {
-            version: 1, command_id: uuid::Uuid::new_v4().to_string(),
-            halted: false, reason: None, cancel_active: false,
-        }, false)),
+        Some("resume-delegations") if args.len() == 1 => Ok((
+            WrapperToDaemon::DelegationHaltSet {
+                version: 1,
+                command_id: uuid::Uuid::new_v4().to_string(),
+                halted: false,
+                reason: None,
+                cancel_active: false,
+            },
+            false,
+        )),
         _ => Err(usage.into()),
     }
 }
 
 // FR011 : même ligne dans la liste, la réponse de mutation et control status.
-fn print_delegation_halt_line(halted: bool, since: Option<i64>, by: &Option<String>, reason: &Option<String>) {
+fn print_delegation_halt_line(
+    halted: bool,
+    since: Option<i64>,
+    by: &Option<String>,
+    reason: &Option<String>,
+) {
     if halted {
         println!(
             "délégations arrêtées · depuis {} · par {} · motif : {}",
@@ -6267,7 +6427,14 @@ fn cmd_control(args: &[String]) {
                 _ => None,
             };
             match send_control_request(request) {
-                Ok(DaemonToWrapper::DelegationOverview { halted, items, total_active, since, by, reason }) => {
+                Ok(DaemonToWrapper::DelegationOverview {
+                    halted,
+                    items,
+                    total_active,
+                    since,
+                    by,
+                    reason,
+                }) => {
                     if json_output {
                         println!(
                             "{}",
@@ -6296,7 +6463,15 @@ fn cmd_control(args: &[String]) {
                         }
                     }
                 }
-                Ok(DaemonToWrapper::DelegationHaltState { halted, since, by, reason, generation, cancelled, replayed }) => {
+                Ok(DaemonToWrapper::DelegationHaltState {
+                    halted,
+                    since,
+                    by,
+                    reason,
+                    generation,
+                    cancelled,
+                    replayed,
+                }) => {
                     print_delegation_halt_line(halted, since, &by, &reason);
                     if !halted {
                         println!("délégations reprises");
@@ -6311,9 +6486,14 @@ fn cmd_control(args: &[String]) {
                 }
                 Ok(DaemonToWrapper::DelegationControlRejected { reason }) => {
                     if command_id.is_some()
-                        && matches!(reason, bridget_transport::protocol::DelegationControlRefusal::StoreUnavailable)
+                        && matches!(
+                            reason,
+                            bridget_transport::protocol::DelegationControlRefusal::StoreUnavailable
+                        )
                     {
-                        eprintln!("contrôle indisponible : l’état du contrôle des délégations a pu changer. Vérifiez avec bridget control delegations ; utilisez delegations cancel pour les tâches restantes si nécessaire.");
+                        eprintln!(
+                            "contrôle indisponible : l’état du contrôle des délégations a pu changer. Vérifiez avec bridget control delegations ; utilisez delegations cancel pour les tâches restantes si nécessaire."
+                        );
                     } else {
                         eprintln!("bridget control: refusé: {reason:?}");
                     }
@@ -10083,6 +10263,197 @@ mod guidance156_tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
+    #[test]
+    fn wake158b_cli_g7_formes_fermees_et_identifiant_retry() {
+        use bridget_transport::protocol::WakeAction;
+        if let Ok(args) = std::env::var("BRIDGET_GUIDANCE156_CLI_ARGS") {
+            let mut args = serde_json::from_str::<Vec<String>>(&args).unwrap();
+            if let Ok(receipt) = std::env::var("BRIDGET_GUIDANCE156_CLI_REAL_RECEIPT") {
+                // Daemon privé existant dans l'enfant uniquement : exit ferme ses threads.
+                let (socket, db) = super::idempotency_projection_tests::start_real_daemon();
+                let identity = super::idempotency_projection_tests::caller_identity();
+                let mut owner = super::idempotency_projection_tests::owner_connection(&socket);
+                // Réemploi cli_register : deuxième membre102 réellement inscrit, sans fournisseur.
+                let peer_id = "15800000-0000-4000-8000-000000000017";
+                let mut peer = DaemonConnection::connect(&socket).unwrap();
+                let mut registration = cli_register("fixture");
+                if let WrapperToDaemon::Register {
+                    agent_id,
+                    agent_type,
+                    instance_id,
+                    ..
+                } = &mut registration
+                {
+                    *agent_id = peer_id.into();
+                    *agent_type = "fixture".into();
+                    *instance_id = Some("test-cli-peer158b".into());
+                }
+                assert!(matches!(
+                    peer.exchange(&registration).unwrap(),
+                    DaemonToWrapper::Registered {
+                        credential: Some(_),
+                        ..
+                    }
+                ));
+                let request = serde_json::from_value(serde_json::json!({"version":1,"request":{
+                    "action":"create","title":"CLI fil headless158B","members":[peer_id],"operation_id":uuid::Uuid::new_v4().to_string()
+                }})).unwrap();
+                let DaemonToWrapper::ThreadResult { result } = owner
+                    .exchange(&WrapperToDaemon::ThreadRequest { request })
+                    .unwrap()
+                else {
+                    panic!("création102 réelle attendue");
+                };
+                assert_eq!(result.result["status"], "created", "{}", result.result);
+                let thread_id = result.result["thread_id"].as_str().unwrap();
+                let daemon_root = socket.parent().unwrap();
+                let name_file = daemon_root.join("agent-name158b");
+                bridget_transport::fsutil::write_private_file_atomic(
+                    &name_file,
+                    identity.name.as_bytes(),
+                )
+                .unwrap();
+                let id = args.windows(2).find(|w| w[0] == "--id").unwrap()[1].clone();
+                args[0] = thread_id.to_owned();
+                unsafe {
+                    std::env::set_var("BRIDGET_HOME", daemon_root);
+                    std::env::set_var("BRIDGET_SOCKET", &socket);
+                    if id != "missing-context158b" {
+                        std::env::set_var("BRIDGET_AGENT_ID_FILE", &name_file);
+                        std::env::set_var(
+                            "BRIDGET_AGENT_INSTANCE_ID",
+                            if id == "invalid-context158b" {
+                                "autre-instance158b"
+                            } else {
+                                &identity.instance_id
+                            },
+                        );
+                    }
+                }
+                bridget_transport::fsutil::write_private_file_atomic(Path::new(&receipt), serde_json::to_vec(&serde_json::json!({
+                    "db":db,"thread_id":thread_id,"owner":identity.name,"instance":identity.instance_id,"id":id
+                })).unwrap().as_slice()).unwrap();
+                cmd_wake(&args);
+                // Maintenir la primaire et sa credential réelles jusqu'au retour CLI.
+                drop(peer);
+                drop(owner);
+            } else {
+                cmd_wake(&args);
+            }
+            return;
+        }
+        let explicit =
+            ["agent-connu", "--label", "libellé", "--id", "retry158b"].map(str::to_string);
+        assert!(
+            matches!(parse_wake_args(&explicit).unwrap(), WakeAction::CliOnce {
+            target, label:Some(label), id,
+        } if target == "agent-connu" && label == "libellé" && id == "retry158b")
+        );
+        let fresh = parse_wake_args(&["agent-connu".into()]).unwrap();
+        let WakeAction::CliOnce { target, label, id } = fresh else {
+            panic!("déclenchement CLI unitaire attendu");
+        };
+        assert_eq!(target, "agent-connu");
+        assert!(label.is_none());
+        assert!(
+            uuid::Uuid::parse_str(&id).is_ok(),
+            "--id omis crée une clé unique réelle"
+        );
+        assert!(
+            matches!(parse_wake_args(&["agent-connu".into(), "--label".into(), "".into()]).unwrap(),
+            WakeAction::CliOnce { label:Some(label), .. } if label.is_empty())
+        );
+        for (flag, too_large) in [("--label", "é".repeat(1025)), ("--id", "x".repeat(257))] {
+            assert!(parse_wake_args(&["agent-connu".into(), flag.into(), too_large]).is_err());
+        }
+        assert!(matches!(
+            parse_wake_args(&["list".into()]).unwrap(),
+            WakeAction::List {}
+        ));
+        assert!(matches!(
+            parse_wake_args(&["list".into(), "--all".into()]).unwrap(),
+            WakeAction::AdminList {}
+        ));
+        let schedule_id = "15800000-0000-4000-8000-000000000007";
+        assert!(
+            matches!(parse_wake_args(&["cancel".into(), schedule_id.into()]).unwrap(),
+            WakeAction::AdminCancel { schedule_id:id } if id == schedule_id)
+        );
+        for invalid in [
+            vec![],
+            vec!["--label", "sans-cible"],
+            vec!["agent-connu", "--label"],
+            vec!["agent-connu", "--id"],
+            vec!["agent-connu", "--from", "humain"],
+            vec!["agent-connu", "--owner", "autre"],
+            vec!["agent-connu", "--issued-at", "0"],
+            vec!["list", "--inconnu"],
+            vec!["cancel"],
+            vec!["cancel", "pas-un-uuid"],
+            vec!["agent-connu", "--id", "a", "--id", "b"],
+        ] {
+            let args = invalid.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(
+                parse_wake_args(&args).is_err(),
+                "forme CLI refusée avant connexion : {args:?}"
+            );
+        }
+        // Même commande sans TTY : le socket observe la vraie négociation et
+        // l'objet fermé. Le faux serveur ne prouve ni quotas ni écritures SQL.
+        for (id, exit_code) in [
+            ("retry158b", 0),
+            ("refused158b", 2),
+            ("error158b", 1),
+            ("transport158b", 1),
+        ] {
+            let (output, wire) = guidance156_cli_run(
+                "wake158b_cli_g7_formes_fermees_et_identifiant_retry",
+                &["agent-connu", "--label", "libellé", "--id", id],
+            );
+            assert_eq!(output.status.code(), Some(exit_code), "{id}: {output:?}");
+            let wire: serde_json::Value =
+                serde_json::from_str(&wire.expect("WakeRequest réellement reçu")).unwrap();
+            assert_eq!(
+                wire,
+                serde_json::json!({"type":"WakeRequest","request":{"version":1,"request":{
+                    "action":"cli_once","target":"agent-connu","label":"libellé","id":id
+                }}}),
+                "aucune autorité client ajoutée"
+            );
+        }
+        for (id, exit_code) in [
+            ("attested-thread158b", 0),
+            ("missing-context158b", 2),
+            ("invalid-context158b", 1),
+        ] {
+            let (output, proof) = guidance156_cli_run(
+                "wake158b_cli_g7_formes_fermees_et_identifiant_retry",
+                &["fil-résolu-dans-enfant", "--label", "headless", "--id", id],
+            );
+            assert_eq!(output.status.code(), Some(exit_code), "{id}: {output:?}");
+            let proof: serde_json::Value =
+                serde_json::from_str(&proof.expect("preuve SQL privée de la CLI réelle")).unwrap();
+            assert_eq!(proof["id"], id);
+            assert_eq!(
+                proof["reservations"],
+                if id == "attested-thread158b" { 1 } else { 0 }
+            );
+            if id == "attested-thread158b" {
+                assert_eq!(proof["canonical_owner"], proof["owner"]);
+                assert_eq!(
+                    proof["canonical_target"],
+                    serde_json::json!({"kind":"thread","id":proof["thread_id"]})
+                );
+                assert!(String::from_utf8_lossy(&output.stdout).contains("prepared"));
+            } else {
+                assert_eq!(
+                    proof["posts"], 0,
+                    "contexte absent/invalide : aucun post102"
+                );
+            }
+        }
+    }
+
     // Recette cli_arguments_integration_test::run_cli_as/capture_one_message,
     // adaptée au testlib par current_exe (core_089_isolation_test).
     // Trois usages : cmd_send sort du processus, aucun parseur factice requis.
@@ -10104,12 +10475,26 @@ mod guidance156_tests {
             test,
             "guidance156_cli_queue_parse" | "control158_delegations_cli_parse"
         );
+        let wake_cli = test == "wake158b_cli_g7_formes_fermees_et_identifiant_retry";
+        let wake_id = extra
+            .windows(2)
+            .find(|pair| pair[0] == "--id")
+            .map(|pair| pair[1].to_string())
+            .unwrap_or_default();
+        let real_wake_cli = wake_cli
+            && matches!(
+                wake_id.as_str(),
+                "attested-thread158b" | "missing-context158b" | "invalid-context158b"
+            );
+        let queue_parse_only = queue_parse_only || real_wake_cli;
+        let receipt = root.join("real-cli-receipt.json");
         let listener = UnixListener::bind(&socket).unwrap();
         listener.set_nonblocking(true).unwrap();
         if queue_parse_only {
             std::fs::remove_file(&socket).unwrap();
         }
         let (stop, stopped) = mpsc::channel();
+        let server_wake_id = wake_id.clone();
         let server = std::thread::spawn(move || {
             if queue_parse_only {
                 return None;
@@ -10152,9 +10537,18 @@ mod guidance156_tests {
             )
             .unwrap();
             writer.flush().unwrap();
-            assert!(
-                matches!(read_control_message_for_guidance156(&mut reader), WrapperToDaemon::ClientHello { capabilities, .. } if capabilities == vec![ClientCapability::SendIdempotent])
-            );
+            let hello = read_control_message_for_guidance156(&mut reader);
+            if wake_cli {
+                assert!(
+                    matches!(hello, WrapperToDaemon::ClientHello { contract_version, issuer_scope, capabilities }
+                    if contract_version == CLIENT_CONTRACT_VERSION && !issuer_scope.is_empty() && capabilities.is_empty())
+                );
+            } else {
+                assert!(
+                    matches!(hello, WrapperToDaemon::ClientHello { capabilities, .. }
+                    if capabilities == vec![ClientCapability::SendIdempotent])
+                );
+            }
             writeln!(
                 writer,
                 "{}",
@@ -10163,13 +10557,46 @@ mod guidance156_tests {
                     build_id: "test-build".into(),
                     horizon_secs: 60,
                     issued_at_tolerance_secs: 5,
-                    capabilities: vec![ClientCapability::SendIdempotent],
+                    capabilities: if wake_cli {
+                        Vec::new()
+                    } else {
+                        vec![ClientCapability::SendIdempotent]
+                    },
                 })
                 .unwrap()
             )
             .unwrap();
             writer.flush().unwrap();
             let sent = read_control_message_for_guidance156(&mut reader);
+            if wake_cli {
+                assert!(
+                    matches!(&sent, WrapperToDaemon::WakeRequest { request } if request.version == 1)
+                );
+                let wire = encode(&sent).unwrap();
+                // EOF après réception est une erreur technique, jamais un succès.
+                if server_wake_id != "transport158b" {
+                    let result = match server_wake_id.as_str() {
+                        "refused158b" => {
+                            serde_json::json!({"status":"refused","code":"rate_limited"})
+                        }
+                        "error158b" => {
+                            serde_json::json!({"status":"error","code":"storage_unavailable"})
+                        }
+                        _ => serde_json::json!({"status":"accepted","id":server_wake_id}),
+                    };
+                    writeln!(
+                        writer,
+                        "{}",
+                        encode(&DaemonToWrapper::WakeResult {
+                            result: bridget_transport::protocol::WakeResult { version: 1, result },
+                        })
+                        .unwrap()
+                    )
+                    .unwrap();
+                    writer.flush().unwrap();
+                }
+                return Some(wire);
+            }
             assert!(matches!(&sent, WrapperToDaemon::SendIdempotent { .. }));
             let wire = encode(&sent).unwrap();
             writeln!(
@@ -10187,7 +10614,7 @@ mod guidance156_tests {
             writer.flush().unwrap();
             Some(wire)
         });
-        let mut args: Vec<String> = if queue_parse_only {
+        let mut args: Vec<String> = if queue_parse_only || wake_cli {
             Vec::new()
         } else {
             [
@@ -10207,16 +10634,20 @@ mod guidance156_tests {
             .collect()
         };
         args.extend(extra.iter().map(|argument| argument.to_string()));
-        if !queue_parse_only {
+        if !queue_parse_only && !wake_cli {
             args.extend(["--".into(), "octets $VAR intacts".into()]);
         }
-        let output = Command::new(std::env::current_exe().unwrap())
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child.env_clear();
+        if real_wake_cli {
+            child.env("BRIDGET_GUIDANCE156_CLI_REAL_RECEIPT", &receipt);
+        }
+        let output = child
             .args([
                 "--exact",
                 &format!("cli::guidance156_tests::{test}"),
                 "--nocapture",
             ])
-            .env_clear()
             .env("HOME", root.join("home"))
             .env("TMPDIR", root.join("tmp"))
             .env("BRIDGET_HOME", root.join("ns"))
@@ -10230,7 +10661,52 @@ mod guidance156_tests {
             .output()
             .unwrap();
         let _ = stop.send(());
-        let wire = server.join().unwrap();
+        let mut wire = server.join().unwrap();
+        if real_wake_cli {
+            let mut proof: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+            let db = PathBuf::from(proof["db"].as_str().unwrap());
+            let connection = rusqlite::Connection::open_with_flags(
+                &db,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            let reservations:i64 = connection.query_row(
+                "SELECT count(*) FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind='send' AND idempotency_key=?2",
+                rusqlite::params![crate::wake_schedules::CLI_WAKE_SCOPE, wake_id], |r|r.get(0)).unwrap();
+            let posts: i64 = connection
+                .query_row(
+                    "SELECT count(*) FROM discussion_entries WHERE thread_id=?1",
+                    [proof["thread_id"].as_str().unwrap()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            proof["reservations"] = reservations.into();
+            proof["posts"] = posts.into();
+            if reservations == 1 {
+                let bytes:Vec<u8> = connection.query_row("SELECT canonical_bytes FROM idempotency_records WHERE issuer_scope=?1 AND idempotency_key=?2",
+                    rusqlite::params![crate::wake_schedules::CLI_WAKE_SCOPE, wake_id], |r|r.get(0)).unwrap();
+                let canon: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                proof["canonical_owner"] = canon["owner"].clone();
+                proof["canonical_target"] = canon["target"].clone();
+                assert!(
+                    canon["thread_operation_id"]
+                        .as_str()
+                        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                );
+            }
+            drop(connection);
+            let daemon_root = db.parent().unwrap();
+            assert!(
+                daemon_root
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("bgcanon-")
+            );
+            std::fs::remove_dir_all(daemon_root).unwrap();
+            wire = Some(proof.to_string());
+        }
         std::fs::remove_dir_all(root).unwrap();
         (output, wire)
     }
@@ -10359,9 +10835,24 @@ mod guidance156_tests {
             return;
         }
         let defaults = vec!["delegations".to_string()];
-        assert!(matches!(parse_delegation_control(&defaults), Ok((WrapperToDaemon::DelegationOverviewRead { version:1, ref state, limit:50 }, false)) if state == "active"));
-        let list: Vec<String> = ["delegations", "list", "--state", "all", "--limit", "100", "--json"].into_iter().map(str::to_string).collect();
-        assert!(matches!(parse_delegation_control(&list), Ok((WrapperToDaemon::DelegationOverviewRead { version:1, ref state, limit:100 }, true)) if state == "all"));
+        assert!(
+            matches!(parse_delegation_control(&defaults), Ok((WrapperToDaemon::DelegationOverviewRead { version:1, ref state, limit:50 }, false)) if state == "active")
+        );
+        let list: Vec<String> = [
+            "delegations",
+            "list",
+            "--state",
+            "all",
+            "--limit",
+            "100",
+            "--json",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        assert!(
+            matches!(parse_delegation_control(&list), Ok((WrapperToDaemon::DelegationOverviewRead { version:1, ref state, limit:100 }, true)) if state == "all")
+        );
         for args in [
             &["control", "delegations", "--limit", "0"][..],
             &["control", "delegations", "--limit", "101"][..],
@@ -10382,8 +10873,14 @@ mod guidance156_tests {
     #[test]
     fn control158_halt_aucun_outil_mcp() {
         let tools = crate::mcp::tools();
-        let controls: Vec<&str> = tools.iter().filter_map(|tool| tool["name"].as_str())
-            .filter(|name| name.starts_with("bridget_control") || name.contains("halt_delegations") || name.contains("resume_delegations"))
+        let controls: Vec<&str> = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .filter(|name| {
+                name.starts_with("bridget_control")
+                    || name.contains("halt_delegations")
+                    || name.contains("resume_delegations")
+            })
             .collect();
         assert_eq!(
             controls,

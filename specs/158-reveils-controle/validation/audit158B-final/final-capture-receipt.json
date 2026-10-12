@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-12T13:07:30.899530+00:00",
+  "hashes_stable_before_after": true,
+  "base": "9a94334a109b4d5f939a8ebea464530abc28f4d6",
+  "daemon_sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+  "tasks_sha256": "fe186b77e076ed5a7cf085b0e34b37835dea6d4942c6e78b7524019859268e0a",
+  "spec_sha256": "9b9d3c8c76fd0b9e0f4811f8ea0cf5634a6bff0c2f7b2c184967ae8b0cff03b4",
+  "files": 39,
+  "rust": 18,
+  "hunks": 405,
+  "outputs": {
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/source-hashes.json": "8a7f68915ec73f26251cd85486495d0d58537d651100768b56145cd06061288f",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/scope-files.json": "3dcd02f384d0518b2dd40941fb9c3b13d7cc077e70321ccaeb5ab4c05ac75254",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/manifest.json": "64dbac58d214840da957ae68d1247fb66a64f5728b815520b2e4dc590a9bbe77",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/delta158B-vs158A.patch": "afcef081ef999bbb5e2a9350a051488c0b96ca2c13e5e6380b1dd3914266c911"
+  },
+  "previous_capture": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-pre-doc-close-42a95",
+  "canonical_diff_for_ROOT_copy": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/delta158B-vs158A.patch",
+  "target_ROOT_copy": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/diff-158B.patch"
+}

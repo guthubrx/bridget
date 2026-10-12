@@ -1,0 +1,86 @@
+{
+  "at": "2026-10-12T13:13:44.005932+00:00",
+  "grade": "A",
+  "numeric": 99.95,
+  "coverage_percent": 7.9,
+  "hunks_read": 32,
+  "hunks_total": 405,
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1
+  },
+  "validator_rc": 0,
+  "outputs": [
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-1/aggregated-findings.json",
+      "sha256": "1a1135f3be3fe6ffe3faca4273a0b6f9fae7fab1905e7b9d7ab22b19dbd85387"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/aggregated-findings.json",
+      "sha256": "6ac8d0513ea10f98fe2e72dfcd0a846a1f129cb255675ec1d64f72fa7b7f2154"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/grade.json",
+      "sha256": "e28aeba5cffb527b214c638b9b3becf46bf4dbd31b6e9ae4e02fbcc21ae694ed"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/scoring.md",
+      "sha256": "83b9b8a876155358ea611a35388d0b18d5334b5752686b2d042e8c32f4b7e403"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/fix-report.md",
+      "sha256": "c8536b7c599ec4bed00062ee065868f6b7385c717ebf57047f9c467def8009ea"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycles.log",
+      "sha256": "6db098528f3d64f532317d40dd09185630110842778f39438a3e1a51d65ddee4"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/read_manifest-aggregation.json",
+      "sha256": "b0ba02b13c839c4053fe8721d50a97bc8e9eb6a534d4e4c87db4da378a84c150"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/aggregation-receipt.json",
+      "sha256": "19b03d7d1d20ec7ed71864bc22f002aed54486f3c886152ef0f04b2f4aca211c"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/validation-receipt.json",
+      "sha256": "99eab3d2bf35f08373e2e4924328c4d5236652485e38c7621449b4db46552f9c"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/final-capture-receipt.json",
+      "sha256": "2a34ebf851305e3d15c23acaf236bd16c9f889296d1554a3a52298ffdae2e2d9"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/aggregate-audit158B.py",
+      "sha256": "5fbd132fc95df68c4fd1a57af68f0a7e95cbb0eee09700f8e4a21177469a8b8d"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/source-hashes.json",
+      "sha256": "8a7f68915ec73f26251cd85486495d0d58537d651100768b56145cd06061288f"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/scope-files.json",
+      "sha256": "3dcd02f384d0518b2dd40941fb9c3b13d7cc077e70321ccaeb5ab4c05ac75254"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/manifest.json",
+      "sha256": "64dbac58d214840da957ae68d1247fb66a64f5728b815520b2e4dc590a9bbe77"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/delta158B-vs158A.patch",
+      "sha256": "afcef081ef999bbb5e2a9350a051488c0b96ca2c13e5e6380b1dd3914266c911"
+    }
+  ],
+  "canonical_diff_for_ROOT_copy": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/delta158B-vs158A.patch",
+  "canonical_diff_sha256": "afcef081ef999bbb5e2a9350a051488c0b96ca2c13e5e6380b1dd3914266c911",
+  "ROOT_target": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/diff-158B.patch",
+  "copy_command": [
+    "cp",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final/delta158B-vs158A.patch",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/diff-158B.patch"
+  ],
+  "WT_mutations": false
+}

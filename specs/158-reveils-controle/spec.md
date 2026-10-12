@@ -5,7 +5,7 @@
 
 Spec: 158-reveils-controle
 Titre: Vue globale, arrêt global et portées MCP (158a) ; réveils et rejeu (158b, spec seule)
-Statut: Spécifiée (révisée après contre-revue Codex du 2026-10-11)
+Statut: Implémentée pour 158A et 158B (US5–US7), livraison B en cours ; US8 reportée
 Priorité: P1 (158a), P2 (158b)
 Tâches: 158a générées (22) ; 158b à générer après livraison de 158a
 Tests: définis en tasks.md (filtres `control158_*`, `mcp158_*`)
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-158-reveils-controle` (worktree isolé158 ; ancien worktree150 historique).
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implémentée pour les lots A et B ; livraison B en cours
 **Priority**: P1
 **Dependencies**: SPEC-150 à 157 ; ADR 027, ADR 011
 
@@ -179,7 +179,7 @@ Date : 2026-10-12. Branche : session-158-reveils-controle. Racine : /Users/moi/N
 
 # Partie 158b - Réveils, déclencheur local, rejeu, secret (spec seule)
 
-Pas de plan détaillé ni de tâches. 158b sera planifiée après 158a.
+Planification158B autorisée après livraison158A. Les artefacts B prolongent la session158. Les 22 tâches A restent conservées ; les tâches B commencent à T101 après AuditExisting PASS et contre-revue du plan. Analyze compare ensuite Spec/Plan/Tasks avant implémentation.
 
 ## Besoin (158b)
 
@@ -196,21 +196,20 @@ comptée (`daemon.rs:1470-1495`, `observation_lost`).
 
 Un agent programme un réveil récurrent (`interval`, minimum 60 s) ou à heure
 fixe (`HH:MM`, jours de semaine), lié à lui-même, à un autre agent ou à un fil.
-À l'échéance, la cible reçoit un message système avec le libellé. Une heure
+À l'échéance, un agent reçoit une notificationSystem produite par le daemon. Un fil reçoit une contribution attribuée au propriétaire attesté membre, kindNone, avec le libellé entier2048 octets et un préfixe court. Son UUID d'opération102 est gelé et persisté avec l'occurrence. Une remise vers fil signifie contribution+intentions102 committées ; ses alertes partagées ne sont pas expirées après 10minutes. Une heure
 fixe manquée de plus de 10 minutes est ignorée et reprogrammée. Un intervalle en
 retard rattrape une seule fois (règles de T3, `scheduledTasks/Schedule.ts`).
 
 ### US6 - Déclencheur externe local (P2)
 
 Un script (launchd, cron, ssh) tape `bridget wake <agent|fil> [--label T] [--id K]`
-par la socket Unix. Limite : 60 appels par minute. Déduplication par `--id`.
+par la socket Unix. Limite globale :60nouveauxIDsCLI unitaires par minute glissante, reçus099 durables, rejeu/collision avant comptage, timestamp fixé par le daemon et scopeinterneCLI stable. Les occurrences programmées et MCP ne consomment pas cequota. Déduplication par `--id`. Vers un fil, le contexte d'identitéauxiliaire existant doit être attesté membre/projet ; sinon refus avant réservation, sans auteurforgé.
 Aucun port réseau.
 
 ### US7 - Rejeu des faits manqués (P2)
 
 Quand une notification d'observation ne peut pas partir, le fait est gardé
-dans une table bornée. Au retour de l'abonné, un seul message résume les faits
-manqués. `bridget_events action=missed` les relit. Un fait que le daemon n'a
+dans une table bornée, avec provenance typée et owner conservé aprèsonce. Les échecs avantwrite et writeunknown sont distingués. Au retour Register confirmé ou DNDlevé, une génération unique de l'épisode résume seulement les nouveaux faits depuis le cutoff confirmé. Le canon/ID/issued_at/cutoff en attente est immuable ; ACK099 corrélé avance ce seuil, jamais read ni unknown. `bridget_events action=missed` les relit. Un fait que le daemon n'a
 jamais vu n'est pas reconstruit. La lacune est datée et annoncée.
 
 ### US8 - Demande de secret sans exposition (P3, reportée)
@@ -225,11 +224,11 @@ histoire reste spécifiée et non planifiée.
 
 - **FR-101** : table `wake_schedules` (propriétaire, cible, type, intervalle ou heure, libellé ≤ 2048 octets, prochaine échéance). Limites : 16 par propriétaire, 128 au total.
 - **FR-102** : un réveil est un effet autonome. Il passe par la décision commune d'admission de `referent_control.rs` (nouvelle variante `ScheduledWake`). Pendant la pause, il est différé, puis rattrapé selon US5.
-- **FR-103** : identifiant d'occurrence déterministe `wake:<schedule>:<échéance>`. Un redémarrage ne double pas un réveil remis.
-- **FR-104** : outil MCP `bridget_wake` avec portée dépendante de la cible. Lister et annuler ses propres réveils, ou programmer un réveil vers soi : `writes_own_state`. Programmer vers un autre agent ou un fil : `sends`, avec vérification des droits de projet (comme `bridget_send`) et de l'appartenance au fil AVANT l'admission. Un agent ne gère que ses réveils. L'humain peut tous les lister et les annuler.
+- **FR-103** : identifiant d'occurrence déterministe `wake:<schedule>:<échéance>`. ID,canon,issued_at,UUID102 éventuel et prochaineéchéance sont persistés avanteffet ; reprise sans régénération. Une seule occurrence en attente par programmation. Agentdirect : report≤600s avantdépart puis missed prouvé ; aprèsdépart, résultat099 ou outcome_unknown, pas fausseabsence. Pour fil : preuve commit102 et garanties102 ensuite. Pas promesse exactlyoncefournisseur illimitée.
+- **FR-104** : outil MCP `bridget_wake` avec portée dépendante de la cible. Lister et annuler ses propres réveils, ou programmer un réveil vers soi : `writes_own_state`. Ciblepropre self typée résolue au daemon ; base de bridget_wake=sends/readOnlyHintfalse. Programmer vers un autre agent ou un fil : `sends`, avec vérification des droits de projet (comme `bridget_send`) et de l'appartenance au fil AVANT l'admission. Un agent ne gère que ses réveils. L'humain peut tous les lister et les annuler.
 - **FR-105** : `bridget wake` (CLI) réveille seulement un agent ou un fil connu du registre.
-- **FR-106** : table `observation_missed` bornée (64 par abonné, 7 jours). Un résumé par retour d'abonné.
-- **FR-107** : toute lacune de couverture est annoncée avec ses dates, jamais comblée.
+- **FR-106** : observation_missed≤8192 faits globaux,64 par abonnement,TTL 7 jours. Métadonnéesowner séparées≤8192 owners,7jours après le dernier fait/gap, protégées tant que des faits ou un résumé non terminal restent, plus une ligne globale datée de taille fixe sansUUID/corpsalien. En saturation, retirer seulement un ancien propriétaire sans faits et sans résumé non terminal. Si les 8192 lignes sont protégées, enregistrer une lacune globale datée dans la même transaction, sans supprimer leurs faits ni créer une 8193e ligne. Un résumé des nouveaux faits par générationRegister/DND de l'épisode, cutoff avancé seulementACK099, canonpending immuable. Pas suppression àlecture. Provenance structurée jusqu'au résultat du worker existant, sans parsebody.
+- **FR-107** : toute lacune connue est annoncée avec ses dates, jamais reconstruite. AprèsTTL/éviction de métadonnées, la preuve reste agrégée au global ; pas histoireattribuable illimitée. journal_only/throttlevolontaire ne sont pas des pertes.
 
 ## Webhook HTTP : hors périmètre, justification
 
@@ -244,3 +243,26 @@ reçoit le webhook et appelle la commande locale. Bridget ne livre pas ce relais
 - Fuseau horaire des heures fixes : fuseau du daemon, annoncé.
 - Réveil d'un agent hors ligne : report borné, puis `missed`, jamais de relance de processus.
 - Occurrences manquées pendant une pause : règle de rattrapage de US5, pas reprise de mission (152).
+
+## Clarifications calendrier158B
+
+Intervalle≥60s : dernière échéance due, unique rattrapage, prochaine strictement future. Heure fixe : heure inexistante sautée, premier instantUTC d'une heure double, date civile précédente persistée. Changement TZ observé par fingerprint libc au tick/avant gel : futures échéances non gelées seulement, jamais canon/occurrenceancienne ou dateprécédente effacée. La résolution non-DST et les bornes de calendrier sont définies dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/contracts/wake-158B.md ; aucun crate supplémentaire. US8 reste reportée faute de consommateur.
+
+## Fermetures finales du contrat ROOT
+
+**Fuseau observé.** Le daemon relève le fingerprint de la zone effectivement rendue par libc (nom de zone et offset) au tick et avant le gel. Un changement observé recalcule seulement les échéances futures non gelées. FrozenWake et previous_calendar_date restent inchangés. Le résultat d'un calcul hors verrou porte son fingerprint ; le CAS refuse un résultat devenu périmé. Aucune promesse de zone figée ou de changement uniquement au restart. Les changements DST du fingerprint n'autorisent pas une seconde occurrence de la même date.
+
+**Retour du worker.** Le canal de résultat utilise try_send, borne64. Si le canal est plein, aucun résultat sans preuve n'est inventé : le pendingfact durable garde sa provenance et sa deadline initiale immuable. Le tick solde un pending dépassant cette deadline en write_unknown, même si l'écriture a pu réussir ; il ne le qualifie jamais de non-écrit. Aucun once recréé. Si Store ne peut pas écrire ce résultat, garder la ligne pending et l'annonce agrégée de panne disponible, puis réessayer à la maintenance ; jamais annoncer une sauvegarde réussie. Le compteur global existant reste une preuve aggregate limitée, pas un reçu durable par fait.
+
+**Cutoff.** Chaque fait porte un fact_seq SQLite AUTOINCREMENT durable et jamais réutilisé, en plus de son UUID de corrélation. Le cutoff du résumé capture ce fact_seq, plus owner_gap_version et global_gap_version séparés. Un fait arrivé après le gel au même observed_at reste au-delà du cutoff. ACK099 valide avance seulement les trois valeurs gelées ; aucune valeur plus récente n'est consommée. Pas triUUID ou horodatage en secondes seul pour ce seuil.
+
+**Création et annulation.** schedule ne prend aucun command_id et n'est pas idempotent à la création. Chaque admission crée un schedule_id UUID neuf côté daemon. Un retry aveugle peut créer un second schedule ; après réponse perdue, relire list au lieu de promettre une création unique. FR103 protège les occurrences du schedule déjà créé, pas cette création. cancel prend seulement ce schedule_id canonique ; sur la même programmation connue déjà annulée, retourne already_cancelled sans mutation ni nouvelle émission. UUID inconnu refuse. Pas second registre de commandes et aucun command_id administratif gratuit. Les --id CLI unitaires conservent séparément la déduplication099 du contrat.
+
+## Borne physique FR101
+
+Limites physiques :128 lignes au total et16 par propriétaire, y compris les programmations annulées. Une admission peut retirer, dans sa transaction, les plus anciennes lignes annulées sans occurrence en attente ou en vol : d'abord celles du propriétaire si sa borne est atteinte, puis celles de la borne globale. Si aucune ligne n'est retirable, schedule_limit. Les preuves099/102 restent intactes. Cancel rend already_cancelled pour une ligne connue ; après retrait borné, son UUID est inconnu et refuse. Aucun historique perpétuel d'annulation.
+
+
+## Clarifications de la revue158B R1
+
+Pendant la pause, aucune nouvelle occurrence n’est gelée. À la levée, un intervalle rattrape une seule dernière échéance ; une heure fixe retardée de plus de600s est sautée. Une occurrence déjà gelée garde sa grâce initiale600s et son canon. Un résultat inconnu est terminal sans prouver la réception ; il ne bloque pas les occurrences futures. Le libellé du réveilSystem est explicitement attribué au propriétaire attesté. Les autres transitions et bornes de reprise sont fixées dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/contracts/wake-158B.md. FR104 et le contrôle humain158A restent inchangés.

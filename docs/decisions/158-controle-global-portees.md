@@ -123,3 +123,82 @@ par cet ADR. Aucun succès global, fournisseur, modèle ou runtime158 prouvé ic
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/150-socle-delegation/spec.md:77
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/027-etat-de-controle-et-voie-humaine-attestee.md
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/011-approbation-exposee-puis-second-facteur.md
+
+## Complément 158B — réveils et faits manqués
+
+Date : 2026-10-12. Statut : **Accepté** pour la décision. Ce complément étend
+la portée normative indiquée en tête. Les décisions et le reçu 158A restent
+inchangés. Aucun code livré, test vert ou activation 158B n’est prouvé ici.
+US5–US7 et FR101–107 sont couverts. US8 reste reportée faute de consommateur.
+
+La décision R8 préparatoire est complétée par une greffe sur la boucle 1s,
+Store, worker et registres 099/102 existants. Les trois modules de domaine/SQL
+et tables wake_schedules, observation_missed, observation_missed_owners portent
+les responsabilités auditées. Aucun service, thread, dépendance, second writer,
+outbox universelle, quota RAM ou registre administratif supplémentaire.
+
+L’unique outil bridget_wake expose schedule/list/cancel. Missed est une action
+de bridget_events. Self et gestion propre sont WritesOwnState ; agent et fil
+sont Sends. Base wake Sends/hintfalse, missed Reads. Identité, propriétaire,
+projet et membre sont contrôlés aux puits. La CLI globale humaine réemploie
+ControlStateV1 et son acteur attesté ; mutation avec TTY, aucun admin MCP.
+La CLI unitaire headless n’est pas anonyme vers un fil et ne lance aucun modèle.
+La borne ADR011 du même compte reste.
+
+Schedule n’est pas idempotent à la création : réponse perdue→list. Limites
+physiques 16/owner et 128 global, annulées comprises ; retrait transactionnel des
+anciennes annulées sans pending/inflight seulement. Un UUID retiré refuse,
+sans prouver que l’ancien cancel a échoué. Quota CLI 60 nouveaux IDs/min sous
+TX099, replay/collision avant compte, horizon 7 jours depuis issued_at initial.
+UUID102 et canon sont gelés avant réserve 099.
+
+Pause interdit le gel d’une nouvelle occurrence. L’intervalle rattrape la
+dernière échéance due une fois, avec prochaine strictement future ; une heure
+fixe vieille de plus de 600s est sautée. Prepared conserve sa grâce 600s initiale.
+Fuseau observé du daemon ; domaine offsets en minutes entières±24h, premier
+UTC d’une heure double DST ou non-DST, heure inexistante sautée. La date civile
+précédente et les occurrences gelées survivent au changement TZ. Aucune garantie
+exactly-once fournisseur illimitée ni parité T3 mesurée.
+
+L’origine native Task/instance est gelée et revérifiée au gel/départ avec
+for_child et les preuves existantes. Fin connue : annulation des futures
+occurrences, prepared non parti soldé owner_unavailable. Absence ou erreur SQL
+ferme le départ, sans repli ni processus ou ronde ressuscités. La notification
+System attribue le propriétaire logique et conserve le label comme donnée.
+Circuit-breaker existant 8/180s par couple au départ, aucun nouveau quota B.
+
+Frontières distinctes : agent dispatching099 avant écriture, puis ACK099 ou
+unknown terminal sans renvoi ; fil commit contribution+intentions102 sous UUID
+gelé, pas lecture et pas expiration 600s des alertes partagées. Aucune transaction
+ne traverse plusieurs connexions ou I/O. La reprise conserve canon/ID/issued_at.
+
+Once est consommé avec le fait/gap dans une transaction. Fait structuré≤16 KiB,
+8192 globaux pending inclus,64 par abonnement,7 jours ; trop gros→gap daté sans
+copie du corps. Provenance typée avant once, jamais déduite du body. Worker
+unique : I/O 1s, deadline 5s non renouvelée, retour 64 ; unknown ne prouve pas
+une non-écriture. Journal_only/throttle ne deviennent pas des pertes.
+Métadonnées 8192 owners+1global fixe ; faits/pending non terminal protégés.
+8192 protégés→gap global, aucune 8193e ligne. Évictions/TTL conservent des périodes
+agrégées sans UUID ou corps étrangers ; pas une histoire attribuable illimitée.
+
+Un retour Register/DND est un épisode. Le gel attend tous ses pending_write
+soldés, puis fige UUID/canon/issued_at/génération/cutoffs. Résumé agrégé≤16 KiB,
+jamais concaténation de 8192 faits ; détails par missed. Seul ACK099 validé avance
+les seuils ; ni lecture ni unknown. Reprise par send_delivery_phase car
+send_delivery masque acked ; callback après Ok ACK même answered_request=None.
+CAS owner/génération/delivery_id/cutoffs et UUID gelé protègent un owner recréé.
+Unknown terminal : prochain résumé seulement au nouveau retour réel, avec
+incertitude précédente, jamais retry automatique de l’ancien canon.
+
+Rejetés : scheduler séparé, second writer, quota RAM, auteur System non attribué,
+TTL B sur WakeRow102, horaire client d’autorité, concaténation de 8192 faits, cutoff
+avancé par lecture, parse de body, owner arbitraire ou secret fictif. Les
+transitions exposent les coûts et l’incertitude. Portées garanties par CI,
+pas par le compilateur ou un confinement OS. Aucun runtime, fournisseur,
+performance ou recette 158B n’est attesté par cette décision.
+
+Références :
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/spec.md (partieB)
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/plan-158B.md
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/contracts/wake-158B.md
+- /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/reuse-audit-158B.md

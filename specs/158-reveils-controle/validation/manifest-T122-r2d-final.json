@@ -1,0 +1,269 @@
+{
+  "at_utc": "2026-10-12T13:01:24.974634+00:00",
+  "status": "CACHE_frozen_T122_R2D",
+  "base": "9a94334a109b4d5f939a8ebea464530abc28f4d6",
+  "files_count": 38,
+  "rust_files_count": 18,
+  "new_rust_count": 3,
+  "hunks_count": 402,
+  "files": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "a72a404dafb2de209e24c5db0128ac16bfcb0c72848648718e0a0d8b70f406a2",
+      "lines": 10891
+    },
+    {
+      "file": "crates/bridget-daemon/src/communication/client.rs",
+      "sha256": "7bf47bcacaba52300ecc5689fee9cc311b9822b7358b2be1c20d674c5585aee9",
+      "lines": 2342
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "lines": 42943
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "90b709655291aed4116b762e734d84bcd30e580ed0bacf58c6f16c330a0c905a",
+      "lines": 13531
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "1f7cc704357296ba257cd70a72465e60eb075d183b5cb2ae38ee8fd24e979b12",
+      "lines": 6162
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "lines": 1541
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "0db6541e31d7809b5caee44bf9a8e933b5aa1bb3f2734cf518294a570e16c8e6",
+      "lines": 839
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "3906b579c76e55093970bd9069e5f1b6ef023c2e9cda20b3513dc4d0e8d9038c",
+      "lines": 70
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+      "lines": 8605
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+      "lines": 332
+    },
+    {
+      "file": "crates/bridget-daemon/src/observation.rs",
+      "sha256": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+      "lines": 1100
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+      "lines": 1029
+    },
+    {
+      "file": "crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "lines": 625
+    },
+    {
+      "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+      "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+      "lines": 1156
+    },
+    {
+      "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+      "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+      "lines": 641
+    },
+    {
+      "file": "crates/bridget-daemon/src/threads.rs",
+      "sha256": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+      "lines": 2314
+    },
+    {
+      "file": "crates/bridget-daemon/src/wake_schedules.rs",
+      "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+      "lines": 554
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+      "lines": 8773
+    },
+    {
+      "file": "docs/decisions/158-controle-global-portees.md",
+      "sha256": "8644f7e82d7de87771b1954f51f536f6216e70459adc1dc27d9f10d16f982307",
+      "lines": 204
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "sha256": "28e8192e00628333c201e799c7fab246ec3c57d84d6756f9f4884c9a27e12495",
+      "lines": 1063
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "sha256": "67e1ea7892a5cfec7d1d0ce387e98af0d0d7fee62aeac9452ea4c7cd731176e4",
+      "lines": 986
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "sha256": "01eaad725c9f0f30677ca7e4cf05fb5097c46db5b924edebd6a1fc84ed6cbb00",
+      "lines": 1477
+    },
+    {
+      "file": "specs/158-reveils-controle/adversarial-review-plan158B-r1.md",
+      "sha256": "11c646c6b1c53e4f4d0258ed36abb3c482ebdc8892a9aa9e7cd38db4d3d55fad",
+      "lines": 23
+    },
+    {
+      "file": "specs/158-reveils-controle/analyze-report-158B.md",
+      "sha256": "05023eed4e6abc008e3e45f5c109a05eeacde25e04427f7fbfc0e61e9f64d2c2",
+      "lines": 17
+    },
+    {
+      "file": "specs/158-reveils-controle/checklists/requirements.md",
+      "sha256": "6a57d2fbcd10d28377693630c31500871bcacb2893d159bac3d7f81ac2f3cd52",
+      "lines": 43
+    },
+    {
+      "file": "specs/158-reveils-controle/contracts/wake-158B.md",
+      "sha256": "1ba8d9e3b2afb5421064d0dcb5a06234abf0cf4847536d1db867400131404e5e",
+      "lines": 150
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model-158B.md",
+      "sha256": "c97dcad62c5484c9df2c3eead6c16e48dac9ef17803778f62c14dc3da5b8de0d",
+      "lines": 104
+    },
+    {
+      "file": "specs/158-reveils-controle/data-model.md",
+      "sha256": "2a7a783ef5075d0ac2bf6d70a25c0e9bbb7c3813dbfe1338ecefbf14a230108a",
+      "lines": 84
+    },
+    {
+      "file": "specs/158-reveils-controle/plan-158B.md",
+      "sha256": "c2c488adbe45ea756bfa139da8e3e825800408ec483b2db388dc72ad33cc6116",
+      "lines": 111
+    },
+    {
+      "file": "specs/158-reveils-controle/plan.md",
+      "sha256": "223b45ba169df77d4b27c49e6d80e22fc44c7142f8d8044bd9235c345726fc70",
+      "lines": 131
+    },
+    {
+      "file": "specs/158-reveils-controle/quickstart-158B.md",
+      "sha256": "f09c6094ad7e24637d9fb43f2bb384a83e1c607b9059ae1bfce3e32a527ef250",
+      "lines": 59
+    },
+    {
+      "file": "specs/158-reveils-controle/quickstart.md",
+      "sha256": "7290260ba5ea62362844d2900f69b41d4a799b732355d9016ee2f01e24aca482",
+      "lines": 50
+    },
+    {
+      "file": "specs/158-reveils-controle/research-158B.md",
+      "sha256": "2fb6e88cbcd51e88ae1cd5c94de5be00da21e6dd30ffc42dcaf731436f8b9b8d",
+      "lines": 76
+    },
+    {
+      "file": "specs/158-reveils-controle/research.md",
+      "sha256": "52ad5a40f3e1f09476ec352b69a6590df82a94eca8c54f8e7682e106a6992e55",
+      "lines": 129
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit-158B.md",
+      "sha256": "0b4ba2197099fba678f2e6d4f6d0fd44bf417682c59bd1ba5349ccbd76d108b9",
+      "lines": 115
+    },
+    {
+      "file": "specs/158-reveils-controle/reuse-audit.md",
+      "sha256": "3b96a2502d3e15df28531e5efd72760909da8cf5e30fcf1b6e99cff73199de81",
+      "lines": 150
+    },
+    {
+      "file": "specs/158-reveils-controle/spec.md",
+      "sha256": "1a68b7320a63ce143f43885d9e6bff10f375165fa0a77b41d0bc0547a5ac7c26",
+      "lines": 268
+    },
+    {
+      "file": "specs/158-reveils-controle/tasks.md",
+      "sha256": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+      "lines": 178
+    }
+  ],
+  "canonical_patch": "/Users/moi/.cache/bridget-code158B-missed-20261012/selfreview-T122/diff-158B-r2d-final.patch",
+  "canonical_patch_sha256": "faa5bfd65891ccdd81a3b24d8268be906b349f0308596b36b96c26bc31b53c3b",
+  "report_patch": "/Users/moi/.cache/bridget-code158B-missed-20261012/selfreview-T122/implementation-158B-r2d.patch",
+  "report_patch_sha256": "7ead925b9fcbed6bd3d1c4f8f7b165557abe37dc513f65c3470355567cd12068",
+  "report_before_sha256": "5ad3c129a834937cee0b124b1bdebb3ddc7f5733011777d6cec495cb36905fa0",
+  "report_after_candidate_sha256": "b30b96a627ae5f88c27485afbd38eb041339fb60ca30fc14e19634df49569609",
+  "production_delta": {
+    "path": "/Users/moi/.cache/bridget-code158B-missed-20261012/selfreview-T122/r2d-source-delta.patch",
+    "sha256": "89521ae514ec3392449568c5082bf5b97aa73e26ea657496bf37a8da57da0001",
+    "before_daemon_sha256": "42a95a02f22c7b223eb6d433bab741f7e4722d771dd05f204f9331685a0316ec",
+    "after_daemon_sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+    "exact_two_calls": true,
+    "new_helpers": 0
+  },
+  "fresh_read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "ranges": [
+        [
+          6563,
+          6573
+        ],
+        [
+          7086,
+          7096
+        ],
+        [
+          21454,
+          21464
+        ]
+      ],
+      "read_mode": "fresh_R2D_calls_and_adjacent_context"
+    }
+  ],
+  "prior_38_semantic_read_manifest": "/Users/moi/.cache/bridget-code158B-missed-20261012/selfreview-T122/manifest-T122-final.json",
+  "prior_manifest_sha256": "aec0a9be46e16cb4c86a63ed24df7d7f264dc3d753f20336fb1383f30440a479",
+  "proof": {
+    "path": "/Users/moi/.cache/bridget-tests158B-20261012/T109-T117-return-clock-order-GREEN.json",
+    "sha256": "c3feb4ada748ebd22470b9cbdf5192031e322f0b3591b28cfe1ca0fe0ae77e4b",
+    "rc": 0,
+    "seconds": 22.51,
+    "results": [
+      [
+        "ok",
+        "4",
+        "0",
+        "0"
+      ]
+    ],
+    "221sources_beforeafter_equal": true,
+    "log_path": "/Users/moi/.cache/bridget-tests158B-20261012/T109-T117-return-clock-order-GREEN.log",
+    "log_sha256": "a7fda2d6fa2a47e7556e4ef18fdef988b7ddb36552dbd727e48afe6ce982b5fd"
+  },
+  "tasks_sha256": "2dda7d0604735ef29260ed4c19d8c4299b32e8c8a964345c29f1bf53214478b2",
+  "no_WT_write": true,
+  "no_tests_by_this_agent": true,
+  "excluded": [
+    "validation raw receipts/logs/patches",
+    "audits",
+    "implementation-158B.md/report self-reference"
+  ],
+  "limits": [
+    "FULL and prior GREEN remain historical, no globalgreen",
+    "Recovery099 +1s deadline issue remains unresolved",
+    "No broad semantic reread claimed for unchanged zones",
+    "Counterreview/audit global status not closed here"
+  ]
+}

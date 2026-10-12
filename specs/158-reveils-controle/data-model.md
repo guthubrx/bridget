@@ -78,3 +78,7 @@ ToolScope { tool, base: Scope, read_actions: &[&str], own_state_actions: &[&str]
 ## Acquisition du plafond (décision ROOT fraîche)
 
 `NativeDelegationRequest::CallerScope {}` réutilise l'enveloppe et le résultat natifs ; ce n'est pas un outil MCP. Le daemon exige l'identité inscrite et cherche le nom d'enfant dans l'index UNIQUE `native_delegations_child` existant. Le résultat est un booléen explicite (`true` : plafond lecture seule ; `false` : plafond standard vérifié). Le client MCP n'ouvre aucune DB, même en lecture seule. Une panne RPC ou magasin ferme l'appel entier sans repli. Aucun état supplémentaire n'est stocké.
+
+## Extension158B après livraison158A
+
+La partie B complète US5–US7. Son artefact de référence est /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/data-model-158B.md. Les preuves et choix158A ci-dessus restent historiques et conservés.

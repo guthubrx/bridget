@@ -664,10 +664,12 @@ fn execute_tool_at_with_identity(
                 message: result["code"].as_str().unwrap_or("refused").to_string(),
             });
         }
-        _ => return Err(ToolError::Technical {
-            code: "daemon_protocol",
-            message: "réponse de plafond MCP invalide".into(),
-        }),
+        _ => {
+            return Err(ToolError::Technical {
+                code: "daemon_protocol",
+                message: "réponse de plafond MCP invalide".into(),
+            });
+        }
     };
     drop(scope_connection);
     if caller_read_only
@@ -701,6 +703,88 @@ fn execute_tool_at_with_identity(
             reject_unknown_arguments(arguments, &["target"])?;
             let target = required_non_empty_string(arguments, "target")?;
             execute_queue(Some(identity), &target, socket)
+        }
+        "bridget_wake" => {
+            use bridget_transport::protocol::{
+                WAKE_CONTRACT_VERSION, WakeAction, WakeCadence, WakeRequest, WakeTarget,
+            };
+            let action: WakeAction = serde_json::from_value(Value::Object(arguments.clone()))
+                .map_err(|error| ToolError::InvalidParams(format!("wake : {error}")))?;
+            match &action {
+                WakeAction::Schedule {
+                    target,
+                    cadence,
+                    label,
+                } => {
+                    if label.as_ref().is_some_and(|value| value.len() > 2048) {
+                        return Err(ToolError::InvalidParams(
+                            "wake : label limité à 2048 octets UTF-8".into(),
+                        ));
+                    }
+                    if let WakeTarget::Agent { id } | WakeTarget::Thread { id } = target {
+                        crate::threads::require_uuid(id, "target").map_err(|_| {
+                            ToolError::InvalidParams("wake : UUID de cible requis".into())
+                        })?;
+                    }
+                    match cadence {
+                        WakeCadence::Interval { seconds } if *seconds >= 60 => {}
+                        WakeCadence::At { time, weekdays } => {
+                            let bytes = time.as_bytes();
+                            let valid_time = bytes.len() == 5
+                                && bytes[2] == b':'
+                                && [0, 1, 3, 4]
+                                    .into_iter()
+                                    .all(|index| bytes[index].is_ascii_digit())
+                                && (bytes[0] - b'0') * 10 + bytes[1] - b'0' < 24
+                                && (bytes[3] - b'0') * 10 + bytes[4] - b'0' < 60;
+                            let mut days = 0u8;
+                            let valid_days = !weekdays.is_empty()
+                                && weekdays.len() <= 7
+                                && weekdays.iter().all(|day| {
+                                    if !(1..=7).contains(day) {
+                                        return false;
+                                    }
+                                    let bit = 1u8 << (*day - 1);
+                                    if days & bit != 0 {
+                                        return false;
+                                    }
+                                    days |= bit;
+                                    true
+                                });
+                            if !valid_time || !valid_days {
+                                return Err(ToolError::InvalidParams(
+                                    "wake : HH:MM et jours distincts 1..7 requis".into(),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(ToolError::InvalidParams(
+                                "wake : intervalle minimum 60 secondes".into(),
+                            ));
+                        }
+                    }
+                }
+                WakeAction::Cancel { schedule_id } => {
+                    crate::threads::require_uuid(schedule_id, "schedule_id").map_err(|_| {
+                        ToolError::InvalidParams("wake : UUID de programmation requis".into())
+                    })?;
+                }
+                WakeAction::List {} => {}
+                _ => {
+                    return Err(ToolError::InvalidParams(
+                        "wake : action réservée à la CLI".into(),
+                    ));
+                }
+            }
+            let result = crate::communication::client::wake_request(
+                Some((principal, instance_id)),
+                socket,
+                WakeRequest {
+                    version: WAKE_CONTRACT_VERSION,
+                    request: action,
+                },
+            )?;
+            Ok(result.result)
         }
         "bridget_events" => {
             let request = serde_json::from_value(Value::Object(arguments.clone()))
@@ -2410,10 +2494,35 @@ pub(crate) fn tools() -> Vec<Value> {
             },"required":["action","draft"],"additionalProperties":false}
         }),
         json!({
-            "name": "bridget_events",
-            "description": "S'abonner aux faits reçus après création, les lister ou se désabonner. Consulter types pour les sources compatibles ; une source impossible est refusée. turn_ended avec once=false reste silencieux (journal_only), même après redémarrage ; état et lacunes consultables via list, faits via bridget_journal. Pour attendre une seule fin de tour, utiliser once=true. Une fin de tour n'est pas un succès ni une fin de mission ; utiliser le contrôleur de missions pour les rappels. Autres notifications non bloquantes, DND respecté. once=une occurrence ; expiration défaut1h, max7j. Abonnements repris automatiquement après redémarrage, faits de la coupure non rejoués. Fichiers : écritures structurées attestées seulement, pas shell ni surveillance globale ; via T3, Codex uniquement et couverture partielle.",
+            "name": "bridget_wake",
+            "description": "Programmer un réveil, lister ou annuler ses propres programmations. self est résolu par le daemon. Agent ou fil : droits de projet et de membre vérifiés. Intervalle minimum de 60 secondes, libellé entier de 2048 octets UTF-8. Une création n'est pas idempotente : après réponse perdue, relire list. Aucune relance d'un agent hors ligne. Une remise différée ou inconnue ne prouve pas l'exécution.",
+            "annotations": {"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":true},
             "inputSchema": {"type":"object","properties":{
-                "action":{"enum":["types","sub","list","unsub"]},
+                "action":{"enum":["schedule","list","cancel"]},
+                "target":{"oneOf":[
+                    {"type":"object","properties":{"kind":{"const":"self"}},"required":["kind"],"additionalProperties":false},
+                    {"type":"object","properties":{"kind":{"const":"agent"},"id":{"type":"string","minLength":36,"maxLength":36}},"required":["kind","id"],"additionalProperties":false},
+                    {"type":"object","properties":{"kind":{"const":"thread"},"id":{"type":"string","minLength":36,"maxLength":36}},"required":["kind","id"],"additionalProperties":false}
+                ]},
+                "cadence":{"oneOf":[
+                    {"type":"object","properties":{"kind":{"const":"interval"},"seconds":{"type":"integer","minimum":60}},"required":["kind","seconds"],"additionalProperties":false},
+                    {"type":"object","properties":{"kind":{"const":"at"},"time":{"type":"string","pattern":"^([01][0-9]|2[0-3]):[0-5][0-9]$"},"weekdays":{"type":"array","items":{"type":"integer","minimum":1,"maximum":7},"minItems":1,"maxItems":7,"uniqueItems":true}},"required":["kind","time","weekdays"],"additionalProperties":false}
+                ]},
+                "label":{"type":"string","maxLength":2048,"description":"Maximum 2048 octets UTF-8, sans troncature"},
+                "schedule_id":{"type":"string","minLength":36,"maxLength":36}
+            },"required":["action"],"additionalProperties":false,"oneOf":[
+                {"properties":{"action":{"const":"schedule"}},"required":["target","cadence"],"not":{"required":["schedule_id"]}},
+                {"properties":{"action":{"const":"list"}},"not":{"anyOf":[{"required":["target"]},{"required":["cadence"]},{"required":["label"]},{"required":["schedule_id"]}]}},
+                {"properties":{"action":{"const":"cancel"}},"required":["schedule_id"],"not":{"anyOf":[{"required":["target"]},{"required":["cadence"]},{"required":["label"]}]}}
+            ]}
+        }),
+        json!({
+            "name": "bridget_events",
+            "description": "S'abonner aux faits reçus après création, les lister ou se désabonner. Consulter types pour les sources compatibles ; une source impossible est refusée. turn_ended avec once=false reste silencieux (journal_only), même après redémarrage ; état et lacunes consultables via list, faits via bridget_journal. Pour attendre une seule fin de tour, utiliser once=true. Une fin de tour n'est pas un succès ni une fin de mission ; utiliser le contrôleur de missions pour les rappels. Autres notifications non bloquantes, DND respecté. once=une occurrence ; expiration défaut1h, max7j. Abonnements repris automatiquement après redémarrage. missed relit les faits connus non remis conservés 7 jours, paginés par séquence ; la lecture ne supprime rien et n'avance aucun cutoff. Une lacune jamais observée reste datée, sans reconstruction. Fichiers : écritures structurées attestées seulement, pas shell ni surveillance globale ; via T3, Codex uniquement et couverture partielle.",
+            "inputSchema": {"type":"object","properties":{
+                "action":{"enum":["types","sub","list","unsub","missed"]},
+                "limit":{"type":"integer","minimum":1,"maximum":64,"default":20},
+                "after_seq":{"type":"integer","minimum":0,"maximum":i64::MAX,"description":"Séquence persistante, pas une date ni UUID"},
                 "event":{"enum":["turn_ended","permission_required","file_written","file_collision"]},
                 "agent":{"type":"string","minLength":1,"maxLength":128},
                 "file":{"type":"string","minLength":1,"maxLength":256,"description":"Motif de chemin, * seulement"},
@@ -3068,7 +3177,7 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_task_ack")
             .expect("outil ACK informatif publié");
-        assert_eq!(catalogue.len(), 30);
+        assert_eq!(catalogue.len(), 31);
         let brief_schema = &catalogue
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
@@ -4410,7 +4519,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    30
+                    31
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -4709,6 +4818,7 @@ mod tests {
             "bridget_send",
             "bridget_status",
             "bridget_thread",
+            "bridget_wake",
             "bridget_who",
             "guichet_delegate",
             "guichet_objective_close",
@@ -5452,7 +5562,11 @@ mod tests {
     struct FixtureDirectory;
     impl crate::threads::Directory for FixtureDirectory {
         fn known_agent(&self, id: &str) -> bool {
-            ["14700000-aaaa-4aaa-8aaa-00000000000a", "14700000-bbbb-4bbb-8bbb-00000000000b"].contains(&id)
+            [
+                "14700000-aaaa-4aaa-8aaa-00000000000a",
+                "14700000-bbbb-4bbb-8bbb-00000000000b",
+            ]
+            .contains(&id)
         }
         fn member_facts(&self, _: &str) -> crate::threads::MemberFacts {
             crate::threads::MemberFacts::default()
@@ -5471,24 +5585,70 @@ mod tests {
     // Plus de vingt consommateurs standard et les oracles de plafond la réemploient.
     fn reply_caller_scope(listener: &UnixListener, result: Value) {
         use std::os::fd::AsRawFd;
-        let mut pollfd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents:0 };
-        assert!(unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0, "requête de plafond attendue dans le budget de fixture");
-let (stream, _) = listener.accept().unwrap();
-                stream.set_nonblocking(false).unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut writer = BufWriter::new(stream);
-                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
-                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
-                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
-                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
-        assert!(matches!(read_command(&mut reader), WrapperToDaemon::NativeDelegation { request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {} }));
-        write_command(&mut writer, DaemonToWrapper::NativeDelegationResult { result });
+        let mut pollfd = libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert!(
+            unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0,
+            "requête de plafond attendue dans le budget de fixture"
+        );
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        let WrapperToDaemon::RegisterAuxiliary {
+            agent_id,
+            instance_id,
+            credential,
+        } = read_command(&mut reader)
+        else {
+            panic!("inscription auxiliaire attendue")
+        };
+        let expected = crate::mcp_identity::auxiliary_registration(
+            &agent_id,
+            &instance_id,
+            writer
+                .get_ref()
+                .local_addr()
+                .unwrap()
+                .as_pathname()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+        );
+        write_command(
+            &mut writer,
+            DaemonToWrapper::Registered {
+                agent_id,
+                credential: None,
+            },
+        );
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::NativeDelegation {
+                request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {}
+            }
+        ));
+        write_command(
+            &mut writer,
+            DaemonToWrapper::NativeDelegationResult { result },
+        );
     }
 
     #[test]
     fn mcp158_plafond_enfant_discovery_refuse_ecriture() {
-        let cases = [("bridget_delegate", json!({})), ("bridget_send", json!({"to":"parent","body":"écrit"})), ("bridget_task_respond", json!({}))];
+        let cases = [
+            ("bridget_delegate", json!({})),
+            ("bridget_send", json!({"to":"parent","body":"écrit"})),
+            ("bridget_task_respond", json!({})),
+        ];
         let socket = test_socket("158-14bc9332");
         let listener = UnixListener::bind(&socket).unwrap();
         let count = cases.len();
@@ -5526,7 +5686,12 @@ let (stream, _) = listener.accept().unwrap();
         let socket = test_socket("mcp158-malformed-scope");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
-            for scope_result in [json!({"version":1}), json!({"version":1,"caller_read_only":"false"}), json!({"version":2,"caller_read_only":false}), json!({"version":1,"caller_read_only":false,"grant":true})] {
+            for scope_result in [
+                json!({"version":1}),
+                json!({"version":1,"caller_read_only":"false"}),
+                json!({"version":2,"caller_read_only":false}),
+                json!({"version":1,"caller_read_only":false,"grant":true}),
+            ] {
                 reply_caller_scope(&listener, scope_result);
             }
         });
@@ -5550,7 +5715,10 @@ let (stream, _) = listener.accept().unwrap();
 
     #[test]
     fn mcp158_plafond_aucun_effet_de_bord_au_refus() {
-        let cases = [("bridget_thread", json!({"action":"post"})), ("bridget_cancel", json!({"id":"queued"}))];
+        let cases = [
+            ("bridget_thread", json!({"action":"post"})),
+            ("bridget_cancel", json!({"id":"queued"})),
+        ];
         let socket = test_socket("158-eae5697c");
         let listener = UnixListener::bind(&socket).unwrap();
         let count = cases.len();
@@ -5678,8 +5846,17 @@ let (stream, _) = listener.accept().unwrap();
             }
         });
         for name in names {
-            let result = execute_tool_at_with_scope("parent158", "instance158", &name, json!({"forged":1}).as_object().unwrap(), &socket);
-            assert!(matches!(result, Err(ToolError::InvalidParams(_))), "{name} : {result:?}");
+            let result = execute_tool_at_with_scope(
+                "parent158",
+                "instance158",
+                &name,
+                json!({"forged":1}).as_object().unwrap(),
+                &socket,
+            );
+            assert!(
+                matches!(result, Err(ToolError::InvalidParams(_))),
+                "{name} : {result:?}"
+            );
         }
         server.join().unwrap();
         assert!(matches!(
@@ -5700,36 +5877,243 @@ let (stream, _) = listener.accept().unwrap();
         let socket = test_socket("mcp158-fil-actions");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
-            for action in ["list", "show", "history", "read", "ack", "create", "add_members", "post", "close"] {
+            for action in [
+                "list",
+                "show",
+                "history",
+                "read",
+                "ack",
+                "create",
+                "add_members",
+                "post",
+                "close",
+            ] {
                 let scope_result = json!({"version":1,"caller_read_only":true});
                 reply_caller_scope(&listener, scope_result);
                 if ["list", "show", "history", "read", "ack"].contains(&action) {
                     let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut writer = BufWriter::new(stream);
-                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
-                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
-                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
-                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
-                    let WrapperToDaemon::ThreadRequest { request } = read_command(&mut reader) else { panic!("requête de fil attendue") };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut writer = BufWriter::new(stream);
+                    let WrapperToDaemon::RegisterAuxiliary {
+                        agent_id,
+                        instance_id,
+                        credential,
+                    } = read_command(&mut reader)
+                    else {
+                        panic!("inscription auxiliaire attendue")
+                    };
+                    let expected = crate::mcp_identity::auxiliary_registration(
+                        &agent_id,
+                        &instance_id,
+                        writer
+                            .get_ref()
+                            .local_addr()
+                            .unwrap()
+                            .as_pathname()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert!(
+                        matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+                    );
+                    write_command(
+                        &mut writer,
+                        DaemonToWrapper::Registered {
+                            agent_id,
+                            credential: None,
+                        },
+                    );
+                    let WrapperToDaemon::ThreadRequest { request } = read_command(&mut reader)
+                    else {
+                        panic!("requête de fil attendue")
+                    };
                     assert_eq!(request.request.name(), action);
-                    write_command(&mut writer, DaemonToWrapper::ThreadResult { result: ThreadResult { version:1, result:json!({"status":"preuve","action":action}) } });
+                    write_command(
+                        &mut writer,
+                        DaemonToWrapper::ThreadResult {
+                            result: ThreadResult {
+                                version: 1,
+                                result: json!({"status":"preuve","action":action}),
+                            },
+                        },
+                    );
                 }
             }
         });
         let id = "15800000-0000-4000-8000-000000000001";
-        for action in ["list", "show", "history", "read", "ack", "create", "add_members", "post", "close"] {
+        for action in [
+            "list",
+            "show",
+            "history",
+            "read",
+            "ack",
+            "create",
+            "add_members",
+            "post",
+            "close",
+        ] {
             let arguments = match action {
                 "list" => json!({"action":action}),
                 "ack" => json!({"action":action,"thread_id":id,"receipt":id}),
                 _ => json!({"action":action,"thread_id":id}),
             };
-            let result = execute_tool_at_with_scope("child158", "instance158", "bridget_thread", arguments.as_object().unwrap(), &socket);
-            if ["list", "show", "history", "read", "ack"].contains(&action) { assert_eq!(result.unwrap()["action"], action); }
-            else { assert!(matches!(result, Err(ToolError::Technical { code:"capability_denied", .. })), "{action}"); }
+            let result = execute_tool_at_with_scope(
+                "child158",
+                "instance158",
+                "bridget_thread",
+                arguments.as_object().unwrap(),
+                &socket,
+            );
+            if ["list", "show", "history", "read", "ack"].contains(&action) {
+                assert_eq!(result.unwrap()["action"], action);
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(ToolError::Technical {
+                            code: "capability_denied",
+                            ..
+                        })
+                    ),
+                    "{action}"
+                );
+            }
         }
         server.join().unwrap();
+    }
+
+    // 158B : RED de surfaces seulement. Les oracles de magasin/temps suivent le GO.
+    #[test]
+    fn wake158b_mcp_surface_wake_et_arguments_fermes() {
+        let catalogue = tools();
+        let wake = catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_wake")
+            .expect("US5/FR104 : bridget_wake doit être présent dans le vrai catalogue MCP");
+        let schema = &wake["inputSchema"];
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"]["action"]["enum"],
+            json!(["schedule", "list", "cancel"])
+        );
+        let properties = schema["properties"].as_object().expect("champs de wake");
+        for forbidden in [
+            "identity",
+            "owner",
+            "from",
+            "issued_at",
+            "scope",
+            "command_id",
+        ] {
+            assert!(
+                !properties.contains_key(forbidden),
+                "champ d'autorité/création refusé : {forbidden}"
+            );
+        }
+        assert_eq!(wake["annotations"]["readOnlyHint"], false);
+    }
+
+    #[test]
+    fn wake158b_mcp_events_missed_passe_par_identite_attestee() {
+        use std::os::fd::AsRawFd;
+        let socket = test_socket("158b-missed");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":true}));
+            // La base158A refuse encore l'action après CallerScope. Le serveur
+            // borné permet d'obtenir le vrai InvalidParams sans thread bloqué.
+            let mut wait = libc::pollfd {
+                fd: listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut wait, 1, 3000) } == 0 {
+                return false;
+            }
+            assert!(wait.revents & libc::POLLIN != 0, "requête missed attendue");
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let WrapperToDaemon::RegisterAuxiliary {
+                agent_id,
+                instance_id,
+                credential,
+            } = read_command(&mut reader)
+            else {
+                panic!("inscription auxiliaire requise pour missed");
+            };
+            assert_eq!(agent_id, "15800000-0000-4000-8000-00000000000b");
+            assert_eq!(instance_id, "missed-instance158b");
+            let expected = crate::mcp_identity::auxiliary_registration(
+                &agent_id,
+                &instance_id,
+                writer
+                    .get_ref()
+                    .local_addr()
+                    .unwrap()
+                    .as_pathname()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: wanted, .. } if wanted == credential)
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    agent_id,
+                    credential: None,
+                },
+            );
+            let WrapperToDaemon::ObservationRequest { request } = read_command(&mut reader) else {
+                panic!("action missed via l'enveloppe d'observation existante");
+            };
+            assert_eq!(serde_json::to_value(request).unwrap()["action"], "missed");
+            // Projection de protocole, pas un faux Store ni une preuve de faits.
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ObservationResult {
+                    result: json!({"fixture_projection":"missed158b"}),
+                },
+            );
+            true
+        });
+        let result = execute_tool_at_with_scope(
+            "15800000-0000-4000-8000-00000000000b",
+            "missed-instance158b",
+            "bridget_events",
+            json!({"action":"missed"}).as_object().unwrap(),
+            &socket,
+        );
+        let reached_missed = server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+        let actual = result
+            .expect("US7 : missed doit être une action valide, pas InvalidParams de la base158A");
+        assert!(
+            reached_missed,
+            "lecture par identité auxiliaire, pas résultat inventé localement"
+        );
+        assert_eq!(actual["fixture_projection"], "missed158b");
+        let events = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_events")
+            .unwrap();
+        assert!(
+            events["inputSchema"]["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|action| action == "missed")
+        );
+        assert_eq!(events["inputSchema"]["additionalProperties"], false);
     }
 
     #[test]
@@ -5746,16 +6130,62 @@ let (stream, _) = listener.accept().unwrap();
                     .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
-                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
-                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
-                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
-                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
-                assert!(matches!(read_command(&mut reader), WrapperToDaemon::ObservationRequest { .. }));
-                write_command(&mut writer, DaemonToWrapper::ObservationResult { result:json!({"status":"ok"}) });
+                let WrapperToDaemon::RegisterAuxiliary {
+                    agent_id,
+                    instance_id,
+                    credential,
+                } = read_command(&mut reader)
+                else {
+                    panic!("inscription auxiliaire attendue")
+                };
+                let expected = crate::mcp_identity::auxiliary_registration(
+                    &agent_id,
+                    &instance_id,
+                    writer
+                        .get_ref()
+                        .local_addr()
+                        .unwrap()
+                        .as_pathname()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+                );
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id,
+                        credential: None,
+                    },
+                );
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::ObservationRequest { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::ObservationResult {
+                        result: json!({"status":"ok"}),
+                    },
+                );
             }
         });
-        for arguments in [json!({"action":"sub","event":"turn_ended","once":true}), json!({"action":"unsub","id":"subscription158"})] {
-            assert_eq!(execute_tool_at_with_scope("child158", "instance158", "bridget_events", arguments.as_object().unwrap(), &socket).unwrap()["status"], "ok");
+        for arguments in [
+            json!({"action":"sub","event":"turn_ended","once":true}),
+            json!({"action":"unsub","id":"subscription158"}),
+        ] {
+            assert_eq!(
+                execute_tool_at_with_scope(
+                    "child158",
+                    "instance158",
+                    "bridget_events",
+                    arguments.as_object().unwrap(),
+                    &socket
+                )
+                .unwrap()["status"],
+                "ok"
+            );
         }
         server.join().unwrap();
     }
@@ -5769,15 +6199,58 @@ let (stream, _) = listener.accept().unwrap();
             let scope_result = json!({"version":1,"caller_read_only":true});
             reply_caller_scope(&listener, scope_result);
             let (stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut writer = BufWriter::new(stream);
-                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
-                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
-                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
-                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
-            let WrapperToDaemon::ArtifactRead { request } = read_command(&mut reader) else { panic!("lecture d'artefact attendue") };
-            write_command(&mut writer, DaemonToWrapper::ArtifactReadResult { version:1, artifact_ref:request.artifact_ref, version_ref:request.version_ref, outcome:ArtifactReadOutcome::Chunk { bytes:b"contenu158".to_vec(), total_len:10, digest:"a".repeat(64), offset:0, next_offset:None } });
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let WrapperToDaemon::RegisterAuxiliary {
+                agent_id,
+                instance_id,
+                credential,
+            } = read_command(&mut reader)
+            else {
+                panic!("inscription auxiliaire attendue")
+            };
+            let expected = crate::mcp_identity::auxiliary_registration(
+                &agent_id,
+                &instance_id,
+                writer
+                    .get_ref()
+                    .local_addr()
+                    .unwrap()
+                    .as_pathname()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    agent_id,
+                    credential: None,
+                },
+            );
+            let WrapperToDaemon::ArtifactRead { request } = read_command(&mut reader) else {
+                panic!("lecture d'artefact attendue")
+            };
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ArtifactReadResult {
+                    version: 1,
+                    artifact_ref: request.artifact_ref,
+                    version_ref: request.version_ref,
+                    outcome: ArtifactReadOutcome::Chunk {
+                        bytes: b"contenu158".to_vec(),
+                        total_len: 10,
+                        digest: "a".repeat(64),
+                        offset: 0,
+                        next_offset: None,
+                    },
+                },
+            );
         });
         let result = execute_tool_at_with_scope("child158", "instance158", "bridget_read_artifact", json!({"version":1,"artifact_ref":"artifact158","version_ref":"version158","kind":{"kind":"manifest"},"offset":0,"limit":16}).as_object().unwrap(), &socket).unwrap();
         assert_eq!(result["outcome"]["status"], "chunk");
@@ -5791,26 +6264,71 @@ let (stream, _) = listener.accept().unwrap();
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
             for _ in 0..2 {
-            let scope_result = json!({"version":1,"caller_read_only":true});
-            reply_caller_scope(&listener, scope_result);
-            let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut writer = BufWriter::new(stream);
-            assert!(matches!(read_command(&mut reader), WrapperToDaemon::RoleHandshake { role:ConnectionRole::Attach }));
-            write_command(&mut writer, DaemonToWrapper::RoleAccepted { role:ConnectionRole::Attach });
-            assert!(matches!(read_command(&mut reader), WrapperToDaemon::Subscribe { .. }));
-            write_command(&mut writer, DaemonToWrapper::Subscribed { subscription_id:"s158".into() });
-            write_command(&mut writer, DaemonToWrapper::JournalFragment { subscription_id:"s158".into(),seq:7,offset:0,final_fragment:true,bytes:serde_json::to_vec(&json!({"seq":7,"text":"preuve158"})).unwrap() });
-            write_command(&mut writer, DaemonToWrapper::SnapshotCaughtUp { subscription_id:"s158".into(),through_seq:Some(7) });
+                let scope_result = json!({"version":1,"caller_read_only":true});
+                reply_caller_scope(&listener, scope_result);
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Attach
+                    }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Attach,
+                    },
+                );
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::Subscribe { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Subscribed {
+                        subscription_id: "s158".into(),
+                    },
+                );
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::JournalFragment {
+                        subscription_id: "s158".into(),
+                        seq: 7,
+                        offset: 0,
+                        final_fragment: true,
+                        bytes: serde_json::to_vec(&json!({"seq":7,"text":"preuve158"})).unwrap(),
+                    },
+                );
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::SnapshotCaughtUp {
+                        subscription_id: "s158".into(),
+                        through_seq: Some(7),
+                    },
+                );
             }
             for _ in 0..2 {
                 let scope_result = json!({"version":1,"caller_read_only":true});
                 reply_caller_scope(&listener, scope_result);
             }
         });
-        for arguments in [json!({"agent":"source"}), json!({"agent":"source","to":null})] {
-            let result = execute_tool_at_with_scope("child158", "instance158", "bridget_journal", arguments.as_object().unwrap(), &socket).unwrap();
+        for arguments in [
+            json!({"agent":"source"}),
+            json!({"agent":"source","to":null}),
+        ] {
+            let result = execute_tool_at_with_scope(
+                "child158",
+                "instance158",
+                "bridget_journal",
+                arguments.as_object().unwrap(),
+                &socket,
+            )
+            .unwrap();
             assert_eq!(result["entries"][0]["text"], "preuve158");
         }
         for to in ["", "parent"] {
@@ -5833,17 +6351,50 @@ let (stream, _) = listener.accept().unwrap();
 
     #[test]
     fn mcp158_discovery_lecture_ack_page_suivante() {
-        use bridget_transport::protocol::{ThreadAction, ThreadRequest, ThreadNotify};
+        use bridget_transport::protocol::{ThreadAction, ThreadNotify, ThreadRequest};
         const A: &str = "14700000-aaaa-4aaa-8aaa-00000000000a";
         const B: &str = "14700000-bbbb-4bbb-8bbb-00000000000b";
         let socket = test_socket("mcp158-three-pages");
         let root = socket.parent().unwrap().to_path_buf();
         let store = crate::store::Store::open(&root.join("db158")).unwrap();
-        let create = crate::threads::handle(&store, &FixtureDirectory, A, ThreadRequest { version:1, cross_project_reason:None, request:ThreadAction::Create { title:"Trois pages158".into(),members:vec![B.into()],operation_id:uuid::Uuid::new_v4().to_string() } }, 1);
+        let create = crate::threads::handle(
+            &store,
+            &FixtureDirectory,
+            A,
+            ThreadRequest {
+                version: 1,
+                cross_project_reason: None,
+                request: ThreadAction::Create {
+                    title: "Trois pages158".into(),
+                    members: vec![B.into()],
+                    operation_id: uuid::Uuid::new_v4().to_string(),
+                },
+            },
+            1,
+        );
         assert_eq!(create.result["status"], "created");
         let thread_id = create.result["thread_id"].as_str().unwrap().to_owned();
         for number in 1..=6 {
-            let posted = crate::threads::handle(&store, &FixtureDirectory, A, ThreadRequest { version:1,cross_project_reason:None,request:ThreadAction::Post { thread_id:thread_id.clone(),body:format!("entrée{number}"),notify:ThreadNotify::Targets(vec![]),operation_id:uuid::Uuid::new_v4().to_string(),reply_to_seq:None,ack_receipt:None,kind:None,supersedes_seq:None } }, 1);
+            let posted = crate::threads::handle(
+                &store,
+                &FixtureDirectory,
+                A,
+                ThreadRequest {
+                    version: 1,
+                    cross_project_reason: None,
+                    request: ThreadAction::Post {
+                        thread_id: thread_id.clone(),
+                        body: format!("entrée{number}"),
+                        notify: ThreadNotify::Targets(vec![]),
+                        operation_id: uuid::Uuid::new_v4().to_string(),
+                        reply_to_seq: None,
+                        ack_receipt: None,
+                        kind: None,
+                        supersedes_seq: None,
+                    },
+                },
+                1,
+            );
             assert_eq!(posted.result["status"], "posted");
         }
         let listener = UnixListener::bind(&socket).unwrap();
@@ -5857,12 +6408,42 @@ let (stream, _) = listener.accept().unwrap();
                     .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
-                let WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, credential } = read_command(&mut reader) else { panic!("inscription auxiliaire attendue") };
-                let expected = crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, writer.get_ref().local_addr().unwrap().as_pathname().unwrap()).unwrap();
-                assert!(matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential));
-                write_command(&mut writer, DaemonToWrapper::Registered { agent_id, credential: None });
-                let WrapperToDaemon::ThreadRequest { request } = read_command(&mut reader) else { panic!("read/ack existant attendu") };
-                assert!(matches!(&request.request, ThreadAction::Read { .. } | ThreadAction::Ack { .. }));
+                let WrapperToDaemon::RegisterAuxiliary {
+                    agent_id,
+                    instance_id,
+                    credential,
+                } = read_command(&mut reader)
+                else {
+                    panic!("inscription auxiliaire attendue")
+                };
+                let expected = crate::mcp_identity::auxiliary_registration(
+                    &agent_id,
+                    &instance_id,
+                    writer
+                        .get_ref()
+                        .local_addr()
+                        .unwrap()
+                        .as_pathname()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+                );
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id,
+                        credential: None,
+                    },
+                );
+                let WrapperToDaemon::ThreadRequest { request } = read_command(&mut reader) else {
+                    panic!("read/ack existant attendu")
+                };
+                assert!(matches!(
+                    &request.request,
+                    ThreadAction::Read { .. } | ThreadAction::Ack { .. }
+                ));
                 let result = crate::threads::handle(&store, &FixtureDirectory, B, request, 2);
                 write_command(&mut writer, DaemonToWrapper::ThreadResult { result });
             }
@@ -5870,7 +6451,16 @@ let (stream, _) = listener.accept().unwrap();
         let mut seqs = BTreeSet::new();
         let mut receipts = BTreeSet::new();
         for page_number in 0..3 {
-            let page = execute_tool_at_with_scope(B, "instance158", "bridget_thread", json!({"action":"read","thread_id":thread_id,"limit":2}).as_object().unwrap(), &socket).unwrap();
+            let page = execute_tool_at_with_scope(
+                B,
+                "instance158",
+                "bridget_thread",
+                json!({"action":"read","thread_id":thread_id,"limit":2})
+                    .as_object()
+                    .unwrap(),
+                &socket,
+            )
+            .unwrap();
             assert_eq!(page["status"], "read");
             assert_eq!(page["has_more"], page_number < 2);
             assert_eq!(page["entries"].as_array().unwrap().len(), 2);
@@ -5882,7 +6472,16 @@ let (stream, _) = listener.accept().unwrap();
             }
             let receipt = page["receipt"].as_str().unwrap().to_owned();
             assert!(receipts.insert(receipt.clone()));
-            let ack = execute_tool_at_with_scope(B, "instance158", "bridget_thread", json!({"action":"ack","thread_id":thread_id,"receipt":receipt}).as_object().unwrap(), &socket).unwrap();
+            let ack = execute_tool_at_with_scope(
+                B,
+                "instance158",
+                "bridget_thread",
+                json!({"action":"ack","thread_id":thread_id,"receipt":receipt})
+                    .as_object()
+                    .unwrap(),
+                &socket,
+            )
+            .unwrap();
             assert_eq!(ack["status"], "acknowledged");
         }
         assert_eq!(seqs.into_iter().collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6]);

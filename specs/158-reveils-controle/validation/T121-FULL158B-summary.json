@@ -1,0 +1,1216 @@
+{
+  "label": "T121-FULL158B-compiled-final",
+  "rc": 101,
+  "seconds": 1356.44,
+  "sources_stable": true,
+  "log_sha256": "fd5ba6c30e89954db7d40725589d0b368d4ded5569cffd1ef66dcc1be2b7a274",
+  "targets": [
+    {
+      "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_core-ee95a898191b90c7)",
+      "state": "ok",
+      "pass": 45,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "state": "FAILED",
+      "pass": 1728,
+      "fail": 2,
+      "ignored": 15,
+      "child_summaries_excluded": 5
+    },
+    {
+      "header": "Running unittests src/main.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget-e28ab0ef1375e70c)",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running unittests src/bin/bridget-greffe-policy-refresh.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_greffe_policy_refresh-d111d5e2d97171a6)",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/agent_graph_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/agent_graph_test-b4a88fe133fe1403)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/artifact_lifecycle_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_lifecycle_test-1cb838f9a57e596d)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/artifact_policy_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_policy_test-3fd00776f4dfcd0d)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/artifact_publication_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_publication_test-5b4702d4a8e44ca3)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/artifact_service_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_service_test-f777bba7d2425e9f)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/artifact_store_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_store_test-f93907f8781a6257)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/attach_journal_attestation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/attach_journal_attestation_test-ab8e9c84fee358ad)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/build_id_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/build_id_integration_test-c3e85c7d8bab32fb)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/capabilities_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/capabilities_integration_test-21be0372e4be3000)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/channel_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/channel_observation_test-c8090d8e09e8beb5)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/claude_interactive_097_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/claude_interactive_097_test-a04688e62da4f14f)",
+      "state": "ok",
+      "pass": 8,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/claude_native_permissions_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/claude_native_permissions_test-d3c9579ef83bb3a0)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/cli_arguments_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/cli_arguments_integration_test-1638681b20b4ad51)",
+      "state": "ok",
+      "pass": 18,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/codex_interactive_090_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/codex_interactive_090_test-e530aa51a6356db2)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 15,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/coordination_events_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/coordination_events_test-3147641b194c347d)",
+      "state": "ok",
+      "pass": 6,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_attach_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_attach_test-3c706e2e2706012d)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_concurrency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_concurrency_test-23c741dda04db4b0)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_content_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_content_test-3e807681533e0d7f)",
+      "state": "ok",
+      "pass": 7,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)",
+      "state": "FAILED",
+      "pass": 1,
+      "fail": 2,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)",
+      "state": "FAILED",
+      "pass": 9,
+      "fail": 3,
+      "ignored": 2,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_dependency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_dependency_test-08d5d0d3cc73b29a)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_federation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_federation_test-f951d52fa2ca4045)",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 5,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_host_session_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_host_session_test-124f3cf257c6d9fa)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+      "state": "FAILED",
+      "pass": 1,
+      "fail": 3,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_isolation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_isolation_test-04d97126b11b43c9)",
+      "state": "ok",
+      "pass": 8,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_ledger_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_ledger_test-fce84ffa075b44f7)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_migration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_migration_test-22990b6a6f5f986f)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_native_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_native_test-21f4f5e052a21f5d)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 3,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_removed_surface_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_removed_surface_test-5b73d63261df8516)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_reply_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_reply_test-0f9d08e31efe6482)",
+      "state": "FAILED",
+      "pass": 0,
+      "fail": 1,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_retired_runtime_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_retired_runtime_test-efbb4eb1c8324ff8)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_security_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_security_test-840f80620c4ca9bf)",
+      "state": "ok",
+      "pass": 5,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_service_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_service_test-bbd0a39927596d22)",
+      "state": "ok",
+      "pass": 7,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_skill_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_skill_test-e129e3078774130d)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_status_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_status_test-60969aafbfc9c4ad)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/core_089_storage_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_storage_test-254ad878c3f99728)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/daemon_shutdown_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/daemon_shutdown_test-5533d58ee1548c9e)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/execution_budget_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_budget_test-921c85e05e947acb)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/execution_lifecycle_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_lifecycle_test-91d7eab2078821bf)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/execution_observability_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_observability_test-6d15465b944c0cdd)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/execution_resume_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_resume_test-61bc2eb960aa2232)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/execution_scale_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_scale_test-0e63759cc90cae63)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/execution_store_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_store_test-679a8b80a38c30a8)",
+      "state": "ok",
+      "pass": 17,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/federate_096_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/federate_096_test-18df7f3799ba17bb)",
+      "state": "ok",
+      "pass": 5,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/greffe_policy_refresh_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/greffe_policy_refresh_test-5b81e4272d0f31ee)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/guidance156_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/guidance156_e2e-c0817decaa777735)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/handoff_103_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/handoff_103_test-a755e3407e5655e8)",
+      "state": "ok",
+      "pass": 5,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/idempotency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/idempotency_test-39963ec1be26c24a)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/identity_migration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/identity_migration_test-09ef870975a898fe)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/identity_probe_timeout_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/identity_probe_timeout_test-27692f1e00df992f)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/integration_test-aadd913ed198d05c)",
+      "state": "ok",
+      "pass": 7,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/lineage_cli_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/lineage_cli_test-bd8f2e59d6afba7c)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/managed_parity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/managed_parity_test-3acf1b44c226fa07)",
+      "state": "ok",
+      "pass": 7,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/managed_wrapper_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/managed_wrapper_test-1bfed8a33485508f)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/mcp_cancel_091_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mcp_cancel_091_test-f5484133b5b25f8e)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/mcp_injection_smoke_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mcp_injection_smoke_test-cb5548fbd6251441)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/mission_boundary_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mission_boundary_test-a29800a4bc1b9c0f)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_delegation_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_delegation_e2e-4a977dc8ac454336)",
+      "state": "ok",
+      "pass": 11,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_delegation_real_glm.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_delegation_real_glm-44a449f4ab54ce38)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 2,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_provider_death149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_provider_death149_test-198c1e02c0a13ec6)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_wrapper_stop149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_wrapper_stop149_test-7c650553428dc1d7)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/project_binding_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_binding_integration_test-f43c0ec846805dd6)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/project_profile_surface_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_profile_surface_test-1f839fb7fc88f407)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/runtime_selection_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/runtime_selection_integration_test-865b5aaa078f01d4)",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/sc005_attach_budget.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/sc005_attach_budget-9d375ecbd0041ade)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 3,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/search_104_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/search_104_test-0adb32476ff90329)",
+      "state": "ok",
+      "pass": 23,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/service_file_limit149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/service_file_limit149_test-229225b4a3c6728b)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spawn_refusal_hosts_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spawn_refusal_hosts_test-58900cf4a0dc3936)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spec101_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec101_observation_test-f8c7b03489a6f18a)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "state": "ok",
+      "pass": 44,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spec138_project_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec138_project_test-a30fc75be4e84903)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spec145_human_cli.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec145_human_cli-239eff3fc089ff89)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/spec146_recent_human_cli.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec146_recent_human_cli-10fb9d0051f105b7)",
+      "state": "ok",
+      "pass": 4,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/t3_session_identity_env.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3_session_identity_env-40370aa199d20e10)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/t3code_098_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_098_test-291f5efdcba34642)",
+      "state": "FAILED",
+      "pass": 2,
+      "fail": 1,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/t3code_opaque_identifiers149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_opaque_identifiers149_test-4e740ff6ffc56eb4)",
+      "state": "ok",
+      "pass": 6,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/work_submission_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/work_submission_test-9b18a7e7a5a4a22a)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_transport-e9cc60d766c3fd62)",
+      "state": "ok",
+      "pass": 327,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 2
+    },
+    {
+      "header": "Running tests/core_089_wire_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_wire_test-08532ce3c3ce6cba)",
+      "state": "ok",
+      "pass": 1,
+      "fail": 0,
+      "ignored": 1,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/lineage_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/lineage_contract_test-47dd9f5dd68de08a)",
+      "state": "ok",
+      "pass": 6,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_alias149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_alias149_test-4a066ac964725598)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_permissions149_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_permissions149_e2e-8f0bfca971fb5c2a)",
+      "state": "ok",
+      "pass": 5,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_permissions149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_permissions149_test-7214d262c52a3686)",
+      "state": "ok",
+      "pass": 8,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/native_stop149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_stop149_test-86cb085afe3e4a62)",
+      "state": "ok",
+      "pass": 5,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/permission_source_revision_vectors149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/permission_source_revision_vectors149_test-adda0765ea446456)",
+      "state": "ok",
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/project_runtime_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_runtime_contract_test-23e090918ba95a4e)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Running tests/provider_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/provider_contract_test-052b36e5d4131f4d)",
+      "state": "ok",
+      "pass": 2,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Doc-tests bridget_core",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Doc-tests bridget_daemon",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    },
+    {
+      "header": "Doc-tests bridget_transport",
+      "state": "ok",
+      "pass": 0,
+      "fail": 0,
+      "ignored": 0,
+      "child_summaries_excluded": 0
+    }
+  ],
+  "counts": {
+    "pass": 2456,
+    "fail": 12,
+    "ignored": 74
+  },
+  "targets_completed": 95,
+  "headers_started": 95,
+  "child_summaries_excluded": 7,
+  "failed_tests": [
+    "daemon::spec099_classic_delivery_tests::spec100_owner_source_collision_and_nonblocking_notifications",
+    "daemon::spec099_classic_delivery_tests::spec101_upstream_gap_requires_primary_and_dnd_preserves_loss_counters",
+    "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+    "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+    "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+    "recovery_acked_wrapper_finalise_accepted_apres_crash_daemon",
+    "reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance",
+    "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+    "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+    "spec094_mcp_modifie_uniquement_sa_propre_presence",
+    "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+    "spec098_pont_expose_remet_repond_renouvelle_et_retire"
+  ],
+  "baseline30": [
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "daemon::spec099_classic_delivery_tests::spec099_reponse_immediate_reste_correlable",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "daemon::spec099_classic_delivery_tests::spec099_notification_systeme_bornee_meme_si_writer_occupe",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "daemon::spec099_classic_delivery_tests::spec099_socket_saturee_isolee_des_autres_agents",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "daemon::spec099_classic_delivery_tests::spec099_writer_verrouille_isole_des_autres_agents",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec100_collision_is_scoped_and_deduplicated",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec100_once_owner_expiry_and_filters",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec100_rate_cache_and_combined_filters_are_bounded",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec100_subscriptions_are_bounded_and_unknown_fields_refused",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec101_gap_is_counted_filtered_and_notification_rate_bounded",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec101_sources_are_required_and_loss_is_explicit",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec119_aller_retour_bref_de_source_sans_avis",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec119_source_qui_clignote_avis_borne_par_periode",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec122_restore_resumes_and_absolute_ttl_is_preserved",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec135_legacy_repeated_turn_subscription_stays_silent_after_restore",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec135_one_shot_wait_and_permission_alerts_still_wake_the_owner",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "lib",
+      "name": "observation::tests::spec135_repeated_turn_ends_never_wake_the_owner",
+      "status": "ok",
+      "cargo_header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+      "fresh_results": [
+        {
+          "header": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec100_observation_test",
+      "name": "spec100_cli_share_and_events_use_registered_identity",
+      "status": "ok",
+      "cargo_header": "Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec100_observation_test",
+      "name": "spec100_cli_journal_real_socket_and_parameter_errors",
+      "status": "ok",
+      "cargo_header": "Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec101_observation_test",
+      "name": "spec101_real_daemon_journal_share_collision_and_restart",
+      "status": "ok",
+      "cargo_header": "Running tests/spec101_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec101_observation_test-f8c7b03489a6f18a)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec101_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec101_observation_test-f8c7b03489a6f18a)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v08_dix_mentions_une_generation",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v09_mention_concurrente_enveloppe_figee",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v10_membre_absent_dnd_busy_reprise",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v16_matrice_ack",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v19_rejeu_create_post_close",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v20_envelope_mismatch_laisse_l_operation_intacte",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v21_non_membre_erreurs_uniformes",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v24_crash_apres_commit_avant_projection",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v26_recu_actif_survit_au_redemarrage",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v25_issue_inconnue_puis_nouvelle_mention",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test",
+      "name": "spec102_v27_capacite_absente_et_autre_instance",
+      "status": "ok",
+      "cargo_header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+      "fresh_results": [
+        {
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "status": "ok"
+        }
+      ],
+      "same_status": true
+    }
+  ],
+  "baseline30_same": 30,
+  "global_green": false,
+  "limits": "Chaque dernier résumé par cible Cargo seulement ; sous-processus calendrier exclus, aucun deuxième FULL."
+}

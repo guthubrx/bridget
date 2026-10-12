@@ -1,0 +1,91 @@
+{
+  "captured_at_utc": "2026-10-12T12:15:31.093442+00:00",
+  "kind": "ROOT integration receipt T123 fresh, historical candidate manifest unchanged",
+  "source_actual": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+    "sha256": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1"
+  },
+  "source_candidate_historical": {
+    "path": "/Users/moi/.cache/bridget-code158B-natif-20261012/thread-commit-recovery/crates/bridget-daemon/src/daemon.rs",
+    "sha256": "94a7a586ce1b9c14cf33d7687015d446b54ac283d0127fe2521088d0db9ea548",
+    "manifest": "/Users/moi/.cache/bridget-code158B-natif-20261012/thread-commit-recovery/manifest.json",
+    "manifest_sha256": "57e813f516e6ac02f2e258b5fe62433418f480d73c27dc4e58aa558f9d92871b"
+  },
+  "normalization": {
+    "command": [
+      "/Users/moi/.cargo/bin/rustfmt",
+      "--edition",
+      "2024",
+      "--config",
+      "skip_children=true",
+      "/Users/moi/.cache/bridget-docs158B-20261012/T123-normalization/candidate.rs",
+      "/Users/moi/.cache/bridget-docs158B-20261012/T123-normalization/actual.rs"
+    ],
+    "rc": 0,
+    "scratch_only": true,
+    "candidate_sha256": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+    "actual_sha256": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+    "equal_bytes": true,
+    "remaining_diff_hunks": 0,
+    "remaining_production_differences": 0,
+    "remaining_test_differences": 0,
+    "diff": "/Users/moi/.cache/bridget-docs158B-20261012/T123-normalization/normalized-differences.patch",
+    "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "provenance": {
+    "T123_production_patch": {
+      "path": "/Users/moi/.cache/bridget-code158B-natif-20261012/thread-commit-recovery/T123-thread-commit-recovery.patch",
+      "sha256": "d2c15743b414c994b86c181b3729dcc8018971b9ce4e860dc131ecc595f99939"
+    },
+    "G6_tests_patch": {
+      "path": "/Users/moi/.cache/bridget-docs158B-20261012/tests158B-T123-postcommit.patch",
+      "sha256": "6b747c8703c647ef9fcb4ef1852c5e3848e7548c87f5b2aad7baa17854833785"
+    },
+    "review_original": {
+      "path": "/Users/moi/.cache/bridget-docs158B-20261012/plan-code-review-r1-original-preserved.json",
+      "sha256": "af3995719da5edf8941d1a7a4bd506b54fe01f81f3b49d475b00dccb70ef8856"
+    }
+  },
+  "targeted_green": {
+    "path": "/Users/moi/.cache/bridget-tests158B-20261012/T123-G6-postcommit-GREEN.json",
+    "sha256": "d7664c7de2e918b22f73c278f56e505235b60caf11afe47fcf0ba97320d04a4a",
+    "rc": 0,
+    "seconds": 43.11,
+    "test_results": [
+      [
+        "ok",
+        "1",
+        "0",
+        "0"
+      ]
+    ],
+    "sources_stable": true,
+    "log": "/Users/moi/.cache/bridget-tests158B-20261012/T123-G6-postcommit-GREEN.log",
+    "log_sha256": "23ca3585e8f11df1c909fb8c687ba49f0980d44ac21a0110a1dbf33766ad424a",
+    "daemon_sha_before": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1"
+  },
+  "converge_p2": {
+    "path": "/Users/moi/.cache/bridget-code158B-daemon-20261012/converge158B-p2.json",
+    "sha256": "81bd115caaee63079e75e805a1af088f541a3d88a81c321f70a4b410e75ef518",
+    "verdict": "CONVERGED",
+    "coverage_reported_by_root": "7FR/3US, no FULL status inferred"
+  },
+  "audit_source_ready": {
+    "path": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/manifest.json",
+    "sha256": "2422d1449eece2c9b83d6e5724ad53051d6ba0393e5431993ea1a182b5b367fe",
+    "files_count": 38,
+    "rust_files_count": 18,
+    "source_capture": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/source-hashes.json",
+    "source_capture_sha256": "c87c3a046555955bbf66c196d961faf379eec89fa9238fee1e8329c5a2ac4b0b",
+    "valid_for_current_sources": true,
+    "preparation_only": true,
+    "thematic_modules_executed": []
+  },
+  "full_status": "FULL unique running per ROOT session10421; no GREEN inferred",
+  "limits": [
+    "Only normalization/provenance/targeted result evidence; not semantic reread of18Rust",
+    "No tests/Cargo/build/service/Git/WT write",
+    "Source hashes fresh; historical T123 manifest retained",
+    "Converged code obligations do not imply complete-suite success"
+  ]
+}

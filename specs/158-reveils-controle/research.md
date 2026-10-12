@@ -123,3 +123,7 @@ Date : 2026-10-12. Branche : session-158-reveils-controle. Racine : /Users/moi/N
 ## Réemploi/contre-revue fraîche158A après livraison157
 
 Index UNIQUE native_delegations_child confirmé dans delegation_lineage.rs126 ; for_child146 le réutilise. Le MCP séparé reçoit identité/socket, donc CallerScope interne fournit le booléen via l'identité inscrite du daemon ciblé, sans DB cliente ni panne convertie en standard. L'arrêt compose la garde de Delegate/Continue ; enfant/open/approve restent pause seule. Le count précommit est celui des plus hautes racines actives visées, calculé seulement sur nouvelle commande via FnOnce ; réception historique au rejeu, jamais un nombre physique confirmé. Ces décisions n'ajoutent ni Saga, table, outil, scénario, tâche ou fonctions158B. La baseline fraîche est exécutée et reçue par ROOT ; l'auditeur n'exécute aucun test.
+
+## Extension158B après livraison158A
+
+La partie B complète US5–US7. Son artefact de référence est /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/research-158B.md. Les preuves et choix158A ci-dessus restent historiques et conservés.

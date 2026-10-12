@@ -123,6 +123,15 @@ pub(crate) fn observation_request(
     socket: &Path,
     request: bridget_transport::protocol::ObservationRequest,
 ) -> Result<serde_json::Value, ClientError> {
+    if let bridget_transport::protocol::ObservationRequest::Missed { limit, after_seq } = &request {
+        if limit.is_some_and(|value| !(1..=64).contains(&value))
+            || after_seq.is_some_and(|value| value > i64::MAX as u64)
+        {
+            return Err(ClientError::InvalidParams(
+                "missed : limit 1..64 et curseur de séquence borné requis".into(),
+            ));
+        }
+    }
     let mut connection = registered_connection(identity, instance_id, socket)?;
     match connection.send_then_wait(&WrapperToDaemon::ObservationRequest { request })? {
         DaemonToWrapper::ObservationResult { result } => Ok(result),
@@ -910,6 +919,64 @@ pub(crate) fn read_artifact(
     }
 }
 
+/// Frontière158B : identité auxiliaire pour MCP ; rôle client pour CLI local.
+/// Les actions administratives gardent la négociation de contrôle existante.
+/// Coût O(B), B octets sérialisés et lus ; nombre constant d'échanges.
+/// Cette borne ne décrit ni la latence réseau ni le temps de réponse du daemon.
+pub(crate) fn wake_request(
+    identity: Option<(&str, &str)>,
+    socket: &Path,
+    request: bridget_transport::protocol::WakeRequest,
+) -> Result<bridget_transport::protocol::WakeResult, ClientError> {
+    use bridget_transport::protocol::{WAKE_CONTRACT_VERSION, WakeAction};
+    if request.version != WAKE_CONTRACT_VERSION {
+        return Err(ClientError::InvalidParams(
+            "version de réveil invalide".into(),
+        ));
+    }
+    if matches!(
+        &request.request,
+        WakeAction::AdminList {} | WakeAction::AdminCancel { .. }
+    ) {
+        return Err(ClientError::InvalidParams(
+            "action de contrôle réservée au chemin CLI humain".into(),
+        ));
+    }
+    let mut connection = if let Some((agent, instance)) = identity {
+        registered_connection(agent, instance, socket)?
+    } else if matches!(&request.request, WakeAction::CliOnce { .. }) {
+        let mut connection = DaemonConnection::connect(socket)?;
+        match connection.exchange(&WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        })? {
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client,
+            } => {}
+            other => return unexpected_response(other),
+        }
+        match connection.exchange(&WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::communication::issuer_scope("bridget-wake-cli"),
+            capabilities: Vec::new(),
+        })? {
+            DaemonToWrapper::ClientWelcome { .. } => {}
+            other => return unexpected_response(other),
+        }
+        connection
+    } else {
+        return Err(ClientError::Technical {
+            code: "identity_unavailable",
+            message: "identité auxiliaire requise pour cette action de réveil".into(),
+        });
+    };
+    match connection.exchange(&WrapperToDaemon::WakeRequest { request })? {
+        DaemonToWrapper::WakeResult { result } if result.version == WAKE_CONTRACT_VERSION => {
+            Ok(result)
+        }
+        other => unexpected_response(other),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum ClientError {
     InvalidParams(String),
@@ -934,15 +1001,27 @@ pub(crate) struct DaemonConnection {
 }
 
 impl DaemonConnection {
-    pub(crate) fn read_stream(&self) -> &UnixStream { self.reader.get_ref() }
+    pub(crate) fn read_stream(&self) -> &UnixStream {
+        self.reader.get_ref()
+    }
 
     /// Flux déjà négocié : aucune échéance de tour, seulement un fragment borné.
-    pub(crate) fn read_stream_response(&mut self, max_bytes: usize) -> Result<DaemonToWrapper, ClientError> {
-        self.reader.get_ref().set_read_timeout(None).map_err(watch_output_error)?;
-        let line=bridget_transport::jsonl::read_unix_line(&mut self.reader,max_bytes,
-            bridget_transport::jsonl::LineDeadline::AfterFirstByte(Duration::from_secs(6)))
-            .map_err(watch_output_error)?.ok_or_else(watch_protocol_error)?;
-        serde_json::from_slice::<DaemonToWrapper>(&line).map_err(|_|watch_protocol_error())
+    pub(crate) fn read_stream_response(
+        &mut self,
+        max_bytes: usize,
+    ) -> Result<DaemonToWrapper, ClientError> {
+        self.reader
+            .get_ref()
+            .set_read_timeout(None)
+            .map_err(watch_output_error)?;
+        let line = bridget_transport::jsonl::read_unix_line(
+            &mut self.reader,
+            max_bytes,
+            bridget_transport::jsonl::LineDeadline::AfterFirstByte(Duration::from_secs(6)),
+        )
+        .map_err(watch_output_error)?
+        .ok_or_else(watch_protocol_error)?;
+        serde_json::from_slice::<DaemonToWrapper>(&line).map_err(|_| watch_protocol_error())
     }
 
     pub(crate) fn connect(socket: &Path) -> Result<Self, ClientError> {

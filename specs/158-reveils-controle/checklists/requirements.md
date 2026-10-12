@@ -36,3 +36,8 @@
 - La demande de secret est spécifiée et reportée : aucun consommateur Bridget n'existe (question 3).
 - Budget de tours retiré après la contre-revue (compteur non attesté pour Codex) : question 3.
 - Les lignes de code citées viennent du checkout principal. Elles sont historiques et à revalider sur la livraison157 vérifiée ; les cases ci-dessus ne valent pas un gate frais158.
+
+
+## Extension158B — vérificationROOTdu12octobre
+
+Les mentions158Bspecseuleci-dessus décrivent le gateA historique. B dispose maintenant de son plan, réemploiPASS40items/gate5sur5, revueR1tranchée,22tâchesT101–T122 etAnalyzePASS7FR/3US/22tâches. Le rapport actuel est /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/analyze-report-158B.md. Les10groupes contractuels restent prévus, pas exécutés. Les casesA ne valent pas une validation des testsB.

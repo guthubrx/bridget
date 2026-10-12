@@ -1019,7 +1019,10 @@ struct DaemonState {
     thread_wake_departures: VecDeque<Instant>,
     /// Session 104 : permis de recherche/relecture (2 simultanés, sans file).
     ledger_read_permits: crate::ledger::search::ReadPermits,
-    observation_tx: mpsc::SyncSender<(Instant, DeferredControl)>,
+    observation_tx: mpsc::SyncSender<ObservationJob>,
+    observation_result_tx: mpsc::SyncSender<ObservationWriteResult>,
+    observation_result_rx: mpsc::Receiver<ObservationWriteResult>,
+    cli_wake_cursor: Option<(i64, String)>,
     observation_lost: Arc<std::sync::atomic::AtomicU64>,
     #[cfg(test)]
     fixture_root: Option<FixtureRoot>,
@@ -1702,6 +1705,1106 @@ enum ReminderAction {
     },
 }
 
+// Orchestration158B : aucune transaction SQL n'est gardée pendant une E/S.
+// La preuve native est capturée à l'admission puis revalidée au gel/départ.
+fn wake_native_origin(
+    st: &DaemonState,
+    owner: &str,
+    frozen: Option<&crate::wake_schedules::NativeWakeOrigin>,
+) -> Result<Option<crate::wake_schedules::NativeWakeOrigin>, &'static str> {
+    let task = st
+        .delegation_store
+        .for_child(owner)
+        .map_err(|_| "storage_unavailable")?;
+    let Some(task) = task else {
+        return if frozen.is_some() {
+            Err("owner_unavailable")
+        } else {
+            Ok(None)
+        };
+    };
+    let instance = task.child_instance.as_deref().ok_or("owner_unavailable")?;
+    if frozen.is_some_and(|old| {
+        old.task_id != task.task_id || old.instance_id != instance || old.mission != task.mission
+    }) || task.cleanup_done
+        || !matches!(
+            task.state.as_str(),
+            "starting" | "mission_pending" | "working" | "waiting_for_children"
+        )
+    {
+        return Err("owner_unavailable");
+    }
+    let route = st.router.get_agent(owner).ok_or("owner_unavailable")?;
+    if live_connection_identity(st, &route.connection_id)
+        != Some((owner.to_owned(), instance.to_owned()))
+    {
+        return Err("owner_unavailable");
+    }
+    let link = st
+        .fleet
+        .agent_link_for_child(instance)
+        .map_err(|_| "storage_unavailable")?
+        .ok_or("owner_unavailable")?;
+    if link.role != "native_delegate"
+        || !link.state.owns_child()
+        || link.delegation_id.as_deref() != Some(task.task_id.as_str())
+        || st.managed_by_instance.get(instance) != Some(&task.task_id)
+    {
+        return Err("owner_unavailable");
+    }
+    let mut current = task.clone();
+    let mut seen = HashSet::from([task.task_id.clone()]);
+    while let Some(id) = current.parent_task_id.as_deref() {
+        if seen.len() >= 8 || !seen.insert(id.to_owned()) {
+            return Err("owner_unavailable");
+        }
+        current = st
+            .delegation_store
+            .get(id)
+            .map_err(|_| "storage_unavailable")?
+            .ok_or("owner_unavailable")?;
+        if current.root_owner() != task.root_owner()
+            || current.cleanup_done
+            || !matches!(
+                current.state.as_str(),
+                "starting" | "mission_pending" | "working" | "waiting_for_children"
+            )
+        {
+            return Err("owner_unavailable");
+        }
+    }
+    if let Some(id) = &task.parent_execution_id {
+        let execution = st
+            .execution_store
+            .execution_snapshot(id)
+            .map_err(|_| "storage_unavailable")?
+            .ok_or("owner_unavailable")?;
+        if matches!(
+            execution.state.as_str(),
+            "interrupted" | "completed" | "failed" | "unreachable"
+        ) {
+            return Err("owner_unavailable");
+        }
+    }
+    Ok(Some(crate::wake_schedules::NativeWakeOrigin {
+        task_id: task.task_id,
+        instance_id: instance.to_owned(),
+        mission: task.mission,
+    }))
+}
+
+// Trois puits réels : admission, gel et dernière vérification avant émission.
+fn wake_target_guard(
+    st: &DaemonState,
+    owner: &str,
+    target: &bridget_transport::protocol::WakeTarget,
+) -> Result<(), &'static str> {
+    use bridget_transport::protocol::{ThreadAction, ThreadRequest, WakeTarget};
+    match target {
+        WakeTarget::SelfTarget {} => Ok(()),
+        WakeTarget::Agent { id } => {
+            if crate::threads::canonical_uuid(id).as_deref() != Some(id.as_str()) {
+                return Err("invalid_request");
+            }
+            if !st.presences.values().any(|p| p.name == *id) && st.router.get_agent(id).is_none() {
+                return Err("target_unknown");
+            }
+            if owner != id {
+                crate::communication::project_scope(
+                    agent_communication_project(st, owner).as_ref(),
+                    agent_communication_project(st, id).as_ref(),
+                    id,
+                    None,
+                )
+                .map_err(|_| "project_scope_unavailable")?;
+            }
+            Ok(())
+        }
+        WakeTarget::Thread { id } => {
+            let (result, _) = crate::threads::handle_with_change(
+                &st.store,
+                &DaemonDirectory { state: st },
+                owner,
+                ThreadRequest {
+                    version: 1,
+                    cross_project_reason: None,
+                    request: ThreadAction::Show {
+                        thread_id: id.clone(),
+                    },
+                },
+                unix_now_secs(),
+            );
+            if result.result["status"] != "shown" || result.result["state"] != "open" {
+                return Err("thread_unavailable");
+            }
+            let members: Vec<String> = result.result["members"]
+                .as_array()
+                .ok_or("storage_unavailable")?
+                .iter()
+                .map(|m| {
+                    m["agent_id"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or("storage_unavailable")
+                })
+                .collect::<Result<_, _>>()?;
+            crate::threads::Directory::communication_scope(
+                &DaemonDirectory { state: st },
+                owner,
+                &members,
+                None,
+            )
+            .map_err(|_| "project_scope_unavailable")?;
+            Ok(())
+        }
+    }
+}
+
+/// Calcul civil hors mutex ; la décision est revalidée avant sa seule écriture.
+fn handle_wake_request(
+    conn_id: &str,
+    request: bridget_transport::protocol::WakeRequest,
+    state: &Arc<Mutex<DaemonState>>,
+    now: i64,
+) -> DaemonToWrapper {
+    use crate::wake_schedules::{WakeSchedule, calculate_cadence, timezone_fingerprint};
+    use bridget_transport::protocol::{WakeAction, WakeResult, WakeTarget};
+    let result = (|| -> Result<serde_json::Value, &'static str> {
+        if request.version != 1 {
+            return Err("invalid_request");
+        }
+        let (owner, native, admin) = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let admin = matches!(
+                request.request,
+                WakeAction::AdminList {} | WakeAction::AdminCancel { .. }
+            );
+            if admin {
+                if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client) {
+                    return Err("identity_unavailable");
+                }
+                let negotiated = st
+                    .client_negotiations
+                    .get(conn_id)
+                    .ok_or("negotiation_required")?;
+                if !negotiated
+                    .capabilities
+                    .contains(&ClientCapability::ControlStateV1)
+                {
+                    return Err("capability_not_negotiated");
+                }
+                control_client_actor(&st, conn_id).ok_or("human_actor_required")?;
+                (String::new(), None, true)
+            } else if let Some((owner, _)) = live_connection_identity(&st, conn_id) {
+                let native = wake_native_origin(&st, &owner, None)?;
+                (owner, native, false)
+            } else if matches!(request.request, WakeAction::CliOnce { .. })
+                && st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
+                && st
+                    .client_negotiations
+                    .get(conn_id)
+                    .is_some_and(|n| n.version == CLIENT_CONTRACT_VERSION)
+                && st.peer_uids.get(conn_id).copied() == Some(unsafe { libc::geteuid() })
+            {
+                ("bridget-local-cli".to_owned(), None, false)
+            } else {
+                return Err("identity_unavailable");
+            }
+        };
+        if matches!(request.request, WakeAction::CliOnce { .. }) && native.is_some() {
+            return Err("identity_unavailable");
+        }
+        match request.request {
+            WakeAction::Schedule {
+                target,
+                cadence,
+                label,
+            } => {
+                let label = label.unwrap_or_default();
+                if label.len() > 2048 {
+                    return Err("invalid_request");
+                }
+                let mut schedule = WakeSchedule {
+                    schedule_id: uuid::Uuid::new_v4().to_string(),
+                    owner: owner.clone(),
+                    owner_native: native,
+                    owner_project: None,
+                    target,
+                    cadence,
+                    label,
+                    anchor_at: now,
+                    next_at: now.saturating_add(1),
+                    timezone: String::new(),
+                    next_calendar_date: None,
+                    previous_calendar_date: None,
+                    occurrence: None,
+                    cancelled_at: None,
+                };
+                // La première échéance d'un intervalle est now+seconds, jamais now.
+                if let bridget_transport::protocol::WakeCadence::Interval { seconds } =
+                    schedule.cadence
+                {
+                    schedule.next_at = now
+                        .checked_add(seconds.try_into().map_err(|_| "invalid_request")?)
+                        .ok_or("invalid_request")?;
+                }
+                schedule.owner_project = {
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    agent_communication_project(&st, &owner)
+                };
+                let calculated = calculate_cadence(&schedule, now)?;
+                schedule.next_at = calculated.next_at;
+                schedule.timezone = calculated.fingerprint.clone();
+                schedule.next_calendar_date = calculated.next_calendar_date.clone();
+                let current_timezone = timezone_fingerprint(now)?;
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if live_connection_identity(&st, conn_id)
+                    .is_none_or(|(current, _)| current != owner)
+                {
+                    return Err("identity_unavailable");
+                }
+                wake_native_origin(&st, &owner, schedule.owner_native.as_ref())?;
+                wake_target_guard(&st, &owner, &schedule.target)?;
+                if current_timezone != calculated.fingerprint {
+                    return Err("calendar_unavailable");
+                }
+                st.store
+                    .create_wake_schedule(&schedule)
+                    .map_err(|e| match e {
+                        crate::store::StoreError::Invariant("schedule_limit") => "schedule_limit",
+                        _ => "storage_unavailable",
+                    })?;
+                Ok(serde_json::json!({"status":"scheduled","schedule":schedule}))
+            }
+            WakeAction::List {} | WakeAction::AdminList {} => {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let schedules = st
+                    .store
+                    .list_wake_schedules((!admin).then_some(owner.as_str()))
+                    .map_err(|_| "storage_unavailable")?;
+                Ok(
+                    serde_json::json!({"status":"listed","schedules":schedules,"calendar":"daemon_local","nonexistent_times":"skipped"}),
+                )
+            }
+            WakeAction::Cancel { schedule_id } | WakeAction::AdminCancel { schedule_id } => {
+                if crate::threads::canonical_uuid(&schedule_id).as_deref()
+                    != Some(schedule_id.as_str())
+                {
+                    return Err("invalid_request");
+                }
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let changed = st
+                    .store
+                    .cancel_wake_schedule((!admin).then_some(owner.as_str()), &schedule_id, now)
+                    .map_err(|e| match e {
+                        crate::store::StoreError::Invariant("target_unknown") => "target_unknown",
+                        crate::store::StoreError::Invariant("not_owner") => "not_owner",
+                        _ => "storage_unavailable",
+                    })?;
+                Ok(
+                    serde_json::json!({"status":if changed{"cancelled"}else{"already_cancelled"},"schedule_id":schedule_id}),
+                )
+            }
+            WakeAction::CliOnce { target, label, id } => {
+                let label = label.unwrap_or_default();
+                if label.len() > 2048 || id.is_empty() || id.len() > 256 {
+                    return Err("invalid_request");
+                }
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let directory = st.agent_infos();
+                let agent = if crate::threads::canonical_uuid(&target).is_some() {
+                    directory
+                        .iter()
+                        .find(|p| p.agent_id == target)
+                        .map(|p| p.agent_id.clone())
+                } else {
+                    match crate::cli::resolve_name_in_directory(
+                        &target,
+                        directory
+                            .iter()
+                            .map(|p| (p.display_name.as_str(), p.agent_id.as_str())),
+                    ) {
+                        Ok(id) => Some(id),
+                        Err(error) if error.contains("ambigu") => return Err("target_ambiguous"),
+                        Err(_) => None,
+                    }
+                };
+                let thread = if crate::threads::canonical_uuid(&target).is_some() {
+                    st.store
+                        .connection()
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM discussion_threads WHERE thread_id=?1)",
+                            [&target],
+                            |r| r.get::<_, bool>(0),
+                        )
+                        .map_err(|_| "storage_unavailable")?
+                } else {
+                    false
+                };
+                if agent.is_some() && thread {
+                    return Err("target_ambiguous");
+                }
+                let target = if thread {
+                    if live_connection_identity(&st, conn_id).is_none() {
+                        return Err("identity_unavailable");
+                    }
+                    WakeTarget::Thread { id: target }
+                } else {
+                    WakeTarget::Agent {
+                        id: agent.ok_or("target_unknown")?,
+                    }
+                };
+                if owner != "bridget-local-cli" {
+                    wake_target_guard(&st, &owner, &target)?;
+                }
+                let project = agent_communication_project(&st, &owner);
+                let (reservation, frozen) = match st.idempotency.reserve_cli_wake(
+                    &id,
+                    &owner,
+                    &target,
+                    &label,
+                    project.as_ref(),
+                    now,
+                ) {
+                    Ok(value) => value,
+                    Err(crate::idempotency::IdempotencyError::CliWakeRateLimited {
+                        retry_after_secs,
+                    }) => {
+                        return Ok(
+                            serde_json::json!({"status":"refused","code":"rate_limited","retry_after_secs":retry_after_secs}),
+                        );
+                    }
+                    Err(_) => return Err("storage_unavailable"),
+                };
+                match reservation {
+                    Reservation::EnvelopeMismatch => Err("envelope_mismatch"),
+                    Reservation::IdempotencyExpired => Err("request_expired"),
+                    Reservation::Prepared { .. } => Ok(
+                        serde_json::json!({"status":"prepared","id":id,"issued_at":frozen.issued_at,"target":frozen.target}),
+                    ),
+                    Reservation::Replayed(result) => Ok(
+                        serde_json::json!({"status":"replayed","id":id,"issued_at":frozen.issued_at,"result":format!("{result:?}")}),
+                    ),
+                }
+            }
+        }
+    })();
+    DaemonToWrapper::WakeResult { result: WakeResult {version:1,result:result.unwrap_or_else(|code|serde_json::json!({"status":if matches!(code,"storage_unavailable"|"calendar_unavailable"){"error"}else{"refused"},"code":code}))} }
+}
+
+// Une seule frontière de départ pour occurrences, CLI et résumés ; guard au write.
+fn deliver_frozen_wake(
+    state: &Arc<Mutex<DaemonState>>,
+    wake: &crate::wake_schedules::FrozenWake,
+    scheduled_id: Option<&str>,
+    now: i64,
+    clock: Instant,
+) -> Result<crate::wake_schedules::WakePhase, &'static str> {
+    use crate::wake_schedules::{
+        CLI_WAKE_SCOPE, MISSED_SUMMARY_SCOPE, SCHEDULED_WAKE_SCOPE, WakePhase, WakeSource,
+    };
+    use bridget_transport::protocol::WakeTarget;
+    // Wall avant Mono fournit une borne conservatrice de la fraction du tick.
+    // Le résultat102 déjà acquis reste prioritaire même si cette horloge échoue.
+    let wall_before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok();
+    let mono_anchor = Instant::now();
+    let age_before = mono_anchor.saturating_duration_since(clock);
+    let tick_wall_lower = wall_before.and_then(|wall| wall.checked_sub(age_before));
+    let departure_deadline =
+        (clock + Duration::from_secs(1)).min(mono_anchor + Duration::from_secs(1));
+    let scope = match wake.source {
+        WakeSource::Scheduled => SCHEDULED_WAKE_SCOPE,
+        WakeSource::CliOnce => CLI_WAKE_SCOPE,
+        WakeSource::MissedSummary => MISSED_SUMMARY_SCOPE,
+    };
+    let key =
+        IdempotencyKey::new(scope, OperationKind::Send, &wake.id).map_err(|_| "invalid_request")?;
+    let route = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        // Un dépôt102 déjà committé n'est pas une nouvelle émission : retrouver
+        // sa preuve avant les gardes mutables et sans republier ses intentions.
+        if let WakeTarget::Thread { id } = &wake.target {
+            let operation_id = wake
+                .thread_operation_id
+                .as_deref()
+                .ok_or("invalid_request")?;
+            let canonical_hash = crate::threads::digest(&[
+                b"post",
+                b"v1",
+                id.as_bytes(),
+                wake.body.as_bytes(),
+                b"all",
+                b"reply_to",
+                b"ack",
+            ]);
+            match st
+                .store
+                .thread_operation_replay(&wake.owner, operation_id, &canonical_hash)
+                .map_err(|_| "storage_unavailable")?
+            {
+                Some(crate::store::threads::ThreadTxOutcome::Replayed(result))
+                    if result["status"] == "posted"
+                        && result["thread_id"].as_str() == Some(id.as_str()) =>
+                {
+                    if matches!(wake.source, WakeSource::CliOnce) {
+                        let (_, phase, expires_at) = st
+                            .idempotency
+                            .cli_wake(&wake.id)
+                            .map_err(|_| "storage_unavailable")?
+                            .ok_or("storage_unavailable")?;
+                        if phase == crate::idempotency::RecordState::Prepared {
+                            st.idempotency
+                                .transition(
+                                    &key,
+                                    crate::idempotency::RecordState::Prepared,
+                                    crate::idempotency::RecordState::Dispatching,
+                                )
+                                .map_err(|_| "storage_unavailable")?;
+                        }
+                        if phase != crate::idempotency::RecordState::Terminal {
+                            st.idempotency
+                                .finalize(
+                                    &key,
+                                    crate::idempotency::PublicResult::Accepted { expires_at },
+                                )
+                                .map_err(|_| "storage_unavailable")?;
+                        }
+                    }
+                    return Ok(WakePhase::CommittedThread);
+                }
+                Some(crate::store::threads::ThreadTxOutcome::Refused(
+                    crate::store::threads::ThreadRefusal::EnvelopeMismatch,
+                )) => return Err("envelope_mismatch"),
+                Some(_) => return Err("thread_unavailable"),
+                None => {}
+            }
+        }
+        match st
+            .idempotency
+            .send_delivery_phase(&key)
+            .map_err(|_| "storage_unavailable")?
+            .as_deref()
+        {
+            Some("acked") => return Ok(WakePhase::Confirmed),
+            Some("dispatching") if now < wake.grace_until => {
+                return Ok(WakePhase::DispatchingAgent);
+            }
+            Some(_) => return Ok(WakePhase::OutcomeUnknown),
+            None => {}
+        }
+        if now >= wake.grace_until {
+            return Ok(WakePhase::MissedBeforeDeparture);
+        }
+        if let Some(id) = scheduled_id {
+            let current = st
+                .store
+                .wake_schedule(id)
+                .map_err(|_| "storage_unavailable")?
+                .ok_or("owner_unavailable")?;
+            if current.cancelled_at.is_some()
+                || current.occurrence.as_ref().is_none_or(|w| w.id != wake.id)
+            {
+                return Ok(WakePhase::OwnerUnavailable);
+            }
+        }
+        if agent_communication_project(&st, &wake.owner) != wake.owner_project {
+            return Err("project_scope_unavailable");
+        }
+        wake_native_origin(&st, &wake.owner, wake.owner_native.as_ref())?;
+        if !(matches!(wake.source, WakeSource::CliOnce) && wake.owner == "bridget-local-cli") {
+            wake_target_guard(&st, &wake.owner, &wake.target)?;
+        }
+        let control = crate::referent_control::read(st.store.connection())
+            .map_err(|_| "storage_unavailable")?;
+        if !matches!(
+            crate::referent_control::admit_autonomous_effect(
+                crate::referent_control::AutonomousEffect::ScheduledWake,
+                &control
+            ),
+            crate::referent_control::Admission::Admitted
+        ) {
+            return Ok(WakePhase::Deferred);
+        }
+        if let WakeTarget::Thread { id } = &wake.target {
+            let current_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|wall| {
+                    tick_wall_lower.and_then(|tick| wall.as_secs().checked_sub(tick.as_secs()))
+                })
+                .and_then(|delta| i64::try_from(delta).ok())
+                .and_then(|delta| now.checked_add(delta))
+                .ok_or("calendar_unavailable")?;
+            if current_now >= wake.grace_until {
+                return Ok(WakePhase::MissedBeforeDeparture);
+            }
+            if matches!(wake.source, WakeSource::CliOnce) {
+                if st
+                    .idempotency
+                    .cli_wake(&wake.id)
+                    .map_err(|_| "storage_unavailable")?
+                    .is_some_and(|(_, phase, _)| phase == crate::idempotency::RecordState::Prepared)
+                {
+                    st.idempotency
+                        .transition(
+                            &key,
+                            crate::idempotency::RecordState::Prepared,
+                            crate::idempotency::RecordState::Dispatching,
+                        )
+                        .map_err(|_| "storage_unavailable")?;
+                }
+            }
+            let current_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|wall| {
+                    tick_wall_lower.and_then(|tick| wall.as_secs().checked_sub(tick.as_secs()))
+                })
+                .and_then(|delta| i64::try_from(delta).ok())
+                .and_then(|delta| now.checked_add(delta))
+                .ok_or("calendar_unavailable")?;
+            if current_now >= wake.grace_until {
+                return Ok(WakePhase::MissedBeforeDeparture);
+            }
+            let (posted, changed) = crate::threads::handle_with_change(
+                &st.store,
+                &DaemonDirectory { state: &st },
+                &wake.owner,
+                bridget_transport::protocol::ThreadRequest {
+                    version: 1,
+                    cross_project_reason: None,
+                    request: bridget_transport::protocol::ThreadAction::Post {
+                        thread_id: id.clone(),
+                        body: wake.body.clone(),
+                        notify: bridget_transport::protocol::ThreadNotify::All(
+                            bridget_transport::protocol::ThreadNotifyAll::All,
+                        ),
+                        operation_id: wake.thread_operation_id.clone().ok_or("invalid_request")?,
+                        reply_to_seq: None,
+                        ack_receipt: None,
+                        kind: None,
+                        supersedes_seq: None,
+                    },
+                },
+                current_now,
+            );
+            if posted.result["status"] != "posted" {
+                return Err("thread_unavailable");
+            }
+            if let Some(thread) = changed {
+                publish_human_thread_change(&mut st, &thread);
+            }
+            if matches!(wake.source, WakeSource::CliOnce) {
+                st.idempotency
+                    .finalize(
+                        &key,
+                        crate::idempotency::PublicResult::Accepted {
+                            expires_at: wake.issued_at.saturating_add(7 * 86400),
+                        },
+                    )
+                    .map_err(|_| "storage_unavailable")?;
+            }
+            return Ok(WakePhase::CommittedThread);
+        }
+        let target = match &wake.target {
+            WakeTarget::SelfTarget {} => wake.owner.as_str(),
+            WakeTarget::Agent { id } => id.as_str(),
+            _ => unreachable!(),
+        };
+        let route = st.router.get_agent(target).ok_or("target_unavailable")?;
+        let conn = route.connection_id.clone();
+        let instance = st
+            .conn_instances
+            .get(&conn)
+            .cloned()
+            .ok_or("target_unavailable")?;
+        let presence = st.presences.get(&instance).ok_or("target_unavailable")?;
+        if presence.dnd_until.is_some_and(|until| clock < until)
+            || !matches!(presence.state.as_str(), "connected" | "busy")
+            || live_connection_identity(&st, &conn) != Some((target.to_owned(), instance.clone()))
+        {
+            return Ok(WakePhase::Deferred);
+        }
+        let definition = st
+            .registry
+            .get(&presence.agent_type)
+            .map_err(|_| "target_unavailable")?;
+        if !definition
+            .capabilities
+            .execution_paths
+            .iter()
+            .any(|path| path == &definition.protocol)
+        {
+            return Ok(WakePhase::Deferred);
+        }
+        let writer = st
+            .connections
+            .get(&conn)
+            .cloned()
+            .ok_or("target_unavailable")?;
+        (target.to_owned(), conn, instance, writer)
+    };
+    let (target, conn, instance, writer) = route;
+    let mut permit = None;
+    let mut committed = None;
+    let placeholder = DaemonToWrapper::Nack {
+        id: wake.id.clone(),
+        reason: "réveil non admis".into(),
+    };
+    let result =
+        push_control_message_until_checked(&writer, &placeholder, departure_deadline, || {
+            let mut st = match state.try_lock() {
+                Ok(st) => st,
+                Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return Err(std::io::ErrorKind::WouldBlock.into());
+                }
+            };
+            let refusal = || {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "wake departure refused",
+                )
+            };
+            if agent_communication_project(&st, &wake.owner) != wake.owner_project
+                || (!(matches!(wake.source, WakeSource::CliOnce)
+                    && wake.owner == "bridget-local-cli")
+                    && wake_target_guard(&st, &wake.owner, &wake.target).is_err())
+                || wake_native_origin(&st, &wake.owner, wake.owner_native.as_ref()).is_err()
+            {
+                return Err(refusal());
+            }
+            if let Some(id) = scheduled_id {
+                let current = st
+                    .store
+                    .wake_schedule(id)
+                    .map_err(|_| refusal())?
+                    .ok_or_else(refusal)?;
+                if current.cancelled_at.is_some()
+                    || current.occurrence.as_ref().is_none_or(|w| w.id != wake.id)
+                {
+                    return Err(refusal());
+                }
+            }
+            let control =
+                crate::referent_control::read(st.store.connection()).map_err(|_| refusal())?;
+            let current_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|wall| {
+                    tick_wall_lower.and_then(|tick| wall.as_secs().checked_sub(tick.as_secs()))
+                })
+                .and_then(|delta| i64::try_from(delta).ok())
+                .and_then(|delta| now.checked_add(delta))
+                .ok_or_else(refusal)?;
+            let current_clock = clock
+                .checked_add(age_before.saturating_add(mono_anchor.elapsed()))
+                .ok_or_else(refusal)?;
+            if control.paused
+                || current_now >= wake.grace_until
+                || live_connection_identity(&st, &conn) != Some((target.clone(), instance.clone()))
+                || st
+                    .router
+                    .get_agent(&target)
+                    .is_none_or(|route| route.connection_id != conn)
+                || st.presences.get(&instance).is_none_or(|p| {
+                    p.dnd_until.is_some_and(|until| current_clock < until)
+                        || !matches!(p.state.as_str(), "connected" | "busy")
+                })
+                || st.presences.get(&instance).is_none_or(|presence| {
+                    !st.registry
+                        .get(&presence.agent_type)
+                        .is_ok_and(|definition| {
+                            definition
+                                .capabilities
+                                .execution_paths
+                                .iter()
+                                .any(|path| path == &definition.protocol)
+                        })
+                })
+                || !st
+                    .circuit_breaker
+                    .check_at(&wake.owner, &target, current_clock)
+            {
+                return Err(refusal());
+            }
+            let expiry = match st
+                .idempotency
+                .reserve(
+                    &key,
+                    &wake.canonical_bytes,
+                    wake.issued_at,
+                    7 * 86400,
+                    current_now,
+                    CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                )
+                .map_err(std::io::Error::other)?
+            {
+                Reservation::Prepared { expires_at } => expires_at,
+                Reservation::Replayed(_) => st
+                    .idempotency
+                    .prepared_expiry(&key, current_now)
+                    .map_err(std::io::Error::other)?
+                    .ok_or_else(refusal)?,
+                _ => return Err(refusal()),
+            };
+            let mut message = bridget_core::BridgetMessage::new("bridget", &target, &wake.body);
+            message.id = wake.id.clone();
+            message.reply = false;
+            message.origin = Some(bridget_core::MessageOrigin::System);
+            message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+            message.deadline_at = Some(wake.grace_until.max(0) as u64);
+            let delivery = SendDelivery {
+                delivery_id: uuid::Uuid::new_v4().to_string(),
+                recipient_instance_id: instance.clone(),
+                delivery_generation: 1,
+                expires_at: expiry,
+                message_bytes: serde_json::to_vec(&message).map_err(std::io::Error::other)?,
+            };
+            // La réserve peut attendre SQLite ; refaire le contrôle juste avant le départ.
+            let commit_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|wall| {
+                    tick_wall_lower.and_then(|tick| wall.as_secs().checked_sub(tick.as_secs()))
+                })
+                .and_then(|delta| i64::try_from(delta).ok())
+                .and_then(|delta| now.checked_add(delta))
+                .ok_or_else(refusal)?;
+            let commit_clock = clock
+                .checked_add(age_before.saturating_add(mono_anchor.elapsed()))
+                .ok_or_else(refusal)?;
+            if commit_now >= wake.grace_until || Instant::now() >= departure_deadline {
+                return Err(refusal());
+            }
+            st.idempotency
+                .begin_send_delivery(&key, &delivery)
+                .map_err(std::io::Error::other)?;
+            st.circuit_breaker
+                .record_at(&wake.owner, &target, commit_clock);
+            committed = Some(delivery.clone());
+            let frame = DaemonToWrapper::DeliverIdempotent {
+                delivery_id: delivery.delivery_id,
+                recipient_instance_id: instance.clone(),
+                delivery_generation: 1,
+                expires_at: expiry,
+                message,
+                execution: None,
+                mid_turn_ok: Some(true),
+            };
+            permit = Some(st);
+            Ok(Some(frame))
+        });
+    drop(permit);
+    if let Some(delivery) = committed {
+        if result.is_err() {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = st
+                .idempotency
+                .mark_delivery_indeterminate(&delivery.delivery_id, &instance, 1);
+        }
+        Ok(WakePhase::DispatchingAgent)
+    } else {
+        Ok(WakePhase::Deferred)
+    }
+}
+
+/// O(128+B+calendrier borné), tick1s existant ; aucun calendrier sous mutex.
+fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instant) {
+    use crate::wake_schedules::{
+        FrozenWake, WakePhase, WakeSource, calculate_cadence, timezone_fingerprint,
+    };
+    let schedules = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        match st.store.list_wake_schedules(None) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("wake snapshot unavailable: {e}");
+                return;
+            }
+        }
+    };
+    for schedule in schedules {
+        let mut frozen = schedule.occurrence.clone().filter(|w| !w.phase.terminal());
+        if schedule.cancelled_at.is_some() && frozen.is_none() {
+            continue;
+        }
+        // Cette lecture prime aussi l'annulation et la perte de l'origine.
+        // Seul None autorise ensuite les gardes d'un départ encore absent.
+        let committed_thread = if let Some(wake) = frozen.as_ref() {
+            if let bridget_transport::protocol::WakeTarget::Thread { id } = &wake.target {
+                let Some(operation_id) = wake.thread_operation_id.as_deref() else {
+                    continue;
+                };
+                let canonical_hash = crate::threads::digest(&[
+                    b"post",
+                    b"v1",
+                    id.as_bytes(),
+                    wake.body.as_bytes(),
+                    b"all",
+                    b"reply_to",
+                    b"ack",
+                ]);
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                match st
+                    .store
+                    .thread_operation_replay(&wake.owner, operation_id, &canonical_hash)
+                {
+                    Ok(Some(crate::store::threads::ThreadTxOutcome::Replayed(result)))
+                        if result["status"] == "posted"
+                            && result["thread_id"].as_str() == Some(id.as_str()) =>
+                    {
+                        true
+                    }
+                    Ok(None) => false,
+                    _ => continue,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let native_status = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            wake_native_origin(&st, &schedule.owner, schedule.owner_native.as_ref())
+        };
+        let owner_closed = matches!(native_status, Err("owner_unavailable"));
+        if native_status.is_err() && !owner_closed && !committed_thread {
+            continue;
+        }
+        let cancellation_phase = if committed_thread {
+            Some(WakePhase::CommittedThread)
+        } else if schedule.cancelled_at.is_some() || owner_closed {
+            if let Some(wake) = &frozen {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let key = match IdempotencyKey::new(
+                    crate::wake_schedules::SCHEDULED_WAKE_SCOPE,
+                    OperationKind::Send,
+                    &wake.id,
+                ) {
+                    Ok(key) => key,
+                    Err(_) => continue,
+                };
+                match st.idempotency.send_delivery_phase(&key) {
+                    Ok(None) => Some(WakePhase::OwnerUnavailable),
+                    Ok(Some(p)) if p == "acked" => Some(WakePhase::Confirmed),
+                    Ok(Some(p)) if p == "dispatching" && now < wake.grace_until => None,
+                    Ok(Some(_)) => Some(WakePhase::OutcomeUnknown),
+                    Err(_) => continue,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let tz = match timezone_fingerprint(now) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let calendar = if (frozen.is_none() && (schedule.next_at <= now || tz != schedule.timezone))
+            || (cancellation_phase.is_some() && schedule.next_at <= now)
+        {
+            match calculate_cadence(&schedule, now) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("wake calendar unavailable: {e}");
+                    continue;
+                }
+            }
+        } else {
+            crate::wake_schedules::CalendarSnapshot {
+                fingerprint: tz,
+                next_at: schedule.next_at,
+                due_at: None,
+                calendar_date: None,
+                next_calendar_date: schedule.next_calendar_date.clone(),
+            }
+        };
+        let current_tz = match timezone_fingerprint(now) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if owner_closed {
+                let _ = st.store.cancel_wake_schedule(
+                    Some(&schedule.owner),
+                    &schedule.schedule_id,
+                    now,
+                );
+                if let (Some(phase), Some(wake)) = (cancellation_phase, frozen.as_ref()) {
+                    let _ = st.store.settle_wake_occurrence(
+                        &schedule.schedule_id,
+                        &wake.id,
+                        phase,
+                        calendar.next_at.max(schedule.next_at),
+                        calendar.next_calendar_date.as_deref(),
+                    );
+                }
+                continue;
+            }
+            if let (Some(phase), Some(wake)) = (cancellation_phase, frozen.as_ref()) {
+                let _ = st.store.settle_wake_occurrence(
+                    &schedule.schedule_id,
+                    &wake.id,
+                    phase,
+                    calendar.next_at.max(schedule.next_at),
+                    calendar.next_calendar_date.as_deref(),
+                );
+                continue;
+            }
+            if frozen.is_none() && schedule.cancelled_at.is_none() {
+                let control = match crate::referent_control::read(st.store.connection()) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                if control.paused {
+                    continue;
+                }
+                if let Some(due) = calendar.due_at {
+                    if wake_target_guard(&st, &schedule.owner, &schedule.target).is_err() {
+                        continue;
+                    }
+                    let mut wake = FrozenWake {
+                        version: 1,
+                        source: WakeSource::Scheduled,
+                        target: schedule.target.clone(),
+                        owner: schedule.owner.clone(),
+                        owner_native: schedule.owner_native.clone(),
+                        owner_project: schedule.owner_project.clone(),
+                        due_at: due,
+                        issued_at: now,
+                        grace_until: due.saturating_add(600),
+                        id: format!("wake:{}:{due}", schedule.schedule_id),
+                        label: schedule.label.clone(),
+                        body: format!(
+                            "Réveil programmé par {}\n{}",
+                            schedule.owner, schedule.label
+                        ),
+                        canonical_bytes: Vec::new(),
+                        thread_operation_id: matches!(
+                            schedule.target,
+                            bridget_transport::protocol::WakeTarget::Thread { .. }
+                        )
+                        .then(|| uuid::Uuid::new_v4().to_string()),
+                        delivery_id: None,
+                        phase: WakePhase::Prepared,
+                    };
+                    if wake.freeze_canonical().is_err() {
+                        continue;
+                    }
+                    if matches!(
+                        st.store.freeze_wake_occurrence(
+                            &schedule.schedule_id,
+                            schedule.next_at,
+                            &calendar.fingerprint,
+                            &current_tz,
+                            &wake,
+                            calendar.next_at,
+                            calendar.calendar_date.as_deref(),
+                            calendar.next_calendar_date.as_deref()
+                        ),
+                        Ok(true)
+                    ) {
+                        frozen = Some(wake);
+                    }
+                } else if calendar.next_at != schedule.next_at
+                    || calendar.fingerprint != schedule.timezone
+                {
+                    let _ = st.store.advance_wake_calendar(
+                        &schedule.schedule_id,
+                        schedule.next_at,
+                        &calendar.fingerprint,
+                        &current_tz,
+                        calendar.next_at,
+                        calendar.next_calendar_date.as_deref(),
+                        now,
+                    );
+                }
+            }
+        }
+        if let Some(wake) = frozen {
+            if let Ok(phase) =
+                deliver_frozen_wake(state, &wake, Some(&schedule.schedule_id), now, clock)
+            {
+                let future = if phase.terminal() && schedule.next_at <= now {
+                    match calculate_cadence(&schedule, now) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    }
+                } else {
+                    calendar.clone()
+                };
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = st.store.settle_wake_occurrence(
+                    &schedule.schedule_id,
+                    &wake.id,
+                    phase,
+                    future.next_at.max(schedule.next_at),
+                    future.next_calendar_date.as_deref(),
+                );
+            }
+        }
+    }
+    let pending = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.idempotency
+            .pending_cli_wakes(now, st.cli_wake_cursor.clone())
+    };
+    if let Ok(pending) = pending {
+        if pending.is_empty() {
+            state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .cli_wake_cursor = None;
+        }
+        for (wake, _, _) in pending {
+            let outcome = deliver_frozen_wake(state, &wake, None, now, clock);
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            st.cli_wake_cursor = Some((wake.issued_at, wake.id.clone()));
+            let terminal = match outcome {
+                Ok(WakePhase::MissedBeforeDeparture) => {
+                    Some(crate::idempotency::PublicResult::Rejected {
+                        category: "missed_before_departure".into(),
+                        reason: "réveil expiré avant départ".into(),
+                    })
+                }
+                Ok(WakePhase::OutcomeUnknown) => Some(crate::idempotency::PublicResult::Orphaned {
+                    reason: "outcome_unknown".into(),
+                }),
+                Err("owner_unavailable") => Some(crate::idempotency::PublicResult::Rejected {
+                    category: "owner_unavailable".into(),
+                    reason: "origine native terminée".into(),
+                }),
+                _ => None,
+            };
+            if let Some(result) = terminal {
+                if let Ok(key) = IdempotencyKey::new(
+                    crate::wake_schedules::CLI_WAKE_SCOPE,
+                    OperationKind::Send,
+                    &wake.id,
+                ) {
+                    if matches!(
+                        st.idempotency.cli_wake(&wake.id),
+                        Ok(Some((_, crate::idempotency::RecordState::Prepared, _)))
+                    ) {
+                        let _ = st.idempotency.transition(
+                            &key,
+                            crate::idempotency::RecordState::Prepared,
+                            crate::idempotency::RecordState::Dispatching,
+                        );
+                    }
+                    let _ = st.idempotency.finalize(&key, result);
+                }
+            }
+        }
+    }
+}
+
 fn deliver_to_agent(
     writer: &Arc<Mutex<BufWriter<UnixStream>>>,
     target_name: &str,
@@ -1721,101 +2824,379 @@ fn deliver_to_agent(
     Ok(message_id)
 }
 
+// Le worker de notification existant reste unique. Aucun accès Store ici.
+enum ObservationJob {
+    Control(Instant, DeferredControl),
+    Notice {
+        deadline: Instant,
+        control: DeferredControl,
+        owner: String,
+        fact_id: String,
+        result_tx: mpsc::SyncSender<ObservationWriteResult>,
+    },
+}
+struct ObservationWriteResult {
+    owner: String,
+    fact_id: String,
+    outcome: crate::store::observation_missed::ObservationWriteOutcome,
+}
 fn observation_output() -> (
-    mpsc::SyncSender<(Instant, DeferredControl)>,
+    mpsc::SyncSender<ObservationJob>,
     Arc<std::sync::atomic::AtomicU64>,
 ) {
-    let (tx, rx) = mpsc::sync_channel::<(Instant, DeferredControl)>(64);
+    let (tx, rx) = mpsc::sync_channel::<ObservationJob>(64);
     let lost = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failures = lost.clone();
     thread::spawn(move || {
-        while let Ok((deadline, control)) = rx.recv() {
-            if Instant::now() >= deadline
-                || push_control_message_until(
+        while let Ok(job) = rx.recv() {
+            let (deadline, control, reply) = match job {
+                ObservationJob::Control(deadline, control) => (deadline, control, None),
+                ObservationJob::Notice {
+                    deadline,
+                    control,
+                    owner,
+                    fact_id,
+                    result_tx,
+                } => (deadline, control, Some((owner, fact_id, result_tx))),
+            };
+            use crate::store::observation_missed::ObservationWriteOutcome as O;
+            let outcome = if Instant::now() >= deadline {
+                O::FailedBeforeWrite
+            } else {
+                match push_control_message_until(
                     &control.writer,
                     &control.message,
                     deadline.min(Instant::now() + CANCEL_NOTIFICATION_BUDGET),
-                )
-                .is_err()
-            {
+                ) {
+                    Ok(()) => O::Written,
+                    Err(_) => O::WriteUnknown,
+                }
+            };
+            if !matches!(outcome, O::Written) {
                 failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some((owner, fact_id, result_tx)) = reply {
+                let _ = result_tx.try_send(ObservationWriteResult {
+                    owner,
+                    fact_id,
+                    outcome,
+                });
             }
         }
     });
     (tx, lost)
 }
 
-/// O(S), S<=128 ; persistance seulement si abonnement consommé/expiré.
-/// Aucune E/S de notification sous verrou, dépôt non bloquant en file de64.
 fn observe_fact(st: &mut DaemonState, fact: crate::observation::Fact) {
+    observe_fact_at(st, fact, unix_now_secs(), Instant::now());
+}
+// Même puits métier avec horloges explicites ; pas d'horloge globale de test.
+fn observe_fact_at(st: &mut DaemonState, fact: crate::observation::Fact, now: i64, clock: Instant) {
     let before = st.observations.subscriptions.clone();
     let revision = st.observations.revision;
-    let notifications = st.observations.observe(fact, Instant::now());
-    if revision != st.observations.revision {
-        let saved = st
-            .observations
-            .snapshot()
-            .ok()
-            .is_some_and(|bytes| st.store.save_observation_snapshot(&bytes).is_ok());
-        if !saved {
-            st.observations.subscriptions = before;
-            st.observations.revision = revision;
-            st.observation_lost.fetch_add(
-                notifications.len() as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            error!("observation persistence failed; no notification delivered");
-            return;
+    let notices = st.observations.observe(fact, clock);
+    let snapshot = if revision != st.observations.revision {
+        match st.observations.snapshot() {
+            Ok(bytes) => Some(bytes),
+            Err(_) => {
+                st.observations.subscriptions = before;
+                st.observations.revision = revision;
+                st.observation_lost
+                    .fetch_add(notices.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
         }
+    } else {
+        None
+    };
+    if !queue_observation_notifications_at(st, notices, now, clock, snapshot.as_deref()) {
+        st.observations.subscriptions = before;
+        st.observations.revision = revision;
     }
-    queue_observation_notifications(st, notifications);
 }
-
-// Réutilisé pour faits et interruptions, même file bornée et même règle DND.
 fn queue_observation_notifications(
-    st: &DaemonState,
-    notifications: Vec<crate::observation::Notification>,
+    st: &mut DaemonState,
+    notices: Vec<crate::observation::Notification>,
 ) {
-    for notification in notifications {
-        let target = st.router.get_agent(&notification.owner).and_then(|route| {
-            // Une route en cours de Register n'a pas encore sa preuve : ne
-            // jamais faire précéder le reçu Registered par une notification.
+    let snapshot = st.observations.snapshot().ok();
+    let _ = queue_observation_notifications_at(
+        st,
+        notices,
+        unix_now_secs(),
+        Instant::now(),
+        snapshot.as_deref(),
+    );
+}
+// Snapshotonce et provenance sont committés avant le dépôt borné/nonbloquant.
+fn queue_observation_notifications_at(
+    st: &mut DaemonState,
+    notices: Vec<crate::observation::Notification>,
+    now: i64,
+    clock: Instant,
+    snapshot: Option<&[u8]>,
+) -> bool {
+    let accepted = match st.store.save_observation_batch(snapshot, &notices, now) {
+        Ok(ids) => ids,
+        Err(error) => {
+            st.observation_lost
+                .fetch_add(notices.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            warn!("observation snapshot/provenance unavailable: {error}");
+            return false;
+        }
+    };
+    for notice in notices {
+        if !accepted.contains(&notice.fact_id) {
+            continue;
+        }
+        let target = st.router.get_agent(&notice.owner).and_then(|route| {
             if !st.identity_credentials.contains_key(&route.connection_id) {
                 return None;
             }
-            let presence = st
-                .conn_instances
-                .get(&route.connection_id)
-                .and_then(|id| st.presences.get(id))?;
-            if presence.is_dnd() {
+            let instance = st.conn_instances.get(&route.connection_id)?;
+            let presence = st.presences.get(instance)?;
+            if presence.dnd_until.is_some_and(|until| clock < until) {
                 return None;
             }
             st.connections.get(&route.connection_id).cloned()
         });
-        let accepted = target.is_some_and(|writer| {
-            let mut message = bridget_core::BridgetMessage::new(
-                "bridget",
-                &notification.owner,
-                &notification.body,
-            );
-            message.id = format!("bridget-observation:{}", message.id);
-            message.origin = Some(bridget_core::MessageOrigin::System);
-            st.observation_tx
-                .try_send((
-                    Instant::now() + Duration::from_secs(5),
-                    DeferredControl {
-                        writer,
-                        message: DaemonToWrapper::Deliver {
-                            message,
-                            mid_turn_ok: Some(true),
-                        },
-                    },
-                ))
-                .is_ok()
-        });
-        if !accepted {
+        let Some(writer) = target else {
+            // Le fait conservé ne prouve pas la remise de sa notice immédiate.
             st.observation_lost
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = st
+                .store
+                .observation_owner_presence(&notice.owner, false, now);
+            let _ = st.store.finish_observation_write(
+                &notice.owner,
+                &notice.fact_id,
+                crate::store::observation_missed::ObservationWriteOutcome::FailedBeforeWrite,
+                now,
+            );
+            continue;
+        };
+        let mut message = bridget_core::BridgetMessage::new("bridget", &notice.owner, &notice.body);
+        message.id = format!("bridget-observation:{}", notice.fact_id);
+        message.origin = Some(bridget_core::MessageOrigin::System);
+        let job = ObservationJob::Notice {
+            deadline: clock + Duration::from_secs(5),
+            control: DeferredControl {
+                writer,
+                message: DaemonToWrapper::Deliver {
+                    message,
+                    mid_turn_ok: Some(true),
+                },
+            },
+            owner: notice.owner,
+            fact_id: notice.fact_id,
+            result_tx: st.observation_result_tx.clone(),
+        };
+        if st.observation_tx.try_send(job).is_err() {
+            st.observation_lost
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Full : conserver le pending et sa deadline initiale. Le tick le solde unknown.
+    }
+    true
+}
+
+/// Même tick1s ; preuves de retour avant gel, ACK099 avant expiration/supersession.
+fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instant) {
+    use crate::wake_schedules::{FrozenWake, MISSED_SUMMARY_SCOPE, WakePhase, WakeSource};
+    let summaries = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        // Une deadline durable dépassée prime sur un callback arrivé tardivement.
+        if let Err(error) = st.store.maintain_observation_missed(now, false) {
+            warn!("observation maintenance unavailable: {error}");
+            return;
+        }
+        while let Ok(result) = st.observation_result_rx.try_recv() {
+            if let Err(error) = st.store.finish_observation_write(
+                &result.owner,
+                &result.fact_id,
+                result.outcome,
+                now,
+            ) {
+                warn!("observation completion unavailable: {error}");
+            }
+        }
+        // Une seule décision par owner. Une présence historique ne décrit pas la route actuelle.
+        let owners: std::collections::BTreeSet<_> = st
+            .presences
+            .values()
+            .map(|presence| presence.name.clone())
+            .collect();
+        for owner in owners {
+            let available = st
+                .router
+                .get_agent(&owner)
+                .and_then(|route| {
+                    if !st.identity_credentials.contains_key(&route.connection_id) {
+                        return None;
+                    }
+                    let instance = st.conn_instances.get(&route.connection_id)?;
+                    if live_connection_identity(&st, &route.connection_id)
+                        != Some((owner.clone(), instance.clone()))
+                    {
+                        return None;
+                    }
+                    let presence = st.presences.get(instance)?;
+                    Some(
+                        presence.name == owner
+                            && matches!(presence.state.as_str(), "connected" | "busy")
+                            && !presence.dnd_until.is_some_and(|until| clock < until),
+                    )
+                })
+                .unwrap_or(false);
+            if st
+                .store
+                .observation_owner_presence(&owner, available, now)
+                .is_err()
+            {
+                continue;
+            }
+            if available {
+                match st.store.observation_summary_current(&owner) {
+                    Ok(Some(summary)) => {
+                        let key = match IdempotencyKey::new(
+                            MISSED_SUMMARY_SCOPE,
+                            OperationKind::Send,
+                            &summary.summary_id,
+                        ) {
+                            Ok(key) => key,
+                            Err(_) => continue,
+                        };
+                        match st.idempotency.send_delivery_phase(&key) {
+                            Ok(Some(phase)) if phase == "acked" => {
+                                if let Ok(Some(delivery)) =
+                                    st.idempotency.stored_send_delivery(&key)
+                                {
+                                    let _ = st.store.bind_observation_summary_delivery(
+                                        &summary.summary_id,
+                                        &delivery.delivery_id,
+                                        &delivery.recipient_instance_id,
+                                        delivery.delivery_generation,
+                                    );
+                                    let _ = st.store.confirm_observation_summary(
+                                        &owner,
+                                        &summary.summary_id,
+                                        summary.generation,
+                                        &delivery.delivery_id,
+                                        &delivery.recipient_instance_id,
+                                        delivery.delivery_generation,
+                                    );
+                                }
+                            }
+                            Err(_) => continue,
+                            _ => {}
+                        }
+                    }
+                    Err(_) => continue,
+                    Ok(None) => {}
+                }
+                let _ = st.store.freeze_observation_summary(&owner, now);
+            }
+        }
+        match st.store.observation_summaries_pending() {
+            Ok(s) => s,
+            Err(error) => {
+                warn!("observation summaries unavailable: {error}");
+                return;
+            }
+        }
+    };
+    for summary in summaries {
+        let key = match IdempotencyKey::new(
+            MISSED_SUMMARY_SCOPE,
+            OperationKind::Send,
+            &summary.summary_id,
+        ) {
+            Ok(key) => key,
+            Err(_) => continue,
+        };
+        {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.idempotency.send_delivery_phase(&key) {
+                Ok(Some(phase)) if phase == "acked" => {
+                    if let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key) {
+                        let _ = st.store.bind_observation_summary_delivery(
+                            &summary.summary_id,
+                            &delivery.delivery_id,
+                            &delivery.recipient_instance_id,
+                            delivery.delivery_generation,
+                        );
+                        let _ = st.store.confirm_observation_summary(
+                            &summary.owner,
+                            &summary.summary_id,
+                            summary.generation,
+                            &delivery.delivery_id,
+                            &delivery.recipient_instance_id,
+                            delivery.delivery_generation,
+                        );
+                    }
+                    continue;
+                }
+                Ok(Some(phase)) => {
+                    if phase != "dispatching" || now >= summary.expires_at {
+                        let _ = st.store.expire_observation_summary(
+                            &summary.summary_id,
+                            now.max(summary.expires_at),
+                        );
+                    }
+                    continue;
+                }
+                Err(error) => {
+                    warn!("observation ACK proof unavailable: {error}");
+                    continue;
+                }
+                Ok(None) => {}
+            }
+            if now >= summary.expires_at {
+                let _ = st
+                    .store
+                    .expire_observation_summary(&summary.summary_id, now);
+                continue;
+            }
+        }
+        let project = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            agent_communication_project(&st, &summary.owner)
+        };
+        let mut wake = FrozenWake {
+            version: 1,
+            source: WakeSource::MissedSummary,
+            target: bridget_transport::protocol::WakeTarget::SelfTarget {},
+            owner: summary.owner.clone(),
+            owner_native: None,
+            owner_project: project,
+            due_at: summary.issued_at,
+            issued_at: summary.issued_at,
+            grace_until: summary.expires_at,
+            id: summary.summary_id.clone(),
+            label: String::new(),
+            body: summary.body,
+            canonical_bytes: Vec::new(),
+            thread_operation_id: None,
+            delivery_id: None,
+            phase: WakePhase::Prepared,
+        };
+        if wake.freeze_canonical().is_err() {
+            continue;
+        }
+        if let Ok(WakePhase::DispatchingAgent) = deliver_frozen_wake(state, &wake, None, now, clock)
+        {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            match st.idempotency.stored_send_delivery(&key) {
+                Ok(Some(delivery)) => {
+                    let _ = st.store.bind_observation_summary_delivery(
+                        &summary.summary_id,
+                        &delivery.delivery_id,
+                        &delivery.recipient_instance_id,
+                        delivery.delivery_generation,
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => warn!("observation delivery proof unavailable: {error}"),
+            }
         }
     }
 }
@@ -3439,6 +4820,8 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         let (observation_tx, observation_lost) = observation_output();
+        let (observation_result_tx, observation_result_rx) = mpsc::sync_channel(64);
+        store.maintain_observation_missed(unix_now_secs(), true)?;
         let observations = crate::observation::Observations::restore(
             &store.observation_snapshot()?,
             Instant::now(),
@@ -3461,6 +4844,9 @@ impl DaemonState {
             ledger_read_permits: crate::ledger::search::ReadPermits::default(),
             thread_wake_departures: VecDeque::new(),
             observation_tx,
+            observation_result_tx,
+            observation_result_rx,
+            cli_wake_cursor: None,
             observation_lost,
             #[cfg(test)]
             fixture_root: None,
@@ -4622,6 +6008,12 @@ fn schedule_idempotent_delivery_recovery(
     };
     let mut controls = Vec::new();
     for delivery in deliveries {
+        if !matches!(
+            state.idempotency.is_wake_delivery(&delivery.delivery_id),
+            Ok(false)
+        ) {
+            continue;
+        }
         // Une remise native incertaine n'est jamais une autorisation de
         // réexécuter sa mission, même sur la même instance reconnectée.
         let native_mission =
@@ -5170,6 +6562,10 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             let now = std::time::Instant::now();
 
             native_delegation::tick(&st_reminder);
+            let wake_clock = Instant::now();
+            let wake_now = unix_now_secs();
+            scheduled_wakes_tick(&st_reminder, wake_now, wake_clock);
+            observer_return_tick(&st_reminder, wake_now, wake_clock);
 
             // Collecter les actions à faire
             let actions: Vec<ReminderAction> = {
@@ -5189,7 +6585,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             {
                 let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
                 let notices = st.observations.due_source_notices(now);
-                queue_observation_notifications(&st, notices);
+                queue_observation_notifications(&mut st, notices);
             }
 
             // Exécuter les actions hors lock
@@ -5683,7 +7079,7 @@ fn handle_connection(
                         && st.presences.get(&instance).is_some_and(|p| !p.is_dnd())
                     {
                         let notices = st.observations.owner_returned(&owner, Instant::now());
-                        queue_observation_notifications(&st, notices);
+                        queue_observation_notifications(&mut st, notices);
                     }
                 }
                 state
@@ -5691,6 +7087,8 @@ fn handle_connection(
                     .unwrap_or_else(|e| e.into_inner())
                     .flush_pending_orphan_emitter_notices();
                 replay_delegated_runtime_events_for_connection(&state, &conn_id);
+                let return_clock = Instant::now();
+                observer_return_tick(&state, unix_now_secs(), return_clock);
             }
         }
         Ok(())
@@ -5705,6 +7103,11 @@ fn handle_connection(
         let writer_opt = st.connections.remove(&conn_id);
 
         let removed = st.router.unregister_by_conn(&conn_id);
+        if let Some(route) = &removed {
+            let _ = st
+                .store
+                .observation_owner_presence(&route.agent_id, false, unix_now_secs());
+        }
         st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
         st.observation_sequences.remove(&conn_id);
@@ -8208,6 +9611,37 @@ fn handle_delivery_ack(
         .acknowledge_send_delivery(&delivery_id, &instance_id, delivery_generation)
     {
         Ok(answered_request) => {
+            if let Some((owner, _)) = live_connection_identity(st, conn_id) {
+                if let Ok(Some(summary)) = st.store.observation_summary_current(&owner) {
+                    if let Ok(key) = IdempotencyKey::new(
+                        crate::wake_schedules::MISSED_SUMMARY_SCOPE,
+                        OperationKind::Send,
+                        &summary.summary_id,
+                    ) {
+                        if let Ok(Some(delivery)) = st.idempotency.stored_send_delivery(&key) {
+                            if delivery.delivery_id == delivery_id
+                                && delivery.recipient_instance_id == instance_id
+                                && delivery.delivery_generation == delivery_generation
+                            {
+                                let _ = st.store.bind_observation_summary_delivery(
+                                    &summary.summary_id,
+                                    &delivery_id,
+                                    &instance_id,
+                                    delivery_generation,
+                                );
+                                let _ = st.store.confirm_observation_summary(
+                                    &owner,
+                                    &summary.summary_id,
+                                    summary.generation,
+                                    &delivery_id,
+                                    &instance_id,
+                                    delivery_generation,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             if let Some(request_id) = answered_request {
                 st.delegation_store.wait_epoch().bump();
                 st.pending_replies
@@ -10726,16 +12160,22 @@ fn handle_delegation_overview(
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::DelegationControlRefusal as E;
     if version != 1 {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::UnsupportedVersion };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::UnsupportedVersion,
+        };
     }
     let st = state.lock().unwrap_or_else(|error| error.into_inner());
     if control_client_actor(&st, conn_id).is_none() {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::HumanActorRequired };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::HumanActorRequired,
+        };
     }
     match st.delegation_store.overview_page(filter, limit) {
-        Ok(page) => serde_json::from_value(page).unwrap_or(
-            DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
-        ),
+        Ok(page) => {
+            serde_json::from_value(page).unwrap_or(DaemonToWrapper::DelegationControlRejected {
+                reason: E::StoreUnavailable,
+            })
+        }
         Err(reason) => DaemonToWrapper::DelegationControlRejected { reason },
     }
 }
@@ -10750,24 +12190,38 @@ fn handle_delegation_cancel(
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::DelegationControlRefusal as E;
     if version != 1 {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::UnsupportedVersion };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::UnsupportedVersion,
+        };
     }
     if crate::threads::canonical_uuid(task_id).as_deref() != Some(task_id)
         || request_id.is_empty()
         || request_id.len() > 128
         || request_id.chars().any(bridget_core::is_disallowed_control)
     {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::InvalidRequest };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::InvalidRequest,
+        };
     }
     let drive = {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
         if control_client_actor(&st, conn_id).is_none() {
-            return DaemonToWrapper::DelegationControlRejected { reason: E::HumanActorRequired };
+            return DaemonToWrapper::DelegationControlRejected {
+                reason: E::HumanActorRequired,
+            };
         }
         let task = match st.delegation_store.get(task_id) {
             Ok(Some(task)) => task,
-            Ok(None) => return DaemonToWrapper::DelegationControlRejected { reason: E::TaskUnavailable },
-            Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+            Ok(None) => {
+                return DaemonToWrapper::DelegationControlRejected {
+                    reason: E::TaskUnavailable,
+                };
+            }
+            Err(_) => {
+                return DaemonToWrapper::DelegationControlRejected {
+                    reason: E::StoreUnavailable,
+                };
+            }
         };
         match st
             .delegation_store
@@ -10775,12 +12229,20 @@ fn handle_delegation_cancel(
         {
             Ok((_, drive)) => drive,
             Err(bridget_transport::protocol::HumanLineageError::TaskUnavailable) => {
-                return DaemonToWrapper::DelegationControlRejected { reason: E::TaskUnavailable };
+                return DaemonToWrapper::DelegationControlRejected {
+                    reason: E::TaskUnavailable,
+                };
             }
             Err(bridget_transport::protocol::HumanLineageError::EnvelopeMismatch) => {
-                return DaemonToWrapper::DelegationControlRejected { reason: E::InvalidRequest };
+                return DaemonToWrapper::DelegationControlRejected {
+                    reason: E::InvalidRequest,
+                };
             }
-            Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+            Err(_) => {
+                return DaemonToWrapper::DelegationControlRejected {
+                    reason: E::StoreUnavailable,
+                };
+            }
         }
     };
     if drive {
@@ -10789,8 +12251,16 @@ fn handle_delegation_cancel(
     let st = state.lock().unwrap_or_else(|error| error.into_inner());
     let task = match st.delegation_store.get(task_id) {
         Ok(Some(task)) => task,
-        Ok(None) => return DaemonToWrapper::DelegationControlRejected { reason: E::TaskUnavailable },
-        Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+        Ok(None) => {
+            return DaemonToWrapper::DelegationControlRejected {
+                reason: E::TaskUnavailable,
+            };
+        }
+        Err(_) => {
+            return DaemonToWrapper::DelegationControlRejected {
+                reason: E::StoreUnavailable,
+            };
+        }
     };
     let halt = match st.delegation_store.delegation_halt() {
         Ok(halt) => halt,
@@ -10798,7 +12268,11 @@ fn handle_delegation_cancel(
     };
     let total_active = match st.delegation_store.admission_counts(&task.owner_instance) {
         Ok((active, _, _)) => active as u32,
-        Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+        Err(_) => {
+            return DaemonToWrapper::DelegationControlRejected {
+                reason: E::StoreUnavailable,
+            };
+        }
     };
     DaemonToWrapper::DelegationOverview {
         halted: halt.halted,
@@ -10826,18 +12300,24 @@ fn handle_delegation_halt_set(
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::DelegationControlRefusal as E;
     if version != 1 {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::UnsupportedVersion };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::UnsupportedVersion,
+        };
     }
     if command_id.is_empty()
         || command_id.len() > 128
         || command_id.chars().any(bridget_core::is_disallowed_control)
         || (cancel_active && !halted)
     {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::InvalidRequest };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::InvalidRequest,
+        };
     }
     let st = state.lock().unwrap_or_else(|error| error.into_inner());
     let Some(actor) = control_client_actor(&st, conn_id) else {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::HumanActorRequired };
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::HumanActorRequired,
+        };
     };
     let mut targets = Vec::new();
     let response = st.delegation_store.set_delegation_halt(
@@ -10888,12 +12368,23 @@ fn handle_delegation_halt_set(
     let response: DaemonToWrapper = match response {
         Ok(response) => match serde_json::from_value(response) {
             Ok(response) => response,
-            Err(_) => return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable },
+            Err(_) => {
+                return DaemonToWrapper::DelegationControlRejected {
+                    reason: E::StoreUnavailable,
+                };
+            }
         },
         Err(reason) => return DaemonToWrapper::DelegationControlRejected { reason },
     };
-    let DaemonToWrapper::DelegationHaltState { replayed, cancelled, .. } = &response else {
-        return DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable };
+    let DaemonToWrapper::DelegationHaltState {
+        replayed,
+        cancelled,
+        ..
+    } = &response
+    else {
+        return DaemonToWrapper::DelegationControlRejected {
+            reason: E::StoreUnavailable,
+        };
     };
     let mut drive = !targets.is_empty();
     let mut failed = false;
@@ -10925,7 +12416,9 @@ fn handle_delegation_halt_set(
         native_delegation::tick(state);
     }
     if failed {
-        DaemonToWrapper::DelegationControlRejected { reason: E::StoreUnavailable }
+        DaemonToWrapper::DelegationControlRejected {
+            reason: E::StoreUnavailable,
+        }
     } else {
         response
     }
@@ -12546,7 +14039,7 @@ mod spec099_classic_delivery_tests {
         let mut accepted = 0;
         let mut full = 0;
         for _ in 0..128 {
-            match tx.try_send((
+            match tx.try_send(ObservationJob::Control(
                 Instant::now() + Duration::from_secs(5),
                 DeferredControl {
                     writer: writer.clone(),
@@ -12587,7 +14080,7 @@ mod spec099_classic_delivery_tests {
             ("expired", Instant::now()),
             ("fresh", Instant::now() + Duration::from_secs(5)),
         ] {
-            tx.try_send((
+            tx.try_send(ObservationJob::Control(
                 deadline,
                 DeferredControl {
                     writer: writer.clone(),
@@ -16057,6 +17550,8 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::DelegationOverviewRead { .. }
                 | WrapperToDaemon::DelegationHaltSet { .. }
                 | WrapperToDaemon::DelegationCancel { .. }
+                | WrapperToDaemon::WakeRequest { .. }
+
                 | WrapperToDaemon::ControlFocusRead { .. }
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
@@ -16099,6 +17594,8 @@ fn handle_wrapper_message_with_peer(
                 Some(ClientRefusal::CapabilityNotNegotiated)
             }
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::WakeRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
+                WrapperToDaemon::WakeRequest { .. } => None,
                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueListV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
                 WrapperToDaemon::QueueList { .. } => None,
@@ -16120,6 +17617,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::DelegationOverviewRead { .. }
                 | WrapperToDaemon::DelegationHaltSet { .. }
                 | WrapperToDaemon::DelegationCancel { .. }
+
                     if !st.client_negotiations.contains_key(conn_id) =>
                 {
                     Some(ClientRefusal::NegotiationRequired)
@@ -16142,6 +17640,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::DelegationOverviewRead { .. }
                 | WrapperToDaemon::DelegationHaltSet { .. }
                 | WrapperToDaemon::DelegationCancel { .. }
+
                     if st.client_negotiations.get(conn_id).is_some_and(|negotiated| {
                         negotiated.version != CLIENT_CONTRACT_VERSION
                             || !negotiated
@@ -16159,7 +17658,8 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::HumanInboxResolve { .. }
                 | WrapperToDaemon::DelegationOverviewRead { .. }
                 | WrapperToDaemon::DelegationHaltSet { .. }
-                | WrapperToDaemon::DelegationCancel { .. } => None,
+                | WrapperToDaemon::DelegationCancel { .. }
+ => None,
                 WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::ControlExecution { .. }
@@ -16366,6 +17866,12 @@ fn handle_wrapper_message_with_peer(
     }
 
     match msg {
+        WrapperToDaemon::WakeRequest { request } => Some(handle_wake_request(
+            conn_id,
+            request,
+            state,
+            unix_now_secs(),
+        )),
         WrapperToDaemon::QueueList { target } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             Some(handle_guidance_queue(&st, conn_id, &target))
@@ -16434,7 +17940,7 @@ fn handle_wrapper_message_with_peer(
                 return None;
             }
             let notices = st.observations.report_gap(&agent, dropped, Instant::now());
-            queue_observation_notifications(&st, notices);
+            queue_observation_notifications(&mut st, notices);
             None
         }
         WrapperToDaemon::ObservationCapabilities { events } => {
@@ -16666,6 +18172,18 @@ fn handle_wrapper_message_with_peer(
                     });
                 }
             }
+            if let bridget_transport::protocol::ObservationRequest::Missed { limit, after_seq } =
+                &request
+            {
+                return Some(DaemonToWrapper::ObservationResult {
+                    result: st
+                        .store
+                        .observation_missed_page(&owner, *limit, *after_seq, unix_now_secs())
+                        .unwrap_or_else(
+                            |_| serde_json::json!({"status":"error","code":"storage_unavailable"}),
+                        ),
+                });
+            }
             let before = st.observations.subscriptions.clone();
             let revision = st.observations.revision;
             let mut result = st.observations.request(
@@ -16745,17 +18263,39 @@ fn handle_wrapper_message_with_peer(
             None
         }
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
-        WrapperToDaemon::DelegationOverviewRead { version, state: filter, limit } => {
-            Some(handle_delegation_overview(state, conn_id, version, &filter, limit))
-        }
-        WrapperToDaemon::DelegationCancel { version, task_id, request_id } => {
-            Some(handle_delegation_cancel(state, conn_id, version, &task_id, &request_id))
-        }
-        WrapperToDaemon::DelegationHaltSet { version, command_id, halted, reason, cancel_active } => {
-            Some(handle_delegation_halt_set(
-                state, conn_id, version, &command_id, halted, reason.as_deref(), cancel_active,
-            ))
-        }
+        WrapperToDaemon::DelegationOverviewRead {
+            version,
+            state: filter,
+            limit,
+        } => Some(handle_delegation_overview(
+            state, conn_id, version, &filter, limit,
+        )),
+        WrapperToDaemon::DelegationCancel {
+            version,
+            task_id,
+            request_id,
+        } => Some(handle_delegation_cancel(
+            state,
+            conn_id,
+            version,
+            &task_id,
+            &request_id,
+        )),
+        WrapperToDaemon::DelegationHaltSet {
+            version,
+            command_id,
+            halted,
+            reason,
+            cancel_active,
+        } => Some(handle_delegation_halt_set(
+            state,
+            conn_id,
+            version,
+            &command_id,
+            halted,
+            reason.as_deref(),
+            cancel_active,
+        )),
         WrapperToDaemon::ControlStateRead { version } => {
             Some(handle_control_state_read(state, version))
         }
@@ -19908,12 +21448,16 @@ fn handle_wrapper_message_with_peer(
                 Ok(instance_id) => instance_id,
                 Err(response) => return Some(*response),
             };
-            Some(handle_availability_for_instance(
-                &agent,
-                until_secs,
-                Some(&instance_id),
-                &mut st,
-            ))
+            let result =
+                handle_availability_for_instance(&agent, until_secs, Some(&instance_id), &mut st);
+            let available = st.presences.get(&instance_id).is_some_and(|p| !p.is_dnd());
+            let _ = st
+                .store
+                .observation_owner_presence(&agent, available, unix_now_secs());
+            drop(st);
+            let return_clock = Instant::now();
+            observer_return_tick(state, unix_now_secs(), return_clock);
+            Some(result)
         }
 
         WrapperToDaemon::DeliveryRejected { id, reason } => {
@@ -22279,12 +23823,1339 @@ mod presence_tests {
         (state, config)
     }
 
+    #[test]
+    fn wake158b_daemon_g4_g5_pause_et_grace_avant_depart() {
+        use crate::wake_schedules::WakePhase;
+        use bridget_transport::protocol::{WakeAction, WakeCadence, WakeRequest, WakeTarget};
+        for mode in [
+            "pause",
+            "offline",
+            "dnd",
+            "capacite",
+            "circuit",
+            "depart_unknown",
+            "sql099",
+            "expiration_writer",
+        ] {
+            let (mut st, config) = state_with_registered_agent(&format!("w158b-{mode}"));
+            let owner = st.presences["instance-1"].name.clone();
+            let (writer, mut reader) = control_socket(&format!("w158b-{mode}"));
+            st.connections.insert("conn-1".into(), writer.clone());
+            let state = Arc::new(Mutex::new(st));
+            let at = unix_now_secs();
+            let clock = Instant::now();
+            let response = handle_wake_request(
+                "conn-1",
+                WakeRequest {
+                    version: 1,
+                    request: WakeAction::Schedule {
+                        target: WakeTarget::SelfTarget {},
+                        cadence: WakeCadence::Interval { seconds: 60 },
+                        label: Some("libellé complet158B".into()),
+                    },
+                },
+                &state,
+                at,
+            );
+            assert!(
+                matches!(response, DaemonToWrapper::WakeResult { .. }),
+                "{response:?}"
+            );
+            let initial = state
+                .lock()
+                .unwrap()
+                .store
+                .list_wake_schedules(Some(&owner))
+                .unwrap();
+            assert_eq!(
+                initial.len(),
+                1,
+                "le handler admet réellement la programmation"
+            );
+            let id = initial[0].schedule_id.clone();
+            let due = initial[0].next_at;
+            assert_eq!(due, at + 60);
+            {
+                let mut st = state.lock().unwrap();
+                if mode == "dnd" {
+                    st.presences.get_mut("instance-1").unwrap().dnd_until =
+                        Some(clock + Duration::from_secs(1800));
+                } else if mode == "capacite" {
+                    let registry_path = st.registry.source().to_path_buf();
+                    st.registry = crate::registry::AgentRegistry::from_json(
+                        &serde_json::json!({"agents":{"claude":{"command":"/bin/sh","protocol":"tmux",
+                            "forbidden_env":[],"pass_env":[]}}}).to_string(), registry_path,
+                    ).unwrap();
+                    assert_eq!(st.registry.get("claude").unwrap().protocol, "tmux");
+                } else if mode == "circuit" {
+                    for _ in 0..8 {
+                        st.circuit_breaker.record_at(&owner, &owner, clock);
+                    }
+                } else if mode != "depart_unknown" {
+                    st.connections.remove("conn-1");
+                }
+                if mode == "pause" {
+                    let current = crate::referent_control::read(st.store.connection()).unwrap();
+                    crate::referent_control::set(
+                        st.store.connection(),
+                        crate::referent_control::ControlMutation {
+                            command_id: "pause-wake158b",
+                            expected_generation: current.generation,
+                            paused: Some(true),
+                            auto_objectives_cap: None,
+                            reason: Some("pause15min"),
+                            actor: "humain",
+                            now: due,
+                            agent_posture: None,
+                            auto_reassignment: None,
+                        },
+                    )
+                    .unwrap()
+                    .unwrap();
+                }
+            }
+            scheduled_wakes_tick(&state, due, clock);
+            let mut effective_due = due;
+            if mode == "pause" {
+                assert!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .store
+                        .wake_schedule(&id)
+                        .unwrap()
+                        .unwrap()
+                        .occurrence
+                        .is_none(),
+                    "aucun gel pendant pause"
+                );
+                scheduled_wakes_tick(&state, due + 900, clock + Duration::from_secs(900));
+                assert!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .store
+                        .wake_schedule(&id)
+                        .unwrap()
+                        .unwrap()
+                        .occurrence
+                        .is_none()
+                );
+                {
+                    let st = state.lock().unwrap();
+                    let current = crate::referent_control::read(st.store.connection()).unwrap();
+                    crate::referent_control::set(
+                        st.store.connection(),
+                        crate::referent_control::ControlMutation {
+                            command_id: "resume-wake158b",
+                            expected_generation: current.generation,
+                            paused: Some(false),
+                            auto_objectives_cap: None,
+                            reason: None,
+                            actor: "humain",
+                            now: due + 900,
+                            agent_posture: None,
+                            auto_reassignment: None,
+                        },
+                    )
+                    .unwrap()
+                    .unwrap();
+                    st.delegation_store
+                        .set_delegation_halt(
+                            "halt-wake158b",
+                            true,
+                            "humain",
+                            None,
+                            || Ok(0),
+                            due + 900,
+                        )
+                        .unwrap();
+                }
+                effective_due = due + 900;
+                scheduled_wakes_tick(&state, effective_due, clock + Duration::from_secs(900));
+            }
+            let frozen = state
+                .lock()
+                .unwrap()
+                .store
+                .wake_schedule(&id)
+                .unwrap()
+                .unwrap();
+            let wake = frozen
+                .occurrence
+                .clone()
+                .expect("occurrence réelle gelée après admission du tick");
+            assert_eq!(wake.due_at, effective_due);
+            assert_eq!(wake.grace_until, effective_due + 600);
+            assert_eq!(wake.owner, owner);
+            assert_eq!(wake.label, "libellé complet158B");
+            assert!(
+                wake.body.contains(&owner) && wake.body.contains(&wake.label),
+                "attribution/label complets : {}",
+                wake.body
+            );
+            assert!(frozen.next_at > effective_due);
+            assert!(
+                !wake.phase.terminal(),
+                "aucune fausse confirmation avant ACK"
+            );
+            if mode == "depart_unknown" {
+                assert_eq!(wake.phase, WakePhase::DispatchingAgent);
+                match read_control(&mut reader) {
+                    DaemonToWrapper::DeliverIdempotent { message, .. } => {
+                        assert_eq!(message.origin, Some(bridget_core::MessageOrigin::System));
+                        assert_eq!(message.body, wake.body);
+                    }
+                    other => panic!("départ099 réel attendu : {other:?}"),
+                }
+            }
+            if mode == "expiration_writer" {
+                state
+                    .lock()
+                    .unwrap()
+                    .connections
+                    .insert("conn-1".into(), writer.clone());
+                let held = Arc::new(std::sync::Barrier::new(2));
+                let release = Arc::new(std::sync::Barrier::new(2));
+                let held_child = held.clone();
+                let release_child = release.clone();
+                let blocked_writer = writer.clone();
+                let blocker = thread::spawn(move || {
+                    let guard = blocked_writer.lock().unwrap();
+                    held_child.wait();
+                    release_child.wait();
+                    thread::sleep(Duration::from_millis(200));
+                    drop(guard);
+                });
+                held.wait();
+                let boundary_budget = Instant::now() + Duration::from_secs(2);
+                let (departure_clock, wall_tick) = loop {
+                    let candidate_clock = Instant::now();
+                    let wall = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap();
+                    if (900..950).contains(&wall.subsec_millis())
+                        && candidate_clock.elapsed() < Duration::from_millis(50)
+                    {
+                        break (candidate_clock, wall);
+                    }
+                    assert!(
+                        Instant::now() < boundary_budget,
+                        "fraction de seconde observable"
+                    );
+                    thread::sleep(Duration::from_millis(1));
+                };
+                release.wait();
+                let outcome = deliver_frozen_wake(
+                    &state,
+                    &wake,
+                    Some(&id),
+                    wake.grace_until - 1,
+                    departure_clock,
+                );
+                blocker.join().unwrap();
+                let wall_after = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap();
+                assert!(
+                    departure_clock.elapsed() < Duration::from_secs(1),
+                    "bornewriter1s observée"
+                );
+                assert!(
+                    wall_after.as_secs() > wall_tick.as_secs(),
+                    "seconde réellement franchie : {wall_tick:?} -> {wall_after:?}"
+                );
+                eprintln!(
+                    "G5 writer expiry : wall={wall_tick:?}->{wall_after:?}, logical_now={}, grace={}, outcome={outcome:?}",
+                    wake.grace_until - 1,
+                    wake.grace_until
+                );
+                let key = IdempotencyKey::new(
+                    crate::wake_schedules::SCHEDULED_WAKE_SCOPE,
+                    OperationKind::Send,
+                    &wake.id,
+                )
+                .unwrap();
+                assert_eq!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .idempotency
+                        .send_delivery_phase(&key)
+                        .unwrap(),
+                    None,
+                    "aucun départ099 après expiration franchie pendant writer"
+                );
+                assert!(
+                    matches!(
+                        outcome,
+                        Ok(WakePhase::Deferred) | Ok(WakePhase::MissedBeforeDeparture)
+                    ),
+                    "{outcome:?}"
+                );
+                reader.get_ref().set_nonblocking(true).unwrap();
+                let mut line = String::new();
+                assert!(
+                    matches!(reader.read_line(&mut line),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock),
+                    "aucune trame après expiration"
+                );
+                let saved = state
+                    .lock()
+                    .unwrap()
+                    .store
+                    .wake_schedule(&id)
+                    .unwrap()
+                    .unwrap()
+                    .occurrence
+                    .unwrap();
+                assert_eq!(saved.canonical_bytes, wake.canonical_bytes);
+                assert_eq!(saved.grace_until, wake.grace_until);
+                drop(state);
+                let _ = std::fs::remove_file(&config.db_path);
+                continue;
+            }
+            if mode == "sql099" {
+                state
+                    .lock()
+                    .unwrap()
+                    .store
+                    .connection()
+                    .execute_batch("DROP TABLE send_deliveries")
+                    .unwrap();
+            }
+            if mode == "circuit" {
+                let mut st = state.lock().unwrap();
+                for _ in 0..8 {
+                    st.circuit_breaker
+                        .record_at(&owner, &owner, clock + Duration::from_secs(1499));
+                }
+            }
+            scheduled_wakes_tick(
+                &state,
+                effective_due + 599,
+                clock + Duration::from_secs(1499),
+            );
+            let before_expiry = state
+                .lock()
+                .unwrap()
+                .store
+                .wake_schedule(&id)
+                .unwrap()
+                .unwrap()
+                .occurrence
+                .unwrap();
+            assert_eq!(before_expiry.id, wake.id);
+            assert_eq!(before_expiry.canonical_bytes, wake.canonical_bytes);
+            assert_eq!(
+                before_expiry.grace_until, wake.grace_until,
+                "aucun renouvellement au retry"
+            );
+            scheduled_wakes_tick(
+                &state,
+                effective_due + 600,
+                clock + Duration::from_secs(1500),
+            );
+            let terminal = state
+                .lock()
+                .unwrap()
+                .store
+                .wake_schedule(&id)
+                .unwrap()
+                .unwrap()
+                .occurrence
+                .unwrap();
+            if mode == "sql099" {
+                assert_ne!(
+                    terminal.phase,
+                    WakePhase::MissedBeforeDeparture,
+                    "erreurSQL n'est pas absence099 prouvée"
+                );
+                assert_ne!(terminal.phase, WakePhase::Confirmed);
+            } else if mode == "depart_unknown" {
+                assert_eq!(
+                    terminal.phase,
+                    WakePhase::OutcomeUnknown,
+                    "départ sans ACK n'est jamais absence d'injection"
+                );
+            } else {
+                assert_eq!(
+                    terminal.phase,
+                    WakePhase::MissedBeforeDeparture,
+                    "borne600s sans remise099"
+                );
+            }
+            reader.get_ref().set_nonblocking(true).unwrap();
+            let mut line = String::new();
+            assert!(
+                matches!(reader.read_line(&mut line), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucune remise ni relance fournisseur"
+            );
+            drop(state);
+            let _ = std::fs::remove_file(&config.db_path);
+        }
+        // Même groupe4/5 : réemploi149 de l'admission et du bail natifs réels.
+        for closing in ["cancel", "sql"] {
+            use super::native_delegation::native_delegation_permissions149_tests::{
+                fixture_with_reader, mission_native,
+            };
+            let (mut st, config, commands, _parent_reader) = fixture_with_reader("w158b-native");
+            let task = mission_native(&mut st, &commands, "wake-origin158b", "working");
+            assert_eq!(
+                task.effective_posture,
+                Some(bridget_transport::protocol::SpawnPosture::Discovery)
+            );
+            let instance = task.child_instance.clone().unwrap();
+            let (writer, mut child_reader) = control_socket("w158b-native-child");
+            st.connections
+                .insert("wake-native-child".into(), writer.clone());
+            let host = st.host.clone();
+            assert!(matches!(
+                handle_register_with_channel(
+                    "wake-native-child",
+                    2,
+                    "native-test".into(),
+                    task.child.clone(),
+                    Some(host),
+                    Some("codex_app_server".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("macOS".into()),
+                    Some(instance.clone()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st
+                ),
+                DaemonToWrapper::Registered {
+                    credential: Some(_),
+                    ..
+                }
+            ));
+            st.conn_instances
+                .insert("wake-native-child".into(), instance.clone());
+            let mut child_presence = st.presences["instance-1"].clone();
+            child_presence.name = task.child.clone();
+            child_presence.agent_type = "native-test".into();
+            child_presence.transport = "codex_app_server".into();
+            child_presence.host = st.host.clone();
+            st.presences.insert(instance.clone(), child_presence);
+            let state = Arc::new(Mutex::new(st));
+            let at = unix_now_secs();
+            let response = handle_wake_request(
+                "wake-native-child",
+                WakeRequest {
+                    version: 1,
+                    request: WakeAction::Schedule {
+                        target: WakeTarget::SelfTarget {},
+                        cadence: WakeCadence::Interval { seconds: 60 },
+                        label: Some("self discovery natif158B".into()),
+                    },
+                },
+                &state,
+                at,
+            );
+            assert!(
+                matches!(response, DaemonToWrapper::WakeResult { .. }),
+                "{response:?}"
+            );
+            let schedules = state
+                .lock()
+                .unwrap()
+                .store
+                .list_wake_schedules(Some(&task.child))
+                .unwrap();
+            assert_eq!(
+                schedules.len(),
+                1,
+                "enfant discovery actif peut programmer self"
+            );
+            let id = schedules[0].schedule_id.clone();
+            let origin = schedules[0]
+                .owner_native
+                .as_ref()
+                .expect("preuve native capturée, aucun repli ordinaire");
+            assert_eq!(origin.task_id, task.task_id);
+            assert_eq!(origin.instance_id, instance);
+            assert_eq!(origin.mission, task.mission);
+            {
+                let st = state.lock().unwrap();
+                if closing == "cancel" {
+                    let (receipt, changed) = st
+                        .delegation_store
+                        .human_cancel(
+                            task.root_owner(),
+                            &task.task_id,
+                            &Uuid::new_v4().to_string(),
+                        )
+                        .unwrap();
+                    assert!(changed);
+                    assert_eq!(
+                        receipt["status"], "cancelling",
+                        "fin demandée par human_cancel réel"
+                    );
+                } else {
+                    st.store
+                        .connection()
+                        .execute_batch("DROP TABLE native_delegations")
+                        .unwrap();
+                }
+            }
+            scheduled_wakes_tick(&state, at + 60, Instant::now());
+            let saved = state
+                .lock()
+                .unwrap()
+                .store
+                .wake_schedule(&id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                saved.owner_native.is_some(),
+                "SQLerror/fin ne transforme pas l'enfant en agent ordinaire"
+            );
+            if closing == "cancel" {
+                assert!(
+                    saved.cancelled_at.is_some(),
+                    "fin native annule les occurrences futures"
+                );
+            }
+            assert!(
+                saved.occurrence.as_ref().is_none_or(|wake| !matches!(
+                    wake.phase,
+                    WakePhase::Confirmed | WakePhase::DispatchingAgent
+                )),
+                "aucun départ après fin ou SQL illisible"
+            );
+            child_reader.get_ref().set_nonblocking(true).unwrap();
+            let mut line = String::new();
+            assert!(
+                matches!(child_reader.read_line(&mut line), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "aucune remise à l'enfant pourtant encore connecté"
+            );
+            drop(state);
+            drop(writer);
+            drop(commands);
+            let _ = std::fs::remove_file(&config.db_path);
+        }
+    }
+
+    #[test]
+    fn wake158b_daemon_g6_fil_commit_uuid_et_revalidation() {
+        use crate::wake_schedules::WakePhase;
+        use bridget_transport::protocol::{WakeAction, WakeCadence, WakeRequest, WakeTarget};
+        for refusal in ["aucun", "projet", "membre"] {
+            let (mut st, config) = state_with_registered_agent(&format!("w158b-fil-{refusal}"));
+            let owner = st.presences["instance-1"].name.clone();
+            let peer = "15800000-0000-4000-8000-000000000006";
+            let (writer, _owner_reader) = control_socket("w158b-fil-owner");
+            st.connections.insert("conn-1".into(), writer);
+            let (peer_writer, _peer_reader) = control_socket("w158b-fil-peer");
+            st.connections.insert("conn-fil-peer".into(), peer_writer);
+            assert!(matches!(
+                handle_register_with_channel(
+                    "conn-fil-peer",
+                    2,
+                    "claude".into(),
+                    peer.into(),
+                    Some("macbook".into()),
+                    Some("acp".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("macOS".into()),
+                    Some("instance-fil-peer".into()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st
+                ),
+                DaemonToWrapper::Registered {
+                    credential: Some(_),
+                    ..
+                }
+            ));
+            let mut presence = st.presences["instance-1"].clone();
+            presence.name = peer.into();
+            st.presences.insert("instance-fil-peer".into(), presence);
+            st.conn_instances
+                .insert("conn-fil-peer".into(), "instance-fil-peer".into());
+            let project = bridget_transport::protocol::CommunicationProject {
+                host: "macbook".into(),
+                root: config
+                    .db_path
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            st.communication_projects
+                .insert("conn-1".into(), (Some(project.clone()), None, false));
+            st.communication_projects
+                .insert("conn-fil-peer".into(), (Some(project), None, false));
+            let at = unix_now_secs();
+            let request = serde_json::from_value(serde_json::json!({"version":1,"request":{
+                "action":"create","title":"réveil fil158B","members":[peer],"operation_id":Uuid::new_v4().to_string()
+            }})).unwrap();
+            let (created, _) = crate::threads::handle_with_change(
+                &st.store,
+                &DaemonDirectory { state: &st },
+                &owner,
+                request,
+                at,
+            );
+            assert_eq!(created.result["status"], "created", "{}", created.result);
+            let thread_id = created.result["thread_id"].as_str().unwrap().to_string();
+            let post = serde_json::from_value(serde_json::json!({"version":1,"request":{
+                "action":"post","thread_id":thread_id,"body":"sollicitation ordinaire conservée",
+                "notify":[owner],"operation_id":Uuid::new_v4().to_string()
+            }}))
+            .unwrap();
+            let (posted, _) = crate::threads::handle_with_change(
+                &st.store,
+                &DaemonDirectory { state: &st },
+                peer,
+                post,
+                at,
+            );
+            assert_eq!(posted.result["status"], "posted", "{}", posted.result);
+            let state = Arc::new(Mutex::new(st));
+            let label = "é".repeat(1024);
+            let response = handle_wake_request(
+                "conn-1",
+                WakeRequest {
+                    version: 1,
+                    request: WakeAction::Schedule {
+                        target: WakeTarget::Thread {
+                            id: thread_id.clone(),
+                        },
+                        cadence: WakeCadence::Interval { seconds: 60 },
+                        label: Some(label.clone()),
+                    },
+                },
+                &state,
+                at,
+            );
+            assert!(
+                matches!(response, DaemonToWrapper::WakeResult { .. }),
+                "{response:?}"
+            );
+            let initial = state
+                .lock()
+                .unwrap()
+                .store
+                .list_wake_schedules(Some(&owner))
+                .unwrap();
+            assert_eq!(initial.len(), 1);
+            let id = initial[0].schedule_id.clone();
+            {
+                let mut st = state.lock().unwrap();
+                if refusal == "projet" {
+                    st.communication_projects
+                        .get_mut("conn-fil-peer")
+                        .unwrap()
+                        .0
+                        .as_mut()
+                        .unwrap()
+                        .root
+                        .push_str("/autre-projet");
+                } else if refusal == "membre" {
+                    // Retrait cohérent du membre et de ses dépendances dans la DB isolée.
+                    let tx = st.store.connection().unchecked_transaction().unwrap();
+                    assert_eq!(
+                        tx.execute(
+                            "DELETE FROM thread_wakes WHERE thread_id=?1 AND agent_id=?2",
+                            rusqlite::params![thread_id, owner]
+                        )
+                        .unwrap(),
+                        1,
+                        "réveil du post ordinaire pour ce membre"
+                    );
+                    tx.execute(
+                        "DELETE FROM thread_reads WHERE thread_id=?1 AND agent_id=?2",
+                        rusqlite::params![thread_id, owner],
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        tx.execute(
+                            "DELETE FROM discussion_members WHERE thread_id=?1 AND agent_id=?2",
+                            rusqlite::params![thread_id, owner]
+                        )
+                        .unwrap(),
+                        1
+                    );
+                    tx.commit().unwrap();
+                }
+            }
+            scheduled_wakes_tick(&state, at + 60, Instant::now());
+            let st = state.lock().unwrap();
+            let saved = st.store.wake_schedule(&id).unwrap().unwrap();
+            let count: i64 = st
+                .store
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM discussion_entries WHERE thread_id=?1",
+                    [&thread_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            if refusal != "aucun" {
+                assert_eq!(count, 1, "aucun post après retrait de droit {refusal}");
+                assert_ne!(
+                    saved.occurrence.as_ref().map(|w| &w.phase),
+                    Some(&WakePhase::CommittedThread)
+                );
+            } else {
+                assert_eq!(count, 2);
+                let wake = saved.occurrence.as_ref().unwrap();
+                assert_eq!(
+                    wake.phase,
+                    WakePhase::CommittedThread,
+                    "frontière commit102, pas ACK de l'alerte"
+                );
+                let operation = wake.thread_operation_id.as_ref().unwrap();
+                assert!(Uuid::parse_str(operation).is_ok());
+                let receipt_count: i64 = st
+                    .store
+                    .connection()
+                    .query_row(
+                        "SELECT count(*) FROM thread_operations WHERE operation_id=?1",
+                        [operation],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(receipt_count, 1, "UUID102 gelé unique");
+                let (author, body, kind):(String,String,Option<String>) = st.store.connection().query_row(
+                    "SELECT author_id,body,kind FROM discussion_entries WHERE thread_id=?1 ORDER BY seq DESC LIMIT 1", [&thread_id],
+                    |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+                assert_eq!(author, owner);
+                assert!(
+                    body.ends_with(&label),
+                    "label UTF8 entier2048octets après préfixe"
+                );
+                assert!(kind.is_none());
+            }
+            drop(st);
+            if refusal == "aucun" {
+                // Crash après commit102 mais avant la clôture locale du réveil.
+                let mut frozen = saved.occurrence.clone().unwrap();
+                frozen.phase = WakePhase::Prepared;
+                let operation = frozen.thread_operation_id.as_ref().unwrap();
+                let retry_at = frozen.grace_until + 1;
+                let original_hash: String;
+                {
+                    let mut st = state.lock().unwrap();
+                    assert_eq!(st.store.connection().execute(
+                        "UPDATE wake_schedules SET payload=json_set(payload,'$.occurrence.phase','prepared') WHERE schedule_id=?1 AND json_extract(payload,'$.occurrence.id')=?2",
+                        rusqlite::params![id, frozen.id]).unwrap(), 1);
+                    st.communication_projects
+                        .get_mut("conn-1")
+                        .unwrap()
+                        .0
+                        .as_mut()
+                        .unwrap()
+                        .root
+                        .push_str("/projet-retiré");
+                    original_hash = st.store.connection().query_row(
+                        "SELECT canonical_hash FROM thread_operations WHERE actor_id=?1 AND operation_id=?2",
+                        rusqlite::params![owner, operation], |r|r.get(0)).unwrap();
+                    assert_eq!(st.store.connection().execute(
+                        "UPDATE thread_operations SET canonical_hash='canon-divergent158B' WHERE actor_id=?1 AND operation_id=?2",
+                        rusqlite::params![owner, operation]).unwrap(), 1);
+                }
+                assert_eq!(
+                    deliver_frozen_wake(&state, &frozen, Some(&id), retry_at, Instant::now()),
+                    Err("envelope_mismatch"),
+                    "même UUID102 mais canon différent : aucun nouveau post"
+                );
+                {
+                    let st = state.lock().unwrap();
+                    st.store.connection().execute(
+                        "UPDATE thread_operations SET canonical_hash=?3 WHERE actor_id=?1 AND operation_id=?2",
+                        rusqlite::params![owner, operation, original_hash]).unwrap();
+                    st.store.connection().execute_batch(
+                        "ALTER TABLE thread_operations RENAME TO thread_operations_fixture158B;").unwrap();
+                }
+                let unreadable =
+                    deliver_frozen_wake(&state, &frozen, Some(&id), retry_at, Instant::now());
+                {
+                    let st = state.lock().unwrap();
+                    st.store.connection().execute_batch(
+                        "ALTER TABLE thread_operations_fixture158B RENAME TO thread_operations;").unwrap();
+                    assert_eq!(
+                        st.store
+                            .wake_schedule(&id)
+                            .unwrap()
+                            .unwrap()
+                            .occurrence
+                            .unwrap()
+                            .phase,
+                        WakePhase::Prepared,
+                        "les refus ne confirment pas le post"
+                    );
+                    let unchanged: i64 = st
+                        .store
+                        .connection()
+                        .query_row(
+                            "SELECT count(*) FROM discussion_entries WHERE thread_id=?1",
+                            [&thread_id],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        unchanged, count,
+                        "collision et panne de lecture ne republient pas"
+                    );
+                }
+                assert_eq!(
+                    unreadable,
+                    Err("storage_unavailable"),
+                    "erreur SQL102 distincte d'un reçu absent"
+                );
+                scheduled_wakes_tick(&state, retry_at, Instant::now());
+                let st = state.lock().unwrap();
+                let recovered = st
+                    .store
+                    .wake_schedule(&id)
+                    .unwrap()
+                    .unwrap()
+                    .occurrence
+                    .unwrap();
+                assert_eq!(
+                    recovered.phase,
+                    WakePhase::CommittedThread,
+                    "reçu102 retrouvé après grâce600s et retrait du projet"
+                );
+                assert_eq!(recovered.id, frozen.id);
+                assert_eq!(recovered.thread_operation_id, frozen.thread_operation_id);
+                assert_eq!(recovered.issued_at, frozen.issued_at);
+                assert_eq!(recovered.canonical_bytes, frozen.canonical_bytes);
+                let unchanged: i64 = st
+                    .store
+                    .connection()
+                    .query_row(
+                        "SELECT count(*) FROM discussion_entries WHERE thread_id=?1",
+                        [&thread_id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    unchanged, count,
+                    "reprise du commit102 sans seconde contribution"
+                );
+            }
+            let cancel_at = if refusal == "aucun" {
+                saved.occurrence.as_ref().unwrap().grace_until + 2
+            } else {
+                at + 61
+            };
+            let response = handle_wake_request(
+                "conn-1",
+                WakeRequest {
+                    version: 1,
+                    request: WakeAction::Cancel {
+                        schedule_id: id.clone(),
+                    },
+                },
+                &state,
+                cancel_at,
+            );
+            assert!(matches!(response, DaemonToWrapper::WakeResult { .. }));
+            scheduled_wakes_tick(&state, cancel_at + 600, Instant::now());
+            let st = state.lock().unwrap();
+            let after: i64 = st
+                .store
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM discussion_entries WHERE thread_id=?1",
+                    [&thread_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                after, count,
+                "aucune republication de l'UUID ni occurrence après cancel"
+            );
+            let ordinary:i64 = st.store.connection().query_row("SELECT count(*) FROM thread_wakes WHERE thread_id=?1 AND agent_id=?2 AND pending_seq>0",
+                rusqlite::params![thread_id, owner], |r|r.get(0)).unwrap();
+            if refusal != "membre" {
+                assert_eq!(
+                    ordinary, 1,
+                    "pas TTL600s sur WakeRow partagée avec post ordinaire102"
+                );
+            }
+            drop(st);
+            // Frontière CLI-fil distincte du Schedule primaire : preuve149 réelle.
+            let (aux_writer, _aux_reader) = control_socket("w158b-fil-cli-aux");
+            let credential = {
+                let mut st = state.lock().unwrap();
+                if refusal == "aucun" {
+                    st.communication_projects.get_mut("conn-1").unwrap().0 =
+                        saved.owner_project.clone();
+                }
+                st.connections.insert("conn-fil-cli-aux".into(), aux_writer);
+                st.identity_credentials["conn-1"].clone()
+            };
+            assert!(matches!(
+                handle_wrapper_message(
+                    "conn-fil-cli-aux",
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Client
+                    },
+                    &state
+                ),
+                Some(DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+            ));
+            assert!(matches!(
+                handle_wrapper_message(
+                    "conn-fil-cli-aux",
+                    WrapperToDaemon::RegisterAuxiliary {
+                        agent_id: owner.clone(),
+                        instance_id: "instance-1".into(),
+                        credential
+                    },
+                    &state
+                ),
+                Some(DaemonToWrapper::Registered {
+                    credential: None,
+                    ..
+                })
+            ));
+            for conn in ["conn-fil-cli-absent", "conn-fil-cli-invalid"] {
+                if conn.ends_with("invalid") {
+                    assert!(matches!(
+                        handle_wrapper_message(
+                            conn,
+                            WrapperToDaemon::RoleHandshake {
+                                role: ConnectionRole::Client
+                            },
+                            &state
+                        ),
+                        Some(DaemonToWrapper::RoleAccepted {
+                            role: ConnectionRole::Client
+                        })
+                    ));
+                    assert!(matches!(
+                        handle_wrapper_message(
+                            conn,
+                            WrapperToDaemon::RegisterAuxiliary {
+                                agent_id: owner.clone(),
+                                instance_id: "instance-1".into(),
+                                credential: bridget_transport::protocol::IdentityCredential::new(
+                                    "preuve-invalide158b".into()
+                                )
+                            },
+                            &state
+                        ),
+                        Some(DaemonToWrapper::Nack { .. })
+                    ));
+                }
+                let key = format!("cli-fil-{refusal}-{conn}");
+                let response = handle_wake_request(
+                    conn,
+                    WakeRequest {
+                        version: 1,
+                        request: WakeAction::CliOnce {
+                            target: thread_id.clone(),
+                            label: Some("sans contexte valide".into()),
+                            id: key.clone(),
+                        },
+                    },
+                    &state,
+                    at + 1300,
+                );
+                assert!(matches!(response, DaemonToWrapper::WakeResult { result }
+                    if result.result["code"] == "identity_unavailable"));
+                assert!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .idempotency
+                        .cli_wake(&key)
+                        .unwrap()
+                        .is_none(),
+                    "refus avant réserve099"
+                );
+            }
+            let key = format!("cli-fil-atteste-{refusal}");
+            let response = handle_wake_request(
+                "conn-fil-cli-aux",
+                WakeRequest {
+                    version: 1,
+                    request: WakeAction::CliOnce {
+                        target: thread_id.clone(),
+                        label: Some("fil headless attesté".into()),
+                        id: key.clone(),
+                    },
+                },
+                &state,
+                at + 1300,
+            );
+            let DaemonToWrapper::WakeResult { result } = response else {
+                panic!("WakeResult attendu");
+            };
+            if refusal == "aucun" {
+                assert_eq!(result.result["status"], "prepared", "{}", result.result);
+                scheduled_wakes_tick(&state, at + 1300, Instant::now());
+                let st = state.lock().unwrap();
+                assert_eq!(
+                    st.idempotency.cli_wake(&key).unwrap().unwrap().1,
+                    crate::idempotency::RecordState::Terminal,
+                    "commit102 clôture la commande099"
+                );
+                let (posts, author):(i64,String) = st.store.connection().query_row(
+                    "SELECT count(*),author_id FROM discussion_entries WHERE thread_id=?1 AND seq=(SELECT max(seq) FROM discussion_entries WHERE thread_id=?1)",
+                    [&thread_id], |r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+                assert_eq!(
+                    (posts, author),
+                    (1, owner.clone()),
+                    "CLI auxiliaire attribuée à l'acteur attesté"
+                );
+            } else {
+                assert_eq!(result.result["status"], "refused", "{}", result.result);
+                assert!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .idempotency
+                        .cli_wake(&key)
+                        .unwrap()
+                        .is_none(),
+                    "droit membre/projet avant réserve099"
+                );
+            }
+            let final_count: i64 = state
+                .lock()
+                .unwrap()
+                .store
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM discussion_entries WHERE thread_id=?1",
+                    [&thread_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(final_count, count + i64::from(refusal == "aucun"));
+            drop(state);
+            let _ = std::fs::remove_file(&config.db_path);
+        }
+    }
+
+    #[test]
+    fn wake158b_daemon_g8_g10_once_worker_et_retour_ack() {
+        use crate::store::observation_missed::ObservationWriteOutcome;
+        use bridget_transport::protocol::{ObservationKind, ObservationRequest};
+        let (mut st, config) = state_with_registered_agent("w158b-worker");
+        let owner = st.presences["instance-1"].name.clone();
+        let (writer, _initial_reader) = control_socket("w158b-worker");
+        st.connections.insert("conn-1".into(), writer.clone());
+        let (tx, jobs) = mpsc::sync_channel(64);
+        st.observation_tx = tx;
+        let at = unix_now_secs();
+        let clock = Instant::now();
+        st.observations.set_source(
+            "source158b",
+            "source158b",
+            vec![ObservationKind::PermissionRequired],
+            clock,
+        );
+        for index in 0..65 {
+            let instant = clock + Duration::from_millis(index * 250);
+            let response = st.observations.request(
+                &owner,
+                ObservationRequest::Sub {
+                    event: ObservationKind::PermissionRequired,
+                    agent: Some("source158b".into()),
+                    file: None,
+                    once: true,
+                    ttl_secs: Some(3600),
+                },
+                instant,
+                at as u64,
+            );
+            assert_eq!(response["status"], "subscribed", "{response}");
+            observe_fact_at(
+                &mut st,
+                crate::observation::Fact {
+                    event: ObservationKind::PermissionRequired,
+                    agent: "source158b".into(),
+                    host: "fixture158b".into(),
+                    file: None,
+                    other_agent: None,
+                },
+                at,
+                instant,
+            );
+        }
+        assert!(
+            st.observations.subscriptions.is_empty(),
+            "once consommées, provenance durable conservée"
+        );
+        let state = Arc::new(Mutex::new(st));
+        state
+            .lock()
+            .unwrap()
+            .presences
+            .get_mut("instance-1")
+            .unwrap()
+            .dnd_until = Some(clock + Duration::from_secs(1000));
+        observer_return_tick(&state, at + 1, clock + Duration::from_secs(1));
+        // Réemploi reconnexion_redeclare_busy_et_arret_propre_reste_stopped :
+        // retirer la route pendant le même épisode absent/DND avant Registered.
+        let (reconnected_writer, reconnected_reader) = control_socket("w158b-worker-return");
+        {
+            let mut st = state.lock().unwrap();
+            assert_eq!(st.router.get_agent(&owner).unwrap().connection_id, "conn-1");
+            let removed = st
+                .router
+                .unregister_by_conn("conn-1")
+                .expect("route primaire avant coupure");
+            assert_eq!(removed.agent_id, owner);
+            st.mark_unreachable("conn-1");
+            st.connections.remove("conn-1");
+            assert!(st.router.get_agent(&owner).is_none());
+            assert!(!st.conn_instances.contains_key("conn-1"));
+            st.connections
+                .insert("conn-return158b".into(), reconnected_writer.clone());
+            let registered = handle_register_with_channel(
+                "conn-return158b",
+                2,
+                "claude".into(),
+                owner.clone(),
+                Some("macbook".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".into()),
+                Some("instance-1".into()),
+                None,
+                false,
+                Some(true),
+                &mut st,
+            );
+            assert!(
+                matches!(
+                    registered,
+                    DaemonToWrapper::Registered {
+                        credential: Some(_),
+                        ..
+                    }
+                ),
+                "reconnexion primaire réelle : {registered:?}"
+            );
+            assert_eq!(
+                st.router.get_agent(&owner).unwrap().connection_id,
+                "conn-return158b"
+            );
+            assert_eq!(st.conn_instances["conn-return158b"], "instance-1");
+        }
+        let mut reader = reconnected_reader;
+        observer_return_tick(&state, at + 2, clock + Duration::from_secs(2)); // hook Registered
+        state
+            .lock()
+            .unwrap()
+            .presences
+            .get_mut("instance-1")
+            .unwrap()
+            .dnd_until = None;
+        observer_return_tick(&state, at + 2, clock + Duration::from_secs(2)); // hook levée DND
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .observation_summaries_pending()
+                .unwrap()
+                .is_empty(),
+            "aucun gel avant solde des pending_write du propriétaire"
+        );
+        observer_return_tick(&state, at + 5, clock + Duration::from_secs(5));
+        let mut pending = state
+            .lock()
+            .unwrap()
+            .store
+            .observation_summaries_pending()
+            .unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "DND puis Register du même épisode : une génération"
+        );
+        let summary = pending.remove(0);
+        assert_eq!(summary.owner, owner);
+        assert_eq!(
+            summary.episode, 1,
+            "Registered et levée DND du même épisode ne doublent pas le retour"
+        );
+        assert_eq!(summary.generation, 1);
+        assert_eq!(
+            summary.fact_seq, 65,
+            "séquence SQLite distingue65faits au même observed_at"
+        );
+        let page_before = state
+            .lock()
+            .unwrap()
+            .store
+            .observation_missed_page(&owner, Some(64), None, at + 5)
+            .unwrap();
+        let page_repeated = state
+            .lock()
+            .unwrap()
+            .store
+            .observation_missed_page(&owner, Some(64), None, at + 5)
+            .unwrap();
+        assert_eq!(
+            page_before, page_repeated,
+            "missed read ne supprime ni fait ni preuve"
+        );
+        let first_facts = page_before["facts"]
+            .as_array()
+            .expect("faits réellement conservés");
+        assert_eq!(first_facts.len(), 64);
+        let after_seq = first_facts.last().unwrap()["fact_seq"].as_u64().unwrap();
+        assert_eq!(page_before["next_after_seq"].as_u64(), Some(after_seq));
+        let page_next = state
+            .lock()
+            .unwrap()
+            .store
+            .observation_missed_page(&owner, Some(64), Some(after_seq), at + 5)
+            .unwrap();
+        let remaining_facts = page_next["facts"].as_array().unwrap();
+        assert_eq!(remaining_facts.len(), 1);
+        assert!(
+            remaining_facts[0]["fact_seq"].as_u64().unwrap() > after_seq,
+            "pas de seconde lecture de la même page"
+        );
+        let (delivery_id, generation) = match read_control(&mut reader) {
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                delivery_generation,
+                message,
+                ..
+            } => {
+                assert_eq!(message.origin, Some(bridget_core::MessageOrigin::System));
+                (delivery_id, delivery_generation)
+            }
+            other => panic!("résumé livré099 réel attendu : {other:?}"),
+        };
+        {
+            let mut st = state.lock().unwrap();
+            assert!(
+                handle_delivery_ack(
+                    "conn-return158b",
+                    delivery_id.clone(),
+                    generation + 1,
+                    &mut st
+                )
+                .is_some(),
+                "mauvaise génération refusée"
+            );
+        }
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .observation_summaries_pending()
+                .unwrap()
+                .len(),
+            1
+        );
+        let job = jobs.try_recv().expect("canal64 réellement rempli");
+        if let ObservationJob::Notice {
+            owner,
+            fact_id,
+            result_tx,
+            ..
+        } = job
+        {
+            result_tx
+                .try_send(ObservationWriteResult {
+                    owner,
+                    fact_id,
+                    outcome: ObservationWriteOutcome::Written,
+                })
+                .unwrap();
+        } else {
+            panic!("job corrélé once attendu");
+        }
+        observer_return_tick(&state, at + 6, clock + Duration::from_secs(6));
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .observation_summaries_pending()
+                .unwrap()
+                .len(),
+            1,
+            "callback tardif ne crée aucune nouvelle génération"
+        );
+        {
+            let mut st = state.lock().unwrap();
+            assert!(
+                handle_delivery_ack("conn-return158b", delivery_id, generation, &mut st).is_none(),
+                "ACK099 validé même answered_request=None"
+            );
+        }
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .observation_summaries_pending()
+                .unwrap()
+                .is_empty()
+        );
+        let page_after = state
+            .lock()
+            .unwrap()
+            .store
+            .observation_missed_page(&owner, Some(64), None, at + 6)
+            .unwrap();
+        assert_eq!(
+            page_before["facts"], page_after["facts"],
+            "ACKrésumé et callbacktardif ne suppriment pas les faits conservés"
+        );
+        let page_next_after = state
+            .lock()
+            .unwrap()
+            .store
+            .observation_missed_page(&owner, Some(64), Some(after_seq), at + 6)
+            .unwrap();
+        assert_eq!(
+            page_next["facts"], page_next_after["facts"],
+            "la deuxième page reste conservée après ACK"
+        );
+        observer_return_tick(&state, at + 7, clock + Duration::from_secs(7));
+        reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert!(
+            matches!(reader.read_line(&mut line), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "aucun deuxième résumé au même retour"
+        );
+        drop(jobs);
+        drop(state);
+        drop(writer);
+        drop(reconnected_writer);
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+
     // T008/T012 : neuf usages. Réemploi état/registre/SQLite et négociation
     // publics ; aucune présence d'enfant ni aucun fournisseur lancé.
     fn control158_state_with_tasks(
         label: &str,
-    ) -> (Arc<Mutex<DaemonState>>, DaemonConfig, Vec<crate::delegation::Task>) {
-        let label = format!("158-{label}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    ) -> (
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        Vec<crate::delegation::Task>,
+    ) {
+        let label = format!(
+            "158-{label}-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
         let (state, config) = state_with_registered_agent(&label);
         let ids: Vec<_> = (0..4).map(|_| uuid::Uuid::new_v4().to_string()).collect();
         let children: Vec<_> = (0..4).map(|_| uuid::Uuid::new_v4().to_string()).collect();
@@ -22323,11 +25194,22 @@ mod presence_tests {
         }
         // La pause empêche le tick d'admettre une branche non visée. L'arrêt
         // global ne doit pas lever cette pause ; cancelling reste traité.
-        crate::referent_control::set(state.store.connection(), crate::referent_control::ControlMutation {
-            command_id:"fixture158-pause", expected_generation:0, paused:Some(true),
-            auto_objectives_cap:None, reason:Some("fixture158"), actor:"cli", now,
-            agent_posture:None, auto_reassignment:None,
-        }).unwrap().unwrap();
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "fixture158-pause",
+                expected_generation: 0,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: Some("fixture158"),
+                actor: "cli",
+                now,
+                agent_posture: None,
+                auto_reassignment: None,
+            },
+        )
+        .unwrap()
+        .unwrap();
         let shared = Arc::new(Mutex::new(state));
         assert!(matches!(
             handle_wrapper_message(
@@ -22358,8 +25240,11 @@ mod presence_tests {
         let (shared, config, tasks) = control158_state_with_tasks("agent");
         let before = {
             let st = shared.lock().unwrap();
-            (serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
-                st.delegation_store.delegation_halt().unwrap(), st.delegation_store.wait_epoch().get())
+            (
+                serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
+                st.delegation_store.delegation_halt().unwrap(),
+                st.delegation_store.wait_epoch().get(),
+            )
         };
         assert!(matches!(
             handle_wrapper_message(
@@ -22380,9 +25265,23 @@ mod presence_tests {
             if capabilities.contains(&ClientCapability::ControlStateV1))
         );
         for request in [
-            WrapperToDaemon::DelegationOverviewRead { version:1,state:"all".into(),limit:100 },
-            WrapperToDaemon::DelegationCancel { version:1,task_id:tasks[1].task_id.clone(),request_id:"agent-cancel".into() },
-            WrapperToDaemon::DelegationHaltSet { version:1,command_id:"agent-halt".into(),halted:true,reason:None,cancel_active:true },
+            WrapperToDaemon::DelegationOverviewRead {
+                version: 1,
+                state: "all".into(),
+                limit: 100,
+            },
+            WrapperToDaemon::DelegationCancel {
+                version: 1,
+                task_id: tasks[1].task_id.clone(),
+                request_id: "agent-cancel".into(),
+            },
+            WrapperToDaemon::DelegationHaltSet {
+                version: 1,
+                command_id: "agent-halt".into(),
+                halted: true,
+                reason: None,
+                cancel_active: true,
+            },
         ] {
             assert!(matches!(
                 handle_wrapper_message("agent158", request, &shared),
@@ -22408,17 +25307,39 @@ mod presence_tests {
     #[test]
     fn control158_overview_client_non_negocie_refuse() {
         let (shared, config, _) = control158_state_with_tasks("neg");
-        assert!(matches!(handle_wrapper_message("bare158", WrapperToDaemon::RoleHandshake {
-            role:ConnectionRole::Client,
-        }, &shared), Some(DaemonToWrapper::RoleAccepted { .. })));
-        let request = WrapperToDaemon::DelegationOverviewRead { version:1,state:"active".into(),limit:50 };
-        assert!(matches!(handle_wrapper_message("bare158",request.clone(),&shared),
-            Some(DaemonToWrapper::ClientRejected { reason:ClientRefusal::NegotiationRequired })));
-        assert!(matches!(handle_wrapper_message("bare158", WrapperToDaemon::ClientHello {
-            contract_version:CLIENT_CONTRACT_VERSION,
-            issuer_scope:crate::communication::issuer_scope("bridget-control-cli"),
-            capabilities:vec![ClientCapability::Lookup],
-        }, &shared), Some(DaemonToWrapper::ClientWelcome { .. })));
+        assert!(matches!(
+            handle_wrapper_message(
+                "bare158",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        let request = WrapperToDaemon::DelegationOverviewRead {
+            version: 1,
+            state: "active".into(),
+            limit: 50,
+        };
+        assert!(matches!(
+            handle_wrapper_message("bare158", request.clone(), &shared),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "bare158",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::communication::issuer_scope("bridget-control-cli"),
+                    capabilities: vec![ClientCapability::Lookup],
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
         // Lookup ne remplace pas ControlStateV1 pour cette vue globale.
         assert!(matches!(
             handle_wrapper_message("bare158", request, &shared),
@@ -22442,10 +25363,21 @@ mod presence_tests {
     #[test]
     fn control158_overview_cancel_cascade() {
         let (shared, config, tasks) = control158_state_with_tasks("cascade");
-        let response = handle_wrapper_message("human158", WrapperToDaemon::DelegationCancel {
-            version:1,task_id:tasks[1].task_id.clone(),request_id:"human-cascade".into(),
-        }, &shared);
-        let Some(DaemonToWrapper::DelegationOverview { items,total_active,.. }) = response else {
+        let response = handle_wrapper_message(
+            "human158",
+            WrapperToDaemon::DelegationCancel {
+                version: 1,
+                task_id: tasks[1].task_id.clone(),
+                request_id: "human-cascade".into(),
+            },
+            &shared,
+        );
+        let Some(DaemonToWrapper::DelegationOverview {
+            items,
+            total_active,
+            ..
+        }) = response
+        else {
             panic!("vue mise à jour attendue, reçu {response:?}");
         };
         assert_eq!(items.len(), 1);
@@ -22600,10 +25532,19 @@ mod presence_tests {
     #[test]
     fn control158_halt_cancel_active_annule_les_arbres() {
         let (shared, config, tasks) = control158_state_with_tasks("halt-cascade");
-        let response = handle_wrapper_message("human158", WrapperToDaemon::DelegationHaltSet {
-            version:1,command_id:"A-cancel".into(),halted:true,reason:Some("arrêt humain".into()),cancel_active:true,
-        }, &shared);
-        assert!(matches!(response,Some(DaemonToWrapper::DelegationHaltState {
+        let response = handle_wrapper_message(
+            "human158",
+            WrapperToDaemon::DelegationHaltSet {
+                version: 1,
+                command_id: "A-cancel".into(),
+                halted: true,
+                reason: Some("arrêt humain".into()),
+                cancel_active: true,
+            },
+            &shared,
+        );
+        assert!(
+            matches!(response,Some(DaemonToWrapper::DelegationHaltState {
             halted:true,cancelled:2,replayed:false,by:Some(ref actor),reason:Some(ref reason),..
         }) if actor == "cli" && reason == "arrêt humain")
         );
@@ -22644,9 +25585,12 @@ mod presence_tests {
     fn control158_halt_sans_cancel_active_ne_touche_rien() {
         let (shared, config, _) = control158_state_with_tasks("halt-only");
         let before = {
-            let st=shared.lock().unwrap();
-            (serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
-                st.delegation_store.wait_epoch().get(),crate::referent_control::read(st.store.connection()).unwrap())
+            let st = shared.lock().unwrap();
+            (
+                serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),
+                st.delegation_store.wait_epoch().get(),
+                crate::referent_control::read(st.store.connection()).unwrap(),
+            )
         };
         assert!(matches!(
             handle_wrapper_message(
@@ -22684,13 +25628,41 @@ mod presence_tests {
     #[test]
     fn control158_halt_commande_rejouee() {
         let (shared, config, _) = control158_state_with_tasks("replay");
-        let a=WrapperToDaemon::DelegationHaltSet { version:1,command_id:"replay-A".into(),halted:true,
-            reason:Some("historique A".into()),cancel_active:false };
-        assert!(matches!(handle_wrapper_message("human158",a.clone(),&shared),
-            Some(DaemonToWrapper::DelegationHaltState { halted:true,cancelled:0,replayed:false,generation:1,.. })));
-        assert!(matches!(handle_wrapper_message("human158",WrapperToDaemon::DelegationHaltSet {
-            version:1,command_id:"replay-B".into(),halted:false,reason:None,cancel_active:false,
-        },&shared),Some(DaemonToWrapper::DelegationHaltState { halted:false,generation:2,.. })));
+        let a = WrapperToDaemon::DelegationHaltSet {
+            version: 1,
+            command_id: "replay-A".into(),
+            halted: true,
+            reason: Some("historique A".into()),
+            cancel_active: false,
+        };
+        assert!(matches!(
+            handle_wrapper_message("human158", a.clone(), &shared),
+            Some(DaemonToWrapper::DelegationHaltState {
+                halted: true,
+                cancelled: 0,
+                replayed: false,
+                generation: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "human158",
+                WrapperToDaemon::DelegationHaltSet {
+                    version: 1,
+                    command_id: "replay-B".into(),
+                    halted: false,
+                    reason: None,
+                    cancel_active: false,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::DelegationHaltState {
+                halted: false,
+                generation: 2,
+                ..
+            })
+        ));
         assert!(matches!(handle_wrapper_message("human158",a,&shared),
             Some(DaemonToWrapper::DelegationHaltState { halted:true,cancelled:0,replayed:true,generation:1,
                 reason:Some(ref reason),.. }) if reason == "historique A"));
@@ -22709,25 +25681,54 @@ mod presence_tests {
 
     #[test]
     fn control158_halt_a_b_c_rejeu_a_ne_touche_pas_c() {
-        let (shared, config, tasks)=control158_state_with_tasks("abc");
-        let a=WrapperToDaemon::DelegationHaltSet { version:1,command_id:"abc-A".into(),halted:true,
-            reason:Some("A".into()),cancel_active:true };
-        assert!(matches!(handle_wrapper_message("human158",a.clone(),&shared),
-            Some(DaemonToWrapper::DelegationHaltState { cancelled:2,replayed:false,.. })));
-        assert!(matches!(handle_wrapper_message("human158",WrapperToDaemon::DelegationHaltSet {
-            version:1,command_id:"abc-B".into(),halted:false,reason:None,cancel_active:false,
-        },&shared),Some(DaemonToWrapper::DelegationHaltState { halted:false,.. })));
-        let (c,before,epoch)={
-            let st=shared.lock().unwrap();
-            let mut c=tasks[3].clone();
-            c.task_id=uuid::Uuid::new_v4().to_string(); c.child=uuid::Uuid::new_v4().to_string();
-            c.mission=uuid::Uuid::new_v4().to_string();
-            st.delegation_store.insert(&c,"abc-C",b"abc-C").unwrap();
-            let before=serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap();
+        let (shared, config, tasks) = control158_state_with_tasks("abc");
+        let a = WrapperToDaemon::DelegationHaltSet {
+            version: 1,
+            command_id: "abc-A".into(),
+            halted: true,
+            reason: Some("A".into()),
+            cancel_active: true,
+        };
+        assert!(matches!(
+            handle_wrapper_message("human158", a.clone(), &shared),
+            Some(DaemonToWrapper::DelegationHaltState {
+                cancelled: 2,
+                replayed: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "human158",
+                WrapperToDaemon::DelegationHaltSet {
+                    version: 1,
+                    command_id: "abc-B".into(),
+                    halted: false,
+                    reason: None,
+                    cancel_active: false,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::DelegationHaltState { halted: false, .. })
+        ));
+        let (c, before, epoch) = {
+            let st = shared.lock().unwrap();
+            let mut c = tasks[3].clone();
+            c.task_id = uuid::Uuid::new_v4().to_string();
+            c.child = uuid::Uuid::new_v4().to_string();
+            c.mission = uuid::Uuid::new_v4().to_string();
+            st.delegation_store.insert(&c, "abc-C", b"abc-C").unwrap();
+            let before =
+                serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap();
             // Un payload illisible prouve que le rejeu connu ne relit aucune tâche.
-            st.delegation_store.test_connection().execute(
-                "UPDATE native_delegations SET payload='{}' WHERE task_id=?1",[&tasks[0].task_id]).unwrap();
-            (c,before,st.delegation_store.wait_epoch().get())
+            st.delegation_store
+                .test_connection()
+                .execute(
+                    "UPDATE native_delegations SET payload='{}' WHERE task_id=?1",
+                    [&tasks[0].task_id],
+                )
+                .unwrap();
+            (c, before, st.delegation_store.wait_epoch().get())
         };
         assert!(matches!(
             handle_wrapper_message("human158", a, &shared),
@@ -22752,21 +25753,47 @@ mod presence_tests {
 
     #[test]
     fn control158_halt_a_b_c_rejeu_a_apres_redemarrage() {
-        let (shared, config, tasks)=control158_state_with_tasks("abc-reopen");
-        let a=WrapperToDaemon::DelegationHaltSet { version:1,command_id:"reopen-A".into(),halted:true,
-            reason:Some("A durable".into()),cancel_active:true };
-        assert!(matches!(handle_wrapper_message("human158",a.clone(),&shared),
-            Some(DaemonToWrapper::DelegationHaltState { cancelled:2,replayed:false,.. })));
-        assert!(matches!(handle_wrapper_message("human158",WrapperToDaemon::DelegationHaltSet {
-            version:1,command_id:"reopen-B".into(),halted:false,reason:None,cancel_active:false,
-        },&shared),Some(DaemonToWrapper::DelegationHaltState { halted:false,.. })));
-        let (c,before)={
-            let mut st=shared.lock().unwrap();
-            let mut c=tasks[3].clone();
-            c.task_id=uuid::Uuid::new_v4().to_string(); c.child=uuid::Uuid::new_v4().to_string();
-            c.mission=uuid::Uuid::new_v4().to_string();
-            st.delegation_store.insert(&c,"reopen-C",b"reopen-C").unwrap();
-            let before=serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap();
+        let (shared, config, tasks) = control158_state_with_tasks("abc-reopen");
+        let a = WrapperToDaemon::DelegationHaltSet {
+            version: 1,
+            command_id: "reopen-A".into(),
+            halted: true,
+            reason: Some("A durable".into()),
+            cancel_active: true,
+        };
+        assert!(matches!(
+            handle_wrapper_message("human158", a.clone(), &shared),
+            Some(DaemonToWrapper::DelegationHaltState {
+                cancelled: 2,
+                replayed: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "human158",
+                WrapperToDaemon::DelegationHaltSet {
+                    version: 1,
+                    command_id: "reopen-B".into(),
+                    halted: false,
+                    reason: None,
+                    cancel_active: false,
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::DelegationHaltState { halted: false, .. })
+        ));
+        let (c, before) = {
+            let mut st = shared.lock().unwrap();
+            let mut c = tasks[3].clone();
+            c.task_id = uuid::Uuid::new_v4().to_string();
+            c.child = uuid::Uuid::new_v4().to_string();
+            c.mission = uuid::Uuid::new_v4().to_string();
+            st.delegation_store
+                .insert(&c, "reopen-C", b"reopen-C")
+                .unwrap();
+            let before =
+                serde_json::to_vec(&st.delegation_store.get(&c.task_id).unwrap().unwrap()).unwrap();
             // Fermer/reouvrir le magasin disque, sans service ni processus neuf.
             st.delegation_store =
                 crate::delegation::DelegationStore::open(&config.db_path).unwrap();

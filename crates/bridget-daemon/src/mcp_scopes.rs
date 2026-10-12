@@ -20,42 +20,209 @@ pub(crate) struct ToolScope {
 }
 
 pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
-    ToolScope { tool: "bridget_cancel", base: Scope::Sends, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_capabilities", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_control_status", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_delegate", base: Scope::Delegates, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_dnd", base: Scope::WritesOwnState, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_domain", base: Scope::WritesOwnState, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_events", base: Scope::WritesOwnState, read_actions: &["types", "list"], own_state_actions: &["sub", "unsub"] },
-    ToolScope { tool: "bridget_handoff", base: Scope::Sends, read_actions: &["preview"], own_state_actions: &[] },
-    ToolScope { tool: "bridget_journal", base: Scope::Sends, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_ledger", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_publish_artifact", base: Scope::Publishes, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_queue", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_read_artifact", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_rename", base: Scope::WritesOwnState, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_request_wait", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_runtime", base: Scope::WritesOwnState, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_send", base: Scope::Sends, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_status", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_task_ack", base: Scope::WritesOwnState, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_task_cancel", base: Scope::Delegates, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_task_continue", base: Scope::Delegates, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_task_respond", base: Scope::Sends, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_task_status", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_task_wait", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "bridget_thread", base: Scope::WritesThreads, read_actions: &["list", "show", "history"], own_state_actions: &["read", "ack"] },
-    ToolScope { tool: "bridget_who", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "guichet_delegate", base: Scope::Delegates, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "guichet_objective_close", base: Scope::Delegates, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "guichet_registre_add", base: Scope::Delegates, read_actions: &[], own_state_actions: &[] },
-    ToolScope { tool: "guichet_request_status", base: Scope::Reads, read_actions: &[], own_state_actions: &[] },
+    ToolScope {
+        tool: "bridget_cancel",
+        base: Scope::Sends,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_capabilities",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_control_status",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_delegate",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_dnd",
+        base: Scope::WritesOwnState,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_domain",
+        base: Scope::WritesOwnState,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_events",
+        base: Scope::WritesOwnState,
+        read_actions: &["types", "list", "missed"],
+        own_state_actions: &["sub", "unsub"],
+    },
+    ToolScope {
+        tool: "bridget_handoff",
+        base: Scope::Sends,
+        read_actions: &["preview"],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_journal",
+        base: Scope::Sends,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_ledger",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_publish_artifact",
+        base: Scope::Publishes,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_queue",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_read_artifact",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_rename",
+        base: Scope::WritesOwnState,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_request_wait",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_runtime",
+        base: Scope::WritesOwnState,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_send",
+        base: Scope::Sends,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_status",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_task_ack",
+        base: Scope::WritesOwnState,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_task_cancel",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_task_continue",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_task_respond",
+        base: Scope::Sends,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_task_status",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_task_wait",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "bridget_thread",
+        base: Scope::WritesThreads,
+        read_actions: &["list", "show", "history"],
+        own_state_actions: &["read", "ack"],
+    },
+    ToolScope {
+        tool: "bridget_wake",
+        base: Scope::Sends,
+        read_actions: &[],
+        own_state_actions: &["list", "cancel"],
+    },
+    ToolScope {
+        tool: "bridget_who",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "guichet_delegate",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "guichet_objective_close",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "guichet_registre_add",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
+        tool: "guichet_request_status",
+        base: Scope::Reads,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
 ];
 
 /// O(1) : table statique et listes d'actions fixes, sans donnée utilisateur.
 /// Un outil inconnu ne reçoit aucune portée implicite.
 pub(crate) fn scope_of(tool: &str, arguments: &Map<String, Value>) -> Option<Scope> {
     let entry = TOOL_SCOPES.iter().find(|entry| entry.tool == tool)?;
+    if tool == "bridget_wake"
+        && arguments.get("action").and_then(Value::as_str) == Some("schedule")
+        && arguments
+            .get("target")
+            .and_then(Value::as_object)
+            .is_some_and(|target| {
+                target.len() == 1 && target.get("kind").and_then(Value::as_str) == Some("self")
+            })
+    {
+        return Some(Scope::WritesOwnState);
+    }
     if tool == "bridget_journal" && arguments.get("to").is_none_or(Value::is_null) {
         return Some(Scope::Reads);
     }
@@ -97,6 +264,37 @@ mod tests {
         for tool in tools {
             assert!(scope_of(tool["name"].as_str().unwrap(), &Map::new()).is_some());
         }
+        assert_eq!(
+            scope_of(
+                "bridget_wake",
+                serde_json::json!({"action":"schedule","target":{"kind":"self"}})
+                    .as_object()
+                    .unwrap()
+            ),
+            Some(Scope::WritesOwnState)
+        );
+        assert_eq!(scope_of("bridget_wake", serde_json::json!({"action":"schedule","target":{"kind":"agent","id":"15800000-0000-4000-8000-000000000001"}}).as_object().unwrap()), Some(Scope::Sends));
+        assert_eq!(
+            scope_of(
+                "bridget_wake",
+                serde_json::json!({"action":"list"}).as_object().unwrap()
+            ),
+            Some(Scope::WritesOwnState)
+        );
+        assert_eq!(
+            scope_of(
+                "bridget_wake",
+                serde_json::json!({"action":"cancel"}).as_object().unwrap()
+            ),
+            Some(Scope::WritesOwnState)
+        );
+        assert_eq!(
+            scope_of(
+                "bridget_events",
+                serde_json::json!({"action":"missed"}).as_object().unwrap()
+            ),
+            Some(Scope::Reads)
+        );
     }
 
     #[test]

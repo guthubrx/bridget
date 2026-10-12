@@ -39,8 +39,8 @@ pub use managed_supervisor::{
 pub(crate) mod delegation;
 pub(crate) mod delegation_mcp;
 pub mod mcp;
-pub(crate) mod mcp_scopes;
 pub mod mcp_identity;
+pub(crate) mod mcp_scopes;
 mod native_permission_observer;
 pub(crate) mod native_permissions;
 mod observation;
@@ -66,3 +66,5 @@ pub mod test_sync;
 pub mod threads;
 pub(crate) mod workspace_git;
 pub mod wrapper;
+
+pub(crate) mod wake_schedules;

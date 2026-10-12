@@ -1,0 +1,79 @@
+{
+  "grade": "A",
+  "date": "2026-10-12",
+  "spec": "158B",
+  "scope": "Diff158B code2124/docsgelés ;lecturepartielle,pasGLOBALGREEN.",
+  "coverage_percent": 7.9,
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 99,
+      "findings_count": 1
+    },
+    "ux": {
+      "grade": "N/A",
+      "findings_count": 0
+    }
+  },
+  "justification": "UnLOWnonbloquant,cinqMrelus résolus ;scoreofficiel et couverture strictepartielle."
+}

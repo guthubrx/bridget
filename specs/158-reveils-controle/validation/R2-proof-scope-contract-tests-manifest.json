@@ -1,0 +1,31 @@
+{
+  "patch": "/Users/moi/.cache/bridget-docs158B-20261012/R2-proof-scope-contract-tests.patch",
+  "patch_sha256": "74564a6f1d911803cdc0ba6d5f5aeab76d88a44d96854aada2e3e83a87913416",
+  "files": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+      "base_sha256": "29e83f5a1917c1aea7a25e22e5cc6e5667a06e7dacd03d60dec2baf14ece1ecf",
+      "candidate_sha256": "1ba8d9e3b2afb5421064d0dcb5a06234abf0cf4847536d1db867400131404e5e"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/validation/tests-158B.md",
+      "base_sha256": "f9d12f663ccf527235f68550d9b7dce634fc581687adb339f8de9ac77f4fce32",
+      "candidate_sha256": "5b109ec8877bffd0d4ec2dbd2ecbf9f66d0edd72ba2edc7fd34310f71c2ee110"
+    }
+  ],
+  "responses": "/Users/moi/.cache/bridget-docs158B-20261012/adversarial-review-code158B-r2-responses.md",
+  "responses_sha256": "89aeb816816c597536f553c496fe7f2c869aad3b77b54db3664bcd8b2ca3b20b",
+  "review": "/Users/moi/.cache/bridget-docs158B-20261012/code-review158B-r2-result.json",
+  "review_sha256": "12710c56eabe9abbbf6db993b6a83bc8971048c2acafdb615fea3911f63292cd",
+  "daemon_current_sha256": "42a95a02f22c7b223eb6d433bab741f7e4722d771dd05f204f9331685a0316ec",
+  "green_receipt": "/Users/moi/.cache/bridget-tests158B-20261012/T109-departure-clock-GREEN-affected.json",
+  "green_receipt_sha256": "c82d96f3298b78db6a6f76a1640251a3d982b4ff579a5481c7f2890f1304ec32",
+  "green_daemon_before": "42a95a02f22c7b223eb6d433bab741f7e4722d771dd05f204f9331685a0316ec",
+  "green_daemon_after": "42a95a02f22c7b223eb6d433bab741f7e4722d771dd05f204f9331685a0316ec",
+  "scope": "CACHE only ; aucun WT/source/test/task écrit",
+  "limits": [
+    "A précision de preuve ; terminal au tick suivant non testé",
+    "B/C/D non retenus par ROOT ; aucune correction supplémentaire",
+    "E preuve d’exécution basée sur SHA before/after du JSON, pas hash de candidat cache"
+  ]
+}

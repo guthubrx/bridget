@@ -1,0 +1,2754 @@
+{
+  "capture": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/capture-final",
+  "capture_sha256": "64dbac58d214840da957ae68d1247fb66a64f5728b815520b2e4dc590a9bbe77",
+  "reports": [
+    {
+      "module": "04",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              490,
+              590
+            ],
+            [
+              889,
+              1032
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:15:22 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "sha256": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+          "ranges": [
+            [
+              664,
+              675
+            ],
+            [
+              704,
+              791
+            ],
+            [
+              2493,
+              2528
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+          "sha256": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+          "ranges": [
+            [
+              195,
+              245
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:18:20 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/observation.rs",
+          "sha256": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+          "ranges": [
+            [
+              60,
+              195
+            ],
+            [
+              319,
+              325
+            ],
+            [
+              331,
+              337
+            ],
+            [
+              343,
+              350
+            ],
+            [
+              450,
+              540
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:14:41 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/referent_control.rs",
+          "sha256": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+          "ranges": [
+            [
+              117,
+              124
+            ],
+            [
+              140,
+              147
+            ],
+            [
+              152,
+              160
+            ],
+            [
+              899,
+              919
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store.rs",
+          "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+          "ranges": [
+            [
+              5,
+              15
+            ],
+            [
+              80,
+              155
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:15:22 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              340
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:13:03 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/threads.rs",
+          "sha256": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+          "ranges": [
+            [
+              366,
+              372
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              355
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:13:03 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "sha256": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+          "ranges": [
+            [
+              2362,
+              2381
+            ],
+            [
+              2392,
+              2470
+            ],
+            [
+              3079,
+              3087
+            ],
+            [
+              4062,
+              4070
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+            "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "sha256": "a72a404dafb2de209e24c5db0128ac16bfcb0c72848648718e0a0d8b70f406a2",
+          "ranges": [
+            [
+              948,
+              1078
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_complexite.json",
+            "sha256": "28227f41232db3a18bd7817509bcd74636f103d861881b0e9b67f2ca6d35ecb1",
+            "date_originale": "2026-10-12 12:46:36 UTC",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/communication/client.rs",
+          "sha256": "7bf47bcacaba52300ecc5689fee9cc311b9822b7358b2be1c20d674c5585aee9",
+          "ranges": [
+            [
+              919,
+              980
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_complexite.json",
+            "sha256": "28227f41232db3a18bd7817509bcd74636f103d861881b0e9b67f2ca6d35ecb1",
+            "date_originale": "2026-10-12 12:46:36 UTC",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              1,
+              4
+            ],
+            [
+              110,
+              220
+            ],
+            [
+              267,
+              363
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_complexite.json",
+            "sha256": "28227f41232db3a18bd7817509bcd74636f103d861881b0e9b67f2ca6d35ecb1",
+            "date_originale": "2026-10-12 12:47:10 UTC",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_complexite.json",
+      "source_report_sha256": "28227f41232db3a18bd7817509bcd74636f103d861881b0e9b67f2ca6d35ecb1"
+    },
+    {
+      "module": "07",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              889,
+              1034
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+            "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "sha256": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+          "ranges": [
+            [
+              704,
+              790
+            ],
+            [
+              2493,
+              2529
+            ],
+            [
+              5562,
+              5688
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+            "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              641
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+            "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/threads.rs",
+          "sha256": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+          "ranges": [
+            [
+              350,
+              380
+            ],
+            [
+              1030,
+              1058
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+            "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              554
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+            "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "sha256": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+          "ranges": [
+            [
+              2362,
+              2472
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+            "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              110,
+              118
+            ],
+            [
+              175,
+              184
+            ],
+            [
+              271,
+              288
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_duplication.json",
+            "sha256": "ff8ff518fcbe8c300394c4b6d8408423573171dc97e9250ee3105b4e9cf58bac",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/communication/client.rs",
+          "sha256": "7bf47bcacaba52300ecc5689fee9cc311b9822b7358b2be1c20d674c5585aee9",
+          "ranges": [
+            [
+              920,
+              986
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_duplication.json",
+            "sha256": "ff8ff518fcbe8c300394c4b6d8408423573171dc97e9250ee3105b4e9cf58bac",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/research-158B.md",
+          "sha256": "2fb6e88cbcd51e88ae1cd5c94de5be00da21e6dd30ffc42dcaf731436f8b9b8d",
+          "ranges": [
+            [
+              43,
+              43
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_duplication.json",
+            "sha256": "ff8ff518fcbe8c300394c4b6d8408423573171dc97e9250ee3105b4e9cf58bac",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/data-model-158B.md",
+          "sha256": "c97dcad62c5484c9df2c3eead6c16e48dac9ef17803778f62c14dc3da5b8de0d",
+          "ranges": [
+            [
+              55,
+              59
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_duplication.json",
+            "sha256": "ff8ff518fcbe8c300394c4b6d8408423573171dc97e9250ee3105b4e9cf58bac",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_duplication.json",
+      "source_report_sha256": "ff8ff518fcbe8c300394c4b6d8408423573171dc97e9250ee3105b4e9cf58bac"
+    },
+    {
+      "module": "12",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              554
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_minimalisme.json",
+            "sha256": "1088fdee361cf779aae9664d238ad3eedaad3658598c83650c8e8c8fcd519f11",
+            "dates_originales": [
+              {
+                "read_at": "2026-10-12T12:18:41.062043+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              641
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_minimalisme.json",
+            "sha256": "1088fdee361cf779aae9664d238ad3eedaad3658598c83650c8e8c8fcd519f11",
+            "dates_originales": [
+              {
+                "read_at": "2026-10-12T12:18:41.062043+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              893,
+              1048
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_minimalisme.json",
+            "sha256": "1088fdee361cf779aae9664d238ad3eedaad3658598c83650c8e8c8fcd519f11",
+            "dates_originales": [
+              {
+                "read_at": "2026-10-12T12:18:41.062043+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store.rs",
+          "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+          "ranges": [
+            [
+              39,
+              125
+            ],
+            [
+              140,
+              161
+            ],
+            [
+              358,
+              388
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_minimalisme.json",
+            "sha256": "1088fdee361cf779aae9664d238ad3eedaad3658598c83650c8e8c8fcd519f11",
+            "dates_originales": [
+              {
+                "read_at": "2026-10-12T12:18:41.062043+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/reuse-audit-158B.md",
+          "sha256": "0b4ba2197099fba678f2e6d4f6d0fd44bf417682c59bd1ba5349ccbd76d108b9",
+          "ranges": [
+            [
+              1,
+              115
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_minimalisme.json",
+            "sha256": "1088fdee361cf779aae9664d238ad3eedaad3658598c83650c8e8c8fcd519f11",
+            "dates_originales": [
+              {
+                "read_at": "2026-10-12T12:18:41.062043+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              1,
+              18
+            ],
+            [
+              166,
+              202
+            ],
+            [
+              284,
+              310
+            ],
+            [
+              426,
+              453
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_minimalisme.json",
+            "sha256": "af9037a17bd8521687f4ed609f87d611fd1b8b8bf58452dc26b356e116283042",
+            "date_originale": "2026-10-12T12:51:04.077387+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/data-model-158B.md",
+          "sha256": "c97dcad62c5484c9df2c3eead6c16e48dac9ef17803778f62c14dc3da5b8de0d",
+          "ranges": [
+            [
+              48,
+              58
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_minimalisme.json",
+            "sha256": "af9037a17bd8521687f4ed609f87d611fd1b8b8bf58452dc26b356e116283042",
+            "date_originale": "2026-10-12T12:51:04.077387+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_minimalisme.json",
+      "source_report_sha256": "af9037a17bd8521687f4ed609f87d611fd1b8b8bf58452dc26b356e116283042"
+    },
+    {
+      "module": "08",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              490,
+              590
+            ],
+            [
+              889,
+              1032
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:15:22 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "sha256": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+          "ranges": [
+            [
+              664,
+              675
+            ],
+            [
+              704,
+              791
+            ],
+            [
+              2493,
+              2528
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+          "sha256": "18d09409b4603d1eccb0b4962ccc309df7135643e13b58eec0956a4ec2d2f171",
+          "ranges": [
+            [
+              195,
+              245
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:18:20 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/observation.rs",
+          "sha256": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+          "ranges": [
+            [
+              60,
+              195
+            ],
+            [
+              319,
+              325
+            ],
+            [
+              331,
+              337
+            ],
+            [
+              343,
+              350
+            ],
+            [
+              450,
+              540
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:14:41 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/referent_control.rs",
+          "sha256": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+          "ranges": [
+            [
+              117,
+              124
+            ],
+            [
+              140,
+              147
+            ],
+            [
+              152,
+              160
+            ],
+            [
+              899,
+              919
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store.rs",
+          "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+          "ranges": [
+            [
+              5,
+              15
+            ],
+            [
+              80,
+              155
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:15:22 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              340
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:13:03 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/threads.rs",
+          "sha256": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+          "ranges": [
+            [
+              366,
+              372
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              355
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12 12:13:03 UTC"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "sha256": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+          "ranges": [
+            [
+              2362,
+              2381
+            ],
+            [
+              2392,
+              2470
+            ],
+            [
+              3079,
+              3087
+            ],
+            [
+              4062,
+              4070
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+            "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d",
+            "dates_originales": [
+              {
+                "read_at_utc": "2026-10-12T12:26:47.569651+00:00"
+              }
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/cli.rs",
+          "sha256": "a72a404dafb2de209e24c5db0128ac16bfcb0c72848648718e0a0d8b70f406a2",
+          "ranges": [
+            [
+              948,
+              1078
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_performance.json",
+            "sha256": "059e263810c3f1df98611f21bc8ae2f9c0aa14e2dfcf94eadd4158c7e06542cc",
+            "date_originale": "2026-10-12 12:46:36 UTC",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/communication/client.rs",
+          "sha256": "7bf47bcacaba52300ecc5689fee9cc311b9822b7358b2be1c20d674c5585aee9",
+          "ranges": [
+            [
+              919,
+              980
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_performance.json",
+            "sha256": "059e263810c3f1df98611f21bc8ae2f9c0aa14e2dfcf94eadd4158c7e06542cc",
+            "date_originale": "2026-10-12 12:46:36 UTC",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              1,
+              4
+            ],
+            [
+              110,
+              220
+            ],
+            [
+              267,
+              363
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_performance.json",
+            "sha256": "059e263810c3f1df98611f21bc8ae2f9c0aa14e2dfcf94eadd4158c7e06542cc",
+            "date_originale": "2026-10-12 12:47:10 UTC",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_performance.json",
+      "source_report_sha256": "059e263810c3f1df98611f21bc8ae2f9c0aa14e2dfcf94eadd4158c7e06542cc"
+    },
+    {
+      "module": "05",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              889,
+              1034
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+            "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/mcp.rs",
+          "sha256": "96c7d2508752a812204d07521d666906fcde833e81431622928f5745bdfa8071",
+          "ranges": [
+            [
+              704,
+              790
+            ],
+            [
+              2493,
+              2529
+            ],
+            [
+              5562,
+              5688
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+            "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              641
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+            "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/threads.rs",
+          "sha256": "6e40cbefe845190df77be5998cd9383dc871d2e7779fda06045947fb69cfb316",
+          "ranges": [
+            [
+              350,
+              380
+            ],
+            [
+              1030,
+              1058
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+            "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              554
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+            "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-transport/src/protocol.rs",
+          "sha256": "49109bbae1a49660f2b9935d8b27d481cee6ddb06206e747ee04ba668f8c191d",
+          "ranges": [
+            [
+              2362,
+              2472
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+            "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              110,
+              118
+            ],
+            [
+              175,
+              184
+            ],
+            [
+              271,
+              288
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_qualite.json",
+            "sha256": "23ba8669de281c9a9dd84f5823b7185bc3eb27a196dc68d4a69eca63c7eb3ddc",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/communication/client.rs",
+          "sha256": "7bf47bcacaba52300ecc5689fee9cc311b9822b7358b2be1c20d674c5585aee9",
+          "ranges": [
+            [
+              920,
+              986
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_qualite.json",
+            "sha256": "23ba8669de281c9a9dd84f5823b7185bc3eb27a196dc68d4a69eca63c7eb3ddc",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/research-158B.md",
+          "sha256": "2fb6e88cbcd51e88ae1cd5c94de5be00da21e6dd30ffc42dcaf731436f8b9b8d",
+          "ranges": [
+            [
+              43,
+              43
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_qualite.json",
+            "sha256": "23ba8669de281c9a9dd84f5823b7185bc3eb27a196dc68d4a69eca63c7eb3ddc",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/data-model-158B.md",
+          "sha256": "c97dcad62c5484c9df2c3eead6c16e48dac9ef17803778f62c14dc3da5b8de0d",
+          "ranges": [
+            [
+              55,
+              59
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_qualite.json",
+            "sha256": "23ba8669de281c9a9dd84f5823b7185bc3eb27a196dc68d4a69eca63c7eb3ddc",
+            "date_originale": "2026-10-12T12:48:56.558887+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_qualite.json",
+      "source_report_sha256": "23ba8669de281c9a9dd84f5823b7185bc3eb27a196dc68d4a69eca63c7eb3ddc"
+    },
+    {
+      "module": "03",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+          "ranges": [
+            [
+              2104,
+              2123
+            ],
+            [
+              2998,
+              3016
+            ],
+            [
+              7079,
+              7101
+            ],
+            [
+              21446,
+              21468
+            ],
+            [
+              24068,
+              24102
+            ],
+            [
+              24952,
+              24984
+            ],
+            [
+              25091,
+              25102
+            ]
+          ],
+          "read_mode": "fresh_2124_supplement",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite-return-clock-supplement.json",
+            "sha256": "f953249f048905e51689381bcfee57b36758e1142ed8e829781812442492f835",
+            "date_originale": "2026-10-12T13:01:31.093614+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite-return-clock-supplement.json",
+      "source_report_sha256": "f953249f048905e51689381bcfee57b36758e1142ed8e829781812442492f835"
+    },
+    {
+      "module": "03",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              889,
+              1033
+            ],
+            [
+              1427,
+              1541
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_securite.json",
+            "sha256": "ce85f150afa7769ce226c9bea531ecd0de4a33393e28aa94c36e8778da1987e7",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              641
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_securite.json",
+            "sha256": "ce85f150afa7769ce226c9bea531ecd0de4a33393e28aa94c36e8778da1987e7",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              554
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_securite.json",
+            "sha256": "ce85f150afa7769ce226c9bea531ecd0de4a33393e28aa94c36e8778da1987e7",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/observation.rs",
+          "sha256": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+          "ranges": [
+            [
+              52,
+              115
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_securite.json",
+            "sha256": "ce85f150afa7769ce226c9bea531ecd0de4a33393e28aa94c36e8778da1987e7",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store.rs",
+          "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+          "ranges": [
+            [
+              67,
+              150
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_securite.json",
+            "sha256": "ce85f150afa7769ce226c9bea531ecd0de4a33393e28aa94c36e8778da1987e7",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              285,
+              398
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite.json",
+            "sha256": "e8f5f8c0e8a534d3514c0c093f1d6fa4087af0f93b7967b120dfe867a8321325",
+            "date_originale": null,
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/data-model-158B.md",
+          "sha256": "c97dcad62c5484c9df2c3eead6c16e48dac9ef17803778f62c14dc3da5b8de0d",
+          "ranges": [
+            [
+              55,
+              59
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite.json",
+            "sha256": "e8f5f8c0e8a534d3514c0c093f1d6fa4087af0f93b7967b120dfe867a8321325",
+            "date_originale": null,
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/research-158B.md",
+          "sha256": "2fb6e88cbcd51e88ae1cd5c94de5be00da21e6dd30ffc42dcaf731436f8b9b8d",
+          "ranges": [
+            [
+              43,
+              43
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite.json",
+            "sha256": "e8f5f8c0e8a534d3514c0c093f1d6fa4087af0f93b7967b120dfe867a8321325",
+            "date_originale": null,
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite.json",
+      "source_report_sha256": "e8f5f8c0e8a534d3514c0c093f1d6fa4087af0f93b7967b120dfe867a8321325"
+    },
+    {
+      "module": "06",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+          "ranges": [
+            [
+              2104,
+              2123
+            ],
+            [
+              2998,
+              3016
+            ],
+            [
+              7079,
+              7101
+            ],
+            [
+              21446,
+              21468
+            ],
+            [
+              24068,
+              24102
+            ],
+            [
+              24952,
+              24984
+            ],
+            [
+              25091,
+              25102
+            ]
+          ],
+          "read_mode": "fresh_2124_supplement",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests-return-clock-supplement.json",
+            "sha256": "a667e0002e8f6e9b2e6b32efa9854d933e2739dac9aa5eadd5012deb5e839c2b",
+            "date_originale": "2026-10-12T13:01:31.093614+00:00",
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests-return-clock-supplement.json",
+      "source_report_sha256": "a667e0002e8f6e9b2e6b32efa9854d933e2739dac9aa5eadd5012deb5e839c2b"
+    },
+    {
+      "module": "06",
+      "read_manifest": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+          "ranges": [
+            [
+              889,
+              1033
+            ],
+            [
+              1427,
+              1541
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_tests.json",
+            "sha256": "ec0c7d0ec60d16995abb5e70fa1fb3836f140050cb8232daca5a31a1d9d5fd8f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/wake_schedules.rs",
+          "sha256": "a6be31ab2dc59fd3c2e9ba633da53f6ff2ff2aedd61d5212e68fc86d8ef7a882",
+          "ranges": [
+            [
+              1,
+              641
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_tests.json",
+            "sha256": "ec0c7d0ec60d16995abb5e70fa1fb3836f140050cb8232daca5a31a1d9d5fd8f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/wake_schedules.rs",
+          "sha256": "8f8791430bef14cbaa897afe4cabdc3316170f734a27a29c24599fb3b77c2037",
+          "ranges": [
+            [
+              1,
+              554
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_tests.json",
+            "sha256": "ec0c7d0ec60d16995abb5e70fa1fb3836f140050cb8232daca5a31a1d9d5fd8f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/observation.rs",
+          "sha256": "9ee595f89223be6f200511014cb3d9dcb147407bf90c7201098705a89e953965",
+          "ranges": [
+            [
+              52,
+              115
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_tests.json",
+            "sha256": "ec0c7d0ec60d16995abb5e70fa1fb3836f140050cb8232daca5a31a1d9d5fd8f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store.rs",
+          "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+          "ranges": [
+            [
+              67,
+              150
+            ]
+          ],
+          "read_mode": "inherited_initial_unchanged_sha",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_tests.json",
+            "sha256": "ec0c7d0ec60d16995abb5e70fa1fb3836f140050cb8232daca5a31a1d9d5fd8f",
+            "dates_originales": [
+              {}
+            ]
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "crates/bridget-daemon/src/store/observation_missed.rs",
+          "sha256": "17004b1c61a01e14d72e9a52cb76ac182ff127e62cd391bccf707f43714f26a9",
+          "ranges": [
+            [
+              285,
+              398
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests.json",
+            "sha256": "093376662ad37abb280a82974f99782796b82e9a76af11b1da4bcdb997dab343",
+            "date_originale": null,
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/data-model-158B.md",
+          "sha256": "c97dcad62c5484c9df2c3eead6c16e48dac9ef17803778f62c14dc3da5b8de0d",
+          "ranges": [
+            [
+              55,
+              59
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests.json",
+            "sha256": "093376662ad37abb280a82974f99782796b82e9a76af11b1da4bcdb997dab343",
+            "date_originale": null,
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        },
+        {
+          "file": "specs/158-reveils-controle/research-158B.md",
+          "sha256": "2fb6e88cbcd51e88ae1cd5c94de5be00da21e6dd30ffc42dcaf731436f8b9b8d",
+          "ranges": [
+            [
+              43,
+              43
+            ]
+          ],
+          "read_mode": "scoring_entire_SHA_verified",
+          "proof": {
+            "report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests.json",
+            "sha256": "093376662ad37abb280a82974f99782796b82e9a76af11b1da4bcdb997dab343",
+            "date_originale": null,
+            "timing": "Date originale préservée ;ROOTautorise exacteSHAcodefinalavantcapturemetadata."
+          },
+          "verified_at": "2026-10-12T13:12:40.342548+00:00"
+        }
+      ],
+      "source_report": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests.json",
+      "source_report_sha256": "093376662ad37abb280a82974f99782796b82e9a76af11b1da4bcdb997dab343"
+    }
+  ],
+  "coverage": {
+    "files_scanned": 17,
+    "files_total": 39,
+    "lines_analyzed": 3324,
+    "scope_hunks_total": 405,
+    "hunks_semantically_read": 32,
+    "coverage_estimate_percent": 7.9,
+    "read_ranges_by_file": {
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          948,
+          1078
+        ]
+      ],
+      "crates/bridget-daemon/src/communication/client.rs": [
+        [
+          919,
+          986
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          2104,
+          2123
+        ],
+        [
+          2998,
+          3016
+        ],
+        [
+          7079,
+          7101
+        ],
+        [
+          21446,
+          21468
+        ],
+        [
+          24068,
+          24102
+        ],
+        [
+          24952,
+          24984
+        ],
+        [
+          25091,
+          25102
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          490,
+          590
+        ],
+        [
+          889,
+          1048
+        ],
+        [
+          1427,
+          1541
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          664,
+          675
+        ],
+        [
+          704,
+          791
+        ],
+        [
+          2493,
+          2529
+        ],
+        [
+          5562,
+          5688
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          195,
+          245
+        ]
+      ],
+      "crates/bridget-daemon/src/observation.rs": [
+        [
+          52,
+          195
+        ],
+        [
+          319,
+          325
+        ],
+        [
+          331,
+          337
+        ],
+        [
+          343,
+          350
+        ],
+        [
+          450,
+          540
+        ]
+      ],
+      "crates/bridget-daemon/src/referent_control.rs": [
+        [
+          117,
+          124
+        ],
+        [
+          140,
+          147
+        ],
+        [
+          152,
+          160
+        ],
+        [
+          899,
+          919
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          5,
+          15
+        ],
+        [
+          39,
+          161
+        ],
+        [
+          358,
+          388
+        ]
+      ],
+      "crates/bridget-daemon/src/store/observation_missed.rs": [
+        [
+          1,
+          18
+        ],
+        [
+          110,
+          220
+        ],
+        [
+          267,
+          398
+        ],
+        [
+          426,
+          453
+        ]
+      ],
+      "crates/bridget-daemon/src/store/wake_schedules.rs": [
+        [
+          1,
+          641
+        ]
+      ],
+      "crates/bridget-daemon/src/threads.rs": [
+        [
+          350,
+          380
+        ],
+        [
+          1030,
+          1058
+        ]
+      ],
+      "crates/bridget-daemon/src/wake_schedules.rs": [
+        [
+          1,
+          554
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2362,
+          2472
+        ],
+        [
+          3079,
+          3087
+        ],
+        [
+          4062,
+          4070
+        ]
+      ],
+      "specs/158-reveils-controle/data-model-158B.md": [
+        [
+          48,
+          59
+        ]
+      ],
+      "specs/158-reveils-controle/research-158B.md": [
+        [
+          43,
+          43
+        ]
+      ],
+      "specs/158-reveils-controle/reuse-audit-158B.md": [
+        [
+          1,
+          115
+        ]
+      ]
+    },
+    "coverage_basis": "hunks réels contenus dans lectures fraîches ou héritées seulement si SHAinitial/final exactementinchangé, sans date d’origine réécrite",
+    "fresh_read_ranges_by_file": {
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          490,
+          590
+        ],
+        [
+          889,
+          1048
+        ],
+        [
+          1427,
+          1541
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          664,
+          675
+        ],
+        [
+          704,
+          791
+        ],
+        [
+          2493,
+          2529
+        ],
+        [
+          5562,
+          5688
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          195,
+          245
+        ]
+      ],
+      "crates/bridget-daemon/src/observation.rs": [
+        [
+          52,
+          195
+        ],
+        [
+          319,
+          325
+        ],
+        [
+          331,
+          337
+        ],
+        [
+          343,
+          350
+        ],
+        [
+          450,
+          540
+        ]
+      ],
+      "crates/bridget-daemon/src/referent_control.rs": [
+        [
+          117,
+          124
+        ],
+        [
+          140,
+          147
+        ],
+        [
+          152,
+          160
+        ],
+        [
+          899,
+          919
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          5,
+          15
+        ],
+        [
+          39,
+          161
+        ],
+        [
+          358,
+          388
+        ]
+      ],
+      "crates/bridget-daemon/src/store/wake_schedules.rs": [
+        [
+          1,
+          641
+        ]
+      ],
+      "crates/bridget-daemon/src/threads.rs": [
+        [
+          350,
+          380
+        ],
+        [
+          1030,
+          1058
+        ]
+      ],
+      "crates/bridget-daemon/src/wake_schedules.rs": [
+        [
+          1,
+          554
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2362,
+          2472
+        ],
+        [
+          3079,
+          3087
+        ],
+        [
+          4062,
+          4070
+        ]
+      ],
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          948,
+          1078
+        ]
+      ],
+      "crates/bridget-daemon/src/communication/client.rs": [
+        [
+          919,
+          986
+        ]
+      ],
+      "crates/bridget-daemon/src/store/observation_missed.rs": [
+        [
+          1,
+          18
+        ],
+        [
+          110,
+          220
+        ],
+        [
+          267,
+          398
+        ],
+        [
+          426,
+          453
+        ]
+      ],
+      "specs/158-reveils-controle/research-158B.md": [
+        [
+          43,
+          43
+        ]
+      ],
+      "specs/158-reveils-controle/data-model-158B.md": [
+        [
+          48,
+          59
+        ]
+      ],
+      "specs/158-reveils-controle/reuse-audit-158B.md": [
+        [
+          1,
+          115
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          2104,
+          2123
+        ],
+        [
+          2998,
+          3016
+        ],
+        [
+          7079,
+          7101
+        ],
+        [
+          21446,
+          21468
+        ],
+        [
+          24068,
+          24102
+        ],
+        [
+          24952,
+          24984
+        ],
+        [
+          25091,
+          25102
+        ]
+      ]
+    },
+    "inherited_unchanged_read_ranges_by_file": {}
+  },
+  "initial_coverage": {
+    "files_scanned": 20,
+    "files_total": 38,
+    "lines_analyzed": 8370,
+    "scope_hunks_total": 401,
+    "hunks_semantically_read": 64,
+    "coverage_estimate_percent": 15.96,
+    "read_ranges_by_file": {
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          251,
+          257
+        ],
+        [
+          682,
+          688
+        ],
+        [
+          948,
+          1080
+        ],
+        [
+          6230,
+          6243
+        ],
+        [
+          6275,
+          6288
+        ],
+        [
+          6292,
+          6341
+        ],
+        [
+          6427,
+          6440
+        ],
+        [
+          6463,
+          6477
+        ],
+        [
+          6486,
+          6499
+        ],
+        [
+          10267,
+          10426
+        ]
+      ],
+      "crates/bridget-daemon/src/communication/client.rs": [
+        [
+          85,
+          140
+        ],
+        [
+          919,
+          1170
+        ],
+        [
+          1257,
+          1295
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          1018,
+          1045
+        ],
+        [
+          1700,
+          3260
+        ],
+        [
+          3381,
+          3505
+        ],
+        [
+          4756,
+          4763
+        ],
+        [
+          4780,
+          4788
+        ],
+        [
+          5944,
+          5955
+        ],
+        [
+          6490,
+          6540
+        ],
+        [
+          7010,
+          7060
+        ],
+        [
+          9540,
+          9582
+        ],
+        [
+          17799,
+          17810
+        ],
+        [
+          17873,
+          17879
+        ],
+        [
+          18085,
+          18135
+        ],
+        [
+          18196,
+          18234
+        ],
+        [
+          21377,
+          21395
+        ],
+        [
+          23759,
+          24834
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          490,
+          590
+        ],
+        [
+          889,
+          1048
+        ],
+        [
+          1427,
+          1541
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          618,
+          792
+        ],
+        [
+          2493,
+          2529
+        ],
+        [
+          5562,
+          5688
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          20,
+          245
+        ]
+      ],
+      "crates/bridget-daemon/src/observation.rs": [
+        [
+          52,
+          195
+        ],
+        [
+          319,
+          325
+        ],
+        [
+          331,
+          337
+        ],
+        [
+          343,
+          350
+        ],
+        [
+          450,
+          540
+        ]
+      ],
+      "crates/bridget-daemon/src/referent_control.rs": [
+        [
+          117,
+          124
+        ],
+        [
+          140,
+          147
+        ],
+        [
+          152,
+          160
+        ],
+        [
+          899,
+          919
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          5,
+          15
+        ],
+        [
+          39,
+          161
+        ],
+        [
+          358,
+          388
+        ]
+      ],
+      "crates/bridget-daemon/src/store/observation_missed.rs": [
+        [
+          1,
+          1151
+        ]
+      ],
+      "crates/bridget-daemon/src/store/wake_schedules.rs": [
+        [
+          1,
+          641
+        ]
+      ],
+      "crates/bridget-daemon/src/threads.rs": [
+        [
+          350,
+          380
+        ],
+        [
+          1030,
+          1058
+        ]
+      ],
+      "crates/bridget-daemon/src/wake_schedules.rs": [
+        [
+          1,
+          554
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2362,
+          2472
+        ],
+        [
+          3079,
+          3087
+        ],
+        [
+          4062,
+          4070
+        ],
+        [
+          8678,
+          8773
+        ]
+      ],
+      "specs/158-reveils-controle/contracts/wake-158B.md": [
+        [
+          1,
+          140
+        ]
+      ],
+      "specs/158-reveils-controle/data-model-158B.md": [
+        [
+          1,
+          104
+        ]
+      ],
+      "specs/158-reveils-controle/research-158B.md": [
+        [
+          43,
+          43
+        ]
+      ],
+      "specs/158-reveils-controle/reuse-audit-158B.md": [
+        [
+          1,
+          115
+        ]
+      ],
+      "specs/158-reveils-controle/spec.md": [
+        [
+          170,
+          268
+        ]
+      ],
+      "specs/158-reveils-controle/tasks.md": [
+        [
+          123,
+          125
+        ],
+        [
+          132,
+          132
+        ]
+      ]
+    },
+    "coverage_basis": "hunks réels contenus dans lectures fraîches ou héritées seulement si SHAinitial/final exactementinchangé, sans date d’origine réécrite",
+    "fresh_read_ranges_by_file": {
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          251,
+          257
+        ],
+        [
+          682,
+          688
+        ],
+        [
+          948,
+          1080
+        ],
+        [
+          6230,
+          6243
+        ],
+        [
+          6275,
+          6288
+        ],
+        [
+          6292,
+          6341
+        ],
+        [
+          6427,
+          6440
+        ],
+        [
+          6463,
+          6477
+        ],
+        [
+          6486,
+          6499
+        ],
+        [
+          10267,
+          10426
+        ]
+      ],
+      "crates/bridget-daemon/src/communication/client.rs": [
+        [
+          85,
+          140
+        ],
+        [
+          919,
+          1170
+        ],
+        [
+          1257,
+          1295
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          1018,
+          1045
+        ],
+        [
+          1700,
+          3260
+        ],
+        [
+          3381,
+          3505
+        ],
+        [
+          4756,
+          4763
+        ],
+        [
+          4780,
+          4788
+        ],
+        [
+          5944,
+          5955
+        ],
+        [
+          6490,
+          6540
+        ],
+        [
+          7010,
+          7060
+        ],
+        [
+          9540,
+          9582
+        ],
+        [
+          17799,
+          17810
+        ],
+        [
+          17873,
+          17879
+        ],
+        [
+          18085,
+          18135
+        ],
+        [
+          18196,
+          18234
+        ],
+        [
+          21377,
+          21395
+        ],
+        [
+          23759,
+          24834
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          490,
+          590
+        ],
+        [
+          889,
+          1048
+        ],
+        [
+          1427,
+          1541
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          618,
+          792
+        ],
+        [
+          2493,
+          2529
+        ],
+        [
+          5562,
+          5688
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          20,
+          245
+        ]
+      ],
+      "crates/bridget-daemon/src/observation.rs": [
+        [
+          52,
+          195
+        ],
+        [
+          319,
+          325
+        ],
+        [
+          331,
+          337
+        ],
+        [
+          343,
+          350
+        ],
+        [
+          450,
+          540
+        ]
+      ],
+      "crates/bridget-daemon/src/referent_control.rs": [
+        [
+          117,
+          124
+        ],
+        [
+          140,
+          147
+        ],
+        [
+          152,
+          160
+        ],
+        [
+          899,
+          919
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          5,
+          15
+        ],
+        [
+          39,
+          161
+        ],
+        [
+          358,
+          388
+        ]
+      ],
+      "crates/bridget-daemon/src/store/observation_missed.rs": [
+        [
+          1,
+          1151
+        ]
+      ],
+      "crates/bridget-daemon/src/store/wake_schedules.rs": [
+        [
+          1,
+          641
+        ]
+      ],
+      "crates/bridget-daemon/src/threads.rs": [
+        [
+          350,
+          380
+        ],
+        [
+          1030,
+          1058
+        ]
+      ],
+      "crates/bridget-daemon/src/wake_schedules.rs": [
+        [
+          1,
+          554
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2362,
+          2472
+        ],
+        [
+          3079,
+          3087
+        ],
+        [
+          4062,
+          4070
+        ],
+        [
+          8678,
+          8773
+        ]
+      ],
+      "specs/158-reveils-controle/contracts/wake-158B.md": [
+        [
+          1,
+          140
+        ]
+      ],
+      "specs/158-reveils-controle/reuse-audit-158B.md": [
+        [
+          1,
+          115
+        ]
+      ],
+      "specs/158-reveils-controle/data-model-158B.md": [
+        [
+          1,
+          104
+        ]
+      ],
+      "specs/158-reveils-controle/spec.md": [
+        [
+          170,
+          268
+        ]
+      ],
+      "specs/158-reveils-controle/research-158B.md": [
+        [
+          43,
+          43
+        ]
+      ],
+      "specs/158-reveils-controle/tasks.md": [
+        [
+          123,
+          125
+        ],
+        [
+          132,
+          132
+        ]
+      ]
+    },
+    "inherited_unchanged_read_ranges_by_file": {}
+  },
+  "warnings": [
+    "AncienSHAexclu:04:specs/158-reveils-controle/contracts/wake-158B.md",
+    "AncienSHAexclu:04:crates/bridget-daemon/src/daemon.rs",
+    "AncienSHAexclu:07:crates/bridget-daemon/src/daemon.rs",
+    "Contexte/selfreviewexclu:07:crates/bridget-daemon/src/cli.rs",
+    "AncienSHAexclu:07:specs/158-reveils-controle/spec.md",
+    "AncienSHAexclu:12:specs/158-reveils-controle/contracts/wake-158B.md",
+    "AncienSHAexclu:12:crates/bridget-daemon/src/daemon.rs",
+    "AncienSHAexclu:08:specs/158-reveils-controle/contracts/wake-158B.md",
+    "AncienSHAexclu:08:crates/bridget-daemon/src/daemon.rs",
+    "AncienSHAexclu:05:crates/bridget-daemon/src/daemon.rs",
+    "Contexte/selfreviewexclu:05:crates/bridget-daemon/src/cli.rs",
+    "AncienSHAexclu:05:specs/158-reveils-controle/spec.md",
+    "AncienSHAexclu:03:specs/158-reveils-controle/contracts/wake-158B.md",
+    "Contexte/selfreviewexclu:03:crates/bridget-daemon/src/mcp.rs",
+    "Contexte/selfreviewexclu:03:crates/bridget-daemon/src/mcp_scopes.rs",
+    "Contexte/selfreviewexclu:03:crates/bridget-transport/src/protocol.rs",
+    "AncienSHAexclu:03:specs/158-reveils-controle/contracts/wake-158B.md",
+    "AncienSHAexclu:03:specs/158-reveils-controle/tasks.md",
+    "AncienSHAexclu:03:crates/bridget-daemon/src/daemon.rs",
+    "Contexte/selfreviewexclu:03:crates/bridget-daemon/src/cli.rs",
+    "Contexte/selfreviewexclu:03:crates/bridget-daemon/src/communication/client.rs",
+    "AncienSHAexclu:03:specs/158-reveils-controle/spec.md",
+    "AncienSHAexclu:06:specs/158-reveils-controle/contracts/wake-158B.md",
+    "Contexte/selfreviewexclu:06:crates/bridget-daemon/src/mcp.rs",
+    "Contexte/selfreviewexclu:06:crates/bridget-daemon/src/mcp_scopes.rs",
+    "Contexte/selfreviewexclu:06:crates/bridget-transport/src/protocol.rs",
+    "AncienSHAexclu:06:specs/158-reveils-controle/contracts/wake-158B.md",
+    "AncienSHAexclu:06:specs/158-reveils-controle/tasks.md",
+    "AncienSHAexclu:06:crates/bridget-daemon/src/daemon.rs",
+    "Contexte/selfreviewexclu:06:crates/bridget-daemon/src/cli.rs",
+    "Contexte/selfreviewexclu:06:crates/bridget-daemon/src/communication/client.rs",
+    "AncienSHAexclu:06:specs/158-reveils-controle/spec.md",
+    "Couverture basse 7.9% : hunks entièrement couverts par des ranges explicites ; inventaire exclu.",
+    "Chemin read_manifest composé ou hors scope ignoré.",
+    "Chemin read_manifest composé ou hors scope ignoré.",
+    "Chemin read_manifest composé ou hors scope ignoré.",
+    "Chemin read_manifest composé ou hors scope ignoré.",
+    "Chemin read_manifest composé ou hors scope ignoré.",
+    "Couverture basse 15.96% : hunks entièrement couverts par des ranges explicites ; inventaire exclu."
+  ],
+  "authority": "ROOTFINAL exactcode2124suppl13:01:31 est créditépartiellementavantcapturemetadata,sansantidatage."
+}

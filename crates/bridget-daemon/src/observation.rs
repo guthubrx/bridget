@@ -64,7 +64,8 @@ const SOURCE_NOTICE_GRACE: Duration = Duration::from_secs(30);
 /// par période.
 const SOURCE_NOTICE_MAX_DELAY: Duration = Duration::from_secs(300);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Fact {
     pub event: Kind,
     pub agent: String,
@@ -73,9 +74,40 @@ pub(crate) struct Fact {
     pub other_agent: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CoverageGap {
+    SourceGap,
+    SourceUnavailable,
+    SourceChanged,
+    SourceUnstable,
+    DaemonRestart,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub(crate) enum NoticePayload {
+    Fact(Fact),
+    Gap {
+        kind: CoverageGap,
+        source: Option<String>,
+        since_secs: u64,
+        dropped: u64,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct Notification {
     pub owner: String,
     pub body: String,
+    pub fact_id: String,
+    pub subscription_id: String,
+    pub payload: NoticePayload,
 }
 
 #[derive(Clone)]
@@ -124,7 +156,7 @@ impl Observations {
                 continue;
             }
             sub.last_gap_notice = Some(now);
-            notices.push(Notification { owner: sub.owner.clone(), body: format!("[Bridget observation] {}", json!({
+            notices.push(Notification { owner: sub.owner.clone(), fact_id:uuid::Uuid::new_v4().to_string(), subscription_id:sub.id.clone(), payload:NoticePayload::Gap { kind:CoverageGap::SourceGap, source:Some(agent.into()), since_secs:0, dropped }, body: format!("[Bridget observation] {}", json!({
                 "subscription_id":sub.id,"event":"observation_gap","agent":agent,"facts_lost_total":sub.facts_lost,
                 "observation_gaps":sub.observation_gaps,"dropped":if dropped > 0 {Some(dropped)} else {None},
                 "notice":if dropped == 0 {"continuité d'observation non garantie ; quantité manquante inconnue ; surveillance poursuivie sans reconstruire la lacune"}
@@ -287,7 +319,7 @@ impl Observations {
                 } else {
                     "surveillance interrompue : source indisponible"
                 };
-                Some(Notification { owner: sub.owner.clone(), body: format!("[Bridget observation] {}", json!({
+                Some(Notification { owner: sub.owner.clone(), fact_id:uuid::Uuid::new_v4().to_string(), subscription_id:sub.id.clone(), payload:NoticePayload::Gap { kind:if unstable {CoverageGap::SourceUnstable} else if sub.available {CoverageGap::SourceChanged} else {CoverageGap::SourceUnavailable}, source:sub.agent.clone(), since_secs:now.saturating_duration_since(since).as_secs(), dropped:0 }, body: format!("[Bridget observation] {}", json!({
                     "subscription_id":sub.id,"state":if sub.available {"active"} else {"source_unavailable"},
                     "sources_compatible":sub.source_count,"changes":flips,"notice":notice
                 })) })
@@ -299,7 +331,7 @@ impl Observations {
         self.subscriptions.values_mut().filter(|s| s.owner == owner && s.restored && !s.interruption_announced && s.expires > now && !s.journal_only())
             .map(|s| {
                 s.interruption_announced = true;
-                Notification { owner: owner.into(), body: format!("[Bridget observation] {}", json!({"subscription_id":s.id,"state":if s.available {"active"} else {"source_unavailable"},"notice":"daemon redémarré : abonnement repris automatiquement ; faits survenus pendant la coupure perdus, non rejoués"})) }
+                Notification { owner: owner.into(), fact_id:uuid::Uuid::new_v4().to_string(), subscription_id:s.id.clone(), payload:NoticePayload::Gap { kind:CoverageGap::DaemonRestart, source:s.agent.clone(), since_secs:0, dropped:0 }, body: format!("[Bridget observation] {}", json!({"subscription_id":s.id,"state":if s.available {"active"} else {"source_unavailable"},"notice":"daemon redémarré : abonnement repris automatiquement ; faits survenus pendant la coupure perdus, non rejoués"})) }
             }).collect()
     }
 
@@ -311,6 +343,8 @@ impl Observations {
             self.revision += 1;
         }
         match request {
+            // Le daemon route Missed vers Store ; ce chemin mémoire refuse.
+            Request::Missed { .. } => json!({"status":"rejected","reason":"store_required"}),
             Request::Types {} => {
                 let events: Vec<_> = [
                     (Kind::TurnEnded, "fin d'un tour, pas succès ou fin de mission ; répétitions silencieuses, notification ponctuelle avec once=true"),
@@ -492,7 +526,7 @@ impl Observations {
                     "agent":fact.agent,"host":fact.host,"file":fact.file,"other_agent":fact.other_agent,
                     "suppressed_total":sub.suppressed,
                     "notice":"fait observé, pas validation de mission ; aucune action obligatoire"});
-                notifications.push(Notification { owner:sub.owner.clone(), body:format!("[Bridget observation] {body}") });
+                notifications.push(Notification { owner:sub.owner.clone(), fact_id:uuid::Uuid::new_v4().to_string(), subscription_id:sub.id.clone(), payload:NoticePayload::Fact(fact.clone()), body:format!("[Bridget observation] {body}") });
                 if sub.once { return false; }
             }
             true
@@ -943,8 +977,20 @@ mod tests {
         state.set_source("a", "a", vec![Kind::FileWritten], now);
         state.request("owner", sub(Kind::FileCollision, false), now, 100);
         assert!(state.observe(file("a", "h", "/depot/a.rs"), now).is_empty());
-        assert!(state.observe(file("b", "h", "/depot/.worktrees/12345678/a.rs"), now + Duration::from_secs(1)).is_empty());
-        assert_eq!(state.observe(file("b", "h", "/depot/a.rs"), now + Duration::from_secs(2)).len(), 1);
+        assert!(
+            state
+                .observe(
+                    file("b", "h", "/depot/.worktrees/12345678/a.rs"),
+                    now + Duration::from_secs(1)
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            state
+                .observe(file("b", "h", "/depot/a.rs"), now + Duration::from_secs(2))
+                .len(),
+            1
+        );
     }
 
     #[test]

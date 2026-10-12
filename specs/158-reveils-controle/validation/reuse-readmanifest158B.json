@@ -1,0 +1,877 @@
+{
+  "at_utc": "2026-10-12T10:40:59.735120+00:00",
+  "status": "PASS_reuse_gate_before_tasks",
+  "source_base_attested_by_root": "80b43407936110526b28f2c38ea72e1b34055154",
+  "metadata_base_preflight": "9a94334a109b4d5f939a8ebea464530abc28f4d6",
+  "source_root": "/Users/moi/Nextcloud/10.Scripts/64.bridget",
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "relative_file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256_snapshot": "a4ec4a19c6904e616fd40b8ee3cb46650eceb4cbc9e77816dd98bfe836e5aa7b",
+      "line_count": 39916,
+      "ranges": [
+        [
+          1724,
+          1821
+        ],
+        [
+          4532,
+          4602
+        ],
+        [
+          4604,
+          4662
+        ],
+        [
+          5161,
+          5196
+        ],
+        [
+          5669,
+          5696
+        ],
+        [
+          7630,
+          7678
+        ],
+        [
+          7692,
+          7757
+        ],
+        [
+          8334,
+          8462
+        ],
+        [
+          8550,
+          8623
+        ],
+        [
+          9280,
+          9312
+        ],
+        [
+          16420,
+          16448
+        ],
+        [
+          16641,
+          16665
+        ],
+        [
+          3420,
+          3444
+        ],
+        [
+          8715,
+          8731
+        ],
+        [
+          10713,
+          10739
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs",
+      "relative_file": "crates/bridget-daemon/src/idempotency.rs",
+      "sha256_snapshot": "b467937682e8769ab5ccf27d2eb024fff22fe4d7c59d43ddd1ebdcfc5a31c5f7",
+      "line_count": 1278,
+      "ranges": [
+        [
+          38,
+          60
+        ],
+        [
+          470,
+          545
+        ],
+        [
+          887,
+          943
+        ],
+        [
+          996,
+          1020
+        ],
+        [
+          1125,
+          1176
+        ],
+        [
+          1212,
+          1232
+        ],
+        [
+          1245,
+          1269
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "relative_file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256_snapshot": "f1b71c8516447a9d20c9a50b58497ec75c58029c344189439870f68377130d04",
+      "line_count": 839,
+      "ranges": [
+        [
+          54,
+          178
+        ],
+        [
+          768,
+          839
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/observation.rs",
+      "relative_file": "crates/bridget-daemon/src/observation.rs",
+      "sha256_snapshot": "d9449e4dcd2c28339f89d77eafc05b41d6aa90ad21d134e0c18d53854be80cbd",
+      "line_count": 1054,
+      "ranges": [
+        [
+          1,
+          200
+        ],
+        [
+          298,
+          381
+        ],
+        [
+          423,
+          505
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store.rs",
+      "relative_file": "crates/bridget-daemon/src/store.rs",
+      "sha256_snapshot": "162ecbdd284a461e5d845fc02131b9a33a1f4295dbe41287ec757dea861be69c",
+      "line_count": 621,
+      "ranges": [
+        [
+          33,
+          76
+        ],
+        [
+          143,
+          158
+        ],
+        [
+          358,
+          383
+        ],
+        [
+          450,
+          509
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store/threads.rs",
+      "relative_file": "crates/bridget-daemon/src/store/threads.rs",
+      "sha256_snapshot": "1e34ef1b3d5b6059e2846010c1cbb44d623b49685f16f9e09072e658c89a93e6",
+      "line_count": 2630,
+      "ranges": [
+        [
+          249,
+          263
+        ],
+        [
+          1067,
+          1095
+        ],
+        [
+          1161,
+          1273
+        ],
+        [
+          1777,
+          1875
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/threads.rs",
+      "relative_file": "crates/bridget-daemon/src/threads.rs",
+      "sha256_snapshot": "7675231ea83720d4d87c52a3d7dd88d12aead9047fd8940a8ffab9cb4fd1c43d",
+      "line_count": 2314,
+      "ranges": [
+        [
+          565,
+          595
+        ],
+        [
+          611,
+          683
+        ],
+        [
+          932,
+          950
+        ],
+        [
+          975,
+          1084
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/communication.rs",
+      "relative_file": "crates/bridget-daemon/src/communication.rs",
+      "sha256_snapshot": "446d75d95e9ea041441347d6861dbd5c39c16f153d8856f1815de298f69b9cf3",
+      "line_count": 555,
+      "ranges": [
+        [
+          1,
+          110
+        ],
+        [
+          128,
+          221
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/communication/client.rs",
+      "relative_file": "crates/bridget-daemon/src/communication/client.rs",
+      "sha256_snapshot": "4aefa1961876c4521d235e778b9e1fedb7044134578ac2a0509b5a22dcda807c",
+      "line_count": 2263,
+      "ranges": [
+        [
+          66,
+          141
+        ],
+        [
+          186,
+          219
+        ],
+        [
+          1180,
+          1202
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/mcp_scopes.rs",
+      "relative_file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256_snapshot": "eddc29d884ddfa43684f675aecd26f57070698b243d551ee46aa388ae3494a85",
+      "line_count": 134,
+      "ranges": [
+        [
+          22,
+          37
+        ],
+        [
+          45,
+          53
+        ],
+        [
+          55,
+          71
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/mcp.rs",
+      "relative_file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256_snapshot": "0c525f7c5b5f6d78d929570f0f18e0920902a30ef6f7b00c22760bcecdd914ed",
+      "line_count": 8006,
+      "ranges": [
+        [
+          620,
+          677
+        ],
+        [
+          700,
+          732
+        ],
+        [
+          2412,
+          2424
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/referent_control.rs",
+      "relative_file": "crates/bridget-daemon/src/referent_control.rs",
+      "sha256_snapshot": "91f40dfc1f66bdb74bb0be90723ef9cdb142855579e4e319c2b100c4b994e0f0",
+      "line_count": 1012,
+      "ranges": [
+        [
+          107,
+          157
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/protocol.rs",
+      "relative_file": "crates/bridget-transport/src/protocol.rs",
+      "sha256_snapshot": "7f1792dbf9d95470a87b2bad35c7c648a2e4077cc603b943b9445d07f860a07c",
+      "line_count": 8535,
+      "ranges": [
+        [
+          2350,
+          2377
+        ],
+        [
+          2868,
+          2898
+        ],
+        [
+          3025,
+          3088
+        ],
+        [
+          4024,
+          4040
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs",
+      "relative_file": "crates/bridget-daemon/src/cli.rs",
+      "sha256_snapshot": "cedf1abb594c5720e37bc94d94b15b6bbe39eca1f5128de7263a99ca413dc543",
+      "line_count": 10394,
+      "ranges": [
+        [
+          937,
+          984
+        ],
+        [
+          6705,
+          6726
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store/project_compat.rs",
+      "relative_file": "crates/bridget-daemon/src/store/project_compat.rs",
+      "sha256_snapshot": "965a8e5c87a9a1ead5c594381138367a79c7c0796d2caab1f5fdd67efcbe2b67",
+      "line_count": 2731,
+      "ranges": [
+        [
+          1315,
+          1407
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/Cargo.toml",
+      "relative_file": "crates/bridget-daemon/Cargo.toml",
+      "sha256_snapshot": "5045c206a29aecfcf3b5f7ef414a61e6acc191df6841af1470abe3020f7533cb",
+      "line_count": 41,
+      "ranges": [
+        [
+          1,
+          41
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/099-fiabilite-communications/spec.md",
+      "relative_file": "specs/099-fiabilite-communications/spec.md",
+      "sha256_snapshot": "e625f93a6b64481f90716d498f5734e4ca45146c2c7555318caab33ac66dd839",
+      "line_count": 143,
+      "ranges": [
+        [
+          1,
+          42
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/099-fiabilite-communications/contracts/communication.md",
+      "relative_file": "specs/099-fiabilite-communications/contracts/communication.md",
+      "sha256_snapshot": "a4469bc6b2d53a9660475a22a53a92049b584effc0a485f41112e536a758c659",
+      "line_count": 33,
+      "ranges": [
+        [
+          1,
+          33
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Texte complet lu."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/100-observation-partage/contracts/observation.md",
+      "relative_file": "specs/100-observation-partage/contracts/observation.md",
+      "sha256_snapshot": "40b1d08c1d80908e3763207476d96b907cf1dca0b3e241f9bced77975a5794ac",
+      "line_count": 40,
+      "ranges": [
+        [
+          1,
+          40
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Texte complet lu."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/101-abonnements-t3/contracts/observation.md",
+      "relative_file": "specs/101-abonnements-t3/contracts/observation.md",
+      "sha256_snapshot": "b5631ac2b5e1d7e73cd8d581925e13725062cc6f0257924038e6d943643a194d",
+      "line_count": 31,
+      "ranges": [
+        [
+          1,
+          31
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Texte complet lu."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/102-fils-inter-agents/contracts/thread-api.md",
+      "relative_file": "specs/102-fils-inter-agents/contracts/thread-api.md",
+      "sha256_snapshot": "00833bbc1233f4cc5bca034d1b206a3f7feeb33cc4e61c55356ec4dab4a6d28b",
+      "line_count": 266,
+      "ranges": [
+        [
+          1,
+          86
+        ],
+        [
+          131,
+          165
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/spec.md",
+      "relative_file": "specs/158-reveils-controle/spec.md",
+      "sha256_snapshot": "a9ba125b73a15d077c2be3353274d0f1737ce83f1224febf4b4ea0e64aa9d14b",
+      "line_count": 246,
+      "ranges": [
+        [
+          184,
+          246
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/plan.md",
+      "relative_file": "specs/158-reveils-controle/plan.md",
+      "sha256_snapshot": "d4b76cb4d3687d6d56eed179b1d2c0021b720d860cbb75ccb5f550d5b0e09275",
+      "line_count": 127,
+      "ranges": [
+        [
+          106,
+          123
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.specify/memory/constitution.md",
+      "relative_file": ".specify/memory/constitution.md",
+      "sha256_snapshot": "5488b1f49f4ee846371969a4d5ada35c79b2f657402415487a3ae81ff4466c76",
+      "line_count": 20,
+      "ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Texte complet lu."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.specify/memory/standards.md",
+      "relative_file": ".specify/memory/standards.md",
+      "sha256_snapshot": "08c79deb5ae7162408eec4ea98336fcb8819692f2e2d59e0372decb19d6020a7",
+      "line_count": 38,
+      "ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Texte complet lu."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/AGENTS.md",
+      "relative_file": "AGENTS.md",
+      "sha256_snapshot": "45e77179a3aae15e7c728df75f009b58ee873ac6846d4a34da9989b275a4b04d",
+      "line_count": 159,
+      "ranges": [
+        [
+          1,
+          2
+        ]
+      ],
+      "read_mode": "fresh_targeted",
+      "limitations": "Lecture partielle du fichier ; recherches rg non créditées comme lecture intégrale."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-clarifications-20261012/clarifications158B-proposition.md",
+      "sha256_snapshot": "4f82c7a8b75535ecf1089d4f6216ec43671f3425e1f463746c7ee7a53a456dc6",
+      "ranges": [
+        [
+          1,
+          153
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Sources en ancien WT dans ces notes historiques ; ancres réattestées sur ROOT pour ce rapport."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-prelecture-20261012/decisions-root-feasibility.md",
+      "sha256_snapshot": "4196d1656233ac1c2f4d2c8ca19103fcb349c21b025f3ce7f11ed3af3fa7ac63",
+      "ranges": [
+        [
+          1,
+          79
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Sources en ancien WT dans ces notes historiques ; ancres réattestées sur ROOT pour ce rapport."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-prelecture-20261012/prelecture158B.md",
+      "sha256_snapshot": "b9521abe9d2bdaefba9037a7974af4aa5fa80d7d996ce6b904e3b82d7f45623d",
+      "ranges": [
+        [
+          1,
+          55
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Sources en ancien WT dans ces notes historiques ; ancres réattestées sur ROOT pour ce rapport."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/plan-158B.md",
+      "sha256_snapshot": "40c53f8964424a1ef32f5d18f09c142f88f1cde66eba6475e77074e22ff8183d",
+      "ranges": [
+        [
+          1,
+          88
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/research-158B.md",
+      "sha256_snapshot": "1d8c273425d5f9713e58a269a28fa2bc1091676b81645a2a170634832022b225",
+      "ranges": [
+        [
+          1,
+          67
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/data-model-158B.md",
+      "sha256_snapshot": "7cffa6e2f7b337f3d950f8c02212bb50c635860b096f2233e9ab5969b855797c",
+      "ranges": [
+        [
+          1,
+          77
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/contracts-158B.md",
+      "sha256_snapshot": "1e237b44cd8f93fce01132e8593dd145219e028dc7e62fe99d4f805a1cf517db",
+      "ranges": [
+        [
+          1,
+          82
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/quickstart-158B.md",
+      "sha256_snapshot": "40e7bf81c85e5385d208bb0cc33708004fcf3e3fec5f7ae3f1c5ed75cefdbc83",
+      "ranges": [
+        [
+          1,
+          43
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/spec-158B.patch",
+      "sha256_snapshot": "c4ac9e9022a60138c9c5dce28c357ed384e34c53fbb721111951491162407b60",
+      "ranges": [
+        [
+          1,
+          70
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/preflight-root158B.json",
+      "sha256_snapshot": "febd29e52ca35b0ee6ef88a5deac27135658ed294f7f1e5535550e943f70ad3c",
+      "ranges": [
+        [
+          1,
+          16
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/manifest.json",
+      "sha256_snapshot": "87d8ee8543b782b82e79d09bfce7dc22516c729d168eca7d2417df7f3d087453",
+      "ranges": [
+        [
+          1,
+          52
+        ]
+      ],
+      "read_mode": "fresh_document_read",
+      "limitations": "Texte intégral candidat lu ; pas encore appliqué dans le dépôt."
+    },
+    {
+      "file": "/Users/moi/.speckit/constitution.md",
+      "sha256_snapshot": "0258b90dc1402f6d20881d2766b16552f269742d4f91f9b127b1e752b633fb3f",
+      "ranges": [
+        [
+          404,
+          620
+        ]
+      ],
+      "read_mode": "applicable_rules",
+      "limitations": "Sections pertinentes seulement."
+    },
+    {
+      "file": "/Users/moi/.speckit/ref/speckit-workflow.md",
+      "sha256_snapshot": "afc189ecaac93b1e53f43cdfe5bc9a21da3bb3573218bc94e1b6da1fb9f375a8",
+      "ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "read_mode": "applicable_rules",
+      "limitations": "Sections pertinentes seulement."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/data-model-158B.md",
+      "sha256_snapshot": "7cffa6e2f7b337f3d950f8c02212bb50c635860b096f2233e9ab5969b855797c",
+      "ranges": [
+        [
+          37,
+          80
+        ]
+      ],
+      "read_mode": "final_delta_targeted",
+      "limitations": "Crédit ciblé du complément final ; la lecture intégrale précédente reste historique."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/plan-158B.md",
+      "sha256_snapshot": "552a838877ea770dcf9727d40cd0e4d182c5350efda83804034a5b864fe6ef30",
+      "ranges": [
+        [
+          30,
+          38
+        ]
+      ],
+      "read_mode": "final_delta_targeted",
+      "limitations": "Crédit ciblé du complément final ; la lecture intégrale précédente reste historique."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/contracts-158B.md",
+      "sha256_snapshot": "1e237b44cd8f93fce01132e8593dd145219e028dc7e62fe99d4f805a1cf517db",
+      "ranges": [
+        [
+          48,
+          78
+        ]
+      ],
+      "read_mode": "final_delta_targeted",
+      "limitations": "Crédit ciblé du complément final ; la lecture intégrale précédente reste historique."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan158B-officiel-20261012/manifest.json",
+      "sha256_snapshot": "a01a4acf057940e36189991f4b3072a152ea74d85629584f40878c3c2704140d",
+      "ranges": [
+        [
+          1,
+          51
+        ]
+      ],
+      "read_mode": "final_delta_targeted",
+      "limitations": "Crédit ciblé du complément final ; la lecture intégrale précédente reste historique."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256_snapshot": "9345ed667c2278adce9a8141566edb1fb3af732a031ac51a43afbacd8475c992",
+      "ranges": [
+        [
+          263,
+          263
+        ]
+      ],
+      "read_mode": "root_integrated_FR101_delta",
+      "limitations": "Seul delta officiel final relu ; lecture complète antérieure du candidat conservée avec ses SHA historiques."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/plan-158B.md",
+      "sha256_snapshot": "7313e91f56d3b8168919f3fd904f2032cd518df65864223038571de12bec9c9b",
+      "ranges": [
+        [
+          92,
+          92
+        ]
+      ],
+      "read_mode": "root_integrated_FR101_delta",
+      "limitations": "Seul delta officiel final relu ; lecture complète antérieure du candidat conservée avec ses SHA historiques."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/research-158B.md",
+      "sha256_snapshot": "2bbbc80140e84d4aa195b896d1499224375e70bd99727dee132dcc71d38c0396",
+      "ranges": [
+        [
+          71,
+          71
+        ]
+      ],
+      "read_mode": "root_integrated_FR101_delta",
+      "limitations": "Seul delta officiel final relu ; lecture complète antérieure du candidat conservée avec ses SHA historiques."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/data-model-158B.md",
+      "sha256_snapshot": "3319c002c49e29f23be1218a3b348a1434c158d03144a5f5f7eda1bc2d2eaa64",
+      "ranges": [
+        [
+          23,
+          23
+        ],
+        [
+          81,
+          81
+        ]
+      ],
+      "read_mode": "root_integrated_FR101_delta",
+      "limitations": "Seul delta officiel final relu ; lecture complète antérieure du candidat conservée avec ses SHA historiques."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/quickstart-158B.md",
+      "sha256_snapshot": "520dcf3f84761d853ec9e53c40c9f059f7a0c3a01dc90974079a0a4b4c28e388",
+      "ranges": [
+        [
+          47,
+          47
+        ]
+      ],
+      "read_mode": "root_integrated_FR101_delta",
+      "limitations": "Seul delta officiel final relu ; lecture complète antérieure du candidat conservée avec ses SHA historiques."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+      "sha256_snapshot": "05215a59cd2c10a31a26369ebad89733c7add23af336126ce9e16e22d9d5d493",
+      "ranges": [
+        [
+          86,
+          86
+        ]
+      ],
+      "read_mode": "root_integrated_FR101_delta",
+      "limitations": "Seul delta officiel final relu ; lecture complète antérieure du candidat conservée avec ses SHA historiques."
+    }
+  ],
+  "semantic_coverage": "Ciblée sur les primitives de réemploi ; aucun pourcentage dépôt ni crédit de hunks calculé. Sorties tronquées exclues des plages non effectivement visibles.",
+  "not_executed": [
+    "Git",
+    "Cargo",
+    "tests",
+    "build",
+    "runtime",
+    "DB",
+    "service",
+    "modèle",
+    "scanner",
+    "web research"
+  ],
+  "source_start_hashes": "Pas de capture avant les premières lectures ; snapshot actuel pour comparaison de clôture uniquement.",
+  "closed_at_utc": "2026-10-12T10:48:40.553577+00:00",
+  "source_snapshot_comparison": "29/29 fichiers de la capture intermédiaire inchangés à la clôture. Pas de capture avant les premières lectures.",
+  "official_plan_sha256": "40c53f8964424a1ef32f5d18f09c142f88f1cde66eba6475e77074e22ff8183d",
+  "official_manifest_sha256": "87d8ee8543b782b82e79d09bfce7dc22516c729d168eca7d2417df7f3d087453",
+  "final_artifact_change": "Des candidats ont été actualisés après la lecture initiale. Lectures finales ciblées : data-model37–fin,plan30–38,contracts48–fin et manifest ; aucune attribution de relecture intégrale nouvelle.",
+  "official_final_receipt_sha256": "32ef3f9ba1488aa1489e431054a25bc5bf4c9cc226630c33dba28d139f6d860a",
+  "official_outputs_verified": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/spec.md",
+      "sha256": "9345ed667c2278adce9a8141566edb1fb3af732a031ac51a43afbacd8475c992"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/plan-158B.md",
+      "sha256": "7313e91f56d3b8168919f3fd904f2032cd518df65864223038571de12bec9c9b"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/research-158B.md",
+      "sha256": "2bbbc80140e84d4aa195b896d1499224375e70bd99727dee132dcc71d38c0396"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/data-model-158B.md",
+      "sha256": "3319c002c49e29f23be1218a3b348a1434c158d03144a5f5f7eda1bc2d2eaa64"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/quickstart-158B.md",
+      "sha256": "520dcf3f84761d853ec9e53c40c9f059f7a0c3a01dc90974079a0a4b4c28e388"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/158-reveils-controle/contracts/wake-158B.md",
+      "sha256": "05215a59cd2c10a31a26369ebad89733c7add23af336126ce9e16e22d9d5d493"
+    }
+  ],
+  "active_blockers": [],
+  "resolved_objection": "FR101 physique16/128, annulations incluses, retrait TX soldées uniquement, reçus099/102 intacts, UUID retiré refusé. Delta ROOT officiel vérifié6/6."
+}

@@ -60,6 +60,7 @@ de couverture.
 | `requests` | Équivalence MCP | `bridget_ledger` avec `view=requests` | Consulte les demandes de l'appelant, ou la projection globale autorisée ; aucun outil synonyme n'est créé. |
 | `rename` | MCP exposé | `bridget_rename` | Change seulement le nom d'affichage de l'identité propre ; UUID, instance, historique et rejeux restent liés à la même identité. |
 | `control` | Équivalence MCP pour control status ; CLI humain pour la vue globale et les mutations | `bridget_control_status` remplace `control status`; `pause`, `resume`, `budget`, `posture` et le contrôle global158A restent sans MCP | Le statut est observable ; les mutations appartiennent au référent humain et ne sont pas déléguées par 094. |
+| `wake` | CLI local unitaire ; CLI humain administratif ; MCP exposé pour la programmation | `wake cible --label/--id` déclenche une fois ; `bridget_wake` programme/liste/annule seulement ses propres réveils ; aucun admin MCP | Contrat158B prévu : cible connue, pas autostart ; fil avec identité auxiliaire/membre/projet ; list propre authentifié, list --all humain ControlStateV1, cancel administratif avec TTY. |
 | `inbox` | CLI humain | `bridget_control_status` ne donne que le compte ouvert, pas la liste ni la résolution | Liste et tranche des décisions humaines. Exposer `resolve` au modèle confondrait observation et autorité de référent. |
 | `runtime` | MCP exposé | `bridget_runtime` | Déclare le modèle/effort propres avec source `Declared`; ne sélectionne aucun modèle chez le fournisseur. |
 | `identity` | CLI humain | Aucun | `identity migrate --dry-run|--apply` planifie ou applique une migration sur chemins locaux explicites ; `--apply` exige le daemon arrêté et peut écrire des sauvegardes. |
@@ -274,6 +275,90 @@ discovery conserve sa surface normale, sans gain d’autres droits. Les outils
 151–157 sont classés par la table effective ; aucun inventaire non testé n’est
 présenté comme déjà validé. Tours et tokens sont hors 158A ; délai reply_timeout
 conservé. L’ADR158 lève le report de budgets de tokens à158 annoncé en150.
+
+## Réveils et faits manqués — contrat 158B prévu
+
+Ces formes décrivent l’extension prévue. Elles ne prouvent ni implémentation
+B terminée, tests verts, activation ou chargement par un MCP déjà ouvert.
+
+| Surface | Forme et garde |
+|---|---|
+| CLI unitaire | `bridget wake AGENT_OU_FIL [--label T] [--id K]`. Sans TTY, cible connue, aucune relance de modèle. |
+| CLI propre | `bridget wake list`. Identité authentifiée, programmations propres seulement. |
+| CLI humaine | `bridget wake list --all`, `bridget wake cancel UUID_PROGRAMMATION`. ControlStateV1 et acteur humain ; mutation TTY. Aucun équivalent administratif MCP. |
+| MCP programmation | `bridget_wake` avec action schedule, target, cadence et label facultatif. |
+| MCP gestion propre | action list, ou cancel avec schedule_id. Aucun owner/from/scope libre ni action admin. |
+| MCP faits manqués | `bridget_events` action missed, limit et after_seq facultatifs ; propriétaire implicite, Reads. |
+
+Exemples d’arguments MCP, pas de trames internes à fabriquer :
+
+```json
+{"action":"schedule","target":{"kind":"self"},"cadence":{"kind":"interval","seconds":60},"label":"Point de reprise"}
+{"action":"schedule","target":{"kind":"thread","id":"UUID_CANONIQUE"},"cadence":{"kind":"at","time":"09:00","weekdays":[1,2,3,4,5]}}
+{"action":"list"}
+{"action":"cancel","schedule_id":"UUID_CANONIQUE"}
+{"action":"missed"}
+```
+
+Le dernier exemple appartient à bridget_events ; les autres à bridget_wake.
+Champs fermés, null présent refusé pour les options. Target self est résolu
+par le daemon. La base wake est sends et readOnlyHintfalse ; schedule self/
+gestion propre sont writes_own_state, agent/fil sends, même UUID propre fourni.
+Discovery/self garde l’origineTask/instance et les gardes de vie au gel/départ.
+Fin connue→owner_unavailable ; erreur/preuve manquante ferme le départ.
+
+Cadenceintervalle≥60s ; cadence at HH:MM et jours 1..7 non vides/sans doublon.
+Fuseau du daemon annoncé ; heure civile inexistante sautée, heure double DST ou non-DST au
+premier UTC, une seule date. Offsets minutes entières±24h, sinon refuscalendar.
+ChangementTZ ne modifie que les échéancesfutures non gelées. Pause ne gèle pas
+une nouvelle occurrence ; rattrapage intervalle unique, fixe>600s sautée ; grâce
+600s déjà préparée jamais renouvelée. HaltA n’annule pas les programmations.
+
+Schedule crée un UUID neuf par admission, sans command_id. Réponse perdue :
+relire list, pas retry aveugle supposé unique. Limites physiques16/owner et128
+global incluent annulées ; retirer seulement annulées sans pending/inflight,
+sinon schedule_limit. Cancel connu déjà annulé→already_cancelled ; après retrait
+UUID inconnu→target_unknown, pas preuve que l’ancien cancel a échoué.
+
+CLI vers fil : BRIDGET_AGENT_ID_FILE et BRIDGET_AGENT_INSTANCE_ID/credential
+existants, appartenance et projet attestés avant réservation, aucun --from.
+Même --id/canon au retry conserve issued_at original/UUID102 ; mismatch refuse.
+ScopeCLI séparé,60 nouveaux IDs/min glissante, COUNT+INSERT transaction099.
+Programmations/MCP exclus de ce quota. Rétention7 jours, non renouvelée, reçu
+expiré refuse. Le circuit-breaker agent existant8/180s par couple s’applique
+au départ avec propriétaire logique, pas un nouveau quota de programmations.
+
+| Preuve | Interprétation |
+|---|---|
+| prepared/deferred | En attente dans la grâce initiale ; aucune exécution prouvée. |
+| Agent confirmé par ACK099 | Remise confirmée par la frontière099, pas lecture du modèle. |
+| Agent outcome_unknown | Terminal pour cette occurrence, réception incertaine, aucun renvoi. |
+| Fil committed_thread | Contribution +intentions102 committées sous UUID gelé ; pas lecture. |
+| missed_before_departure | Absence de départ prouvée par lecture099 disponible, grâce expirée. |
+| storage_unavailable | Aucun succès ni absence de départ déduit. |
+
+System produit par le daemon attribue « Réveil programmé par <owner attesté> »
+et cite le label entier ≤2048 octets, qui reste une donnée sans autorité. Le fil
+attribue le post au propriétaire membre, kindNone ; UUID102avant réserve099.
+Alertes/WakeRowpartagées suivent102 et ne sont pas expirées à 600s par B.
+
+Missed utilise after_seq, une séquence durable, pas un UUID/temps. La lecture
+propre est paginée et non destructive ; aucun owner libre ou cutoff avancé.
+Faits : 8192 globaux pending inclus,64/sub,7 jours,≤16384 octets par fait. Dépassement
+→compteur/lacune datée sans corps ni troncature, transactioncommune avec once.
+Worker existant : budget 1s,deadline initiale 5s ; saturation/écriture incertaine
+→write_unknown, pas faussepreuve de non-écriture. Journal_only/throttle exclu.
+
+Métadonnées≤8192 owners, TTL7 jours après dernier fait/gap, plus1ligneglobale
+fixe sans corps/UUID étrangers. Owner avec faits ou résumé non terminal protégé.
+Tous protégés : gap global, jamais 8193e owner. Lecture ne renouvelle pas TTL.
+Register+DNDlevé même épisode : un résumé, gel après solde des pending_write.
+Agrégat≤16384 octets avec compteurs/types/périodes/gaps ; détails par missed.
+Canon/UUID/génération/cutoff figés, grâce 600s. Seul ACK099 corrélé current avance
+les seuils ; reprise recherche acked avant unknown/supersession. Unknown terminal
+ne renvoie pas l’ancien canon : prochain résumé seulement nouveau retour réel
+avec incertitude précédente. Un callback ancien ne recrée pas d’owner retiré.
+Aucun fait non observé reconstruit, aucune histoire attribuable illimitée.
 
 ## Catalogue MCP Bridget fermé
 

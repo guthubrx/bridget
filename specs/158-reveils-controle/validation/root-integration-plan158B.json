@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-12T10:47:20.026511+00:00",
+  "input_manifest_sha256": "a01a4acf057940e36189991f4b3072a152ea74d85629584f40878c3c2704140d",
+  "outputs": {
+    "specs/158-reveils-controle/spec.md": "9345ed667c2278adce9a8141566edb1fb3af732a031ac51a43afbacd8475c992",
+    "specs/158-reveils-controle/plan-158B.md": "7313e91f56d3b8168919f3fd904f2032cd518df65864223038571de12bec9c9b",
+    "specs/158-reveils-controle/research-158B.md": "2bbbc80140e84d4aa195b896d1499224375e70bd99727dee132dcc71d38c0396",
+    "specs/158-reveils-controle/data-model-158B.md": "3319c002c49e29f23be1218a3b348a1434c158d03144a5f5f7eda1bc2d2eaa64",
+    "specs/158-reveils-controle/quickstart-158B.md": "520dcf3f84761d853ec9e53c40c9f059f7a0c3a01dc90974079a0a4b4c28e388",
+    "specs/158-reveils-controle/contracts/wake-158B.md": "05215a59cd2c10a31a26369ebad89733c7add23af336126ce9e16e22d9d5d493"
+  },
+  "amendments": [
+    "FR101 borne physique128/16, eviction cancelled soldée sans second reçu",
+    "contracts chemin canonique wake-158B.md"
+  ],
+  "A_prefix_unchanged": true,
+  "B_tasks_generated": false
+}

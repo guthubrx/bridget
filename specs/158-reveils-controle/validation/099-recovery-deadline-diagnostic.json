@@ -1,0 +1,161 @@
+{
+  "diagnostic": "historical_production_deadline_projection_changed_at_replay",
+  "base": "9a94334a109b4d5f939a8ebea464530abc28f4d6",
+  "timestamp": "2026-10-12T12:33:22.557677+00:00",
+  "scope": "stored_send_delivery/recovery099 only",
+  "functions": [
+    {
+      "function": "defer_idempotent_delivery",
+      "byte_identical": true,
+      "proofs": [
+        {
+          "authority": "158A",
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 4532,
+          "function_excerpt_sha256": "188d2031f00e082bf91abc46f21b548701c38530e819b7283291743d9fd345d7"
+        },
+        {
+          "authority": "158B",
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 5857,
+          "function_excerpt_sha256": "188d2031f00e082bf91abc46f21b548701c38530e819b7283291743d9fd345d7"
+        }
+      ]
+    },
+    {
+      "function": "stamp_turn_deadline_for_delivery",
+      "byte_identical": true,
+      "proofs": [
+        {
+          "authority": "158A",
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 7860,
+          "function_excerpt_sha256": "2fa15528ec243e0e9793f7d99d5d8f1d143f79af6585cc8ab3efca54875ee114"
+        },
+        {
+          "authority": "158B",
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 9199,
+          "function_excerpt_sha256": "2fa15528ec243e0e9793f7d99d5d8f1d143f79af6585cc8ab3efca54875ee114"
+        }
+      ]
+    }
+  ],
+  "tests_byte_identical": true,
+  "tests_sha256": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+  "fixture_byte_identical": true,
+  "store_delta": "stored_send_delivery visibility private→pub(crate) only; SELECT message_bytes unchanged",
+  "new_recovery_guard": "158B excludes internalwake deliveries using is_wake_delivery; ordinary099 continues existing defer path; no measured performance attribution",
+  "source_anchors": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "ranges": [
+        [
+          5854,
+          5890
+        ],
+        [
+          5916,
+          5983
+        ],
+        [
+          9196,
+          9225
+        ],
+        [
+          11224,
+          11250
+        ],
+        [
+          11368,
+          11424
+        ]
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "ranges": [
+        [
+          345,
+          370
+        ]
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_crash_test.rs",
+      "ranges": [
+        [
+          137,
+          168
+        ],
+        [
+          784,
+          807
+        ]
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/tests/support/idempotent.rs",
+      "ranges": [
+        [
+          923,
+          935
+        ]
+      ]
+    }
+  ],
+  "fresh_FULL_observation": {
+    "log": "/Users/moi/.cache/bridget-tests158B-20261012/T121-FULL158B-compiled-final.log",
+    "ranges": [
+      [
+        2312,
+        2324
+      ]
+    ],
+    "excerpt_sha256": "95146e7208e62a8444b389bca4c72b0dfe82a784ae96f16fc368b2034fe5c56b",
+    "differences": [
+      {
+        "id": "recovery-acked-wrapper",
+        "deadline_first": 1791810535,
+        "deadline_replayed": 1791810536
+      },
+      {
+        "id": "t1205bis-redelivery",
+        "deadline_first": 1791810537,
+        "deadline_replayed": 1791810538
+      }
+    ],
+    "other_envelope_fields": "UUID/delivery generation/recipient/message fields identical in quoted assertion",
+    "whole_log_stability": "not claimed: FULL active at diagnosis"
+  },
+  "because": "Durable message_bytes is serialized before defer adds a missing turn deadline. Recovery reloads durable bytes without this deadline and calls the same stamp function with a fresh wall clock. Crossing a second changes only deadline_at by1; within same second the historic byte-equality oracle can pass.",
+  "root_command_after_full": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--features",
+    "test-support",
+    "--test",
+    "core_089_crash_test",
+    "--",
+    "recovery_acked_wrapper_finalise_accepted_apres_crash_daemon",
+    "reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "limits": [
+    "No patch, no assertion weakened, no new task/test/helper/scenario.",
+    "No Cargo/test/Gitwrite/DB/service/process executed by this owner.",
+    "Base158A twoPASS does not prove projection immutability across a second boundary.",
+    "One targeted replay requested ROOT only; even a PASS must retain these fresh FULL failures and historic production limitation.",
+    "This is a historical production defect, not merely a weak/flaky assertion. Neither globalGREEN nor158B runtime/provider guarantee claimed."
+  ]
+}

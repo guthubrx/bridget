@@ -366,7 +366,7 @@ pub(crate) fn parse_recent_cursor(value: &str) -> Result<(i64, String), ()> {
     Ok((timestamp as i64, canonical_uuid(id).ok_or(())?))
 }
 
-fn digest(parts: &[&[u8]]) -> String {
+pub(crate) fn digest(parts: &[&[u8]]) -> String {
     let mut hasher = Sha256::new();
     for part in parts {
         hasher.update((part.len() as u64).to_be_bytes());

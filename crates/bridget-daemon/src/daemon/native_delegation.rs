@@ -1,7 +1,9 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
 use super::*;
 use crate::delegation::{Task, WorkspaceRecord, WorkspaceState};
-use bridget_transport::protocol::{NativeDelegationRequest, SpawnOwnership, SpawnPosture, WorkspaceRequest};
+use bridget_transport::protocol::{
+    NativeDelegationRequest, SpawnOwnership, SpawnPosture, WorkspaceRequest,
+};
 use serde_json::{Value, json};
 use sha2::Digest;
 use std::path::Path;
@@ -40,8 +42,12 @@ impl Drop for WorkspaceClaim {
     fn drop(&mut self) {
         let mut work = self.work.lock().unwrap_or_else(|e| e.into_inner());
         match &self.key {
-            WorkspaceClaimKey::Creation(key) => { work.creations.remove(key); }
-            WorkspaceClaimKey::Report(key) => { work.reports.remove(key); }
+            WorkspaceClaimKey::Creation(key) => {
+                work.creations.remove(key);
+            }
+            WorkspaceClaimKey::Report(key) => {
+                work.reports.remove(key);
+            }
         }
     }
 }
@@ -75,11 +81,16 @@ fn failure(code: &str) -> Value {
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
     }
-    if code.starts_with("workspace_") && let Some((code, message)) = code.split_once(':') {
+    if code.starts_with("workspace_")
+        && let Some((code, message)) = code.split_once(':')
+    {
         return json!({"status":"refused","code":code,"message":message.trim()});
     }
     if let Some((canonical_code, encoded)) = code.split_once(':')
-        && matches!(canonical_code, "provider_quota_exhausted" | "fallback_exhausted")
+        && matches!(
+            canonical_code,
+            "provider_quota_exhausted" | "fallback_exhausted"
+        )
     {
         // Forme fermée : une charge invalide conserve le refus, sans détail inventé.
         if encoded.len() <= 65536
@@ -87,23 +98,49 @@ fn failure(code: &str) -> Value {
             && let Some(object) = payload.as_object()
             && object.len() == 2
             && let Some(message) = object.get("message").and_then(Value::as_str)
-            && !message.is_empty() && message.len() <= 4096
+            && !message.is_empty()
+            && message.len() <= 4096
             && !message.chars().any(bridget_core::is_disallowed_control)
             && let Some(detail) = object.get("detail").and_then(Value::as_object)
         {
             let valid = match canonical_code {
-                "provider_quota_exhausted" => detail.len() == 1
-                    && detail.get("resets_at").is_some_and(|value| value.is_null() || value.as_i64().is_some()),
-                "fallback_exhausted" => detail.len() == 1 && detail.get("tried").and_then(Value::as_array).is_some_and(|tried|
-                    !tried.is_empty() && tried.len() <= 4 && tried.iter().all(|entry|
-                        entry.as_object().is_some_and(|entry| entry.len() == 3
-                            && ["agent_type", "model", "code"].into_iter().all(|key|
-                                entry.get(key).and_then(Value::as_str).is_some_and(|value|
-                                    !value.is_empty() && !value.chars().any(bridget_core::is_disallowed_control)))
-                            && entry["code"].as_str().is_some_and(|value| value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))))),
+                "provider_quota_exhausted" => {
+                    detail.len() == 1
+                        && detail
+                            .get("resets_at")
+                            .is_some_and(|value| value.is_null() || value.as_i64().is_some())
+                }
+                "fallback_exhausted" => detail.len() == 1
+                    && detail
+                        .get("tried")
+                        .and_then(Value::as_array)
+                        .is_some_and(|tried| {
+                            !tried.is_empty() && tried.len() <= 4 && tried.iter().all(|entry| {
+                                entry.as_object().is_some_and(|entry| {
+                                    entry.len() == 3
+                                        && ["agent_type", "model", "code"].into_iter().all(|key| {
+                                            entry.get(key).and_then(Value::as_str).is_some_and(
+                                                |value| {
+                                                    !value.is_empty()
+                                                        && !value.chars().any(
+                                                            bridget_core::is_disallowed_control,
+                                                        )
+                                                },
+                                            )
+                                        })
+                                        && entry["code"].as_str().is_some_and(|value| {
+                                            value.bytes().all(|byte| {
+                                                byte.is_ascii_alphanumeric() || byte == b'_'
+                                            })
+                                        })
+                                })
+                            })
+                        }),
                 _ => false,
             };
-            if valid { return json!({"status":"refused","code":canonical_code,"message":message,"detail":detail}); }
+            if valid {
+                return json!({"status":"refused","code":canonical_code,"message":message,"detail":detail});
+            }
         }
         return json!({"status":"refused","code":canonical_code});
     }
@@ -112,8 +149,10 @@ fn failure(code: &str) -> Value {
 
 /// Lecture indexée de la pause exacte, ou de sa continuation déjà reconstruite.
 fn pause_covers(st: &DaemonState, execution: &str, resumed: bool) -> Result<bool, String> {
-    st.store.connection().query_row(
-        "SELECT EXISTS(
+    st.store
+        .connection()
+        .query_row(
+            "SELECT EXISTS(
              SELECT 1 FROM control_pause_interruptions
              WHERE execution_id=?1 AND resumed_at IS NULL
              UNION ALL
@@ -121,8 +160,10 @@ fn pause_covers(st: &DaemonState, execution: &str, resumed: bool) -> Result<bool
              JOIN control_pause_interruptions pause ON pause.execution_id=child.parent_execution_id
              WHERE child.execution_id=?1 AND pause.resume_execution_id=?1 AND ?2
          )",
-        rusqlite::params![execution, resumed], |row| row.get(0),
-    ).map_err(|error| error.to_string())
+            rusqlite::params![execution, resumed],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
 }
 
 /// O(B + F log(F + 1) + log L + c * (log C + log E + log(c + 1)) + log P),
@@ -132,7 +173,12 @@ fn pause_covers(st: &DaemonState, execution: &str, resumed: bool) -> Result<bool
 /// le tri SQL des S sagas : O(Bs + S log(S + 1)), Bs octets de leurs payloads.
 /// Seule la feuille de la mission peut être reprise.
 /// Une interruption de pause doit être terminale avant la reconstruction.
-pub(super) fn may_resume(st: &DaemonState, task: &Task, execution: &str, instance: &str) -> Result<bool, String> {
+pub(super) fn may_resume(
+    st: &DaemonState,
+    task: &Task,
+    execution: &str,
+    instance: &str,
+) -> Result<bool, String> {
     if task.state != "working" {
         return Ok(false);
     }
@@ -144,67 +190,137 @@ pub(super) fn may_resume(st: &DaemonState, task: &Task, execution: &str, instanc
     {
         return Ok(false);
     }
-    let Some(snapshot) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
-        .map_err(|error| error.to_string())? else { return Ok(false) };
+    let Some(snapshot) = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
     if snapshot.execution_id != execution {
         return Ok(false);
     }
     if pause_covers(st, execution, false)? {
         return Ok(snapshot.state == "interrupted");
     }
-    Ok(matches!(snapshot.state.as_str(), "queued" | "starting" | "running"
-        | "waiting_approval" | "waiting_user_input"))
+    Ok(matches!(
+        snapshot.state.as_str(),
+        "queued" | "starting" | "running" | "waiting_approval" | "waiting_user_input"
+    ))
 }
 
 /// O(log N + P) via le journal des pauses ; la date métier brute reste intacte.
 fn effective_deadline(st: &DaemonState, task: &Task, now: i64) -> Result<Option<i64>, String> {
-    task.mission_deadline_at.map(|deadline| {
-        let from = deadline.saturating_sub(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
-        crate::referent_control::pause_overlap(st.store.connection(), from, now)
-            .map(|frozen| deadline.saturating_add(frozen))
-            .map_err(|error| error.to_string())
-    }).transpose()
+    task.mission_deadline_at
+        .map(|deadline| {
+            let from =
+                deadline.saturating_sub(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
+            crate::referent_control::pause_overlap(st.store.connection(), from, now)
+                .map(|frozen| deadline.saturating_add(frozen))
+                .map_err(|error| error.to_string())
+        })
+        .transpose()
 }
 
 /// O(log t + log r + log N + P), lectures seules. L'origine est l'admission
 /// durable de la demande, même si le checkpoint working n'a jamais été sauvé.
-pub(super) fn request_frozen_secs(st: &DaemonState, id: &str, now: i64) -> Result<Option<u64>, String> {
+pub(super) fn request_frozen_secs(
+    st: &DaemonState,
+    id: &str,
+    now: i64,
+) -> Result<Option<u64>, String> {
     if st.delegation_store.for_mission(id)?.is_none() {
         return Ok(None);
     }
-    let request = st.store.get_request(id).map_err(|error| error.to_string())?
+    let request = st
+        .store
+        .get_request(id)
+        .map_err(|error| error.to_string())?
         .ok_or("request_unavailable")?;
     crate::referent_control::pause_overlap(st.store.connection(), request.created_at, now)
         .map(|frozen| Some(frozen.max(0) as u64))
         .map_err(|error| error.to_string())
 }
 
-fn parent_fact(st:&DaemonState,owner:&str,instance:&str,request_id:Option<&str>,attested:Option<&bridget_transport::protocol::ProviderPermissions>)->Result<Option<bridget_transport::protocol::ProviderPermissions>,String>{
+fn parent_fact(
+    st: &DaemonState,
+    owner: &str,
+    instance: &str,
+    request_id: Option<&str>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+) -> Result<Option<bridget_transport::protocol::ProviderPermissions>, String> {
     // Une révocation directe conserve le refus148, avant toute attestation.
-    if st.delegation_store.revoked_agent(owner)?||st.delegation_store.revoked(instance)?{return Err("delegation_grant_required".into())}
-    if let Some(parent)=st.delegation_store.for_child(owner)? {
-        if st.delegation_store.revoked_agent(&parent.root_owner_agent_id)?{return Err("permission_not_inherited".into())}
+    if st.delegation_store.revoked_agent(owner)? || st.delegation_store.revoked(instance)? {
+        return Err("delegation_grant_required".into());
+    }
+    if let Some(parent) = st.delegation_store.for_child(owner)? {
+        if st
+            .delegation_store
+            .revoked_agent(&parent.root_owner_agent_id)?
+        {
+            return Err("permission_not_inherited".into());
+        }
         let command = current_command(st, &parent)?;
-        if st.managed_by_instance.get(instance)!=Some(&command)
-            || st.fleet.resolved_definition_for_command(&command).is_none_or(|d|d.digest!=parent.definition.digest)
-            || st.fleet.agent_link_for_child(instance).map_err(|e|e.to_string())?.is_none_or(|link|link.delegation_id.as_deref()!=Some(parent.task_id.as_str())) {return Err("parent_task_unavailable".into())}
-        if let Some(snapshot)=parent.permission_snapshot{
-            return Ok(Some(bridget_transport::protocol::ProviderPermissions{
-                version:1,source:"native_wrapper".into(),run_id:parent.mission,provider_session_id:parent.child.clone(),provider_instance_id:instance.into(),revision:1,
-                driver:parent.definition.protocol,cwd:parent.cwd,runtime_mode:crate::native_permissions::runtime_mode(&snapshot.child_policy).into(),
-                interaction_mode:if snapshot.child_policy["permission_mode"]=="plan"||snapshot.child_policy["sandbox_policy"]["type"]=="readOnly"{"plan"}else{"default"}.into(),provider_policy:snapshot.child_policy,
-            }))
+        if st.managed_by_instance.get(instance) != Some(&command)
+            || st
+                .fleet
+                .resolved_definition_for_command(&command)
+                .is_none_or(|d| d.digest != parent.definition.digest)
+            || st
+                .fleet
+                .agent_link_for_child(instance)
+                .map_err(|e| e.to_string())?
+                .is_none_or(|link| link.delegation_id.as_deref() != Some(parent.task_id.as_str()))
+        {
+            return Err("parent_task_unavailable".into());
+        }
+        if let Some(snapshot) = parent.permission_snapshot {
+            return Ok(Some(bridget_transport::protocol::ProviderPermissions {
+                version: 1,
+                source: "native_wrapper".into(),
+                run_id: parent.mission,
+                provider_session_id: parent.child.clone(),
+                provider_instance_id: instance.into(),
+                revision: 1,
+                driver: parent.definition.protocol,
+                cwd: parent.cwd,
+                runtime_mode: crate::native_permissions::runtime_mode(&snapshot.child_policy)
+                    .into(),
+                interaction_mode: if snapshot.child_policy["permission_mode"] == "plan"
+                    || snapshot.child_policy["sandbox_policy"]["type"] == "readOnly"
+                {
+                    "plan"
+                } else {
+                    "default"
+                }
+                .into(),
+                provider_policy: snapshot.child_policy,
+            }));
         }
     }
-    if let Some(fact)=attested{return Ok(Some(fact.clone()))}
-    let mut facts=st.native_permission_facts.iter().filter(|(conn,(fact,scope))|
-        (scope.is_none()||scope.as_deref()==request_id)&&fact.provider_instance_id==instance&&!st.auxiliary_connections.contains(*conn)
-        &&live_connection_identity(st,conn)==Some((owner.into(),instance.into())));
-    let first=facts.next().map(|(_,f)|f.0.clone());
-    if facts.next().is_some(){return Err("permission_attestation_unavailable".into())}
-    if first.is_none(){
-        for (connection,code) in &st.native_permission_refusals{
-            if !st.auxiliary_connections.contains(connection)&&live_connection_identity(st,connection)==Some((owner.into(),instance.into())){return Err(code.clone())}
+    if let Some(fact) = attested {
+        return Ok(Some(fact.clone()));
+    }
+    let mut facts = st
+        .native_permission_facts
+        .iter()
+        .filter(|(conn, (fact, scope))| {
+            (scope.is_none() || scope.as_deref() == request_id)
+                && fact.provider_instance_id == instance
+                && !st.auxiliary_connections.contains(*conn)
+                && live_connection_identity(st, conn) == Some((owner.into(), instance.into()))
+        });
+    let first = facts.next().map(|(_, f)| f.0.clone());
+    if facts.next().is_some() {
+        return Err("permission_attestation_unavailable".into());
+    }
+    if first.is_none() {
+        for (connection, code) in &st.native_permission_refusals {
+            if !st.auxiliary_connections.contains(connection)
+                && live_connection_identity(st, connection) == Some((owner.into(), instance.into()))
+            {
+                return Err(code.clone());
+            }
         }
     }
     Ok(first)
@@ -227,7 +343,9 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     let summary = body.map(|body| {
         &body[..crate::store::ledger_search::floor_char_boundary(body, body.len().min(2048))]
     });
-    let mailbox = (workspace_report_ready(task) && matches!(task.state.as_str(), "result_available" | "failed")).then(|| {
+    let mailbox = (workspace_report_ready(task)
+        && matches!(task.state.as_str(), "result_available" | "failed"))
+    .then(|| {
         let state = if task.acknowledged_at.is_some() {
             "acknowledged"
         } else if task.delivery_acked || phase == Some("acked") {
@@ -239,13 +357,17 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         json!({"state":state})
     });
-    let work_state = if !workspace_report_ready(task) && task.terminal() { "waiting_for_children" } else { match task.state.as_str() {
-        "waiting_for_children" => "waiting_for_children",
-        "result_available" => "result_available",
-        "failed" => "failed",
-        "cancelled" => "cancelled",
-        _ => "working",
-    }};
+    let work_state = if !workspace_report_ready(task) && task.terminal() {
+        "waiting_for_children"
+    } else {
+        match task.state.as_str() {
+            "waiting_for_children" => "waiting_for_children",
+            "result_available" => "result_available",
+            "failed" => "failed",
+            "cancelled" => "cancelled",
+            _ => "working",
+        }
+    };
     let mut view = json!({"version":1,"task_id":task.task_id,"status":task.state,
         "child_agent_id":task.child,"message_id":task.mission,
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
@@ -295,7 +417,13 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     let control = crate::referent_control::read(st.store.connection())
         .map_err(|_| "control_state_unavailable")?;
     let mut view = task_view(task, phase.as_deref(), full);
-    view["suspended"] = json!(control.paused && matches!(task.state.as_str(), "queued" | "starting" | "mission_pending" | "working"));
+    view["suspended"] = json!(
+        control.paused
+            && matches!(
+                task.state.as_str(),
+                "queued" | "starting" | "mission_pending" | "working"
+            )
+    );
     view["resume_attempts"] = json!(task.restart_resumes);
     let mut rows = st.delegation_store.child_requests_for_task(&task.task_id)?;
     view["pending_requests"]=json!(rows.iter().filter(|row|row.state=="open").map(|row|
@@ -415,7 +543,9 @@ fn recover_owner(
 }
 
 fn recover_child(st: &DaemonState, task: &mut Task, instance: &str) -> Result<bool, String> {
-    if task.child_instance.as_deref() == Some(instance) && task.owner_instance == task.origin_owner_instance {
+    if task.child_instance.as_deref() == Some(instance)
+        && task.owner_instance == task.origin_owner_instance
+    {
         return Ok(true);
     }
     let Some(command) = st.managed_by_instance.get(instance) else {
@@ -434,7 +564,8 @@ fn recover_child(st: &DaemonState, task: &mut Task, instance: &str) -> Result<bo
     else {
         return Ok(false);
     };
-    if link.delegation_id.as_deref() != Some(task.task_id.as_str()) || link.role != "native_delegate"
+    if link.delegation_id.as_deref() != Some(task.task_id.as_str())
+        || link.role != "native_delegate"
         || (link.parent_instance_id != task.owner_instance
             && link.parent_instance_id != task.origin_owner_instance)
     {
@@ -585,9 +716,14 @@ fn handle_with_fact(
             NativeDelegationRequest::Continue { task_id, .. } => {
                 // Ce calcul n'est qu'un candidat Git. La propriété, les erreurs
                 // de magasin et le rejeu sont contrôlés ensuite dans leur ordre.
-                st.delegation_store.get(task_id).ok().flatten()
-                    .filter(|task| live_connection_identity(&st, conn)
-                        .is_some_and(|(owner, _)| task.owner == owner))
+                st.delegation_store
+                    .get(task_id)
+                    .ok()
+                    .flatten()
+                    .filter(|task| {
+                        live_connection_identity(&st, conn)
+                            .is_some_and(|(owner, _)| task.owner == owner)
+                    })
                     .map(|task| task.cwd)
             }
             _ => None,
@@ -604,10 +740,25 @@ fn handle_with_fact(
     } else {
         None
     };
-    if matches!(&request, NativeDelegationRequest::Delegate { workspace: Some(WorkspaceRequest::Worktree { .. }), .. }) {
-        let result = delegate_worktree(conn, &request, candidate_project.as_ref(), fact.as_ref(), thread, state)
-            .unwrap_or_else(|code| failure(&code));
-        if result["status"] != "refused" { tick(state); }
+    if matches!(
+        &request,
+        NativeDelegationRequest::Delegate {
+            workspace: Some(WorkspaceRequest::Worktree { .. }),
+            ..
+        }
+    ) {
+        let result = delegate_worktree(
+            conn,
+            &request,
+            candidate_project.as_ref(),
+            fact.as_ref(),
+            thread,
+            state,
+        )
+        .unwrap_or_else(|code| failure(&code));
+        if result["status"] != "refused" {
+            tick(state);
+        }
         return DaemonToWrapper::NativeDelegationResult { result };
     }
     let drives = matches!(
@@ -660,13 +811,22 @@ fn handle_with_fact(
     DaemonToWrapper::NativeDelegationResult { result }
 }
 
-fn recheck_attested_thread(st: &DaemonState, conn: &str, thread: Option<&str>) -> Result<(), String> {
+fn recheck_attested_thread(
+    st: &DaemonState,
+    conn: &str,
+    thread: Option<&str>,
+) -> Result<(), String> {
     if let Some(thread) = thread {
         let owner = crate::t3code::stable_uuid(thread);
-        let expected = (owner.clone(), crate::t3code::stable_uuid(&format!("instance:{thread}")));
+        let expected = (
+            owner.clone(),
+            crate::t3code::stable_uuid(&format!("instance:{thread}")),
+        );
         if live_connection_identity(st, conn) != Some(expected)
             || human_authority_guard(st, thread, &agent_communication_project(st, &owner)).is_err()
-        { return Err("permission_attestation_unavailable".into()); }
+        {
+            return Err("permission_attestation_unavailable".into());
+        }
     }
     Ok(())
 }
@@ -674,9 +834,11 @@ fn recheck_attested_thread(st: &DaemonState, conn: &str, thread: Option<&str>) -
 /// Git hors verrou ; la réservation protège la clé et la place jusqu'au commit.
 /// O(n+r+B) hors coût Git, n <= 4096, r <= 128.
 fn delegate_worktree(
-    conn: &str, request: &NativeDelegationRequest,
+    conn: &str,
+    request: &NativeDelegationRequest,
     project: Option<&bridget_transport::protocol::CommunicationProject>,
-    fact: Option<&bridget_transport::protocol::ProviderPermissions>, thread: Option<&str>,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
     let (cwd, selected_request, selected_definition, substitution) = {
@@ -684,41 +846,91 @@ fn delegate_worktree(
         recheck_attested_thread(&st, conn, thread)?;
         match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Probe)? {
             WorkspaceAdmission::View(view) => return Ok(view),
-            WorkspaceAdmission::Probe(cwd, selected, definition, substitution) => (cwd, selected, definition, substitution),
+            WorkspaceAdmission::Probe(cwd, selected, definition, substitution) => {
+                (cwd, selected, definition, substitution)
+            }
             _ => unreachable!("sonde avant Git"),
         }
     };
-    let NativeDelegationRequest::Delegate { workspace: Some(WorkspaceRequest::Worktree { base_ref, branch }), .. } = request
-        else { return Err("invalid_request".into()); };
+    let NativeDelegationRequest::Delegate {
+        workspace: Some(WorkspaceRequest::Worktree { base_ref, branch }),
+        ..
+    } = request
+    else {
+        return Err("invalid_request".into());
+    };
     let plan = crate::workspace_git::preflight(&cwd, base_ref.as_deref(), branch.as_deref())?;
     let task_id = Uuid::new_v4().to_string();
     let (reserved, _claim) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
-        match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Reserve { plan: &plan, task_id: &task_id,
-                selection: (&selected_request, &selected_definition, substitution.as_ref()) })? {
+        match admit_delegate(
+            conn,
+            request,
+            project,
+            fact,
+            &mut st,
+            WorkspacePass::Reserve {
+                plan: &plan,
+                task_id: &task_id,
+                selection: (
+                    &selected_request,
+                    &selected_definition,
+                    substitution.as_ref(),
+                ),
+            },
+        )? {
             WorkspaceAdmission::View(view) => return Ok(view),
             WorkspaceAdmission::Reserved { task, claim } => (task, claim),
             _ => unreachable!("première passe métier"),
         }
     };
     let expected_path = plan.worktree_dir.join(&reserved.task_id[..8]);
-    let branch = plan.branch.clone().unwrap_or_else(|| format!("bridget/{}", &reserved.task_id[..8]));
-    info!("création worktree natif : chemin={}, branche={}", expected_path.display(), branch);
+    let branch = plan
+        .branch
+        .clone()
+        .unwrap_or_else(|| format!("bridget/{}", &reserved.task_id[..8]));
+    info!(
+        "création worktree natif : chemin={}, branche={}",
+        expected_path.display(),
+        branch
+    );
     let record = crate::workspace_git::create(&plan, &reserved.task_id)?;
     let result = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        recheck_attested_thread(&st, conn, thread).and_then(|()|
-            admit_delegate(conn, request, project, fact, &mut st,
-                WorkspacePass::Commit { plan: &plan, task_id: &reserved.task_id, record: &record,
-                    selection: (&selected_request, &selected_definition, substitution.as_ref()) }))
+        recheck_attested_thread(&st, conn, thread).and_then(|()| {
+            admit_delegate(
+                conn,
+                request,
+                project,
+                fact,
+                &mut st,
+                WorkspacePass::Commit {
+                    plan: &plan,
+                    task_id: &reserved.task_id,
+                    record: &record,
+                    selection: (
+                        &selected_request,
+                        &selected_definition,
+                        substitution.as_ref(),
+                    ),
+                },
+            )
+        })
     };
     match result {
         Ok(WorkspaceAdmission::View(view)) => Ok(view),
         Ok(_) => unreachable!("seconde passe métier"),
         Err(reason) => {
-            let code = if reason.starts_with("workspace_path_unsafe") { "workspace_path_unsafe" } else { "workspace_create_failed" };
-            Err(format!("{code}: {reason}; chemin {}; branche {}", record.path, record.branch))
+            let code = if reason.starts_with("workspace_path_unsafe") {
+                "workspace_path_unsafe"
+            } else {
+                "workspace_create_failed"
+            };
+            Err(format!(
+                "{code}: {reason}; chemin {}; branche {}",
+                record.path, record.branch
+            ))
         }
     }
 }
@@ -847,16 +1059,39 @@ fn wait_tasks(
 enum WorkspacePass<'a> {
     Shared,
     Probe,
-    Reserve { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str,
-        selection: (&'a NativeDelegationRequest, &'a bridget_transport::protocol::ResolvedAgentDefinition, Option<&'a crate::delegation::Substitution>) },
-    Commit { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str, record: &'a WorkspaceRecord,
-        selection: (&'a NativeDelegationRequest, &'a bridget_transport::protocol::ResolvedAgentDefinition, Option<&'a crate::delegation::Substitution>) },
+    Reserve {
+        plan: &'a crate::workspace_git::WorkspacePreflight,
+        task_id: &'a str,
+        selection: (
+            &'a NativeDelegationRequest,
+            &'a bridget_transport::protocol::ResolvedAgentDefinition,
+            Option<&'a crate::delegation::Substitution>,
+        ),
+    },
+    Commit {
+        plan: &'a crate::workspace_git::WorkspacePreflight,
+        task_id: &'a str,
+        record: &'a WorkspaceRecord,
+        selection: (
+            &'a NativeDelegationRequest,
+            &'a bridget_transport::protocol::ResolvedAgentDefinition,
+            Option<&'a crate::delegation::Substitution>,
+        ),
+    },
 }
 
 enum WorkspaceAdmission {
     View(Value),
-    Probe(PathBuf, NativeDelegationRequest, bridget_transport::protocol::ResolvedAgentDefinition, Option<crate::delegation::Substitution>),
-    Reserved { task: Task, claim: WorkspaceClaim },
+    Probe(
+        PathBuf,
+        NativeDelegationRequest,
+        bridget_transport::protocol::ResolvedAgentDefinition,
+        Option<crate::delegation::Substitution>,
+    ),
+    Reserved {
+        task: Task,
+        claim: WorkspaceClaim,
+    },
 }
 
 fn task_id_for_pass<'a>(pass: WorkspacePass<'a>) -> &'a str {
@@ -867,7 +1102,11 @@ fn task_id_for_pass<'a>(pass: WorkspacePass<'a>) -> &'a str {
 }
 
 /// O(n+r), n <= 4096 tâches, r <= 128 réservations ; aucune commande Git.
-fn workspace_limit(st: &DaemonState, plan: &crate::workspace_git::WorkspacePreflight, created: bool) -> Result<(), String> {
+fn workspace_limit(
+    st: &DaemonState,
+    plan: &crate::workspace_git::WorkspacePreflight,
+    created: bool,
+) -> Result<(), String> {
     let mut paths: HashSet<PathBuf> = plan.listed_paths.iter().cloned().collect();
     for task in st.delegation_store.tasks()? {
         if let Some(workspace) = task.workspace {
@@ -876,16 +1115,24 @@ fn workspace_limit(st: &DaemonState, plan: &crate::workspace_git::WorkspacePrefl
                 // Un retrait humain libère la place, même si la tâche reste retenue.
                 match std::fs::symlink_metadata(&path) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    _ => { paths.insert(path); }
+                    _ => {
+                        paths.insert(path);
+                    }
                 }
             }
         }
     }
     let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
     for reservation in work.creations.values() {
-        if reservation.path.starts_with(&plan.worktree_dir) { paths.insert(reservation.path.clone()); }
+        if reservation.path.starts_with(&plan.worktree_dir) {
+            paths.insert(reservation.path.clone());
+        }
     }
-    if paths.len() > 32 || (!created && paths.len() == 32) { Err("workspace_limit".into()) } else { Ok(()) }
+    if paths.len() > 32 || (!created && paths.len() == 32) {
+        Err("workspace_limit".into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Verdict partagé catalogue/admission, sans mémoire ni sélection de remplacement.
@@ -906,8 +1153,28 @@ fn resolve_target(
     posture: Option<SpawnPosture>,
     workspace: Option<&WorkspaceRequest>,
     child_requests: Option<&str>,
-) -> Result<(AgentRegistry, Option<bridget_transport::protocol::NativePermissionSnapshot>, SpawnPosture), String> {
-    target_resolver(registry,source,limits,owner,instance,fact,agent_type,model,effort,cwd,workspace,child_requests)(posture)
+) -> Result<
+    (
+        AgentRegistry,
+        Option<bridget_transport::protocol::NativePermissionSnapshot>,
+        SpawnPosture,
+    ),
+    String,
+> {
+    target_resolver(
+        registry,
+        source,
+        limits,
+        owner,
+        instance,
+        fact,
+        agent_type,
+        model,
+        effort,
+        cwd,
+        workspace,
+        child_requests,
+    )(posture)
 }
 
 /// R8 : un préparateur commun, lié à une entrée et jeté après ses trois postures.
@@ -926,71 +1193,139 @@ fn target_resolver<'a>(
     cwd: &'a Path,
     workspace: Option<&'a WorkspaceRequest>,
     child_requests: Option<&'a str>,
-) -> impl FnMut(Option<SpawnPosture>) -> Result<(AgentRegistry, Option<bridget_transport::protocol::NativePermissionSnapshot>, SpawnPosture), String> + 'a {
-    let mut prepared: Option<Result<AgentRegistry,String>> = None;
-    let mut policy_reader = fact.zip(registry.get(agent_type).ok())
-        .map(|(parent,target)| crate::native_permissions::child_policy_reader(parent,target,cwd,source));
+) -> impl FnMut(
+    Option<SpawnPosture>,
+) -> Result<
+    (
+        AgentRegistry,
+        Option<bridget_transport::protocol::NativePermissionSnapshot>,
+        SpawnPosture,
+    ),
+    String,
+> + 'a {
+    let mut prepared: Option<Result<AgentRegistry, String>> = None;
+    let mut policy_reader = fact
+        .zip(registry.get(agent_type).ok())
+        .map(|(parent, target)| {
+            crate::native_permissions::child_policy_reader(parent, target, cwd, source)
+        });
     move |posture| {
-    let target = registry.get(agent_type).map_err(|_| "agent_type_unknown")?;
-    let model_capabilities = target.capabilities.models.get(model).ok_or("model_unavailable")?;
-    if effort.is_some_and(|value| !model_capabilities.efforts.iter().any(|item| item == value)) {
-        return Err("effort_unavailable".into());
-    }
-    // Ce résultat ne sert qu'aux postures de cette entrée ; admission = nouveau lecteur.
-    let pinned = prepared.get_or_insert_with(|| {
-        let raw_pinned = AgentRegistry::from_resolved(agent_type, &registry.resolved_definition(agent_type)?)?;
-        let pinned = if matches!(target.protocol.as_str(), "claude_stream_json" | "codex_app_server") {
-            match raw_pinned.clone().pin_delegation_model(agent_type, model, effort) {
-                Ok(pinned) => pinned,
-                Err(error) => {
-                    // Le pin legacy rend Debug ; le préflight conserve le code canonique typé.
-                    return Err(match crate::lifecycle::launch_preflight(&raw_pinned, agent_type, source) {
-                        Err(reason) => crate::lifecycle::refusal_record(&reason).0.to_owned(),
-                        Ok(()) => error,
-                    });
-                }
+        let target = registry.get(agent_type).map_err(|_| "agent_type_unknown")?;
+        let model_capabilities = target
+            .capabilities
+            .models
+            .get(model)
+            .ok_or("model_unavailable")?;
+        if effort.is_some_and(|value| !model_capabilities.efforts.iter().any(|item| item == value))
+        {
+            return Err("effort_unavailable".into());
+        }
+        // Ce résultat ne sert qu'aux postures de cette entrée ; admission = nouveau lecteur.
+        let pinned = prepared
+            .get_or_insert_with(|| {
+                let raw_pinned = AgentRegistry::from_resolved(
+                    agent_type,
+                    &registry.resolved_definition(agent_type)?,
+                )?;
+                let pinned = if matches!(
+                    target.protocol.as_str(),
+                    "claude_stream_json" | "codex_app_server"
+                ) {
+                    match raw_pinned
+                        .clone()
+                        .pin_delegation_model(agent_type, model, effort)
+                    {
+                        Ok(pinned) => pinned,
+                        Err(error) => {
+                            // Le pin legacy rend Debug ; le préflight conserve le code canonique typé.
+                            return Err(
+                                match crate::lifecycle::launch_preflight(
+                                    &raw_pinned,
+                                    agent_type,
+                                    source,
+                                ) {
+                                    Err(reason) => {
+                                        crate::lifecycle::refusal_record(&reason).0.to_owned()
+                                    }
+                                    Ok(()) => error,
+                                },
+                            );
+                        }
+                    }
+                } else {
+                    raw_pinned
+                };
+                crate::lifecycle::launch_preflight(&pinned, agent_type, source)
+                    .map_err(|reason| crate::lifecycle::refusal_record(&reason).0.to_owned())?;
+                Ok(pinned)
+            })
+            .as_ref()
+            .map_err(|code| code.clone())?
+            .clone();
+        let (scoped, snapshot, effective) = if let Some(fact) = fact {
+            let (policy, effective) =
+                policy_reader
+                    .as_mut()
+                    .ok_or("permission_mapping_unavailable")?(posture)?;
+            let scoped = pinned.for_inherited_delegation(agent_type, model, effort, &policy)?;
+            (
+                scoped,
+                Some(crate::native_permissions::snapshot(
+                    owner,
+                    instance,
+                    fact.clone(),
+                    policy,
+                    cwd,
+                )),
+                effective,
+            )
+        } else {
+            if posture != Some(SpawnPosture::Discovery) {
+                return Err("permission_attestation_unavailable".into());
             }
-        } else { raw_pinned };
-        crate::lifecycle::launch_preflight(&pinned, agent_type, source)
-            .map_err(|reason| crate::lifecycle::refusal_record(&reason).0.to_owned())?;
-        Ok(pinned)
-    }).as_ref().map_err(|code| code.clone())?.clone();
-    let (scoped, snapshot, effective) = if let Some(fact) = fact {
-        let (policy, effective) = policy_reader.as_mut().ok_or("permission_mapping_unavailable")?(posture)?;
-        let scoped = pinned.for_inherited_delegation(agent_type, model, effort, &policy)?;
-        (scoped, Some(crate::native_permissions::snapshot(owner, instance, fact.clone(), policy, cwd)), effective)
-    } else {
-        if posture != Some(SpawnPosture::Discovery) {
-            return Err("permission_attestation_unavailable".into());
+            (
+                pinned.for_delegation(agent_type, model, effort, SpawnPosture::Discovery)?,
+                None,
+                SpawnPosture::Discovery,
+            )
+        };
+        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+            if effective != SpawnPosture::Development {
+                return Err("workspace_requires_development".into());
+            }
+            if fact.is_some_and(|f| f.driver == "claude_stream_json")
+                && target.protocol == "claude_stream_json"
+            {
+                return Err("workspace_inheritance_unavailable".into());
+            }
         }
-        (pinned.for_delegation(agent_type, model, effort, SpawnPosture::Discovery)?, None, SpawnPosture::Discovery)
-    };
-    if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
-        if effective != SpawnPosture::Development { return Err("workspace_requires_development".into()); }
-        if fact.is_some_and(|f| f.driver == "claude_stream_json") && target.protocol == "claude_stream_json" {
-            return Err("workspace_inheritance_unavailable".into());
+        if child_requests == Some("forward") && target.protocol != "codex_app_server" {
+            return Err("child_requests_unsupported".into());
         }
-    }
-    if child_requests == Some("forward") && target.protocol != "codex_app_server" {
-        return Err("child_requests_unsupported".into());
-    }
-    if let Some(quota) = limits.quota(agent_type, unix_timestamp()) && quota.exhausted {
-        return Err(format!("provider_quota_exhausted:{}", json!({
-            "message":"Le quota du fournisseur est épuisé.",
-            "detail":{"resets_at":quota.resets_at},
-        })));
-    }
-    Ok((scoped, snapshot, effective))
+        if let Some(quota) = limits.quota(agent_type, unix_timestamp())
+            && quota.exhausted
+        {
+            return Err(format!(
+                "provider_quota_exhausted:{}",
+                json!({
+                    "message":"Le quota du fournisseur est épuisé.",
+                    "detail":{"resets_at":quota.resets_at},
+                })
+            ));
+        }
+        Ok((scoped, snapshot, effective))
     }
 }
 
 /// Admission unique : mêmes gardes sur les deux passes métier. Git reste dehors.
 /// O(n+r+B), n <= 4096 tâches, r <= 128 réservations, B octets des politiques.
 fn admit_delegate(
-    conn: &str, request: &NativeDelegationRequest,
+    conn: &str,
+    request: &NativeDelegationRequest,
     candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
     attested: Option<&bridget_transport::protocol::ProviderPermissions>,
-    st: &mut DaemonState, pass: WorkspacePass<'_>,
+    st: &mut DaemonState,
+    pass: WorkspacePass<'_>,
 ) -> Result<WorkspaceAdmission, String> {
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
     let NativeDelegationRequest::Delegate {
@@ -1020,20 +1355,34 @@ fn admit_delegate(
         return Err("invalid_request".into());
     }
     let requested_target = bridget_transport::protocol::FallbackTarget {
-        agent_type: agent_type.clone(), model: model.clone(), effort: effort.clone(),
+        agent_type: agent_type.clone(),
+        model: model.clone(),
+        effort: effort.clone(),
     };
-    if fallback.len() > 3 || fallback.iter().enumerate().any(|(index, candidate)| {
-        candidate.agent_type.trim().is_empty() || candidate.model.trim().is_empty()
-            || candidate.effort.as_deref().is_some_and(|value| value.trim().is_empty())
-            || [&candidate.agent_type, &candidate.model].into_iter().any(|value| value.chars().any(bridget_core::is_disallowed_control))
-            || candidate.effort.as_deref().is_some_and(|value| value.chars().any(bridget_core::is_disallowed_control))
-            || candidate == &requested_target || fallback[..index].contains(candidate)
-    }) {
+    if fallback.len() > 3
+        || fallback.iter().enumerate().any(|(index, candidate)| {
+            candidate.agent_type.trim().is_empty()
+                || candidate.model.trim().is_empty()
+                || candidate
+                    .effort
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                || [&candidate.agent_type, &candidate.model]
+                    .into_iter()
+                    .any(|value| value.chars().any(bridget_core::is_disallowed_control))
+                || candidate
+                    .effort
+                    .as_deref()
+                    .is_some_and(|value| value.chars().any(bridget_core::is_disallowed_control))
+                || candidate == &requested_target
+                || fallback[..index].contains(candidate)
+        })
+    {
         return Err("invalid_request".into());
     }
-    if reply_timeout.is_some_and(|secs| {
-        !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs)
-    }) {
+    if reply_timeout
+        .is_some_and(|secs| !(MISSION_REPLY_MIN_SECS..=MISSION_REPLY_MAX_SECS).contains(&secs))
+    {
         return Err("reply_timeout_out_of_range".into());
     }
     if keep_alive_secs.is_some_and(|secs| !(60..=7200).contains(&secs)) {
@@ -1134,42 +1483,110 @@ fn admit_delegate(
         )?;
         // O(1) candidats : quatre au plus. Le rejeu et les gardes du parent précèdent la sélection.
         // Reserve/Commit revalident le seul candidat épinglé en Probe, jamais le registre courant.
-        let (effective_request, raw_definition, substitution, scoped, permission_snapshot, resolved_posture) = match pass {
-            WorkspacePass::Reserve { selection: (selected, definition, substitution), .. }
-            | WorkspacePass::Commit { selection: (selected, definition, substitution), .. } => {
-                let NativeDelegationRequest::Delegate { agent_type, model, effort, fallback, .. } = selected
-                    else { return Err("invalid_request".into()); };
-                if !fallback.is_empty() { return Err("invalid_request".into()); }
+        let (
+            effective_request,
+            raw_definition,
+            substitution,
+            scoped,
+            permission_snapshot,
+            resolved_posture,
+        ) = match pass {
+            WorkspacePass::Reserve {
+                selection: (selected, definition, substitution),
+                ..
+            }
+            | WorkspacePass::Commit {
+                selection: (selected, definition, substitution),
+                ..
+            } => {
+                let NativeDelegationRequest::Delegate {
+                    agent_type,
+                    model,
+                    effort,
+                    fallback,
+                    ..
+                } = selected
+                else {
+                    return Err("invalid_request".into());
+                };
+                if !fallback.is_empty() {
+                    return Err("invalid_request".into());
+                }
                 let pinned = AgentRegistry::from_resolved(agent_type, definition)?;
                 let (scoped, snapshot, effective) = resolve_target(
-                    &pinned, &st.source_env, &st.provider_limits, &owner, &instance, fact.as_ref(),
-                    agent_type, model, effort.as_deref(), &frozen_cwd, *posture,
-                    workspace.as_ref(), child_requests.as_deref(),
+                    &pinned,
+                    &st.source_env,
+                    &st.provider_limits,
+                    &owner,
+                    &instance,
+                    fact.as_ref(),
+                    agent_type,
+                    model,
+                    effort.as_deref(),
+                    &frozen_cwd,
+                    *posture,
+                    workspace.as_ref(),
+                    child_requests.as_deref(),
                 )?;
-                (selected.clone(), definition.clone(), substitution.cloned(), scoped, snapshot, effective)
+                (
+                    selected.clone(),
+                    definition.clone(),
+                    substitution.cloned(),
+                    scoped,
+                    snapshot,
+                    effective,
+                )
             }
             WorkspacePass::Shared | WorkspacePass::Probe => {
                 let mut selected = None;
                 let mut tried = Vec::new();
                 let mut requested_error = None;
-                for (index, candidate) in std::iter::once(&requested_target).chain(fallback.iter()).enumerate() {
+                for (index, candidate) in std::iter::once(&requested_target)
+                    .chain(fallback.iter())
+                    .enumerate()
+                {
                     match resolve_target(
-                        &st.registry, &st.source_env, &st.provider_limits, &owner, &instance, fact.as_ref(),
-                        &candidate.agent_type, &candidate.model, candidate.effort.as_deref(), &frozen_cwd, *posture,
-                        workspace.as_ref(), child_requests.as_deref(),
+                        &st.registry,
+                        &st.source_env,
+                        &st.provider_limits,
+                        &owner,
+                        &instance,
+                        fact.as_ref(),
+                        &candidate.agent_type,
+                        &candidate.model,
+                        candidate.effort.as_deref(),
+                        &frozen_cwd,
+                        *posture,
+                        workspace.as_ref(),
+                        child_requests.as_deref(),
                     ) {
                         Ok((scoped, snapshot, effective)) => {
-                            let definition = st.registry.resolved_definition(&candidate.agent_type)?;
-                            selected = Some((candidate.clone(), definition, scoped, snapshot, effective));
+                            let definition =
+                                st.registry.resolved_definition(&candidate.agent_type)?;
+                            selected =
+                                Some((candidate.clone(), definition, scoped, snapshot, effective));
                             break;
                         }
                         Err(error) => {
-                            let code = error.split_once(':').map_or(error.as_str(), |(canonical, _)| canonical).to_owned();
+                            let code = error
+                                .split_once(':')
+                                .map_or(error.as_str(), |(canonical, _)| canonical)
+                                .to_owned();
                             if index == 0 {
-                                if fallback.is_empty() || !matches!(code.as_str(),
-                                    "command_missing" | "billing_guard" | "env_unfit" | "unsupported_capability"
-                                    | "negotiation_failed" | "permission_source_unavailable" | "permission_mapping_unavailable"
-                                    | "provider_confinement_unavailable" | "provider_quota_exhausted") {
+                                if fallback.is_empty()
+                                    || !matches!(
+                                        code.as_str(),
+                                        "command_missing"
+                                            | "billing_guard"
+                                            | "env_unfit"
+                                            | "unsupported_capability"
+                                            | "negotiation_failed"
+                                            | "permission_source_unavailable"
+                                            | "permission_mapping_unavailable"
+                                            | "provider_confinement_unavailable"
+                                            | "provider_quota_exhausted"
+                                    )
+                                {
                                     return Err(error);
                                 }
                                 requested_error = Some(error);
@@ -1178,28 +1595,67 @@ fn admit_delegate(
                         }
                     }
                 }
-                let Some((candidate, definition, scoped, snapshot, effective)) = selected
-                    else { return Err(format!("fallback_exhausted:{}", json!({
-                        "message":"Aucune cible de remplacement n’est disponible.", "detail":{"tried":tried},
-                    }))); };
-                let substitution = requested_error.as_ref().map(|reason| crate::delegation::Substitution {
-                    requested: requested_target.clone(), selected: candidate.clone(),
-                    reason: reason.split_once(':').map_or(reason.as_str(), |(canonical, _)| canonical).to_owned(),
-                    tried,
-                });
+                let Some((candidate, definition, scoped, snapshot, effective)) = selected else {
+                    return Err(format!(
+                        "fallback_exhausted:{}",
+                        json!({
+                            "message":"Aucune cible de remplacement n’est disponible.", "detail":{"tried":tried},
+                        })
+                    ));
+                };
+                let substitution =
+                    requested_error
+                        .as_ref()
+                        .map(|reason| crate::delegation::Substitution {
+                            requested: requested_target.clone(),
+                            selected: candidate.clone(),
+                            reason: reason
+                                .split_once(':')
+                                .map_or(reason.as_str(), |(canonical, _)| canonical)
+                                .to_owned(),
+                            tried,
+                        });
                 let mut effective_request = request.clone();
-                if let NativeDelegationRequest::Delegate { agent_type, model, effort, fallback, .. } = &mut effective_request {
-                    *agent_type = candidate.agent_type; *model = candidate.model; *effort = candidate.effort;
+                if let NativeDelegationRequest::Delegate {
+                    agent_type,
+                    model,
+                    effort,
+                    fallback,
+                    ..
+                } = &mut effective_request
+                {
+                    *agent_type = candidate.agent_type;
+                    *model = candidate.model;
+                    *effort = candidate.effort;
                     fallback.clear();
                 }
-                (effective_request, definition, substitution, scoped, snapshot, effective)
+                (
+                    effective_request,
+                    definition,
+                    substitution,
+                    scoped,
+                    snapshot,
+                    effective,
+                )
             }
         };
-        let NativeDelegationRequest::Delegate { agent_type, model, effort, .. } = &effective_request
-            else { return Err("invalid_request".into()); };
+        let NativeDelegationRequest::Delegate {
+            agent_type,
+            model,
+            effort,
+            ..
+        } = &effective_request
+        else {
+            return Err("invalid_request".into());
+        };
         let effective_posture = Some(resolved_posture);
         if matches!(pass, WorkspacePass::Probe) {
-            return Ok(WorkspaceAdmission::Probe(frozen_cwd, effective_request, raw_definition, substitution));
+            return Ok(WorkspaceAdmission::Probe(
+                frozen_cwd,
+                effective_request,
+                raw_definition,
+                substitution,
+            ));
         }
         let (scoped, permission_snapshot, frozen_cwd) = match pass {
             WorkspacePass::Reserve { plan, .. } => {
@@ -1214,20 +1670,38 @@ fn admit_delegate(
                     return Err("workspace_path_unsafe: dossier parent changé".into());
                 }
                 let expected = plan.worktree_dir.join(&task_id_for_pass(pass)[..8]);
-                let path = std::fs::canonicalize(&record.path).map_err(|_| "workspace_path_unsafe: worktree absent")?;
-                let child = std::fs::canonicalize(path.join(&plan.offset)).map_err(|_| "workspace_path_unsafe: dossier enfant absent")?;
-                if path != expected || !path.starts_with(&frozen_cwd)
-                    || child != expected.join(&plan.offset) || !child.starts_with(&path)
-                { return Err("workspace_path_unsafe: chemin canonique inattendu".into()); }
+                let path = std::fs::canonicalize(&record.path)
+                    .map_err(|_| "workspace_path_unsafe: worktree absent")?;
+                let child = std::fs::canonicalize(path.join(&plan.offset))
+                    .map_err(|_| "workspace_path_unsafe: dossier enfant absent")?;
+                if path != expected
+                    || !path.starts_with(&frozen_cwd)
+                    || child != expected.join(&plan.offset)
+                    || !child.starts_with(&path)
+                {
+                    return Err("workspace_path_unsafe: chemin canonique inattendu".into());
+                }
                 workspace_limit(st, plan, true)?;
                 let fact = fact.ok_or("permission_attestation_unavailable")?;
                 let pinned = AgentRegistry::from_resolved(agent_type, &raw_definition)?;
                 let (scoped, snapshot, effective) = resolve_target(
-                    &pinned, &st.source_env, &st.provider_limits, &owner, &instance, Some(&fact),
-                    agent_type, model, effort.as_deref(), &child, *posture,
-                    workspace.as_ref(), child_requests.as_deref(),
+                    &pinned,
+                    &st.source_env,
+                    &st.provider_limits,
+                    &owner,
+                    &instance,
+                    Some(&fact),
+                    agent_type,
+                    model,
+                    effort.as_deref(),
+                    &child,
+                    *posture,
+                    workspace.as_ref(),
+                    child_requests.as_deref(),
                 )?;
-                if Some(effective) != effective_posture { return Err("permission_not_inherited".into()); }
+                if Some(effective) != effective_posture {
+                    return Err("permission_not_inherited".into());
+                }
                 (scoped, snapshot, child)
             }
             WorkspacePass::Shared => (scoped, permission_snapshot, frozen_cwd),
@@ -1238,8 +1712,18 @@ fn admit_delegate(
             st.delegation_store.admission_counts(&instance)?;
         let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
         let own = matches!(pass, WorkspacePass::Commit { .. });
-        let reservations = work.creations.values().filter(|r| !own || r.task_id != task_id_for_pass(pass)).count();
-        let instance_reservations = work.creations.values().filter(|r| r.owner_instance == instance && (!own || r.task_id != task_id_for_pass(pass))).count();
+        let reservations = work
+            .creations
+            .values()
+            .filter(|r| !own || r.task_id != task_id_for_pass(pass))
+            .count();
+        let instance_reservations = work
+            .creations
+            .values()
+            .filter(|r| {
+                r.owner_instance == instance && (!own || r.task_id != task_id_for_pass(pass))
+            })
+            .count();
         drop(work);
         if active + reservations >= 128 || instance_active + instance_reservations >= 16 {
             return Err("task_limit".into());
@@ -1248,9 +1732,7 @@ fn admit_delegate(
             // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
             // arbres soldés du plus ancien au plus récent), puis seulement refus.
             if let Err(error) = copy_delivery_acks(st) {
-                warn!(
-                    "rétention native: accusés non recopiés avant la purge de borne : {error}"
-                );
+                warn!("rétention native: accusés non recopiés avant la purge de borne : {error}");
             }
             purge_retained(
                 st,
@@ -1265,7 +1747,9 @@ fn admit_delegate(
         }
         let task_id = if matches!(pass, WorkspacePass::Shared) {
             Uuid::new_v4().to_string()
-        } else { task_id_for_pass(pass).to_owned() };
+        } else {
+            task_id_for_pass(pass).to_owned()
+        };
         let executions = st
             .execution_store
             .recoverable_execution_ids_for_agent(&owner)
@@ -1273,41 +1757,40 @@ fn admit_delegate(
         if executions.len() > 1 {
             return Err("parent_execution_ambiguous".into());
         }
-        let (root_owner_agent_id, parent_task_id) =
-            match st.delegation_store.for_child(&owner)? {
-                Some(mut parent) => {
-                    let command = current_command(st, &parent)?;
-                    if st.managed_by_instance.get(&instance) != Some(&command)
-                        || st
-                            .fleet
-                            .resolved_definition_for_command(&command)
-                            .is_none_or(|d| d.digest != parent.definition.digest)
-                        || !recover_child(st, &mut parent, &instance)?
-                    {
-                        return Err("parent_task_unavailable".into());
-                    }
-                    let link = st
+        let (root_owner_agent_id, parent_task_id) = match st.delegation_store.for_child(&owner)? {
+            Some(mut parent) => {
+                let command = current_command(st, &parent)?;
+                if st.managed_by_instance.get(&instance) != Some(&command)
+                    || st
                         .fleet
-                        .agent_link_for_child(&instance)
-                        .map_err(|e| e.to_string())?
-                        .ok_or("parent_task_unavailable")?;
-                    if link.delegation_id.as_deref() != Some(parent.task_id.as_str()) {
-                        return Err("parent_task_unavailable".into());
-                    }
-                    // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
-                    // Sans délai explicite, comportement 149 : aucun contrôle.
-                    if let (Some(secs), Some(deadline)) = (
-                        reply_timeout,
-                        effective_deadline(st, &parent, unix_timestamp())?,
-                    ) && i64::try_from(*secs).map_or(true, |secs| {
-                        secs > deadline.saturating_sub(unix_timestamp())
-                    }) {
-                        return Err("reply_timeout_exceeds_parent".into());
-                    }
-                    st.delegation_store.parent_lineage(&parent)?
+                        .resolved_definition_for_command(&command)
+                        .is_none_or(|d| d.digest != parent.definition.digest)
+                    || !recover_child(st, &mut parent, &instance)?
+                {
+                    return Err("parent_task_unavailable".into());
                 }
-                None => (owner.clone(), None),
-            };
+                let link = st
+                    .fleet
+                    .agent_link_for_child(&instance)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("parent_task_unavailable")?;
+                if link.delegation_id.as_deref() != Some(parent.task_id.as_str()) {
+                    return Err("parent_task_unavailable".into());
+                }
+                // Un délai explicite d'enfant ne dépasse pas le temps restant du parent.
+                // Sans délai explicite, comportement 149 : aucun contrôle.
+                if let (Some(secs), Some(deadline)) = (
+                    reply_timeout,
+                    effective_deadline(st, &parent, unix_timestamp())?,
+                ) && i64::try_from(*secs).map_or(true, |secs| {
+                    secs > deadline.saturating_sub(unix_timestamp())
+                }) {
+                    return Err("reply_timeout_exceeds_parent".into());
+                }
+                st.delegation_store.parent_lineage(&parent)?
+            }
+            None => (owner.clone(), None),
+        };
         let record = Task {
             substitution,
             task_id: task_id.clone(),
@@ -1351,35 +1834,59 @@ fn admit_delegate(
             guarded: keep_alive_secs.is_some(),
             guard_released: false,
             unacked_rounds: Vec::new(),
-            workspace: if let WorkspacePass::Commit { record, .. } = pass { Some(record.clone()) } else { None },
+            workspace: if let WorkspacePass::Commit { record, .. } = pass {
+                Some(record.clone())
+            } else {
+                None
+            },
             workspace_report_mission: None,
         };
         if let WorkspacePass::Reserve { plan, .. } = pass {
             let key = (record.owner.clone(), request_id.clone());
             let reservation = WorkspaceReservation {
-                task_id: record.task_id.clone(), owner_instance: record.owner_instance.clone(),
+                task_id: record.task_id.clone(),
+                owner_instance: record.owner_instance.clone(),
                 path: plan.worktree_dir.join(&record.task_id[..8]),
             };
-            st.workspace_work.lock().unwrap_or_else(|e| e.into_inner()).creations.insert(key.clone(), reservation);
-            let claim = WorkspaceClaim { work: Arc::clone(&st.workspace_work), key: WorkspaceClaimKey::Creation(key) };
-            return Ok(WorkspaceAdmission::Reserved { task: record, claim });
+            st.workspace_work
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .creations
+                .insert(key.clone(), reservation);
+            let claim = WorkspaceClaim {
+                work: Arc::clone(&st.workspace_work),
+                key: WorkspaceClaimKey::Creation(key),
+            };
+            return Ok(WorkspaceAdmission::Reserved {
+                task: record,
+                claim,
+            });
         }
         // O(128) : seules les autres tâches actives en développement.
-        let shared_writers = if record.workspace.is_none() && effective_posture == Some(SpawnPosture::Development) {
-            st.delegation_store.shared_writers(&record.cwd)?
-        } else { 0 };
-        st.delegation_store.insert(&record, request_id, &canonical)?;
+        let shared_writers =
+            if record.workspace.is_none() && effective_posture == Some(SpawnPosture::Development) {
+                st.delegation_store.shared_writers(&record.cwd)?
+            } else {
+                0
+            };
+        st.delegation_store
+            .insert(&record, request_id, &canonical)?;
         if matches!(pass, WorkspacePass::Commit { .. }) {
             // La place réservée devient la tâche durable sous le même verrou.
-            st.workspace_work.lock().unwrap_or_else(|e| e.into_inner())
-                .creations.remove(&(record.owner.clone(), request_id.clone()));
+            st.workspace_work
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .creations
+                .remove(&(record.owner.clone(), request_id.clone()));
         }
         let mut view = current_task_view(st, &record, true)?;
         if let Some(workspace) = &record.workspace {
             view["workspace"] = json!({"state":workspace.state,"path":workspace.path,
                 "branch":workspace.branch,"base_commit":workspace.base_commit});
         }
-        if shared_writers > 0 { view["shared_writers"] = json!(shared_writers); }
+        if shared_writers > 0 {
+            view["shared_writers"] = json!(shared_writers);
+        }
         Ok(WorkspaceAdmission::View(view))
     })();
     if let Err(code) = &result {
@@ -1387,7 +1894,8 @@ fn admit_delegate(
             &receipt_owner,
             request_id,
             &canonical,
-            code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical),
+            code.split_once(':')
+                .map_or(code.as_str(), |(canonical, _)| canonical),
             unix_timestamp(),
         )?;
     }
@@ -1461,11 +1969,18 @@ fn handle_locked_with_project(
         }
         NativeDelegationRequest::Catalogue => {
             let permission = root_permission(st, &owner, &instance)?;
-            let fact=parent_fact(st,&owner,&instance,None,attested)?;
-            let halted = st.delegation_store.delegation_halt()
-                .map_err(|_| "control_state_unavailable")?.halted;
-            let verdict_cwd = fact.as_ref().map(|f| PathBuf::from(&f.cwd))
-                .or_else(|| permission.as_ref().and_then(ParentPermission::root).map(Path::to_path_buf));
+            let fact = parent_fact(st, &owner, &instance, None, attested)?;
+            let halted = st
+                .delegation_store
+                .delegation_halt()
+                .map_err(|_| "control_state_unavailable")?
+                .halted;
+            let verdict_cwd = fact.as_ref().map(|f| PathBuf::from(&f.cwd)).or_else(|| {
+                permission
+                    .as_ref()
+                    .and_then(ParentPermission::root)
+                    .map(Path::to_path_buf)
+            });
             let entries: Vec<Value> = st.registry.resolved_definitions()?.into_iter()
                 .filter(|(name,_)| !name.starts_with("__"))
                 .map(|(name,definition)| {
@@ -1540,7 +2055,14 @@ fn handle_locked_with_project(
             )
         }
         NativeDelegationRequest::Delegate { .. } => {
-            match admit_delegate(conn, &request, candidate_project, attested, st, WorkspacePass::Shared)? {
+            match admit_delegate(
+                conn,
+                &request,
+                candidate_project,
+                attested,
+                st,
+                WorkspacePass::Shared,
+            )? {
                 WorkspaceAdmission::View(view) => Ok(view),
                 _ => unreachable!("admission partagée"),
             }
@@ -1584,10 +2106,10 @@ fn handle_locked_with_project(
                 tasks.push(task);
             }
             // Toute la propriété est établie avant de révéler un état de préparation.
-            if tasks
-                .iter()
-                .any(|task| !workspace_report_ready(task) || !matches!(task.state.as_str(), "result_available" | "failed"))
-            {
+            if tasks.iter().any(|task| {
+                !workspace_report_ready(task)
+                    || !matches!(task.state.as_str(), "result_available" | "failed")
+            }) {
                 return Err("task_not_ready".into());
             }
             let (acknowledged, already) = st
@@ -1922,10 +2444,19 @@ fn handle_locked_with_project(
 /// Relecture des droits et des sources avant tout lancement ou reprise.
 /// O(v + b + log r), hors latences système : v octets de définition, contexte
 /// et environnement inspectés, b octets relus/hachés, r révocations durables.
-pub(super) fn native_launch_registry(st: &DaemonState, task: &Task) -> Result<AgentRegistry, String> {
-    if st.delegation_store.revoked_agent(&task.owner)?||st.delegation_store.revoked_agent(&task.root_owner_agent_id)?||st.delegation_store.revoked(&task.owner_instance)?{return Err("permission_not_inherited".into())}
-    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request
-    else {
+pub(super) fn native_launch_registry(
+    st: &DaemonState,
+    task: &Task,
+) -> Result<AgentRegistry, String> {
+    if st.delegation_store.revoked_agent(&task.owner)?
+        || st
+            .delegation_store
+            .revoked_agent(&task.root_owner_agent_id)?
+        || st.delegation_store.revoked(&task.owner_instance)?
+    {
+        return Err("permission_not_inherited".into());
+    }
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
         return Err("invalid_record".into());
     };
     if std::fs::canonicalize(&task.cwd).map_err(|_| "cwd_unavailable")?
@@ -1934,10 +2465,17 @@ pub(super) fn native_launch_registry(st: &DaemonState, task: &Task) -> Result<Ag
         return Err("cwd_changed".into());
     }
     let registry = AgentRegistry::from_resolved(agent_type, &task.definition)?;
-    if let Some(snapshot)=&task.permission_snapshot {
-        for context in crate::native_permissions::snapshot_contexts(snapshot){bridget_transport::protocol::recheck_permission_context_sources(&context)?;}
-        if let Some(context)=snapshot.child_policy.get("launch_context"){
-            crate::native_permissions::recheck_context(context,registry.get(agent_type)?,Path::new(&task.cwd),&st.source_env)?;
+    if let Some(snapshot) = &task.permission_snapshot {
+        for context in crate::native_permissions::snapshot_contexts(snapshot) {
+            bridget_transport::protocol::recheck_permission_context_sources(&context)?;
+        }
+        if let Some(context) = snapshot.child_policy.get("launch_context") {
+            crate::native_permissions::recheck_context(
+                context,
+                registry.get(agent_type)?,
+                Path::new(&task.cwd),
+                &st.source_env,
+            )?;
         }
     }
     Ok(registry)
@@ -1956,22 +2494,39 @@ pub(super) fn native_child_env(task: &Task, prepared: &mut PreparedSpawn) -> Res
         );
     }
     if let Some(snapshot) = &task.permission_snapshot {
-        prepared.env.insert(crate::native_permissions::CHILD_POLICY_ENV.into(),
-            serde_json::to_string(&snapshot.child_policy).map_err(|error| error.to_string())?.into());
-        prepared.env.insert(crate::native_permissions::CHILD_SOURCES_ENV.into(),
+        prepared.env.insert(
+            crate::native_permissions::CHILD_POLICY_ENV.into(),
+            serde_json::to_string(&snapshot.child_policy)
+                .map_err(|error| error.to_string())?
+                .into(),
+        );
+        prepared.env.insert(
+            crate::native_permissions::CHILD_SOURCES_ENV.into(),
             serde_json::to_string(&crate::native_permissions::snapshot_contexts(snapshot))
-                .map_err(|error| error.to_string())?.into());
+                .map_err(|error| error.to_string())?
+                .into(),
+        );
     }
-    prepared.env.insert(crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV.into(),
+    prepared.env.insert(
+        crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV.into(),
         serde_json::to_string(&crate::wrapper::NativeMissionBootstrap {
-            instance_id: prepared.lease.instance_id.clone(), mission_id: task.mission.clone(),
-        }).map_err(|error| error.to_string())?.into());
+            instance_id: prepared.lease.instance_id.clone(),
+            mission_id: task.mission.clone(),
+        })
+        .map_err(|error| error.to_string())?
+        .into(),
+    );
     Ok(())
 }
 
 fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     let registry = native_launch_registry(st, task)?;
-    let NativeDelegationRequest::Delegate { agent_type, posture, .. } = &task.request else {
+    let NativeDelegationRequest::Delegate {
+        agent_type,
+        posture,
+        ..
+    } = &task.request
+    else {
         return Err("invalid_record".into());
     };
     if task.launch_issued_at.is_none() && !st.fleet.knows_command(&task.task_id) {
@@ -1982,7 +2537,11 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     let order = FleetSpawnOrder {
         // La définition héritée est déjà figée. Une nouvelle conversion de
         // posture réduirait silencieusement sa politique fournisseur.
-        posture: if task.permission_snapshot.is_some(){None}else{*posture},
+        posture: if task.permission_snapshot.is_some() {
+            None
+        } else {
+            *posture
+        },
         agent_type: agent_type.clone(),
         project: None,
         requested_name: Some(task.child.clone()),
@@ -2087,40 +2646,67 @@ pub(super) fn authorize_retained_result(
     message: &bridget_core::BridgetMessage,
 ) -> Result<(), String> {
     let invalid = || "native_result_invalid".to_string();
-    let task = st.delegation_store.get(&authority.task_id)?.ok_or_else(invalid)?;
+    let task = st
+        .delegation_store
+        .get(&authority.task_id)?
+        .ok_or_else(invalid)?;
     let child_instance = task.child_instance.as_ref().ok_or_else(invalid)?;
-    if task.state != "result_available" || task.result.as_deref() != Some(message.body.as_str())
-        || message.body.trim().is_empty() || message.body.len() > 262144
+    if task.state != "result_available"
+        || task.result.as_deref() != Some(message.body.as_str())
+        || message.body.trim().is_empty()
+        || message.body.len() > 262144
         || message.id != task.result_message_id()
-        || message.from != task.child || message.to != task.owner
+        || message.from != task.child
+        || message.to != task.owner
         || message.in_reply_to.as_deref() != Some(task.mission.as_str())
-        || message.reply || message.intent.is_some()
+        || message.reply
+        || message.intent.is_some()
         || conn != format!("native-delegation:{}", message.id)
-        || st.connections.contains_key(conn) || !st.auxiliary_connections.contains(conn)
+        || st.connections.contains_key(conn)
+        || !st.auxiliary_connections.contains(conn)
         || st.conn_names.get(conn) != Some(&task.child)
         || st.conn_instances.get(conn) != Some(child_instance)
-        || !st.client_negotiations.get(conn).is_some_and(|client|
-            client.issuer_scope == crate::communication::issuer_scope(&task.task_id))
+        || !st.client_negotiations.get(conn).is_some_and(|client| {
+            client.issuer_scope == crate::communication::issuer_scope(&task.task_id)
+        })
     {
         return Err(invalid());
     }
     if st.delegation_store.revoked_agent(&task.owner)?
-        || st.delegation_store.revoked_agent(&task.root_owner_agent_id)?
-        || st.delegation_store.revoked(&task.owner_instance)? {
+        || st
+            .delegation_store
+            .revoked_agent(&task.root_owner_agent_id)?
+        || st.delegation_store.revoked(&task.owner_instance)?
+    {
         return Err("native_result_authority_revoked".into());
     }
-    let owner_route = st.router.get_agent(&task.owner).ok_or("native_result_owner_offline")?;
-    if st.communication_projects.get(&owner_route.connection_id).is_some_and(|fact| fact.2) {
+    let owner_route = st
+        .router
+        .get_agent(&task.owner)
+        .ok_or("native_result_owner_offline")?;
+    if st
+        .communication_projects
+        .get(&owner_route.connection_id)
+        .is_some_and(|fact| fact.2)
+    {
         return Err("native_result_authority_revoked".into());
     }
     if live_connection_identity(st, &owner_route.connection_id)
         != Some((task.owner.clone(), task.owner_instance.clone()))
-        || !can_own_task(st, &task, &task.owner, &task.owner_instance)? {
+        || !can_own_task(st, &task, &task.owner, &task.owner_instance)?
+    {
         return Err("native_result_owner_unavailable".into());
     }
-    if st.presences.get(&task.owner_instance).is_some_and(|p| p.transport == "t3code") {
-        let thread = st.t3_thread_bindings.get(&owner_route.connection_id)
-            .and_then(Option::as_deref).ok_or("native_result_owner_unavailable")?;
+    if st
+        .presences
+        .get(&task.owner_instance)
+        .is_some_and(|p| p.transport == "t3code")
+    {
+        let thread = st
+            .t3_thread_bindings
+            .get(&owner_route.connection_id)
+            .and_then(Option::as_deref)
+            .ok_or("native_result_owner_unavailable")?;
         human_authority_guard(st, thread, &agent_communication_project(st, &task.owner))
             .map_err(|_| "native_result_owner_unavailable".to_string())?;
     }
@@ -2136,7 +2722,9 @@ pub(super) fn send_as(
     issued_at: i64,
     controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
-    send_as_with_result_authority(st, owner, instance, task_scope, message, issued_at, controls, None)
+    send_as_with_result_authority(
+        st, owner, instance, task_scope, message, issued_at, controls, None,
+    )
 }
 
 fn send_as_with_result_authority(
@@ -2199,9 +2787,11 @@ pub(super) fn capture_reply(
         let Some(past) = st.delegation_store.past_mission_task(correlation)? else {
             return Ok(false);
         };
-        return Ok(past.child == message.from && past.owner == message.to
-            && past.child_instance.as_ref().is_some_and(|instance|
-                live_connection_identity(st, conn) == Some((past.child.clone(), instance.clone()))));
+        return Ok(past.child == message.from
+            && past.owner == message.to
+            && past.child_instance.as_ref().is_some_and(|instance| {
+                live_connection_identity(st, conn) == Some((past.child.clone(), instance.clone()))
+            }));
     };
     if task.child != message.from
         || task.owner != message.to
@@ -2269,47 +2859,73 @@ fn restart_identity(st: &DaemonState, task: &Task) -> Result<ManagedIdentity, St
     let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
         return Err(mismatch.into());
     };
-    let entry = st.fleet.desired_entry(&task.child).map_err(|error| error.to_string())?
+    let entry = st
+        .fleet
+        .desired_entry(&task.child)
+        .map_err(|error| error.to_string())?
         .ok_or(mismatch)?;
     let fact = entry.agent_link.as_ref().ok_or(mismatch)?;
-    let link = st.idempotency.agent_link_by_id(&fact.link_id)
-        .map_err(|error| error.to_string())?.ok_or(mismatch)?;
-    if &entry.agent_type != agent_type || entry.cwd != Path::new(&task.cwd)
+    let link = st
+        .idempotency
+        .agent_link_by_id(&fact.link_id)
+        .map_err(|error| error.to_string())?
+        .ok_or(mismatch)?;
+    if &entry.agent_type != agent_type
+        || entry.cwd != Path::new(&task.cwd)
         || entry.resolved_definition.as_ref() != Some(&task.definition)
         || !entry.persistent
         || link.delegation_id.as_deref() != Some(task.task_id.as_str())
         || link.role != "native_delegate"
-        || (link.parent_instance_id != task.origin_owner_instance && link.parent_instance_id != task.owner_instance)
+        || (link.parent_instance_id != task.origin_owner_instance
+            && link.parent_instance_id != task.owner_instance)
         || fact.parent_instance_id != link.parent_instance_id
         || fact.parent_execution_id != link.parent_execution_id
-        || fact.delegation_id != link.delegation_id || fact.role != link.role
+        || fact.delegation_id != link.delegation_id
+        || fact.role != link.role
     {
         return Err(mismatch.into());
     }
     let previous = task.child_instance.as_deref().ok_or(mismatch)?;
     if previous != link.child_instance_id {
-        let old = st.fleet.agent_link_for_child(previous).map_err(|error| error.to_string())?
+        let old = st
+            .fleet
+            .agent_link_for_child(previous)
+            .map_err(|error| error.to_string())?
             .ok_or(mismatch)?;
-        if old.delegation_id != link.delegation_id || old.role != link.role
-            || (old.parent_instance_id != task.origin_owner_instance && old.parent_instance_id != task.owner_instance)
+        if old.delegation_id != link.delegation_id
+            || old.role != link.role
+            || (old.parent_instance_id != task.origin_owner_instance
+                && old.parent_instance_id != task.owner_instance)
         {
             return Err(mismatch.into());
         }
-        let commands = st.idempotency.spawn_commands(&st.fleet.supervisor_scope())
+        let commands = st
+            .idempotency
+            .spawn_commands(&st.fleet.supervisor_scope())
             .map_err(|error| error.to_string())?;
-        let old_generation = commands.iter().find(|command|
-            command.name == task.child && command.instance_id.as_deref() == Some(previous))
-            .map(|command| command.generation).ok_or(mismatch)?;
+        let old_generation = commands
+            .iter()
+            .find(|command| {
+                command.name == task.child && command.instance_id.as_deref() == Some(previous)
+            })
+            .map(|command| command.generation)
+            .ok_or(mismatch)?;
         if old_generation >= entry.generation
-            || !commands.iter().any(|command| command.command_id == entry.command_id
-                && command.name == task.child && command.generation == entry.generation
-                && command.instance_id.as_deref() == Some(link.child_instance_id.as_str()))
+            || !commands.iter().any(|command| {
+                command.command_id == entry.command_id
+                    && command.name == task.child
+                    && command.generation == entry.generation
+                    && command.instance_id.as_deref() == Some(link.child_instance_id.as_str())
+            })
         {
             return Err(mismatch.into());
         }
     }
-    Ok(ManagedIdentity { instance_id: link.child_instance_id,
-        command_id: entry.command_id, generation: entry.generation })
+    Ok(ManagedIdentity {
+        instance_id: link.child_instance_id,
+        command_id: entry.command_id,
+        generation: entry.generation,
+    })
 }
 
 fn current_command(st: &DaemonState, task: &Task) -> Result<String, String> {
@@ -2330,25 +2946,42 @@ pub(super) fn restart_identities(
         let marker = match st.marker_store.load(&task.child) {
             Ok(marker) => Some(marker),
             Err(crate::managed_process::ManagedProcessError::Io(error))
-                if error.kind() == std::io::ErrorKind::NotFound => None,
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                None
+            }
             Err(error) => return Err(error.to_string()),
         };
-        if !matches!(task.state.as_str(), "starting" | "mission_pending" | "working") {
+        if !matches!(
+            task.state.as_str(),
+            "starting" | "mission_pending" | "working"
+        ) {
             if let (Some(marker), Ok(identity)) = (marker, restart_identity(st, &task))
                 && marker.instance_id == identity.instance_id
-                && marker.command_id == identity.command_id && marker.generation == identity.generation
+                && marker.command_id == identity.command_id
+                && marker.generation == identity.generation
             {
                 identities.insert(task.child, identity);
             }
             continue;
         }
         let identity = match restart_identity(st, &task) {
-            Ok(identity) if marker.as_ref().is_none_or(|marker|
-                marker.instance_id == identity.instance_id && marker.command_id == identity.command_id
-                    && marker.generation == identity.generation) => identity,
-            Ok(_) => { fail_restart(st, &mut task, "native_restart_identity_mismatch")?; continue; }
+            Ok(identity)
+                if marker.as_ref().is_none_or(|marker| {
+                    marker.instance_id == identity.instance_id
+                        && marker.command_id == identity.command_id
+                        && marker.generation == identity.generation
+                }) =>
+            {
+                identity
+            }
+            Ok(_) => {
+                fail_restart(st, &mut task, "native_restart_identity_mismatch")?;
+                continue;
+            }
             Err(code) if code == "native_restart_identity_mismatch" => {
-                fail_restart(st, &mut task, &code)?; continue;
+                fail_restart(st, &mut task, &code)?;
+                continue;
             }
             Err(error) => return Err(error),
         };
@@ -2356,7 +2989,9 @@ pub(super) fn restart_identities(
             task.child_instance = Some(identity.instance_id.clone());
             st.delegation_store.save(&task)?;
         }
-        if marker.is_some() { identities.insert(task.child, identity); }
+        if marker.is_some() {
+            identities.insert(task.child, identity);
+        }
     }
     Ok(identities)
 }
@@ -2364,10 +2999,21 @@ pub(super) fn restart_identities(
 /// Une tâche queued reste admise si son propriétaire natif va être repris.
 /// Un propriétaire terminal ou dont la filiation n'est plus attestée est perdu.
 fn queued_owner_lost(st: &DaemonState, task: &Task) -> Result<bool, String> {
-    let Some(parent_id) = task.parent_task_id.as_deref() else { return Ok(false) };
-    let parent = st.delegation_store.get(parent_id)?.ok_or("parent_task_unavailable")?;
-    let instance = parent.child_instance.as_deref().ok_or("native_owner_identity_mismatch")?;
-    let link = st.fleet.agent_link_for_child(instance).map_err(|error| error.to_string())?
+    let Some(parent_id) = task.parent_task_id.as_deref() else {
+        return Ok(false);
+    };
+    let parent = st
+        .delegation_store
+        .get(parent_id)?
+        .ok_or("parent_task_unavailable")?;
+    let instance = parent
+        .child_instance
+        .as_deref()
+        .ok_or("native_owner_identity_mismatch")?;
+    let link = st
+        .fleet
+        .agent_link_for_child(instance)
+        .map_err(|error| error.to_string())?
         .ok_or("native_owner_identity_mismatch")?;
     if parent.child != task.owner
         || instance != task.owner_instance
@@ -2382,29 +3028,62 @@ fn queued_owner_lost(st: &DaemonState, task: &Task) -> Result<bool, String> {
         return Err("native_owner_identity_mismatch".into());
     }
     let command = current_command(st, &parent)?;
-    let entry = st.fleet.desired_entry(&parent.child).map_err(|error| error.to_string())?;
-    Ok(!matches!(parent.state.as_str(), "starting" | "mission_pending" | "working")
-        || entry.is_none_or(|entry| entry.command_id != command
-            || entry.lifecycle_state != DesiredLifecycleState::Running))
+    let entry = st
+        .fleet
+        .desired_entry(&parent.child)
+        .map_err(|error| error.to_string())?;
+    Ok(!matches!(
+        parent.state.as_str(),
+        "starting" | "mission_pending" | "working"
+    ) || entry.is_none_or(|entry| {
+        entry.command_id != command || entry.lifecycle_state != DesiredLifecycleState::Running
+    }))
 }
 
 /// Fermer seulement la ligne de mission exacte, par comparaison atomique.
 /// Une exécution déjà terminale (notamment completed) n'est jamais rouverte.
 fn close_lost_execution(st: &DaemonState, task: &Task, reason: &str) -> Result<(), String> {
-    let Some(snapshot) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
-        .map_err(|error| error.to_string())? else { return Ok(()) };
+    let Some(snapshot) = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
     let execution_id = snapshot.execution_id;
-    let Some(target) = st.execution_store.execution_control_target(&execution_id)
-        .map_err(|error| error.to_string())? else { return Ok(()) };
+    let Some(target) = st
+        .execution_store
+        .execution_control_target(&execution_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
     if target.target_agent != task.child {
         return Err("native_execution_mismatch".into());
     }
     let snapshot = target.snapshot;
-    if matches!(snapshot.state.as_str(), "queued" | "starting" | "running"
-        | "waiting_approval" | "waiting_user_input" | "interrupting") {
-        match st.execution_store.transition_if_current(&execution_id, &snapshot.state,
-            snapshot.revision, snapshot.generation, "unreachable", reason, unix_timestamp())
-            .map_err(|error| error.to_string())? {
+    if matches!(
+        snapshot.state.as_str(),
+        "queued"
+            | "starting"
+            | "running"
+            | "waiting_approval"
+            | "waiting_user_input"
+            | "interrupting"
+    ) {
+        match st
+            .execution_store
+            .transition_if_current(
+                &execution_id,
+                &snapshot.state,
+                snapshot.revision,
+                snapshot.generation,
+                "unreachable",
+                reason,
+                unix_timestamp(),
+            )
+            .map_err(|error| error.to_string())?
+        {
             ConditionalTransition::Applied(_) => {}
             _ => return Err("native_execution_changed".into()),
         }
@@ -2413,7 +3092,8 @@ fn close_lost_execution(st: &DaemonState, task: &Task, reason: &str) -> Result<(
         || reason == "daemon_restart"
         || reason == "request_unavailable"
     {
-        st.execution_store.abandon_pause_interruption(&execution_id, unix_timestamp())
+        st.execution_store
+            .abandon_pause_interruption(&execution_id, unix_timestamp())
             .map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -2447,17 +3127,27 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
             // Une feuille encore active d'une mission déjà échouée ne doit
             // pas retenir le résultat acquis de sa racine après la panne.
             close_lost_execution(st, &task, "daemon_restart")?;
-        } else if matches!(task.state.as_str(), "starting" | "mission_pending" | "working") {
+        } else if matches!(
+            task.state.as_str(),
+            "starting" | "mission_pending" | "working"
+        ) {
             let decision: Result<ManagedIdentity, String> = (|| {
                 let identity = restart_identity(st, &task)?;
-                if st.fleet.desired_entry(&task.child).map_err(|error| error.to_string())?
+                if st
+                    .fleet
+                    .desired_entry(&task.child)
+                    .map_err(|error| error.to_string())?
                     .is_none_or(|entry| entry.lifecycle_state != DesiredLifecycleState::Running)
-                { return Err("unreachable".into()); }
+                {
+                    return Err("unreachable".into());
+                }
                 native_launch_registry(st, &task)?;
                 if effective_deadline(st, &task, now)?.is_some_and(|deadline| now >= deadline) {
                     return Err("mission_reply_timeout".into());
                 }
-                if task.restart_resumes >= 2 { return Err("native_resume_exhausted".into()); }
+                if task.restart_resumes >= 2 {
+                    return Err("native_resume_exhausted".into());
+                }
                 Ok(identity)
             })();
             match decision {
@@ -2465,13 +3155,25 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
                     task.child_instance = Some(identity.instance_id);
                     task.restart_resumes += 1;
                     st.delegation_store.save(&task)?;
-                    if let Some(snapshot) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
+                    if let Some(snapshot) = st
+                        .execution_store
+                        .latest_in_chain(&format!("execution-{}", task.mission))
                         .map_err(|error| error.to_string())?
-                        && snapshot.state == "interrupting" && pause_covers(st, &snapshot.execution_id, false)?
+                        && snapshot.state == "interrupting"
+                        && pause_covers(st, &snapshot.execution_id, false)?
                     {
-                        match st.execution_store.transition_if_current(&snapshot.execution_id,
-                            &snapshot.state, snapshot.revision, snapshot.generation, "interrupted",
-                            "pause_restart_reconciled", now).map_err(|error| error.to_string())?
+                        match st
+                            .execution_store
+                            .transition_if_current(
+                                &snapshot.execution_id,
+                                &snapshot.state,
+                                snapshot.revision,
+                                snapshot.generation,
+                                "interrupted",
+                                "pause_restart_reconciled",
+                                now,
+                            )
+                            .map_err(|error| error.to_string())?
                         {
                             ConditionalTransition::Applied(_) => {}
                             _ => return Err("native_execution_changed".into()),
@@ -2512,17 +3214,23 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
         }
         // Les résultats déjà capturés et l'attente des descendants restent
         // durables. Aucun nouveau fournisseur ne doit porter la même mission.
-        if st.fleet.desired_entry(&task.child).map_err(|error| error.to_string())?
+        if st
+            .fleet
+            .desired_entry(&task.child)
+            .map_err(|error| error.to_string())?
             .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Running)
         {
-            st.fleet.mark_stopped(&task.child).map_err(|error| error.to_string())?;
+            st.fleet
+                .mark_stopped(&task.child)
+                .map_err(|error| error.to_string())?;
         }
     }
     Ok(children)
 }
 
 fn workspace_report_ready(task: &Task) -> bool {
-    task.workspace.is_none() || task.workspace_report_mission.as_deref() == Some(task.mission.as_str())
+    task.workspace.is_none()
+        || task.workspace_report_mission.as_deref() == Some(task.mission.as_str())
 }
 
 struct WorkspaceReportJob {
@@ -2535,33 +3243,72 @@ struct WorkspaceReportJob {
 }
 
 /// O(1), réservation distincte du verrou global ; les ticks concurrents passent.
-fn claim_workspace_report(st: &DaemonState, task: &Task, stopped: bool) -> Option<WorkspaceReportJob> {
-    if workspace_report_ready(task) { return None; }
+fn claim_workspace_report(
+    st: &DaemonState,
+    task: &Task,
+    stopped: bool,
+) -> Option<WorkspaceReportJob> {
+    if workspace_report_ready(task) {
+        return None;
+    }
     let workspace = task.workspace.as_ref()?;
     let key = (task.task_id.clone(), task.mission.clone(), task.round_no());
     let mut work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
-    if !work.reports.insert(key.clone()) { return None; }
-    Some(WorkspaceReportJob { task_id: task.task_id.clone(), mission: task.mission.clone(),
-        round: task.round_no(), workspace: workspace.clone(), stopped,
-        _claim: WorkspaceClaim { work: Arc::clone(&st.workspace_work), key: WorkspaceClaimKey::Report(key) } })
+    if !work.reports.insert(key.clone()) {
+        return None;
+    }
+    Some(WorkspaceReportJob {
+        task_id: task.task_id.clone(),
+        mission: task.mission.clone(),
+        round: task.round_no(),
+        workspace: workspace.clone(),
+        stopped,
+        _claim: WorkspaceClaim {
+            work: Arc::clone(&st.workspace_work),
+            key: WorkspaceClaimKey::Report(key),
+        },
+    })
 }
 
 fn report_text(value: &str) -> String {
-    value.chars().flat_map(|c| if c.is_control() || bridget_core::is_disallowed_control(c) {
-        c.escape_unicode().collect::<Vec<_>>()
-    } else { vec![c] }).collect()
+    value
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() || bridget_core::is_disallowed_control(c) {
+                c.escape_unicode().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 /// O(B+L), résultat borné à 256 Kio, L ligne de faits Git. Aucun fait du texte enfant.
 fn append_workspace_result(task: &mut Task) {
-    let Some(workspace) = &task.workspace else { return; };
-    let yes_no = |value: Option<bool>| match value { Some(true) => "oui", Some(false) => "non", None => "indisponible" };
-    let commits = workspace.commit_count.map(|n| format!("{n} commit(s)"))
+    let Some(workspace) = &task.workspace else {
+        return;
+    };
+    let yes_no = |value: Option<bool>| match value {
+        Some(true) => "oui",
+        Some(false) => "non",
+        None => "indisponible",
+    };
+    let commits = workspace
+        .commit_count
+        .map(|n| format!("{n} commit(s)"))
         .unwrap_or_else(|| "nombre de commits indisponible".into());
-    let line = format!("[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}",
-        report_text(&workspace.branch), &workspace.base_commit[..workspace.base_commit.len().min(7)], commits,
-        yes_no(workspace.dirty), yes_no(workspace.head_on_branch), report_text(&workspace.path));
-    let Some(body) = &task.result else { return; };
+    let line = format!(
+        "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}",
+        report_text(&workspace.branch),
+        &workspace.base_commit[..workspace.base_commit.len().min(7)],
+        commits,
+        yes_no(workspace.dirty),
+        yes_no(workspace.head_on_branch),
+        report_text(&workspace.path)
+    );
+    let Some(body) = &task.result else {
+        return;
+    };
     let body = body.replace("[Bridget] espace de travail", "[Enfant] espace de travail");
     const LIMIT: usize = 262144;
     // Les chemins OS et noms validés bornent cette ligne bien sous LIMIT.
@@ -2575,17 +3322,31 @@ fn append_workspace_result(task: &mut Task) {
 fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceReportJob) {
     let report = crate::workspace_git::report(&job.workspace);
     if let Err(error) = &report {
-        warn!("rapport worktree indisponible : tâche={}, mission={}, ronde={}, erreur={}", job.task_id, job.mission, job.round, error);
+        warn!(
+            "rapport worktree indisponible : tâche={}, mission={}, ronde={}, erreur={}",
+            job.task_id, job.mission, job.round, error
+        );
     }
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Ok(Some(mut task)) = st.delegation_store.get(&job.task_id) else { return; };
-    if task.mission != job.mission || task.round_no() != job.round || workspace_report_ready(&task) { return; }
-    let eligible = if job.stopped {
-        matches!(task.state.as_str(), "failed" | "cancelled" | "result_available")
-    } else {
-        task.state == "waiting_for_children" || (task.state == "result_available" && !task.result_sent)
+    let Ok(Some(mut task)) = st.delegation_store.get(&job.task_id) else {
+        return;
     };
-    if !eligible { return; }
+    if task.mission != job.mission || task.round_no() != job.round || workspace_report_ready(&task)
+    {
+        return;
+    }
+    let eligible = if job.stopped {
+        matches!(
+            task.state.as_str(),
+            "failed" | "cancelled" | "result_available"
+        )
+    } else {
+        task.state == "waiting_for_children"
+            || (task.state == "result_available" && !task.result_sent)
+    };
+    if !eligible {
+        return;
+    }
     if task.state == "waiting_for_children" {
         match descendants_busy(&st, &task) {
             Ok(false) => {}
@@ -2613,7 +3374,11 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
     workspace.state = WorkspaceState::Kept;
     task.workspace = Some(workspace);
     task.workspace_report_mission = Some(task.mission.clone());
-    if matches!(task.state.as_str(), "waiting_for_children" | "result_available") && !task.result_sent {
+    if matches!(
+        task.state.as_str(),
+        "waiting_for_children" | "result_available"
+    ) && !task.result_sent
+    {
         append_workspace_result(&mut task);
         task.state = "result_available".into();
     }
@@ -2633,7 +3398,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         let control = match crate::referent_control::read(st.store.connection()) {
             Ok(control) => control,
-            Err(error) => { warn!("contrôle natif illisible: {error}"); return; }
+            Err(error) => {
+                warn!("contrôle natif illisible: {error}");
+                return;
+            }
         };
         let Ok(mut tasks) = st.delegation_store.pending() else {
             return;
@@ -2650,12 +3418,19 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
         }
         for mut task in tasks.iter().cloned() {
-            if control.paused && matches!(task.state.as_str(), "queued" | "starting" | "mission_pending" | "working") {
+            if control.paused
+                && matches!(
+                    task.state.as_str(),
+                    "queued" | "starting" | "mission_pending" | "working"
+                )
+            {
                 continue;
             }
             // O(1) par tâche : l'expiration conserve l'état et le résultat.
             if task.state == "result_available"
-                && task.idle_deadline_at.is_some_and(|deadline| unix_timestamp() >= deadline)
+                && task
+                    .idle_deadline_at
+                    .is_some_and(|deadline| unix_timestamp() >= deadline)
             {
                 task.guard_released = true;
                 task.idle_deadline_at = None;
@@ -2714,8 +3489,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         continue;
                     }
                 };
-                task.mission_deadline_at =
-                    Some(admitted_at.saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)));
+                task.mission_deadline_at = Some(
+                    admitted_at
+                        .saturating_add(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)),
+                );
                 if let Err(error) = st.delegation_store.save(&task) {
                     error!("échéance native non persistée: {error}");
                     continue;
@@ -2724,9 +3501,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             let expired = if task.state == "working" {
                 match effective_deadline(&st, &task, unix_timestamp()) {
                     Ok(deadline) => deadline.is_some_and(|deadline| unix_timestamp() >= deadline),
-                    Err(error) => { warn!("échéance native illisible: {error}"); continue; }
+                    Err(error) => {
+                        warn!("échéance native illisible: {error}");
+                        continue;
+                    }
                 }
-            } else { false };
+            } else {
+                false
+            };
             if expired {
                 task.state = "failed".into();
                 task.error = Some("mission_reply_timeout".into());
@@ -2788,14 +3570,20 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             }
             if task.state == "cancelled" {
-                if !task.cleanup_done { cleanups.push(task); }
+                if !task.cleanup_done {
+                    cleanups.push(task);
+                }
                 continue;
             }
             if task.state == "result_available" && !workspace_report_ready(&task) {
-                if let Some(job) = claim_workspace_report(&st, &task, false) { reports.push(job); }
+                if let Some(job) = claim_workspace_report(&st, &task, false) {
+                    reports.push(job);
+                }
                 continue;
             }
-            if task.state == "result_available" && task.result_sent && !task.cleanup_done
+            if task.state == "result_available"
+                && task.result_sent
+                && !task.cleanup_done
                 && task.idle_deadline_at.is_none()
             {
                 cleanups.push(task);
@@ -2814,8 +3602,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     Ok(busy) => busy,
                     Err(error) => {
                         task.state = "failed".into();
-                        task.error = Some(format!("native_descendants_unavailable:{error}")
-                            .chars().take(1024).collect());
+                        task.error = Some(
+                            format!("native_descendants_unavailable:{error}")
+                                .chars()
+                                .take(1024)
+                                .collect(),
+                        );
                         let _ = st.delegation_store.save(&task);
                         continue;
                     }
@@ -2824,12 +3616,18 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     Some(&child.owner_instance) == task.child_instance.as_ref() && !child.terminal()
                 }) || busy;
                 if !active {
-                    if task.result.as_ref().is_none_or(|body| body.trim().is_empty() || body.len() > 262144)
-                        || task.child_instance.is_none() {
+                    if task
+                        .result
+                        .as_ref()
+                        .is_none_or(|body| body.trim().is_empty() || body.len() > 262144)
+                        || task.child_instance.is_none()
+                    {
                         task.state = "failed".into();
                         task.error = Some("native_result_invalid".into());
                     } else if !workspace_report_ready(&task) {
-                        if let Some(job) = claim_workspace_report(&st, &task, false) { reports.push(job); }
+                        if let Some(job) = claim_workspace_report(&st, &task, false) {
+                            reports.push(job);
+                        }
                         continue;
                     } else {
                         task.state = "result_available".into();
@@ -2848,9 +3646,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             }
             if matches!(task.state.as_str(), "queued" | "starting")
-                && matches!(crate::referent_control::admit_autonomous_effect(
-                    crate::referent_control::AutonomousEffect::NativeMissionDispatch, &control,
-                ), crate::referent_control::Admission::Admitted)
+                && matches!(
+                    crate::referent_control::admit_autonomous_effect(
+                        crate::referent_control::AutonomousEffect::NativeMissionDispatch,
+                        &control,
+                    ),
+                    crate::referent_control::Admission::Admitted
+                )
                 && let Err(error) = spawn_task(&mut st, &mut task)
             {
                 task.state = "failed".into();
@@ -2858,19 +3660,29 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = st.delegation_store.save(&task);
             }
             if task.state == "mission_pending" {
-                if !matches!(crate::referent_control::admit_autonomous_effect(
-                    crate::referent_control::AutonomousEffect::NativeMissionDispatch, &control,
-                ), crate::referent_control::Admission::Admitted) { continue; }
+                if !matches!(
+                    crate::referent_control::admit_autonomous_effect(
+                        crate::referent_control::AutonomousEffect::NativeMissionDispatch,
+                        &control,
+                    ),
+                    crate::referent_control::Admission::Admitted
+                ) {
+                    continue;
+                }
                 if task.mission_issued_at.is_none() {
                     match st.store.get_request(&task.mission) {
                         Ok(None) => {
                             task.mission_issued_at = Some(unix_timestamp());
                             if let Err(error) = st.delegation_store.save(&task) {
-                                error!("date d'émission native non persistée: {error}"); continue;
+                                error!("date d'émission native non persistée: {error}");
+                                continue;
                             }
                         }
                         Ok(Some(_)) => {} // Enveloppe 150 déjà admise : garder created_at.
-                        Err(error) => { warn!("admission native illisible: {error}"); continue; }
+                        Err(error) => {
+                            warn!("admission native illisible: {error}");
+                            continue;
+                        }
                     }
                 }
                 let NativeDelegationRequest::Delegate { task: body, .. } = &task.request else {
@@ -2880,11 +3692,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     continue;
                 }
                 let mut message = bridget_core::BridgetMessage::new(
-                    &task.owner, &task.child, task.round_body.as_deref().unwrap_or(body),
+                    &task.owner,
+                    &task.child,
+                    task.round_body.as_deref().unwrap_or(body),
                 );
                 message.id = task.mission.clone();
                 message.reply = true;
-                message.reply_timeout = u64::try_from(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).ok();
+                message.reply_timeout =
+                    u64::try_from(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).ok();
                 message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
                 let response = send_as(
                     &mut st,
@@ -2957,7 +3772,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             // completed seul ne prouve pas la réponse corrélée. On attend
             // la capture, sans inventer un succès vide.
             if task.state == "working"
-                && let Ok(Some(snapshot)) = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
+                && let Ok(Some(snapshot)) = st
+                    .execution_store
+                    .latest_in_chain(&format!("execution-{}", task.mission))
                 && matches!(
                     snapshot.state.as_str(),
                     "failed" | "unreachable" | "interrupted"
@@ -2975,9 +3792,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     false
                 };
                 if paused {
-                    if let Some(conn) = st.router.get_agent(&task.child).map(|route| route.connection_id.clone())
+                    if let Some(conn) = st
+                        .router
+                        .get_agent(&task.child)
+                        .map(|route| route.connection_id.clone())
                         && let Some(instance) = st.conn_instances.get(&conn).cloned()
-                        && st.presences.get(&instance).is_some_and(|presence| presence.busy_since.is_none())
+                        && st
+                            .presences
+                            .get(&instance)
+                            .is_some_and(|presence| presence.busy_since.is_none())
                     {
                         schedule_execution_recovery(&mut st, &conn, &instance, &task.child, false);
                         if let Some(mut ready) = st.pending_post_response_controls.remove(&conn) {
@@ -3006,7 +3829,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 response.in_reply_to = Some(task.mission.clone());
                 // Même un replay vérifie la tâche durable et son destinataire
                 // actuel avant de consulter la clé idempotente existante.
-                let authority = RetainedResultAuthority { task_id: task.task_id.clone() };
+                let authority = RetainedResultAuthority {
+                    task_id: task.task_id.clone(),
+                };
                 let result = send_as_with_result_authority(
                     &mut st,
                     &task.child,
@@ -3018,18 +3843,24 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     Some(&authority),
                 );
                 if matches!(
-                        &result,
-                        DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::Accepted { .. }
-                                | IdempotencyIssue::OutcomeUnknown { delivery_id: Some(_), .. },
-                            ..
-                        }
-                    )
-                {
+                    &result,
+                    DaemonToWrapper::IdempotencyResult {
+                        issue: IdempotencyIssue::Accepted { .. }
+                            | IdempotencyIssue::OutcomeUnknown {
+                                delivery_id: Some(_),
+                                ..
+                            },
+                        ..
+                    }
+                ) {
                     task.result_sent = true;
                     task.error = None;
-                    if task.guarded && !task.guard_released
-                        && let NativeDelegationRequest::Delegate { keep_alive_secs: Some(secs), .. } = &task.request
+                    if task.guarded
+                        && !task.guard_released
+                        && let NativeDelegationRequest::Delegate {
+                            keep_alive_secs: Some(secs),
+                            ..
+                        } = &task.request
                     {
                         // Même sauvegarde que result_sent ; durée bornée à l'admission.
                         task.idle_deadline_at = Some(unix_timestamp().saturating_add(*secs as i64));
@@ -3041,49 +3872,66 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 } else {
                     match result {
                         DaemonToWrapper::Nack { reason, .. } => {
-                            if matches!(reason.as_str(), "native_result_invalid" | "native_result_authority_revoked") {
+                            if matches!(
+                                reason.as_str(),
+                                "native_result_invalid" | "native_result_authority_revoked"
+                            ) {
                                 task.state = "failed".into();
                             }
                             task.error = Some(reason.chars().take(1024).collect());
                         }
                         DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::Rejected { category, reason, .. }, ..
+                            issue:
+                                IdempotencyIssue::Rejected {
+                                    category, reason, ..
+                                },
+                            ..
                         } => {
                             task.state = "failed".into();
-                            task.error = Some(format!("{category}:{reason}").chars().take(1024).collect());
+                            task.error =
+                                Some(format!("{category}:{reason}").chars().take(1024).collect());
                         }
                         DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::EnvelopeMismatch, ..
+                            issue: IdempotencyIssue::EnvelopeMismatch,
+                            ..
                         } => {
                             task.state = "failed".into();
                             task.error = Some("native_result_invalid".into());
                         }
                         DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::Orphaned { reason, .. }, ..
+                            issue: IdempotencyIssue::Orphaned { reason, .. },
+                            ..
                         } => {
                             task.state = "failed".into();
                             task.error = Some(reason.chars().take(1024).collect());
                         }
                         DaemonToWrapper::IdempotencyResult {
-                            issue: IdempotencyIssue::IdempotencyExpired
-                                | IdempotencyIssue::InvalidIssuedAt, ..
+                            issue:
+                                IdempotencyIssue::IdempotencyExpired | IdempotencyIssue::InvalidIssuedAt,
+                            ..
                         } => {
                             task.state = "failed".into();
                             task.error = Some("native_result_delivery_expired".into());
                         }
-                        _ => { task.error = Some("native_result_delivery_pending".into()); }
+                        _ => {
+                            task.error = Some("native_result_delivery_pending".into());
+                        }
                     }
                     let _ = st.delegation_store.save(&task);
                 }
             }
-            if task.state == "result_available" && task.result_sent && !task.cleanup_done
+            if task.state == "result_available"
+                && task.result_sent
+                && !task.cleanup_done
                 && task.idle_deadline_at.is_none()
             {
                 cleanups.push(task);
             }
         }
     }
-    for job in reports { complete_workspace_report(state, job); }
+    for job in reports {
+        complete_workspace_report(state, job);
+    }
     let _ = execute_controls(controls);
     for task in cancellations {
         cancel_tree(state, &task);
@@ -3094,7 +3942,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
 }
 
 fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
-    if st.delegation_store.descendants(&task.task_id)?.iter().any(|child|!child.terminal()) {
+    if st
+        .delegation_store
+        .descendants(&task.task_id)?
+        .iter()
+        .any(|child| !child.terminal())
+    {
         return Ok(true);
     }
     let Some(instance) = task.child_instance.clone() else {
@@ -3136,7 +3989,8 @@ fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
                         .map(|(name, _)| name.clone())
                 });
             if let Some(name) = name {
-                let executions = st.execution_store
+                let executions = st
+                    .execution_store
                     .recoverable_execution_ids_for_agent(&name)
                     .map_err(|error| error.to_string())?;
                 let mut active_execution = false;
@@ -3144,24 +3998,38 @@ fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
                     // Une ancienne interruption de contrôle peut garder une
                     // ligne de reprise après la clôture exacte au redémarrage.
                     // Elle ne ressuscite pas une mission native perdue.
-                    let closed_native = if let Some(mission) = execution_id.strip_prefix("execution-") {
-                        st.delegation_store.for_mission(mission)?.is_some_and(|child|
-                            child.child == name
-                                && child.child_instance.as_deref() == Some(link.child_instance_id.as_str())
-                                && (child.state == "cancelled"
-                                    || (child.state == "failed"
-                                        && child.error.as_deref() == Some("unreachable"))))
-                            && st.execution_store.latest_in_chain(&execution_id)
-                                .map_err(|error| error.to_string())?
-                                .is_some_and(|snapshot| matches!(snapshot.state.as_str(),
-                                    "failed" | "unreachable" | "interrupted"))
-                    } else { false };
+                    let closed_native =
+                        if let Some(mission) = execution_id.strip_prefix("execution-") {
+                            st.delegation_store
+                                .for_mission(mission)?
+                                .is_some_and(|child| {
+                                    child.child == name
+                                        && child.child_instance.as_deref()
+                                            == Some(link.child_instance_id.as_str())
+                                        && (child.state == "cancelled"
+                                            || (child.state == "failed"
+                                                && child.error.as_deref() == Some("unreachable")))
+                                })
+                                && st
+                                    .execution_store
+                                    .latest_in_chain(&execution_id)
+                                    .map_err(|error| error.to_string())?
+                                    .is_some_and(|snapshot| {
+                                        matches!(
+                                            snapshot.state.as_str(),
+                                            "failed" | "unreachable" | "interrupted"
+                                        )
+                                    })
+                        } else {
+                            false
+                        };
                     if !closed_native {
                         active_execution = true;
                         break;
                     }
                 }
-                if active_execution || st
+                if active_execution
+                    || st
                         .presences
                         .get(&link.child_instance_id)
                         .is_some_and(|presence| presence.state == "busy")
@@ -3318,7 +4186,8 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         // Tous les membres sont classés. La fin de garde est durable avant
         // les arrêts, même pour les tâches actives ou le résultat non remis.
         for entry in &mut tasks {
-            let guard_changed = entry.guarded && (!entry.guard_released || entry.idle_deadline_at.is_some());
+            let guard_changed =
+                entry.guarded && (!entry.guard_released || entry.idle_deadline_at.is_some());
             if guard_changed {
                 entry.guard_released = true;
                 entry.idle_deadline_at = None;
@@ -3408,11 +4277,9 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                         }
                         if entry.state == "cancelling" {
                             entry.state = "cancelled".into();
-                            if entry
-                                .error
-                                .as_deref()
-                                .is_some_and(|error| error.starts_with("native_cancel_unverifiable:"))
-                            {
+                            if entry.error.as_deref().is_some_and(|error| {
+                                error.starts_with("native_cancel_unverifiable:")
+                            }) {
                                 entry.error = None;
                             }
                             if let Err(error) = st.delegation_store.save(&entry) {
@@ -3421,18 +4288,26 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                             }
                         }
                     }
-                    if entry.terminal() { closed.push(id.clone()); }
-                    if entry.terminal() && !workspace_report_ready(&entry)
+                    if entry.terminal() {
+                        closed.push(id.clone());
+                    }
+                    if entry.terminal()
+                        && !workspace_report_ready(&entry)
                         && let Some(job) = claim_workspace_report(&st, &entry, true)
-                    { reports.push(job); }
+                    {
+                        reports.push(job);
+                    }
                 }
             }
         }
-        for job in reports { complete_workspace_report(state, job); }
+        for job in reports {
+            complete_workspace_report(state, job);
+        }
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
         for id in closed {
             if let Ok(Some(mut entry)) = st.delegation_store.get(&id)
-                && entry.terminal() && workspace_report_ready(&entry)
+                && entry.terminal()
+                && workspace_report_ready(&entry)
                 && (!entry.guarded || entry.guard_released)
                 && !st
                     .delegation_store
@@ -3458,11 +4333,17 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
     match st.store.get_request(&task.mission) {
         Ok(Some(tracked)) if tracked.state == "open" && tracked.deadline_at != deadline => {
             if let Err(error) = st.store.set_request_deadline(&task.mission, deadline) {
-                warn!("suivi de mission {} non aligné sur son échéance, nouvel essai au prochain tick : {error}", task.mission);
+                warn!(
+                    "suivi de mission {} non aligné sur son échéance, nouvel essai au prochain tick : {error}",
+                    task.mission
+                );
             }
         }
         Ok(_) => {}
-        Err(error) => warn!("suivi de mission {} illisible, nouvel essai au prochain tick : {error}", task.mission),
+        Err(error) => warn!(
+            "suivi de mission {} illisible, nouvel essai au prochain tick : {error}",
+            task.mission
+        ),
     }
 }
 
@@ -3476,7 +4357,12 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
 /// passage (âge et borne cumulés) ; l'admission passe `usize::MAX`, sans limite.
 /// Complexité : O(S + F + P + M + n log n) — S sagas, F entrées de flotte, P présences,
 /// M lancements gérés, n ≤ 4096 tâches.
-pub(super) fn purge_retained(st: &DaemonState, now: i64, bound: Option<usize>, max_trees: usize) -> usize {
+pub(super) fn purge_retained(
+    st: &DaemonState,
+    now: i64,
+    bound: Option<usize>,
+    max_trees: usize,
+) -> usize {
     let (launching, desired) = match (
         st.idempotency.spawn_commands(&st.fleet.supervisor_scope()),
         st.fleet.desired_fleet(),
@@ -3498,7 +4384,11 @@ pub(super) fn purge_retained(st: &DaemonState, now: i64, bound: Option<usize>, m
         .filter(|presence| matches!(presence.state.as_str(), "connected" | "busy"))
         .map(|presence| presence.name.as_str())
         .collect();
-    let spawning: HashSet<&str> = st.managed_spawns.values().map(|spawn| spawn.lease.name.as_str()).collect();
+    let spawning: HashSet<&str> = st
+        .managed_spawns
+        .values()
+        .map(|spawn| spawn.lease.name.as_str())
+        .collect();
     let launching: HashSet<&str> = launching
         .iter()
         .filter(|saga| {
@@ -3625,7 +4515,10 @@ pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
     // Purge de borne : une base au-dessus de 4096 tâches (écriture externe, ancien
     // volume) redescend par lots, sans attendre une admission. Le quota de 128 arbres
     // est partagé avec la purge d'âge : le second appel ne reçoit que le reste.
-    let over = st.delegation_store.admission_counts("").map(|counts| counts.2 >= crate::delegation::MAX_RETAINED_TASKS);
+    let over = st
+        .delegation_store
+        .admission_counts("")
+        .map(|counts| counts.2 >= crate::delegation::MAX_RETAINED_TASKS);
     let reste = max_trees.saturating_sub(trees);
     if over.unwrap_or(false) && reste > 0 {
         trees += purge_retained(st, now, Some(crate::delegation::MAX_RETAINED_TASKS), reste);
@@ -3657,22 +4550,44 @@ mod tests {
             json!({"objective":" ","summary":"s"}),
             json!({"summary":"s"}),
         ] {
-            let expected = crate::handoff::validate_and_render(&brief).unwrap_err().to_string();
+            let expected = crate::handoff::validate_and_render(&brief)
+                .unwrap_err()
+                .to_string();
             let mut payload = serde_json::to_value(request("brief-invalid")).unwrap();
             payload["brief"] = brief;
             let decoded = serde_json::from_value(payload).unwrap();
-            let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", decoded, &shared) else {
+            let DaemonToWrapper::NativeDelegationResult { result } =
+                handle("conn-1", decoded, &shared)
+            else {
                 panic!("réponse native attendue")
             };
-            assert_eq!(result["code"], "brief_invalid", "refus public nommé : {result}");
-            assert_eq!(result["message"], expected, "champ et raison du validateur existant");
-            assert!(shared.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+            assert_eq!(
+                result["code"], "brief_invalid",
+                "refus public nommé : {result}"
+            );
+            assert_eq!(
+                result["message"], expected,
+                "champ et raison du validateur existant"
+            );
+            assert!(
+                shared
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .tasks()
+                    .unwrap()
+                    .is_empty()
+            );
         }
         let mut payload = serde_json::to_value(request("brief-invalid")).unwrap();
         payload["brief"] = json!({"objective":"o","summary":"s"});
         let mut st = shared.lock().unwrap();
         handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
-        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1, "clé libre après refus");
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            1,
+            "clé libre après refus"
+        );
         cleanup(&config);
     }
 
@@ -3682,9 +4597,18 @@ mod tests {
         let mut payload = serde_json::to_value(request("brief-null")).unwrap();
         payload["brief"] = Value::Null;
         let decoded: NativeDelegationRequest = serde_json::from_value(payload).unwrap();
-        assert!(matches!(&decoded, NativeDelegationRequest::Delegate { brief: Some(Value::Null), .. }));
+        assert!(matches!(
+            &decoded,
+            NativeDelegationRequest::Delegate {
+                brief: Some(Value::Null),
+                ..
+            }
+        ));
         let error = handle_locked("conn-1", decoded, &mut st).unwrap_err();
-        assert!(error.starts_with("brief_invalid"), "null présent refusé : {error}");
+        assert!(
+            error.starts_with("brief_invalid"),
+            "null présent refusé : {error}"
+        );
         assert!(st.delegation_store.tasks().unwrap().is_empty());
         handle_locked("conn-1", request("brief-null"), &mut st).unwrap();
         cleanup(&config);
@@ -3696,9 +4620,18 @@ mod tests {
         let decoded: NativeDelegationRequest = serde_json::from_str(
             r#"{"operation":"continue","task_id":"absent","request_id":"r2","task":"suite","brief":null}"#,
         ).unwrap();
-        assert!(matches!(&decoded, NativeDelegationRequest::Continue { brief: Some(Value::Null), .. }));
+        assert!(matches!(
+            &decoded,
+            NativeDelegationRequest::Continue {
+                brief: Some(Value::Null),
+                ..
+            }
+        ));
         let error = handle_locked("conn-1", decoded, &mut st).unwrap_err();
-        assert!(error.starts_with("brief_invalid"), "validation avant lecture de tâche : {error}");
+        assert!(
+            error.starts_with("brief_invalid"),
+            "validation avant lecture de tâche : {error}"
+        );
         assert!(st.delegation_store.tasks().unwrap().is_empty());
         cleanup(&config);
     }
@@ -3722,15 +4655,21 @@ mod tests {
         assert!(handoff_error.reason.contains("16385"));
         let mut payload = serde_json::to_value(request("brief-bounds")).unwrap();
         payload["brief"] = oversized;
-        let error = handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap_err();
+        let error =
+            handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap_err();
         assert!(error.starts_with("brief_invalid"), "borne rendue : {error}");
         assert!(st.delegation_store.tasks().unwrap().is_empty());
         let mut payload = serde_json::to_value(request("brief-bounds")).unwrap();
         let instruction = "c".repeat(65_536);
         payload["task"] = json!(instruction);
         payload["brief"] = brief;
-        let view = handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
-        let saved = st.delegation_store.get(view["task_id"].as_str().unwrap()).unwrap().unwrap();
+        let view =
+            handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        let saved = st
+            .delegation_store
+            .get(view["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
         let expected = format!("{}\n\n--- Consigne ---\n{}", rendered.body, instruction);
         assert_eq!(saved.round_body.as_deref(), Some(expected.as_str()));
         assert!(expected.chars().count() < crate::wrapper::INJECTED_BODY_MAX_CHARS);
@@ -3746,7 +4685,10 @@ mod tests {
         let first = handle_locked("conn-1", decoded.clone(), &mut st).unwrap();
         assert_eq!(handle_locked("conn-1", decoded, &mut st).unwrap(), first);
         payload["brief"]["summary"] = json!("autre contexte");
-        assert_eq!(handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap_err(), "envelope_mismatch");
+        assert_eq!(
+            handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap_err(),
+            "envelope_mismatch"
+        );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
         cleanup(&config);
     }
@@ -3757,7 +4699,10 @@ mod tests {
             r#"{{"operation":"delegate","request_id":"canon150","agent_type":"native-test","model":"custom/model","effort":"high","task":"Inspecte les faits locaux","cwd":{},"posture":"discovery"}}"#,
             serde_json::to_string(&std::env::temp_dir().to_string_lossy()).unwrap(),
         );
-        assert_eq!(serde_json::to_vec(&request("canon150")).unwrap(), expected.as_bytes());
+        assert_eq!(
+            serde_json::to_vec(&request("canon150")).unwrap(),
+            expected.as_bytes()
+        );
     }
 
     #[test]
@@ -3767,10 +4712,14 @@ mod tests {
         let brief = json!({"objective":"Relire","summary":"Faits vérifiés","references":[{"kind":"file","host":"fixture","path":"/synthetic/facts.txt","label":"faits"}]});
         let rendered = crate::handoff::validate_and_render(&brief).unwrap();
         let preview = crate::handoff::preview_result(&rendered);
-        let expected = format!("{}\n\n--- Consigne ---\nInspecte les faits locaux", preview["body"].as_str().unwrap());
+        let expected = format!(
+            "{}\n\n--- Consigne ---\nInspecte les faits locaux",
+            preview["body"].as_str().unwrap()
+        );
         let mut payload = serde_json::to_value(request("brief-wire")).unwrap();
         payload["brief"] = brief;
-        let view = handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
+        let view =
+            handle_locked("conn-1", serde_json::from_value(payload).unwrap(), &mut st).unwrap();
         let id = view["task_id"].as_str().unwrap().to_owned();
         let shared = Arc::new(Mutex::new(st));
         tick(&shared);
@@ -3778,29 +4727,66 @@ mod tests {
             panic!("lancement existant attendu")
         };
         let (writer, mut reader) = super::super::presence_tests::control_socket("n153-brief");
-        reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
         {
             let mut st = shared.lock().unwrap();
-            assert!(matches!(handle_register_with_channel(
-                "child-conn", 2, "native-test".into(), prepared.lease.name.clone(),
-                Some(st.host.clone()), Some("codex_app_server".into()),
-                ChannelReport::Known("unix".into()), Some(PresenceMode::Acp), None,
-                Some("macOS".into()), Some(prepared.lease.instance_id.clone()), None,
-                false, Some(true), &mut st,
-            ), DaemonToWrapper::Registered { .. }));
+            assert!(matches!(
+                handle_register_with_channel(
+                    "child-conn",
+                    2,
+                    "native-test".into(),
+                    prepared.lease.name.clone(),
+                    Some(st.host.clone()),
+                    Some("codex_app_server".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("macOS".into()),
+                    Some(prepared.lease.instance_id.clone()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st,
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
             st.connections.insert("child-conn".into(), writer);
-            st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
-            st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+            st.conn_instances
+                .insert("child-conn".into(), prepared.lease.instance_id.clone());
+            st.fleet
+                .register_connected(
+                    &prepared.lease,
+                    &prepared.lease.instance_id,
+                    unix_timestamp(),
+                )
+                .unwrap();
             st.managed_spawns.get_mut(&id).unwrap().wrapper_conn = Some("child-conn".into());
         }
         tick(&shared);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap() else {
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap()
+        else {
             panic!("mission idempotente attendue : {line}")
         };
-        assert_eq!(message.body, expected, "corps de l’aperçu avant la consigne, sans lire les références");
-        assert_eq!(message.id, shared.lock().unwrap().delegation_store.get(&id).unwrap().unwrap().mission);
+        assert_eq!(
+            message.body, expected,
+            "corps de l’aperçu avant la consigne, sans lire les références"
+        );
+        assert_eq!(
+            message.id,
+            shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&id)
+                .unwrap()
+                .unwrap()
+                .mission
+        );
         cleanup(&config);
     }
 
@@ -5416,14 +6402,17 @@ mod tests {
 
     // T002 : réutiliser la vraie admission et remise de mission de la fixture150.
     // Les sockets restent ouverts pour observer les avis et les reprises.
-    fn mission_152(paused: bool) -> (
+    fn mission_152(
+        paused: bool,
+    ) -> (
         Arc<Mutex<DaemonState>>,
         DaemonConfig,
         Task,
         BufReader<UnixStream>,
         BufReader<UnixStream>,
     ) {
-        let (shared, config, id, _, _) = parent_en_cours_150(request_delai_150("parent", Some(120)), 0);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(request_delai_150("parent", Some(120)), 0);
         let (parent_writer, parent_reader) =
             super::super::presence_tests::control_socket("n152-parent");
         let (child_writer, child_reader) =
@@ -5440,29 +6429,74 @@ mod tests {
             st.connections.insert("child-conn".into(), child_writer);
             let task = st.delegation_store.get(&id).unwrap().unwrap();
             assert_eq!(task.state, "working");
-            assert!(st.presences.contains_key(task.child_instance.as_ref().unwrap()));
+            assert!(
+                st.presences
+                    .contains_key(task.child_instance.as_ref().unwrap())
+            );
             assert!(st.store.get_request(&task.mission).unwrap().is_some());
-            assert!(st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
-            let delivery = st.idempotency.dispatching_delivery_for_execution(
-                &format!("execution-{}", task.mission), task.child_instance.as_ref().unwrap(), unix_timestamp(),
-            ).unwrap().expect("la mission a été lue par la fixture150");
-            let key = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &task.mission).unwrap();
-            eprintln!("T002 diagnostic réception : task={}, phase={:?}, delivery={:?}, execution={:?}",
-                task.state, st.idempotency.send_delivery_phase(&key).unwrap(),
+            assert!(
+                st.pending_replies
+                    .iter()
+                    .any(|pending| pending.msg_id == task.mission)
+            );
+            let delivery = st
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    &format!("execution-{}", task.mission),
+                    task.child_instance.as_ref().unwrap(),
+                    unix_timestamp(),
+                )
+                .unwrap()
+                .expect("la mission a été lue par la fixture150");
+            let key = IdempotencyKey::new(
+                &crate::communication::issuer_scope(&task.task_id),
+                OperationKind::Send,
+                &task.mission,
+            )
+            .unwrap();
+            eprintln!(
+                "T002 diagnostic réception : task={}, phase={:?}, delivery={:?}, execution={:?}",
+                task.state,
+                st.idempotency.send_delivery_phase(&key).unwrap(),
                 (&delivery.delivery_id, delivery.delivery_generation),
-                st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap());
+                st.execution_store
+                    .latest_in_chain(&format!("execution-{}", task.mission))
+                    .unwrap()
+            );
             (task, delivery)
         };
-        assert!(handle_wrapper_message("child-conn", WrapperToDaemon::DeliverAcked {
-            delivery_id: delivery.delivery_id, delivery_generation: delivery.delivery_generation,
-        }, &shared).is_none());
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: delivery.delivery_id,
+                    delivery_generation: delivery.delivery_generation,
+                },
+                &shared
+            )
+            .is_none()
+        );
         {
             let st = shared.lock().unwrap();
-            let key = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &task.mission).unwrap();
+            let key = IdempotencyKey::new(
+                &crate::communication::issuer_scope(&task.task_id),
+                OperationKind::Send,
+                &task.mission,
+            )
+            .unwrap();
             let phase = st.idempotency.send_delivery_phase(&key).unwrap();
-            eprintln!("T002 après accusé réel : phase={phase:?}, suivi={}", st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+            eprintln!(
+                "T002 après accusé réel : phase={phase:?}, suivi={}",
+                st.pending_replies
+                    .iter()
+                    .any(|pending| pending.msg_id == task.mission)
+            );
             assert_eq!(phase.as_deref(), Some("acked"));
-            assert!(st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+            assert!(
+                st.pending_replies
+                    .iter()
+                    .any(|pending| pending.msg_id == task.mission)
+            );
         }
         transition_wrapper_152(&shared, &task, "running");
         if paused {
@@ -5510,10 +6544,19 @@ mod tests {
             },
             state,
         );
-        assert!(response.is_none(), "transition réelle refusée : {response:?}");
+        assert!(
+            response.is_none(),
+            "transition réelle refusée : {response:?}"
+        );
         assert_eq!(
-            state.lock().unwrap().execution_store.execution_snapshot(&execution)
-                .unwrap().unwrap().state,
+            state
+                .lock()
+                .unwrap()
+                .execution_store
+                .execution_snapshot(&execution)
+                .unwrap()
+                .unwrap()
+                .state,
             next
         );
     }
@@ -5522,29 +6565,45 @@ mod tests {
     fn native152_rouge_pause_chemin_a_suivi_conserve_sans_avis() {
         let (shared, config, task, mut parent_reader, _child_reader) = mission_152(true);
         transition_wrapper_152(&shared, &task, "interrupted");
-        assert!(handle_wrapper_message(
-            "child-conn",
-            WrapperToDaemon::DeliveryRejected {
-                id: task.mission.clone(),
-                reason: "tour annulé par le pilote".into(),
-            },
-            &shared,
-        ).is_none());
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliveryRejected {
+                    id: task.mission.clone(),
+                    reason: "tour annulé par le pilote".into(),
+                },
+                &shared,
+            )
+            .is_none()
+        );
         let (saved, pending) = {
             let st = shared.lock().unwrap();
             (
                 st.delegation_store.get(&task.task_id).unwrap().unwrap(),
-                st.pending_replies.iter().any(|pending| pending.msg_id == task.mission),
+                st.pending_replies
+                    .iter()
+                    .any(|pending| pending.msg_id == task.mission),
             )
         };
         let mut wire = String::new();
         let read = parent_reader.read_line(&mut wire);
-        eprintln!("T003/A réel : tâche={}, erreur={:?}, suivi={}, lecture={read:?}, parent={wire:?}",
-            saved.state, saved.error, pending);
+        eprintln!(
+            "T003/A réel : tâche={}, erreur={:?}, suivi={}, lecture={read:?}, parent={wire:?}",
+            saved.state, saved.error, pending
+        );
         cleanup(&config);
-        assert_eq!(saved.state, "working", "une interruption de pause conserve la mission");
-        assert!(pending, "le vrai handler doit conserver le suivi de demande");
-        assert!(wire.is_empty(), "aucun avis d'échec au parent pendant la pause");
+        assert_eq!(
+            saved.state, "working",
+            "une interruption de pause conserve la mission"
+        );
+        assert!(
+            pending,
+            "le vrai handler doit conserver le suivi de demande"
+        );
+        assert!(
+            wire.is_empty(),
+            "aucun avis d'échec au parent pendant la pause"
+        );
     }
 
     #[test]
@@ -5552,48 +6611,97 @@ mod tests {
         let (shared, config, task, _parent_reader, _child_reader) = mission_152(true);
         transition_wrapper_152(&shared, &task, "interrupted");
         tick(&shared);
-        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
-        eprintln!("T003/B réel : tâche={}, erreur={:?}", saved.state, saved.error);
+        let saved = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "T003/B réel : tâche={}, erreur={:?}",
+            saved.state, saved.error
+        );
         cleanup(&config);
-        assert_eq!(saved.state, "working", "interrupted sous pause est une suspension");
+        assert_eq!(
+            saved.state, "working",
+            "interrupted sous pause est une suspension"
+        );
     }
 
     #[test]
     fn native152_rouge_pause_reprise_attend_interrupted() {
         let (shared, config, task, _parent_reader, mut child_reader) = mission_152(true);
-        assert!(handle_wrapper_message(
-            "child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared,
-        ).is_none());
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::TurnState { in_progress: false },
+                &shared,
+            )
+            .is_none()
+        );
         {
             let st = shared.lock().unwrap();
             pauser_150(&st, false);
         }
-        assert!(handle_wrapper_message(
-            "child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared,
-        ).is_none());
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::TurnState { in_progress: false },
+                &shared,
+            )
+            .is_none()
+        );
         tick(&shared);
         let mut early = String::new();
-        assert!(child_reader.read_line(&mut early).is_err(), "aucune reprise avant interrupted");
-        assert_eq!(shared.lock().unwrap().execution_store
-            .execution_snapshot(&format!("execution-{}", task.mission)).unwrap().unwrap().state,
-            "interrupting");
+        assert!(
+            child_reader.read_line(&mut early).is_err(),
+            "aucune reprise avant interrupted"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .execution_store
+                .execution_snapshot(&format!("execution-{}", task.mission))
+                .unwrap()
+                .unwrap()
+                .state,
+            "interrupting"
+        );
         transition_wrapper_152(&shared, &task, "interrupted");
         tick(&shared);
         let mut wire = String::new();
         let read = child_reader.read_line(&mut wire);
-        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
-        eprintln!("T003/inverse réel : tâche={}, erreur={:?}, lecture={read:?}, reprise={wire:?}",
-            saved.state, saved.error);
+        let saved = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "T003/inverse réel : tâche={}, erreur={:?}, lecture={read:?}, reprise={wire:?}",
+            saved.state, saved.error
+        );
         cleanup(&config);
-        assert_eq!(saved.state, "working", "la reprise attend le terminal puis conserve la mission");
+        assert_eq!(
+            saved.state, "working",
+            "la reprise attend le terminal puis conserve la mission"
+        );
         let frame: DaemonToWrapper = decode(wire.trim()).expect("reprise native réelle attendue");
-        assert!(matches!(frame, DaemonToWrapper::DeliverIdempotent { message, .. }
-            if message.id == task.mission), "même identifiant de mission à la reprise");
+        assert!(
+            matches!(frame, DaemonToWrapper::DeliverIdempotent { message, .. }
+            if message.id == task.mission),
+            "même identifiant de mission à la reprise"
+        );
     }
 
     // Horloges152 : même mutation de contrôle, à une date explicite de fixture.
     fn control_pause_a_152(st: &DaemonState, paused: bool, at: i64) {
-        let generation = crate::referent_control::read(st.store.connection()).unwrap().generation;
+        let generation = crate::referent_control::read(st.store.connection())
+            .unwrap()
+            .generation;
         crate::referent_control::set(
             st.store.connection(),
             crate::referent_control::ControlMutation {
@@ -5607,7 +6715,9 @@ mod tests {
                 agent_posture: None,
                 auto_reassignment: None,
             },
-        ).unwrap().unwrap();
+        )
+        .unwrap()
+        .unwrap();
     }
 
     #[test]
@@ -5619,50 +6729,97 @@ mod tests {
             task.created_at = now - 240;
             task.mission_deadline_at = Some(now - 120);
             st.delegation_store.save(&task).unwrap();
-            st.store.connection().execute(
-                "UPDATE tracked_requests SET created_at=?1, deadline_at=?2 WHERE id=?3",
-                rusqlite::params![now - 240, now - 120, task.mission],
-            ).unwrap();
+            st.store
+                .connection()
+                .execute(
+                    "UPDATE tracked_requests SET created_at=?1, deadline_at=?2 WHERE id=?3",
+                    rusqlite::params![now - 240, now - 120, task.mission],
+                )
+                .unwrap();
             for pending in &mut st.pending_replies {
                 if pending.msg_id == task.mission {
                     pending.created_at = Instant::now() - Duration::from_secs(240);
                 }
             }
             control_pause_a_152(&st, true, now - 220);
-            st.store.create_request("ordinaire-152", OWNER, &task.child, 120).unwrap();
-            st.store.set_request_deadline("ordinaire-152", now - 120).unwrap();
+            st.store
+                .create_request("ordinaire-152", OWNER, &task.child, 120)
+                .unwrap();
+            st.store
+                .set_request_deadline("ordinaire-152", now - 120)
+                .unwrap();
         }
         let start = Instant::now();
-        let native = wait_request("conn-1", &task.mission, 1, &shared, None, Duration::from_millis(100));
+        let native = wait_request(
+            "conn-1",
+            &task.mission,
+            1,
+            &shared,
+            None,
+            Duration::from_millis(100),
+        );
         let waited = start.elapsed();
-        let ordinary = wait_request("conn-1", "ordinaire-152", 1, &shared, None, Duration::from_millis(100));
+        let ordinary = wait_request(
+            "conn-1",
+            "ordinaire-152",
+            1,
+            &shared,
+            None,
+            Duration::from_millis(100),
+        );
         let (timeout_count, pending_level, request_state) = {
             let mut st = shared.lock().unwrap();
-            assert_eq!(st.store.get_request(&task.mission).unwrap().unwrap().state, "open",
-                "RequestWait reste une lecture sans fermeture durable");
+            assert_eq!(
+                st.store.get_request(&task.mission).unwrap().unwrap().state,
+                "open",
+                "RequestWait reste une lecture sans fermeture durable"
+            );
             let actions = collect_reminder_actions(&mut st, Instant::now());
             let timeouts = actions.iter().filter(|action|
                 matches!(action, ReminderAction::Timeout { msg_id, .. } if msg_id == &task.mission)
             ).count();
-            let level = st.pending_replies.iter().find(|pending| pending.msg_id == task.mission)
+            let level = st
+                .pending_replies
+                .iter()
+                .find(|pending| pending.msg_id == task.mission)
                 .map(|pending| pending.escalation_level);
             // Aucun processus fournisseur dans cette fixture : isoler l'horloge de son cleanup.
             st.managed_spawns.clear();
-            (timeouts, level, st.store.get_request(&task.mission).unwrap().unwrap().state)
+            (
+                timeouts,
+                level,
+                st.store.get_request(&task.mission).unwrap().unwrap().state,
+            )
         };
         tick(&shared);
-        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
-        eprintln!("T005 réel : wait_native={native:?}, durée={waited:?}, ordinaire={ordinary:?}, palier={pending_level:?}, timeouts={timeout_count}, demande={request_state}, tâche={}, erreur={:?}", saved.state, saved.error);
+        let saved = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "T005 réel : wait_native={native:?}, durée={waited:?}, ordinaire={ordinary:?}, palier={pending_level:?}, timeouts={timeout_count}, demande={request_state}, tâche={}, erreur={:?}",
+            saved.state, saved.error
+        );
         cleanup(&config);
-        assert!(matches!(ordinary, DaemonToWrapper::RequestWaitResult { state, timed_out_wait: false, .. } if state == "timed_out"),
-            "le délai métier d'une demande ordinaire reste inchangé");
-        assert!(matches!(native, DaemonToWrapper::RequestWaitResult { state, timed_out_wait: true, .. } if state == "open"),
-            "la pause gèle le métier natif, pas le budget d'attente d'une seconde");
+        assert!(
+            matches!(ordinary, DaemonToWrapper::RequestWaitResult { state, timed_out_wait: false, .. } if state == "timed_out"),
+            "le délai métier d'une demande ordinaire reste inchangé"
+        );
+        assert!(
+            matches!(native, DaemonToWrapper::RequestWaitResult { state, timed_out_wait: true, .. } if state == "open"),
+            "la pause gèle le métier natif, pas le budget d'attente d'une seconde"
+        );
         assert_eq!(timeout_count, 0, "aucun palier3 natif pendant la pause");
         assert_eq!(pending_level, Some(0));
         assert_eq!(request_state, "open");
         assert_eq!(saved.state, "working");
-        assert_eq!(saved.mission_deadline_at, task.mission_deadline_at, "échéance brute inchangée");
+        assert_eq!(
+            saved.mission_deadline_at, task.mission_deadline_at,
+            "échéance brute inchangée"
+        );
     }
 
     #[test]
@@ -5677,7 +6834,12 @@ mod tests {
             st.delegation_store.save(&task).unwrap();
             control_pause_a_152(&st, true, now - 620);
             control_pause_a_152(&st, false, now - 20);
-            let created = st.store.get_request(&task.mission).unwrap().unwrap().created_at;
+            let created = st
+                .store
+                .get_request(&task.mission)
+                .unwrap()
+                .unwrap()
+                .created_at;
             st.pending_replies.clear();
             st.restore_pending_for_agent(&task.child, "child-conn");
             let actions = collect_reminder_actions(&mut st, Instant::now());
@@ -5689,14 +6851,26 @@ mod tests {
         tick(&shared);
         let (saved, request) = {
             let st = shared.lock().unwrap();
-            (st.delegation_store.get(&task.task_id).unwrap().unwrap(), st.store.get_request(&task.mission).unwrap().unwrap())
+            (
+                st.delegation_store.get(&task.task_id).unwrap().unwrap(),
+                st.store.get_request(&task.mission).unwrap().unwrap(),
+            )
         };
-        eprintln!("T039 réel : création_tâche={}, admission_demande={created}, now={now}, timeouts={timeouts}, demande={}, tâche={}, erreur={:?}", task.created_at, request.state, saved.state, saved.error);
+        eprintln!(
+            "T039 réel : création_tâche={}, admission_demande={created}, now={now}, timeouts={timeouts}, demande={}, tâche={}, erreur={:?}",
+            task.created_at, request.state, saved.state, saved.error
+        );
         cleanup(&config);
-        assert!(created >= now - 2, "la demande démarre à l'admission, après les 600s queued");
+        assert!(
+            created >= now - 2,
+            "la demande démarre à l'admission, après les 600s queued"
+        );
         assert_eq!(timeouts, 0);
         assert_eq!(request.state, "open");
-        assert_eq!(saved.state, "working", "le rejeu conserve la date et l'enveloppe du premier envoi");
+        assert_eq!(
+            saved.state, "working",
+            "le rejeu conserve la date et l'enveloppe du premier envoi"
+        );
     }
 
     #[test]
@@ -5718,28 +6892,60 @@ mod tests {
             // Panne avant tout tick ; la levée a lieu pendant l'arrêt.
             control_pause_a_152(&st, false, resumed_at);
             let after = effective_deadline(&st, &task, resumed_at).unwrap().unwrap() - resumed_at;
-            assert_eq!(crate::referent_control::pause_overlap(
-                st.store.connection(), paused_at, resumed_at,
-            ).unwrap(), 300);
+            assert_eq!(
+                crate::referent_control::pause_overlap(
+                    st.store.connection(),
+                    paused_at,
+                    resumed_at,
+                )
+                .unwrap(),
+                300
+            );
             st.managed_spawns.clear();
             (before, during, after)
         };
         let fresh = rusqlite::Connection::open(&config.db_path).unwrap();
-        let events: i64 = fresh.query_row(
-            "SELECT COUNT(*) FROM control_events WHERE kind IN ('pause_on','pause_off')", [], |row| row.get(0),
-        ).unwrap();
+        let events: i64 = fresh
+            .query_row(
+                "SELECT COUNT(*) FROM control_events WHERE kind IN ('pause_on','pause_off')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(events, 2, "journal durable relu depuis une autre connexion");
-        let paused_secs: i64 = fresh.query_row(
-            "SELECT MAX(at)-MIN(at) FROM control_events WHERE kind IN ('pause_on','pause_off')", [], |row| row.get(0),
-        ).unwrap();
+        let paused_secs: i64 = fresh
+            .query_row(
+                "SELECT MAX(at)-MIN(at) FROM control_events WHERE kind IN ('pause_on','pause_off')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(paused_secs, 300, "pause fermée durable de300s");
-        assert_eq!((remaining_before, remaining_during, remaining_after), (100, 100, 100));
-        assert!((remaining_after - remaining_before).abs() <= 2, "temps restant conservé à2s près");
+        assert_eq!(
+            (remaining_before, remaining_during, remaining_after),
+            (100, 100, 100)
+        );
+        assert!(
+            (remaining_after - remaining_before).abs() <= 2,
+            "temps restant conservé à2s près"
+        );
         tick(&shared);
-        let saved = shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
-        eprintln!("SC003/T049 réel : timeout=120s, pause={paused_secs}s, restant avant/durant/après={remaining_before}/{remaining_during}/{remaining_after}s, événements={events}, échéance={:?}, tâche={}, erreur={:?}", saved.mission_deadline_at, saved.state, saved.error);
+        let saved = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "SC003/T049 réel : timeout=120s, pause={paused_secs}s, restant avant/durant/après={remaining_before}/{remaining_during}/{remaining_after}s, événements={events}, échéance={:?}, tâche={}, erreur={:?}",
+            saved.mission_deadline_at, saved.state, saved.error
+        );
         cleanup(&config);
-        assert_eq!(saved.state, "working", "300s de pause retrouvées sans checkpoint de tick");
+        assert_eq!(
+            saved.state, "working",
+            "300s de pause retrouvées sans checkpoint de tick"
+        );
         assert_eq!(saved.mission_deadline_at, task.mission_deadline_at);
     }
 
@@ -5752,10 +6958,13 @@ mod tests {
             // La ligne suivie existe ; le checkpoint working n'a pas survécu.
             task.state = "mission_pending".into();
             st.delegation_store.save(&task).unwrap();
-            st.store.connection().execute(
-                "UPDATE tracked_requests SET created_at=?1, deadline_at=?2 WHERE id=?3",
-                rusqlite::params![now - 240, now - 120, task.mission],
-            ).unwrap();
+            st.store
+                .connection()
+                .execute(
+                    "UPDATE tracked_requests SET created_at=?1, deadline_at=?2 WHERE id=?3",
+                    rusqlite::params![now - 240, now - 120, task.mission],
+                )
+                .unwrap();
             control_pause_a_152(&st, true, now - 220);
             control_pause_a_152(&st, false, now - 20);
             st.pending_replies.clear();
@@ -5764,13 +6973,23 @@ mod tests {
             let timeouts = actions.iter().filter(|action|
                 matches!(action, ReminderAction::Timeout { msg_id, .. } if msg_id == &task.mission)
             ).count();
-            (timeouts, st.store.get_request(&task.mission).unwrap().unwrap().state,
-                st.delegation_store.get(&task.task_id).unwrap().unwrap().state)
+            (
+                timeouts,
+                st.store.get_request(&task.mission).unwrap().unwrap().state,
+                st.delegation_store
+                    .get(&task.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+            )
         };
         eprintln!("T049/b réel : checkpoint={stage}, timeouts={timeouts}, demande={state}");
         cleanup(&config);
         assert_eq!(stage, "mission_pending");
-        assert_eq!(timeouts, 0, "le journal couvre la pause depuis l'admission, même sans working");
+        assert_eq!(
+            timeouts, 0,
+            "le journal couvre la pause depuis l'admission, même sans working"
+        );
         assert_eq!(state, "open");
     }
 
@@ -5795,7 +7014,10 @@ mod tests {
         pauser_150(&st, false);
         spawn_task(&mut st, &mut submitted).unwrap();
         assert_eq!(canonical(&submitted.task_id), before);
-        assert!(rx.try_recv().is_err(), "pas de deuxième processus pour la saga");
+        assert!(
+            rx.try_recv().is_err(),
+            "pas de deuxième processus pour la saga"
+        );
 
         let now = unix_timestamp();
         let mut queued = tache_151(&mut st, "queued600152");
@@ -5808,9 +7030,17 @@ mod tests {
         let st = shared.lock().unwrap();
         let saved = st.delegation_store.get(&queued.task_id).unwrap().unwrap();
         let launch = rx.try_recv();
-        eprintln!("T006 réel : state={}, error={:?}, launch_issued_at={:?}, lancement={}",
-            saved.state, saved.error, saved.launch_issued_at, launch.is_ok());
-        assert_eq!(saved.state, "starting", "une première émission garde son budget de lancement");
+        eprintln!(
+            "T006 réel : state={}, error={:?}, launch_issued_at={:?}, lancement={}",
+            saved.state,
+            saved.error,
+            saved.launch_issued_at,
+            launch.is_ok()
+        );
+        assert_eq!(
+            saved.state, "starting",
+            "une première émission garde son budget de lancement"
+        );
         let ManagedSupervisorCommand::Start { prepared, .. } = launch.unwrap() else {
             panic!("Start natif attendu")
         };
@@ -5824,12 +7054,18 @@ mod tests {
 
     // T007/T040 : réutiliser l'arbre et les contrôles du test148, sans processus OS.
     fn arbre_annulation_152() -> (
-        Arc<Mutex<DaemonState>>, DaemonConfig, Vec<Task>, Vec<Arc<ManagedStopControl>>,
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        Vec<Task>,
+        Vec<Arc<ManagedStopControl>>,
     ) {
         let (mut st, config, rx, _reader) = fixture("cancel152");
         let mut root = tache_151(&mut st, "cancel-root152");
         spawn_task(&mut st, &mut root).unwrap();
-        let ManagedSupervisorCommand::Start { stop: root_stop, .. } = rx.try_recv().unwrap() else {
+        let ManagedSupervisorCommand::Start {
+            stop: root_stop, ..
+        } = rx.try_recv().unwrap()
+        else {
             panic!("Start racine attendu")
         };
         let mut child = root.clone();
@@ -5844,9 +7080,18 @@ mod tests {
         child.state = "queued".into();
         child.request = request("cancel-managed152");
         child.launch_issued_at = None;
-        st.delegation_store.insert(&child, "cancel-managed152", &serde_json::to_vec(&child.request).unwrap()).unwrap();
+        st.delegation_store
+            .insert(
+                &child,
+                "cancel-managed152",
+                &serde_json::to_vec(&child.request).unwrap(),
+            )
+            .unwrap();
         spawn_task(&mut st, &mut child).unwrap();
-        let ManagedSupervisorCommand::Start { stop: child_stop, .. } = rx.try_recv().unwrap() else {
+        let ManagedSupervisorCommand::Start {
+            stop: child_stop, ..
+        } = rx.try_recv().unwrap()
+        else {
             panic!("Start descendant attendu")
         };
         let mut unmanaged = child.clone();
@@ -5864,15 +7109,41 @@ mod tests {
                 u64::try_from(unmanaged.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).unwrap(),
             )
             .unwrap();
-        st.delegation_store.insert(&unmanaged, "cancel-unmanaged152", &serde_json::to_vec(&unmanaged.request).unwrap()).unwrap();
-        st.router.register(&unmanaged.child, &bridget_core::AgentType::Codex, "unmanaged152").unwrap();
-        handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id: root.task_id.clone() }, &mut st).unwrap();
-        (Arc::new(Mutex::new(st)), config, vec![root, child, unmanaged], vec![root_stop, child_stop])
+        st.delegation_store
+            .insert(
+                &unmanaged,
+                "cancel-unmanaged152",
+                &serde_json::to_vec(&unmanaged.request).unwrap(),
+            )
+            .unwrap();
+        st.router
+            .register(
+                &unmanaged.child,
+                &bridget_core::AgentType::Codex,
+                "unmanaged152",
+            )
+            .unwrap();
+        handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Cancel {
+                task_id: root.task_id.clone(),
+            },
+            &mut st,
+        )
+        .unwrap();
+        (
+            Arc::new(Mutex::new(st)),
+            config,
+            vec![root, child, unmanaged],
+            vec![root_stop, child_stop],
+        )
     }
 
     // Deux usages : le backend observe les demandes réelles et répond aux attentes.
     // La déconnexion du canal le termine aussi si le test panique.
-    fn observer_arrets_152(stops: Vec<Arc<ManagedStopControl>>) -> (mpsc::Sender<()>, thread::JoinHandle<Vec<bool>>) {
+    fn observer_arrets_152(
+        stops: Vec<Arc<ManagedStopControl>>,
+    ) -> (mpsc::Sender<()>, thread::JoinHandle<Vec<bool>>) {
         let (done, end) = mpsc::channel();
         let worker = thread::spawn(move || {
             let mut requested = vec![false; stops.len()];
@@ -5902,11 +7173,25 @@ mod tests {
         done.send(()).unwrap();
         let requested = observer.join().unwrap();
         let st = shared.lock().unwrap();
-        let saved = tasks.iter().map(|task| st.delegation_store.get(&task.task_id).unwrap().unwrap()).collect::<Vec<_>>();
-        eprintln!("T007 réel : arrêts={requested:?}, états={:?}, erreur={:?}", saved.iter().map(|task| &task.state).collect::<Vec<_>>(), saved[0].error);
-        assert_eq!(requested, vec![false, false], "la validation précède tout arrêt");
+        let saved = tasks
+            .iter()
+            .map(|task| st.delegation_store.get(&task.task_id).unwrap().unwrap())
+            .collect::<Vec<_>>();
+        eprintln!(
+            "T007 réel : arrêts={requested:?}, états={:?}, erreur={:?}",
+            saved.iter().map(|task| &task.state).collect::<Vec<_>>(),
+            saved[0].error
+        );
+        assert_eq!(
+            requested,
+            vec![false, false],
+            "la validation précède tout arrêt"
+        );
         assert_eq!(saved[0].state, "cancelling");
-        assert_eq!(saved[0].error, Some(format!("native_cancel_unverifiable:{}", tasks[2].child)));
+        assert_eq!(
+            saved[0].error,
+            Some(format!("native_cancel_unverifiable:{}", tasks[2].child))
+        );
         assert_eq!(saved[1].state, tasks[1].state);
         assert_eq!(saved[2].state, tasks[2].state);
         assert!(saved.iter().all(|task| task.cancel_stopped.is_empty()));
@@ -5923,14 +7208,36 @@ mod tests {
         for _ in 0..3 {
             tick(&shared);
             let st = shared.lock().unwrap();
-            states.push(tasks.iter().map(|task| st.delegation_store.get(&task.task_id).unwrap().unwrap().state).collect::<Vec<_>>());
+            states.push(
+                tasks
+                    .iter()
+                    .map(|task| {
+                        st.delegation_store
+                            .get(&task.task_id)
+                            .unwrap()
+                            .unwrap()
+                            .state
+                    })
+                    .collect::<Vec<_>>(),
+            );
         }
         done.send(()).unwrap();
         let requested = observer.join().unwrap();
         eprintln!("T040 réel : arrêts={requested:?}, états par tick={states:?}");
-        assert_eq!(requested, vec![false, false], "aucun descendant ne contourne le refus global");
+        assert_eq!(
+            requested,
+            vec![false, false],
+            "aucun descendant ne contourne le refus global"
+        );
         for tick_states in states {
-            assert_eq!(tick_states, vec!["cancelling", tasks[1].state.as_str(), tasks[2].state.as_str()]);
+            assert_eq!(
+                tick_states,
+                vec![
+                    "cancelling",
+                    tasks[1].state.as_str(),
+                    tasks[2].state.as_str()
+                ]
+            );
         }
         cleanup(&config);
     }
@@ -6192,11 +7499,14 @@ mod tests {
         st.recovering = false;
         st.delegation_store = crate::delegation::DelegationStore::open(&config.db_path).unwrap();
         st.execution_store = crate::execution_store::ExecutionStore::open(&config.db_path).unwrap();
-        st.fleet = Arc::new(FleetSupervisor::open(
-            &config.db_path,
-            DesiredStateStore::at_path(st.fixture_root.as_ref().unwrap().0.join("fleet.json")),
-            FleetConfig::from_env(),
-        ).unwrap());
+        st.fleet = Arc::new(
+            FleetSupervisor::open(
+                &config.db_path,
+                DesiredStateStore::at_path(st.fixture_root.as_ref().unwrap().0.join("fleet.json")),
+                FleetConfig::from_env(),
+            )
+            .unwrap(),
+        );
     }
 
     #[test]
@@ -6211,10 +7521,17 @@ mod tests {
                 task.mission_deadline_at = Some(now - 500);
                 st.delegation_store.save(&task).unwrap();
                 control_pause_a_152(&st, true, now - 600);
-                let generation = crate::referent_control::read(st.store.connection()).unwrap().generation;
-                st.execution_store.record_pause_interruption(
-                    &format!("execution-{}", task.mission), &task.child, generation, now - 600,
-                ).unwrap();
+                let generation = crate::referent_control::read(st.store.connection())
+                    .unwrap()
+                    .generation;
+                st.execution_store
+                    .record_pause_interruption(
+                        &format!("execution-{}", task.mission),
+                        &task.child,
+                        generation,
+                        now - 600,
+                    )
+                    .unwrap();
             }
             transition_wrapper_152(&shared, &task, "interrupting");
             let (saved, snapshot) = {
@@ -6225,19 +7542,34 @@ mod tests {
                 }
                 let recovered = reserve_managed_recoveries(&mut st, now).unwrap();
                 let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
-                let snapshot = st.execution_store.execution_snapshot(&format!("execution-{}", task.mission)).unwrap().unwrap();
-                eprintln!("T038 réel : pause_levée={lifted_while_down}, task={}, error={:?}, execution={}, reprises={}",
-                    saved.state, saved.error, snapshot.state, recovered.len());
+                let snapshot = st
+                    .execution_store
+                    .execution_snapshot(&format!("execution-{}", task.mission))
+                    .unwrap()
+                    .unwrap();
+                eprintln!(
+                    "T038 réel : pause_levée={lifted_while_down}, task={}, error={:?}, execution={}, reprises={}",
+                    saved.state,
+                    saved.error,
+                    snapshot.state,
+                    recovered.len()
+                );
                 (saved, snapshot)
             };
             cleanup(&config);
             observed.push((saved, snapshot, task.mission_deadline_at));
         }
         for (saved, snapshot, deadline) in observed {
-            assert_eq!(saved.state, "working", "la pause protège l'échéance effective au redémarrage");
+            assert_eq!(
+                saved.state, "working",
+                "la pause protège l'échéance effective au redémarrage"
+            );
             assert_eq!(saved.error, None);
             assert_eq!(saved.mission_deadline_at, deadline);
-            assert_eq!(snapshot.state, "interrupted", "le processus disparu ne laisse pas interrupting");
+            assert_eq!(
+                snapshot.state, "interrupted",
+                "le processus disparu ne laisse pas interrupting"
+            );
         }
     }
 
@@ -6252,33 +7584,89 @@ mod tests {
                 panic!("lancement natif attendu")
             };
             if checkpoint == "mission_pending" {
-                assert!(matches!(st.fleet.register_connected(
-                    &prepared.lease, &prepared.lease.instance_id, unix_timestamp(),
-                ).unwrap(), crate::idempotency::SpawnCommandIssue::Connected { .. }));
+                assert!(matches!(
+                    st.fleet
+                        .register_connected(
+                            &prepared.lease,
+                            &prepared.lease.instance_id,
+                            unix_timestamp(),
+                        )
+                        .unwrap(),
+                    crate::idempotency::SpawnCommandIssue::Connected { .. }
+                ));
                 task.state = checkpoint.into();
                 st.delegation_store.save(&task).unwrap();
             } else {
-                assert!(st.fleet.register_connected_observed(&prepared.lease,
-                    &prepared.lease.instance_id, unix_timestamp(), || {
-                        Err(std::io::Error::other("T047 crash après fleet.json, avant issue SQLite"))
-                    }).is_err());
+                assert!(
+                    st.fleet
+                        .register_connected_observed(
+                            &prepared.lease,
+                            &prepared.lease.instance_id,
+                            unix_timestamp(),
+                            || {
+                                Err(std::io::Error::other(
+                                    "T047 crash après fleet.json, avant issue SQLite",
+                                ))
+                            }
+                        )
+                        .is_err()
+                );
             }
-            eprintln!("T047 avant réouverture : checkpoint={checkpoint}, desired={:?}, phases={:?}, lease={:?}, link={:?}",
-                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)),
-                st.idempotency.spawn_commands(&st.fleet.supervisor_scope()).unwrap().iter().map(|command|
-                    (&command.command_id, &command.state, command.generation, &command.instance_id)).collect::<Vec<_>>(),
-                prepared.lease, st.fleet.agent_link_for_child(&prepared.lease.instance_id).unwrap());
+            eprintln!(
+                "T047 avant réouverture : checkpoint={checkpoint}, desired={:?}, phases={:?}, lease={:?}, link={:?}",
+                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (
+                    entry.command_id,
+                    entry.generation,
+                    entry.lifecycle_state
+                )),
+                st.idempotency
+                    .spawn_commands(&st.fleet.supervisor_scope())
+                    .unwrap()
+                    .iter()
+                    .map(|command| (
+                        &command.command_id,
+                        &command.state,
+                        command.generation,
+                        &command.instance_id
+                    ))
+                    .collect::<Vec<_>>(),
+                prepared.lease,
+                st.fleet
+                    .agent_link_for_child(&prepared.lease.instance_id)
+                    .unwrap()
+            );
             let mut series = Vec::new();
             for crash in 1..=3 {
                 reouvrir_flotte_152(&mut st, &config);
-                eprintln!("T047 après réouverture : checkpoint={checkpoint}, crash={crash}, candidats={:?}, desired={:?}",
-                    st.fleet.recovery_candidates().iter().map(|candidate| &candidate.lease).collect::<Vec<_>>(),
-                    st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)));
+                eprintln!(
+                    "T047 après réouverture : checkpoint={checkpoint}, crash={crash}, candidats={:?}, desired={:?}",
+                    st.fleet
+                        .recovery_candidates()
+                        .iter()
+                        .map(|candidate| &candidate.lease)
+                        .collect::<Vec<_>>(),
+                    st.fleet.desired_entry(&task.child).unwrap().map(|entry| (
+                        entry.command_id,
+                        entry.generation,
+                        entry.lifecycle_state
+                    ))
+                );
                 let recovered = reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
                 let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
-                assert!(st.execution_store.execution_snapshot(&format!("execution-{}", task.mission)).unwrap().is_none(), "aucun envoi ni continuation de mission");
-                eprintln!("T047 réel : checkpoint={checkpoint}, crash={crash}, state={}, error={:?}, compteur={}, reprises={}",
-                    saved.state, saved.error, saved.restart_resumes, recovered.len());
+                assert!(
+                    st.execution_store
+                        .execution_snapshot(&format!("execution-{}", task.mission))
+                        .unwrap()
+                        .is_none(),
+                    "aucun envoi ni continuation de mission"
+                );
+                eprintln!(
+                    "T047 réel : checkpoint={checkpoint}, crash={crash}, state={}, error={:?}, compteur={}, reprises={}",
+                    saved.state,
+                    saved.error,
+                    saved.restart_resumes,
+                    recovered.len()
+                );
                 series.push(saved);
             }
             cleanup(&config);
@@ -6286,7 +7674,10 @@ mod tests {
         }
         for series in observed {
             for (index, task) in series[..2].iter().enumerate() {
-                assert!(matches!(task.state.as_str(), "starting" | "mission_pending"));
+                assert!(matches!(
+                    task.state.as_str(),
+                    "starting" | "mission_pending"
+                ));
                 assert_eq!(task.restart_resumes, (index + 1) as u8);
             }
             assert_eq!(series[2].state, "failed");
@@ -6299,9 +7690,12 @@ mod tests {
     fn native152_rouge_panne_starting_bootstrap_et_gardes() {
         let mut observed = Vec::new();
         for (checkpoint, guard) in [
-            ("starting", "valide"), ("starting", "revocation"),
-            ("starting", "source_modifiee"), ("starting", "bail_expire"),
-            ("connected", "valide"), ("connected", "revocation"),
+            ("starting", "valide"),
+            ("starting", "revocation"),
+            ("starting", "source_modifiee"),
+            ("starting", "bail_expire"),
+            ("connected", "valide"),
+            ("connected", "revocation"),
             ("connected", "source_modifiee"),
         ] {
             let (mut st, config, rx, _reader) = fixture("bootstrap152");
@@ -6340,65 +7734,146 @@ mod tests {
                 panic!("premier lancement attendu")
             };
             assert_eq!(task.state, "starting");
-            assert!(st.execution_store.execution_snapshot(&format!("execution-{}", task.mission)).unwrap().is_none());
+            assert!(
+                st.execution_store
+                    .execution_snapshot(&format!("execution-{}", task.mission))
+                    .unwrap()
+                    .is_none()
+            );
             if checkpoint == "connected" {
-                assert!(matches!(st.fleet.register_connected(
-                    &prepared.lease, &prepared.lease.instance_id, unix_timestamp(),
-                ).unwrap(), crate::idempotency::SpawnCommandIssue::Connected { .. }));
+                assert!(matches!(
+                    st.fleet
+                        .register_connected(
+                            &prepared.lease,
+                            &prepared.lease.instance_id,
+                            unix_timestamp(),
+                        )
+                        .unwrap(),
+                    crate::idempotency::SpawnCommandIssue::Connected { .. }
+                ));
                 task.state = "mission_pending".into();
                 st.delegation_store.save(&task).unwrap();
             } else {
-                assert!(st.fleet.register_connected_observed(&prepared.lease,
-                    &prepared.lease.instance_id, unix_timestamp(), || {
-                        Err(std::io::Error::other("T004 crash après fleet.json, avant issue SQLite"))
-                    }).is_err());
+                assert!(
+                    st.fleet
+                        .register_connected_observed(
+                            &prepared.lease,
+                            &prepared.lease.instance_id,
+                            unix_timestamp(),
+                            || {
+                                Err(std::io::Error::other(
+                                    "T004 crash après fleet.json, avant issue SQLite",
+                                ))
+                            }
+                        )
+                        .is_err()
+                );
             }
-            eprintln!("T004/{checkpoint} avant réouverture : garde={guard}, desired={:?}, phases={:?}, lease={:?}, link={:?}",
-                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)),
-                st.idempotency.spawn_commands(&st.fleet.supervisor_scope()).unwrap().iter().map(|command|
-                    (&command.command_id, &command.state, command.generation, &command.instance_id)).collect::<Vec<_>>(),
-                prepared.lease, st.fleet.agent_link_for_child(&prepared.lease.instance_id).unwrap());
+            eprintln!(
+                "T004/{checkpoint} avant réouverture : garde={guard}, desired={:?}, phases={:?}, lease={:?}, link={:?}",
+                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (
+                    entry.command_id,
+                    entry.generation,
+                    entry.lifecycle_state
+                )),
+                st.idempotency
+                    .spawn_commands(&st.fleet.supervisor_scope())
+                    .unwrap()
+                    .iter()
+                    .map(|command| (
+                        &command.command_id,
+                        &command.state,
+                        command.generation,
+                        &command.instance_id
+                    ))
+                    .collect::<Vec<_>>(),
+                prepared.lease,
+                st.fleet
+                    .agent_link_for_child(&prepared.lease.instance_id)
+                    .unwrap()
+            );
             if guard == "revocation" {
-                st.delegation_store.grant_agent(OWNER, "instance-1", Path::new(&task.cwd), SpawnPosture::Development, true).unwrap();
+                st.delegation_store
+                    .grant_agent(
+                        OWNER,
+                        "instance-1",
+                        Path::new(&task.cwd),
+                        SpawnPosture::Development,
+                        true,
+                    )
+                    .unwrap();
             }
             if guard == "source_modifiee" {
                 std::fs::write(&source, br#"{"permissions":{"deny":["Read"]}}"#).unwrap();
             }
-            let now = if guard == "bail_expire" { prepared.lease.deadline_at + 1 } else { unix_timestamp() };
+            let now = if guard == "bail_expire" {
+                prepared.lease.deadline_at + 1
+            } else {
+                unix_timestamp()
+            };
             reouvrir_flotte_152(&mut st, &config);
-            eprintln!("T004/{checkpoint} après réouverture : garde={guard}, candidats={:?}, desired={:?}, link={:?}",
-                st.fleet.recovery_candidates().iter().map(|candidate| &candidate.lease).collect::<Vec<_>>(),
-                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (entry.command_id, entry.generation, entry.lifecycle_state)),
-                st.fleet.agent_link_for_child(&prepared.lease.instance_id).unwrap());
+            eprintln!(
+                "T004/{checkpoint} après réouverture : garde={guard}, candidats={:?}, desired={:?}, link={:?}",
+                st.fleet
+                    .recovery_candidates()
+                    .iter()
+                    .map(|candidate| &candidate.lease)
+                    .collect::<Vec<_>>(),
+                st.fleet.desired_entry(&task.child).unwrap().map(|entry| (
+                    entry.command_id,
+                    entry.generation,
+                    entry.lifecycle_state
+                )),
+                st.fleet
+                    .agent_link_for_child(&prepared.lease.instance_id)
+                    .unwrap()
+            );
             let recovered = reserve_managed_recoveries(&mut st, now).unwrap();
             let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
             let env = recovered.first().map(|(next, _)| {
-                let bootstrap = next.env.get(crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV)
+                let bootstrap = next
+                    .env
+                    .get(crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV)
                     .and_then(|raw| serde_json::from_str::<Value>(&raw.to_string_lossy()).ok());
                 (next.lease.clone(), bootstrap)
             });
-            eprintln!("T004/{checkpoint} réel : garde={guard}, state={}, error={:?}, compteur={}, reprises={}, bootstrap={:?}",
-                saved.state, saved.error, saved.restart_resumes, recovered.len(), env.as_ref().map(|(_, bootstrap)| bootstrap));
+            eprintln!(
+                "T004/{checkpoint} réel : garde={guard}, state={}, error={:?}, compteur={}, reprises={}, bootstrap={:?}",
+                saved.state,
+                saved.error,
+                saved.restart_resumes,
+                recovered.len(),
+                env.as_ref().map(|(_, bootstrap)| bootstrap)
+            );
             observed.push((checkpoint, guard, task.mission, saved, recovered.len(), env));
             cleanup(&config);
         }
         for (checkpoint, guard, mission, saved, count, env) in observed {
             if guard == "valide" {
-                assert_eq!(count, 1, "la reprise autorisée doit être préparée : {checkpoint}");
+                assert_eq!(
+                    count, 1,
+                    "la reprise autorisée doit être préparée : {checkpoint}"
+                );
                 assert_eq!(saved.restart_resumes, 1);
                 let (lease, bootstrap) = env.unwrap();
                 let bootstrap = bootstrap.expect("bootstrap natif requis dans les deux chemins");
                 assert_eq!(bootstrap["instance_id"], lease.instance_id);
                 assert_eq!(bootstrap["mission_id"], mission);
                 if checkpoint == "connected" {
-                    assert_ne!(saved.child_instance.as_deref(), Some(lease.instance_id.as_str()));
+                    assert_ne!(
+                        saved.child_instance.as_deref(),
+                        Some(lease.instance_id.as_str())
+                    );
                     assert_eq!(lease.generation, 2);
                 }
                 let ownership = lease.ownership.unwrap();
                 assert_eq!(ownership.role, "native_delegate");
                 assert_eq!(ownership.delegation_id, Some(saved.task_id));
             } else {
-                assert_eq!(count, 0, "aucun lancement après refus : {checkpoint}/{guard}");
+                assert_eq!(
+                    count, 0,
+                    "aucun lancement après refus : {checkpoint}/{guard}"
+                );
                 assert_eq!(saved.state, "failed");
                 if guard == "revocation" {
                     assert_eq!(saved.error.as_deref(), Some("permission_not_inherited"));
@@ -6420,28 +7895,53 @@ mod tests {
         st.marker_store = crate::managed_process::ManagedMarkerStore::at_directory(
             st.fixture_root.as_ref().unwrap().0.join("markers152"),
         );
-        let entry = st.fleet.desired_fleet().unwrap().equipiers.remove(&task.child).unwrap();
-        let _marker = st.marker_store.persist(&task.child, &crate::managed_process::BootstrapReady {
-            pid: 999999, pgid: 999999, birth: 1,
-            instance_id: task.child_instance.clone().unwrap(),
-            command_id: entry.command_id, generation: entry.generation,
-        }).unwrap();
+        let entry = st
+            .fleet
+            .desired_fleet()
+            .unwrap()
+            .equipiers
+            .remove(&task.child)
+            .unwrap();
+        let _marker = st
+            .marker_store
+            .persist(
+                &task.child,
+                &crate::managed_process::BootstrapReady {
+                    pid: 999999,
+                    pgid: 999999,
+                    birth: 1,
+                    instance_id: task.child_instance.clone().unwrap(),
+                    command_id: entry.command_id,
+                    generation: entry.generation,
+                },
+            )
+            .unwrap();
         task.child_instance = Some(Uuid::new_v4().to_string());
         st.delegation_store.save(&task).unwrap();
         reouvrir_flotte_152(st, &config);
         let identities = restart_identities(st);
         let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
-        eprintln!("T048 réel : identities={identities:?}, state={}, error={:?}", saved.state, saved.error);
-        let identities = identities.expect("une frontière native incohérente ne bloque pas tout le daemon");
+        eprintln!(
+            "T048 réel : identities={identities:?}, state={}, error={:?}",
+            saved.state, saved.error
+        );
+        let identities =
+            identities.expect("une frontière native incohérente ne bloque pas tout le daemon");
         assert!(!identities.contains_key(&task.child));
         assert_eq!(saved.state, "failed");
-        assert_eq!(saved.error.as_deref(), Some("native_restart_identity_mismatch"));
+        assert_eq!(
+            saved.error.as_deref(),
+            Some("native_restart_identity_mismatch")
+        );
         cleanup(&config);
     }
 
     #[test]
     fn native152_panne_echeance_et_identite_refusees() {
-        for (case, expected) in [("echeance", "mission_reply_timeout"), ("flotte_arretee", "unreachable")] {
+        for (case, expected) in [
+            ("echeance", "mission_reply_timeout"),
+            ("flotte_arretee", "unreachable"),
+        ] {
             let (shared, config, mut task, _parent, _child) = mission_152(false);
             let st = &mut *shared.lock().unwrap();
             if case == "echeance" {
@@ -6455,29 +7955,53 @@ mod tests {
             let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
             assert_eq!(saved.state, "failed");
             assert_eq!(saved.error.as_deref(), Some(expected));
-            assert_eq!(saved.restart_resumes, 0, "aucune reprise autorisée : {case}");
+            assert_eq!(
+                saved.restart_resumes, 0,
+                "aucune reprise autorisée : {case}"
+            );
             assert_eq!(saved.mission_deadline_at, task.mission_deadline_at);
-            assert_eq!(st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap().state, "unreachable");
-            eprintln!("T023 refus réel : {case}, error={:?}, compteur={}", saved.error, saved.restart_resumes);
+            assert_eq!(
+                st.execution_store
+                    .latest_in_chain(&format!("execution-{}", task.mission))
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "unreachable"
+            );
+            eprintln!(
+                "T023 refus réel : {case}, error={:?}, compteur={}",
+                saved.error, saved.restart_resumes
+            );
             cleanup(&config);
         }
     }
 
     #[test]
     fn native152_panne_conserve_waiting_resultat_et_etats_terminaux() {
-        for state in ["waiting_for_children", "result_available", "failed", "cancelled"] {
+        for state in [
+            "waiting_for_children",
+            "result_available",
+            "failed",
+            "cancelled",
+        ] {
             let (shared, config, mut task, _parent, _child) = mission_152(false);
             let st = &mut *shared.lock().unwrap();
             task.state = state.into();
             task.result = Some("résultat durable déjà acquis".into());
             task.error = (state == "failed").then(|| "échec déjà acquis".into());
             st.delegation_store.save(&task).unwrap();
-            let before = serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+            let before =
+                serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap())
+                    .unwrap();
             reouvrir_flotte_152(st, &config);
             let recoveries = reserve_managed_recoveries(st, unix_timestamp()).unwrap();
             let after = st.delegation_store.get(&task.task_id).unwrap().unwrap();
             assert!(recoveries.is_empty(), "aucun fournisseur pour {state}");
-            assert_eq!(serde_json::to_vec(&after).unwrap(), before, "tâche protégée inchangée : {state}");
+            assert_eq!(
+                serde_json::to_vec(&after).unwrap(),
+                before,
+                "tâche protégée inchangée : {state}"
+            );
             assert_eq!(after.restart_resumes, 0);
             eprintln!("T023 conservation réelle : {state}, octets identiques, reprises=0");
             cleanup(&config);
@@ -6492,12 +8016,19 @@ mod tests {
         let id = admitted["task_id"].as_str().unwrap().to_owned();
         let queued = st.delegation_store.get(&id).unwrap().unwrap();
         assert_eq!(queued.state, "queued");
-        assert_eq!(queued.parent_task_id.as_deref(), Some(parent.task_id.as_str()));
+        assert_eq!(
+            queued.parent_task_id.as_deref(),
+            Some(parent.task_id.as_str())
+        );
         parent.state = "failed".into();
         parent.error = Some("unreachable".into());
         st.delegation_store.save(&parent).unwrap();
         reouvrir_flotte_152(st, &config);
-        assert!(reserve_managed_recoveries(st, unix_timestamp()).unwrap().is_empty());
+        assert!(
+            reserve_managed_recoveries(st, unix_timestamp())
+                .unwrap()
+                .is_empty()
+        );
         let failed = st.delegation_store.get(&id).unwrap().unwrap();
         assert_eq!(failed.state, "failed");
         assert_eq!(failed.error.as_deref(), Some("unreachable"));
@@ -6512,12 +8043,22 @@ mod tests {
         for expected in [1, 2] {
             reouvrir_flotte_152(st, &config);
             assert!(!prepare_restart(st).unwrap().contains(&task.child));
-            assert!(st.managed_spawns.is_empty(), "crash avant toute préparation/lancement");
+            assert!(
+                st.managed_spawns.is_empty(),
+                "crash avant toute préparation/lancement"
+            );
             let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
             assert_eq!(saved.restart_resumes, expected);
             assert_eq!(saved.state, "working");
             assert_eq!(saved.mission, task.mission);
-            assert_eq!(st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap().generation, 1);
+            assert_eq!(
+                st.execution_store
+                    .latest_in_chain(&format!("execution-{}", task.mission))
+                    .unwrap()
+                    .unwrap()
+                    .generation,
+                1
+            );
         }
         reouvrir_flotte_152(st, &config);
         assert!(prepare_restart(st).unwrap().contains(&task.child));
@@ -6543,26 +8084,64 @@ mod tests {
             let mut recovered = reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
             assert_eq!(recovered.len(), 1, "un seul enfant repris après la panne");
             let (prepared, stop) = recovered.pop().unwrap();
-            assert_ne!(Some(prepared.lease.instance_id.as_str()), task.child_instance.as_deref());
-            eprintln!("T025 avant connexion : lease={:?}, phases={:?}", prepared.lease,
-                st.idempotency.spawn_commands(&st.fleet.supervisor_scope()).unwrap().iter()
-                    .map(|command| (&command.command_id, &command.state, command.generation, &command.instance_id))
-                    .collect::<Vec<_>>());
+            assert_ne!(
+                Some(prepared.lease.instance_id.as_str()),
+                task.child_instance.as_deref()
+            );
+            eprintln!(
+                "T025 avant connexion : lease={:?}, phases={:?}",
+                prepared.lease,
+                st.idempotency
+                    .spawn_commands(&st.fleet.supervisor_scope())
+                    .unwrap()
+                    .iter()
+                    .map(|command| (
+                        &command.command_id,
+                        &command.state,
+                        command.generation,
+                        &command.instance_id
+                    ))
+                    .collect::<Vec<_>>()
+            );
             st.connections.insert("child-conn".into(), child_writer);
-            assert!(matches!(st.fleet.register_connected(
-                &prepared.lease, &prepared.lease.instance_id, unix_timestamp(),
-            ).unwrap(), crate::idempotency::SpawnCommandIssue::Connected { .. }));
+            assert!(matches!(
+                st.fleet
+                    .register_connected(
+                        &prepared.lease,
+                        &prepared.lease.instance_id,
+                        unix_timestamp(),
+                    )
+                    .unwrap(),
+                crate::idempotency::SpawnCommandIssue::Connected { .. }
+            ));
             let host = st.host.clone();
-            assert!(matches!(handle_register_with_channel(
-                "child-conn", 2, prepared.agent_type.clone(), prepared.lease.name.clone(),
-                Some(host), Some(prepared.resolved_definition.protocol.clone()),
-                ChannelReport::Known("unix".into()), Some(PresenceMode::Cli), None,
-                Some("macOS".into()), Some(prepared.lease.instance_id.clone()), None,
-                false, Some(true), &mut st,
-            ), DaemonToWrapper::Registered { .. }));
-            st.managed_spawns.get_mut(&prepared.lease.command_id).unwrap().wrapper_conn =
-                Some("child-conn".into());
-            let controls = st.pending_post_response_controls.remove("child-conn")
+            assert!(matches!(
+                handle_register_with_channel(
+                    "child-conn",
+                    2,
+                    prepared.agent_type.clone(),
+                    prepared.lease.name.clone(),
+                    Some(host),
+                    Some(prepared.resolved_definition.protocol.clone()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Cli),
+                    None,
+                    Some("macOS".into()),
+                    Some(prepared.lease.instance_id.clone()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st,
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+            st.managed_spawns
+                .get_mut(&prepared.lease.command_id)
+                .unwrap()
+                .wrapper_conn = Some("child-conn".into());
+            let controls = st
+                .pending_post_response_controls
+                .remove("child-conn")
                 .expect("remise différée après Registered comme dans le serveur");
             assert_eq!(controls.len(), 1);
             (prepared.lease, stop, controls)
@@ -6572,33 +8151,55 @@ mod tests {
         let mut raw = String::new();
         child.read_line(&mut raw).unwrap();
         let DaemonToWrapper::DeliverIdempotent {
-            message, delivery_id, delivery_generation, ..
-        } = decode(raw.trim()).unwrap() else {
+            message,
+            delivery_id,
+            delivery_generation,
+            ..
+        } = decode(raw.trim()).unwrap()
+        else {
             panic!("mission reprise idempotente réelle attendue : {raw}")
         };
         assert_eq!(message.id, task.mission);
-        assert!(handle_wrapper_message("child-conn", WrapperToDaemon::DeliverAcked {
-            delivery_id, delivery_generation,
-        }, &shared).is_none());
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id,
+                    delivery_generation,
+                },
+                &shared
+            )
+            .is_none()
+        );
         {
             let st = shared.lock().unwrap();
             let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
-            let leaf = st.execution_store.latest_in_chain(&format!("execution-{}", task.mission))
-                .unwrap().unwrap();
+            let leaf = st
+                .execution_store
+                .latest_in_chain(&format!("execution-{}", task.mission))
+                .unwrap()
+                .unwrap();
             assert_eq!(saved.state, "working");
             assert_eq!(saved.restart_resumes, 1);
-            assert_eq!(saved.child_instance.as_deref(), Some(lease.instance_id.as_str()));
+            assert_eq!(
+                saved.child_instance.as_deref(),
+                Some(lease.instance_id.as_str())
+            );
             assert_ne!(leaf.execution_id, format!("execution-{}", task.mission));
             assert_eq!(leaf.generation, 2);
-            eprintln!("T025 reprise avant résultat : task={}, compteur={}, instance={}, feuille={}",
-                saved.state, saved.restart_resumes, lease.instance_id, leaf.execution_id);
+            eprintln!(
+                "T025 reprise avant résultat : task={}, compteur={}, instance={}, feuille={}",
+                saved.state, saved.restart_resumes, lease.instance_id, leaf.execution_id
+            );
         }
         transition_wrapper_152(&shared, &task, "running");
         transition_wrapper_152(&shared, &task, "completed");
         {
             let mut st = shared.lock().unwrap();
             let mut result = bridget_core::BridgetMessage::new(
-                &task.child, &task.owner, "résultat après la panne",
+                &task.child,
+                &task.owner,
+                "résultat après la panne",
             );
             result.in_reply_to = Some(task.mission.clone());
             assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
@@ -6611,16 +8212,28 @@ mod tests {
         raw.clear();
         parent.read_line(&mut raw).unwrap();
         let DaemonToWrapper::DeliverIdempotent {
-            message, delivery_id, delivery_generation, ..
-        } = decode(raw.trim()).unwrap() else {
+            message,
+            delivery_id,
+            delivery_generation,
+            ..
+        } = decode(raw.trim()).unwrap()
+        else {
             panic!("résultat repris idempotent réel attendu : {raw}")
         };
         assert_eq!(message.id, format!("native-result-{}", task.task_id));
         assert_eq!(message.in_reply_to.as_deref(), Some(task.mission.as_str()));
         assert_eq!(message.body, "résultat après la panne");
-        assert!(handle_wrapper_message("conn-1", WrapperToDaemon::DeliverAcked {
-            delivery_id, delivery_generation,
-        }, &shared).is_none());
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id,
+                    delivery_generation,
+                },
+                &shared
+            )
+            .is_none()
+        );
         {
             let st = shared.lock().unwrap();
             super::super::maintain_stores(&st, unix_timestamp());
@@ -6629,29 +8242,46 @@ mod tests {
             tick(&shared);
         }
         raw.clear();
-        assert!(parent.read_line(&mut raw).is_err(), "aucune deuxième remise après ACK");
+        assert!(
+            parent.read_line(&mut raw).is_err(),
+            "aucune deuxième remise après ACK"
+        );
         let st = shared.lock().unwrap();
         let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
         assert_eq!(saved.state, "result_available");
         assert_eq!(saved.result.as_deref(), Some("résultat après la panne"));
         assert!(saved.result_sent && saved.delivery_acked && saved.cleanup_done);
         assert_eq!(saved.restart_resumes, 1);
-        eprintln!("T025 résultat après panne : remise_unique={}, ack={}, cleanup={}, compteur={}",
-            message.id, saved.delivery_acked, saved.cleanup_done, saved.restart_resumes);
+        eprintln!(
+            "T025 résultat après panne : remise_unique={}, ack={}, cleanup={}, compteur={}",
+            message.id, saved.delivery_acked, saved.cleanup_done, saved.restart_resumes
+        );
         cleanup(&config);
     }
 
     #[test]
     fn native152_pause_refus_hors_pause_notifie_toujours() {
         let (shared, config, task, mut parent, _child) = mission_152(false);
-        assert!(handle_wrapper_message("child-conn", WrapperToDaemon::DeliveryRejected {
-            id: task.mission.clone(), reason: "tour annulé par le pilote".into(),
-        }, &shared).is_none());
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliveryRejected {
+                    id: task.mission.clone(),
+                    reason: "tour annulé par le pilote".into(),
+                },
+                &shared
+            )
+            .is_none()
+        );
         let st = shared.lock().unwrap();
         let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
         assert_eq!(saved.state, "failed");
         assert_eq!(saved.error.as_deref(), Some("tour annulé par le pilote"));
-        assert!(!st.pending_replies.iter().any(|pending| pending.msg_id == task.mission));
+        assert!(
+            !st.pending_replies
+                .iter()
+                .any(|pending| pending.msg_id == task.mission)
+        );
         let mut raw = String::new();
         parent.read_line(&mut raw).unwrap();
         assert!(raw.contains("Échec de livraison de la demande"));
@@ -6662,7 +8292,11 @@ mod tests {
     fn native152_pause_chaine_suivie_apres_reprise() {
         let (shared, config, task, _parent, mut child) = mission_152(true);
         transition_wrapper_152(&shared, &task, "interrupted");
-        handle_wrapper_message("child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared);
+        handle_wrapper_message(
+            "child-conn",
+            WrapperToDaemon::TurnState { in_progress: false },
+            &shared,
+        );
         pauser_150(&shared.lock().unwrap(), false);
         tick(&shared);
         let mut raw = String::new();
@@ -6671,15 +8305,35 @@ mod tests {
             panic!("reprise idempotente réelle attendue")
         };
         assert_eq!(message.id, task.mission);
-        let leaf = shared.lock().unwrap().execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap();
+        let leaf = shared
+            .lock()
+            .unwrap()
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .unwrap()
+            .unwrap();
         assert_ne!(leaf.execution_id, format!("execution-{}", task.mission));
-        assert_eq!(shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap().restart_resumes, 0, "une pause ne compte pas comme panne");
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .restart_resumes,
+            0,
+            "une pause ne compte pas comme panne"
+        );
         transition_wrapper_152(&shared, &task, "running");
         transition_wrapper_152(&shared, &task, "failed");
         tick(&shared);
         let st = shared.lock().unwrap();
         let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
-        assert_eq!(saved.state, "failed", "la feuille, pas l'ancienne interruption, porte la fin");
+        assert_eq!(
+            saved.state, "failed",
+            "la feuille, pas l'ancienne interruption, porte la fin"
+        );
         assert_eq!(saved.error.as_deref(), Some("failed"));
         cleanup(&config);
     }
@@ -6690,7 +8344,14 @@ mod tests {
         transition_wrapper_152(&shared, &task, "interrupted");
         let stop = {
             let mut st = shared.lock().unwrap();
-            handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id: task.task_id.clone() }, &mut st).unwrap();
+            handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Cancel {
+                    task_id: task.task_id.clone(),
+                },
+                &mut st,
+            )
+            .unwrap();
             st.managed_spawns.values().next().unwrap().stop.clone()
         };
         let (done, observer) = observer_arrets_152(vec![stop]);
@@ -6699,15 +8360,45 @@ mod tests {
         assert_eq!(observer.join().unwrap(), vec![true]);
         {
             let st = shared.lock().unwrap();
-            assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().state, "cancelled");
-            assert!(st.execution_store.pending_pause_interruptions().unwrap().is_empty());
+            assert_eq!(
+                st.delegation_store
+                    .get(&task.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "cancelled"
+            );
+            assert!(
+                st.execution_store
+                    .pending_pause_interruptions()
+                    .unwrap()
+                    .is_empty()
+            );
             pauser_150(&st, false);
         }
-        handle_wrapper_message("child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared);
+        handle_wrapper_message(
+            "child-conn",
+            WrapperToDaemon::TurnState { in_progress: false },
+            &shared,
+        );
         tick(&shared);
         let st = shared.lock().unwrap();
-        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().state, "cancelled");
-        assert_eq!(st.execution_store.latest_in_chain(&format!("execution-{}", task.mission)).unwrap().unwrap().generation, 1);
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            st.execution_store
+                .latest_in_chain(&format!("execution-{}", task.mission))
+                .unwrap()
+                .unwrap()
+                .generation,
+            1
+        );
         cleanup(&config);
     }
 
@@ -6715,7 +8406,11 @@ mod tests {
     fn native152_pause_resultat_rendu_une_fois() {
         let (shared, config, task, mut parent, mut child) = mission_152(true);
         transition_wrapper_152(&shared, &task, "interrupted");
-        handle_wrapper_message("child-conn", WrapperToDaemon::TurnState { in_progress: false }, &shared);
+        handle_wrapper_message(
+            "child-conn",
+            WrapperToDaemon::TurnState { in_progress: false },
+            &shared,
+        );
         pauser_150(&shared.lock().unwrap(), false);
         tick(&shared);
         let mut raw = String::new();
@@ -6724,7 +8419,11 @@ mod tests {
         transition_wrapper_152(&shared, &task, "completed");
         let stop = {
             let mut st = shared.lock().unwrap();
-            let mut result = bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat après la pause");
+            let mut result = bridget_core::BridgetMessage::new(
+                &task.child,
+                &task.owner,
+                "résultat après la pause",
+            );
             result.in_reply_to = Some(task.mission.clone());
             assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
             st.managed_spawns.values().next().unwrap().stop.clone()
@@ -6742,7 +8441,10 @@ mod tests {
         assert_eq!(message.id, format!("native-result-{}", task.task_id));
         assert_eq!(message.body, "résultat après la pause");
         raw.clear();
-        assert!(parent.read_line(&mut raw).is_err(), "aucune deuxième remise");
+        assert!(
+            parent.read_line(&mut raw).is_err(),
+            "aucune deuxième remise"
+        );
         let st = shared.lock().unwrap();
         let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
         assert!(saved.result_sent && saved.cleanup_done);
@@ -6758,11 +8460,23 @@ mod tests {
         task.reply_timeout = Some(120);
         task.mission_deadline_at = Some(now - 580);
         st.delegation_store.save(&task).unwrap();
-        for (paused, at) in [(true, now - 690), (false, now - 390), (true, now - 350), (false, now - 50)] {
+        for (paused, at) in [
+            (true, now - 690),
+            (false, now - 390),
+            (true, now - 350),
+            (false, now - 50),
+        ] {
             control_pause_a_152(&st, paused, at);
         }
         assert_eq!(effective_deadline(&st, &task, now).unwrap(), Some(now + 20));
-        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().mission_deadline_at, Some(now - 580));
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .mission_deadline_at,
+            Some(now - 580)
+        );
         cleanup(&config);
     }
 
@@ -6776,13 +8490,41 @@ mod tests {
         control_pause_a_152(st, true, now - 140);
         control_pause_a_152(st, false, now - 20);
         assert_eq!(effective_deadline(st, &task, now).unwrap(), Some(now + 90));
-        assert_eq!(handle_locked("child-conn", request_delai_150("sous-long152", Some(120)), st).unwrap_err(), "reply_timeout_exceeds_parent");
-        let admitted = handle_locked("child-conn", request_delai_150("sous-court152", Some(60)), st).unwrap();
-        let child = st.delegation_store.get(admitted["task_id"].as_str().unwrap()).unwrap().unwrap();
+        assert_eq!(
+            handle_locked(
+                "child-conn",
+                request_delai_150("sous-long152", Some(120)),
+                st
+            )
+            .unwrap_err(),
+            "reply_timeout_exceeds_parent"
+        );
+        let admitted = handle_locked(
+            "child-conn",
+            request_delai_150("sous-court152", Some(60)),
+            st,
+        )
+        .unwrap();
+        let child = st
+            .delegation_store
+            .get(admitted["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(child.parent_task_id.as_deref(), Some(task.task_id.as_str()));
         assert_eq!(child.reply_timeout, Some(60));
-        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().mission_deadline_at, Some(now - 30));
-        eprintln!("T017 imbriqué réel : brut={}, effectif={}, enfant=60s admis, 120s refusé", now - 30, now + 90);
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .mission_deadline_at,
+            Some(now - 30)
+        );
+        eprintln!(
+            "T017 imbriqué réel : brut={}, effectif={}, enfant=60s admis, 120s refusé",
+            now - 30,
+            now + 90
+        );
         cleanup(&config);
     }
 
@@ -6791,13 +8533,21 @@ mod tests {
         let (shared, config, task, mut parent, _child) = mission_152(true);
         let stop = {
             let mut st = shared.lock().unwrap();
-            let mut result = bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat déjà acquis pendant la pause");
+            let mut result = bridget_core::BridgetMessage::new(
+                &task.child,
+                &task.owner,
+                "résultat déjà acquis pendant la pause",
+            );
             result.in_reply_to = Some(task.mission.clone());
             assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
             let retained = st.delegation_store.get(&task.task_id).unwrap().unwrap();
             assert_eq!(retained.state, "waiting_for_children");
             assert_eq!(retained.result.as_deref(), Some(result.body.as_str()));
-            eprintln!("T019 après capture réelle : {}, résultat retenu={}", retained.state, retained.result.is_some());
+            eprintln!(
+                "T019 après capture réelle : {}, résultat retenu={}",
+                retained.state,
+                retained.result.is_some()
+            );
             st.managed_spawns.values().next().unwrap().stop.clone()
         };
         let (done, observer) = observer_arrets_152(vec![stop]);
@@ -6812,11 +8562,18 @@ mod tests {
         assert_eq!(message.id, format!("native-result-{}", task.task_id));
         assert_eq!(message.body, "résultat déjà acquis pendant la pause");
         let st = shared.lock().unwrap();
-        assert!(crate::referent_control::read(st.store.connection()).unwrap().paused);
+        assert!(
+            crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .paused
+        );
         let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
         assert!(saved.result_sent && saved.cleanup_done);
         assert_eq!(saved.state, "result_available");
-        eprintln!("T019 résultat réel remis sous pause : {}, cleanup={}", message.id, saved.cleanup_done);
+        eprintln!(
+            "T019 résultat réel remis sous pause : {}, cleanup={}",
+            message.id, saved.cleanup_done
+        );
         cleanup(&config);
     }
 
@@ -6824,7 +8581,12 @@ mod tests {
     fn native152_vue_suspended_additive_et_lineage_identique() {
         let (mut st, config, _rx, _reader) = fixture("view152");
         let task = tache_151(&mut st, "vue152");
-        let projection = serde_json::to_vec(&st.delegation_store.lineage_page(OWNER, 100, None, |_| false).unwrap()).unwrap();
+        let projection = serde_json::to_vec(
+            &st.delegation_store
+                .lineage_page(OWNER, 100, None, |_| false)
+                .unwrap(),
+        )
+        .unwrap();
         let first = current_task_view(&st, &task, true).unwrap();
         assert_eq!(first["suspended"], false);
         assert_eq!(first["resume_attempts"], 0);
@@ -6832,8 +8594,20 @@ mod tests {
         let paused = current_task_view(&st, &task, true).unwrap();
         assert_eq!(paused["suspended"], true);
         assert_eq!(paused["status"], "queued");
-        assert_eq!(serde_json::to_vec(&st.delegation_store.lineage_page(OWNER, 100, None, |_| false).unwrap()).unwrap(), projection);
-        assert_eq!(task_view(&task, None, true).get("suspended"), None, "la projection pure ne lit pas le contrôle");
+        assert_eq!(
+            serde_json::to_vec(
+                &st.delegation_store
+                    .lineage_page(OWNER, 100, None, |_| false)
+                    .unwrap()
+            )
+            .unwrap(),
+            projection
+        );
+        assert_eq!(
+            task_view(&task, None, true).get("suspended"),
+            None,
+            "la projection pure ne lit pas le contrôle"
+        );
         cleanup(&config);
     }
 
@@ -6843,38 +8617,92 @@ mod tests {
         let queued = tache_151(&mut st, "queued-pause152");
         let mut pending = tache_151(&mut st, "pending-pause152");
         spawn_task(&mut st, &mut pending).unwrap();
-        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else { panic!("Start attendu") };
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("Start attendu")
+        };
         let (writer, mut reader) = super::super::presence_tests::control_socket("pending152");
-        reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
-        assert!(matches!(handle_register_with_channel(
-            "pending152", 2, "native-test".into(), prepared.lease.name.clone(),
-            Some(st.host.clone()), Some("codex_app_server".into()), ChannelReport::Known("unix".into()),
-            Some(PresenceMode::Acp), None, Some("macOS".into()), Some(prepared.lease.instance_id.clone()),
-            None, false, Some(true), &mut st,
-        ), DaemonToWrapper::Registered { .. }));
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        assert!(matches!(
+            handle_register_with_channel(
+                "pending152",
+                2,
+                "native-test".into(),
+                prepared.lease.name.clone(),
+                Some(st.host.clone()),
+                Some("codex_app_server".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".into()),
+                Some(prepared.lease.instance_id.clone()),
+                None,
+                false,
+                Some(true),
+                &mut st,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
         st.connections.insert("pending152".into(), writer);
-        st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+        st.fleet
+            .register_connected(
+                &prepared.lease,
+                &prepared.lease.instance_id,
+                unix_timestamp(),
+            )
+            .unwrap();
         pending.state = "mission_pending".into();
         st.delegation_store.save(&pending).unwrap();
         let paused_at = unix_timestamp() - 300;
         control_pause_a_152(&st, true, paused_at);
         let shared = Arc::new(Mutex::new(st));
-        for _ in 0..300 { tick(&shared); }
+        for _ in 0..300 {
+            tick(&shared);
+        }
         assert!(rx.try_recv().is_err(), "zéro lancement pendant les300ticks");
         let mut raw = String::new();
-        assert!(reader.read_line(&mut raw).is_err(), "zéro remise pendant les300ticks");
+        assert!(
+            reader.read_line(&mut raw).is_err(),
+            "zéro remise pendant les300ticks"
+        );
         let st = shared.lock().unwrap();
         let observed_at = unix_timestamp();
-        let paused_secs = crate::referent_control::pause_overlap(
-            st.store.connection(), paused_at, observed_at,
-        ).unwrap();
-        assert_eq!(paused_secs, observed_at - paused_at, "pause ouverte durable continue");
+        let paused_secs =
+            crate::referent_control::pause_overlap(st.store.connection(), paused_at, observed_at)
+                .unwrap();
+        assert_eq!(
+            paused_secs,
+            observed_at - paused_at,
+            "pause ouverte durable continue"
+        );
         assert!(paused_secs >= 300, "au moins300s de pause simulée");
-        assert!(crate::referent_control::read(st.store.connection()).unwrap().paused);
-        assert_eq!(st.delegation_store.get(&queued.task_id).unwrap().unwrap().state, "queued");
-        assert_eq!(st.delegation_store.get(&pending.task_id).unwrap().unwrap().state, "mission_pending");
+        assert!(
+            crate::referent_control::read(st.store.connection())
+                .unwrap()
+                .paused
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&queued.task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "queued"
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&pending.task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "mission_pending"
+        );
         assert!(st.store.get_request(&pending.mission).unwrap().is_none());
-        eprintln!("SC002 réel : pause={paused_secs}s, ticks=300, lancements=0, remises=0, queued et mission_pending conservés");
+        eprintln!(
+            "SC002 réel : pause={paused_secs}s, ticks=300, lancements=0, remises=0, queued et mission_pending conservés"
+        );
         cleanup(&config);
     }
 
@@ -8981,9 +10809,14 @@ mod tests {
         };
         st.communication_projects
             .insert("conn-1".into(), (Some(parent.clone()), Some(parent), false));
-        let error =
-            handle_locked_with_project("conn-1", request("other-project"), Some(&other), None, &mut st)
-                .unwrap_err();
+        let error = handle_locked_with_project(
+            "conn-1",
+            request("other-project"),
+            Some(&other),
+            None,
+            &mut st,
+        )
+        .unwrap_err();
         assert!(error.starts_with("cross_project_reason_required"));
         assert!(st.delegation_store.tasks().unwrap().is_empty());
         assert!(rx.try_recv().is_err());
@@ -9728,7 +11561,12 @@ mod tests {
         let first = handle_locked("conn-1", request("cle"), &mut st).unwrap();
         solder_150(&st, first["task_id"].as_str().unwrap());
         let now = unix_timestamp() + 8 * JOUR_150;
-        assert_eq!(st.delegation_store.purge_trees(now, None, usize::MAX, |_| true).unwrap(), 1);
+        assert_eq!(
+            st.delegation_store
+                .purge_trees(now, None, usize::MAX, |_| true)
+                .unwrap(),
+            1
+        );
         // La clé purgée est refusée, quelle que soit l'enveloppe, sans tâche créée.
         assert_eq!(
             handle_locked("conn-1", request("cle"), &mut st).unwrap_err(),
@@ -9754,15 +11592,30 @@ mod tests {
         let first = handle_locked("conn-1", request("cle"), &mut st).unwrap();
         solder_150(&st, first["task_id"].as_str().unwrap());
         let purged_at = unix_timestamp() + 8 * JOUR_150;
-        assert_eq!(st.delegation_store.purge_trees(purged_at, None, usize::MAX, |_| true).unwrap(), 1);
+        assert_eq!(
+            st.delegation_store
+                .purge_trees(purged_at, None, usize::MAX, |_| true)
+                .unwrap(),
+            1
+        );
         // Moins de 30 jours après la purge : la pierre reste, la clé reste refusée.
-        assert_eq!(st.delegation_store.purge_expired_tombstones(purged_at + 29 * JOUR_150).unwrap(), 0);
+        assert_eq!(
+            st.delegation_store
+                .purge_expired_tombstones(purged_at + 29 * JOUR_150)
+                .unwrap(),
+            0
+        );
         assert_eq!(
             handle_locked("conn-1", request("cle"), &mut st).unwrap_err(),
             "request_expired"
         );
         // Au-delà : pierre purgée, clé libre, nouvelle tâche.
-        assert_eq!(st.delegation_store.purge_expired_tombstones(purged_at + 30 * JOUR_150).unwrap(), 1);
+        assert_eq!(
+            st.delegation_store
+                .purge_expired_tombstones(purged_at + 30 * JOUR_150)
+                .unwrap(),
+            1
+        );
         let again = handle_locked("conn-1", request("cle"), &mut st).unwrap();
         assert_ne!(again["task_id"], first["task_id"]);
         cleanup(&config);
@@ -9801,11 +11654,23 @@ mod tests {
         presence.name = task.child.clone();
         presence.state = "connected".into();
         st.presences.insert("instance-enfant".into(), presence);
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "enfant connecté");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "enfant connecté"
+        );
         st.presences.get_mut("instance-enfant").unwrap().state = "busy".into();
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "enfant occupé");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "enfant occupé"
+        );
         st.presences.get_mut("instance-enfant").unwrap().state = "stopped".into();
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1, "enfant arrêté : arbre purgé");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            1,
+            "enfant arrêté : arbre purgé"
+        );
         assert!(st.delegation_store.tasks().unwrap().is_empty());
         cleanup(&config);
     }
@@ -9816,16 +11681,35 @@ mod tests {
         let task = tache_soldee_150(&mut st, "cle");
         let aged = unix_timestamp() + 8 * JOUR_150;
         // Saga de lancement sous le superviseur : réservée, pas encore connectée.
-        let lease = match st.fleet.request_spawn(&ordre_lancement_150(&task.child, "saga-150"), unix_timestamp()).unwrap() {
+        let lease = match st
+            .fleet
+            .request_spawn(
+                &ordre_lancement_150(&task.child, "saga-150"),
+                unix_timestamp(),
+            )
+            .unwrap()
+        {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
             other => panic!("réservation inattendue: {other:?}"),
         };
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "saga requested/reserved");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "saga requested/reserved"
+        );
         let definition = st.registry.resolved_definition("native-test").unwrap();
-        st.fleet.mark_starting(&lease, unix_timestamp(), &definition).unwrap();
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "saga starting");
+        st.fleet
+            .mark_starting(&lease, unix_timestamp(), &definition)
+            .unwrap();
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "saga starting"
+        );
         // Lancement suivi par le daemon (managed_spawns), indépendamment de la saga.
-        st.fleet.register_connected(&lease, &lease.instance_id, unix_timestamp()).unwrap();
+        st.fleet
+            .register_connected(&lease, &lease.instance_id, unix_timestamp())
+            .unwrap();
         st.fleet.mark_stopped(&task.child).unwrap();
         st.managed_spawns.insert(
             lease.command_id.clone(),
@@ -9837,7 +11721,11 @@ mod tests {
                 stop: Arc::new(ManagedStopControl::new()),
             },
         );
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "managed_spawns");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "managed_spawns"
+        );
         st.managed_spawns.clear();
         assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1);
         cleanup(&config);
@@ -9849,11 +11737,21 @@ mod tests {
         let task = tache_soldee_150(&mut st, "cle");
         let aged = unix_timestamp() + 8 * JOUR_150;
         // Route de routeur vivante, sans présence : l'enfant peut encore recevoir un message.
-        st.router.register(&task.child, &bridget_core::AgentType::Codex, "conn-enfant").unwrap();
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "agent routé");
+        st.router
+            .register(&task.child, &bridget_core::AgentType::Codex, "conn-enfant")
+            .unwrap();
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "agent routé"
+        );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
         st.router.unregister_by_conn("conn-enfant").unwrap();
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1, "route retirée : arbre purgé");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            1,
+            "route retirée : arbre purgé"
+        );
         cleanup(&config);
     }
 
@@ -9864,10 +11762,18 @@ mod tests {
         let aged = unix_timestamp() + 8 * JOUR_150;
         // Une décommission déjà en cours (autre chemin) garde l'arbre jusqu'à sa fin.
         st.decommissioning_names.insert(task.child.clone());
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0, "décommission en cours");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            0,
+            "décommission en cours"
+        );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
         st.decommissioning_names.remove(&task.child);
-        assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1, "décommission terminée : arbre purgé");
+        assert_eq!(
+            purge_retained(&st, aged, None, usize::MAX),
+            1,
+            "décommission terminée : arbre purgé"
+        );
         cleanup(&config);
     }
 
@@ -9876,16 +11782,31 @@ mod tests {
         let (mut st, config, _rx, _reader) = fixture("n150-stopped");
         let task = tache_soldee_150(&mut st, "cle");
         let aged = unix_timestamp() + 8 * JOUR_150;
-        let lease = match st.fleet.request_spawn(&ordre_lancement_150(&task.child, "saga-stop"), unix_timestamp()).unwrap() {
+        let lease = match st
+            .fleet
+            .request_spawn(
+                &ordre_lancement_150(&task.child, "saga-stop"),
+                unix_timestamp(),
+            )
+            .unwrap()
+        {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
             other => panic!("réservation inattendue: {other:?}"),
         };
         let definition = st.registry.resolved_definition("native-test").unwrap();
-        st.fleet.mark_starting(&lease, unix_timestamp(), &definition).unwrap();
-        st.fleet.register_connected(&lease, &lease.instance_id, unix_timestamp()).unwrap();
+        st.fleet
+            .mark_starting(&lease, unix_timestamp(), &definition)
+            .unwrap();
+        st.fleet
+            .register_connected(&lease, &lease.instance_id, unix_timestamp())
+            .unwrap();
         // Entrée désirée Running : le sous-agent peut tourner, l'arbre reste.
         assert_eq!(
-            st.fleet.desired_entry(&task.child).unwrap().unwrap().lifecycle_state,
+            st.fleet
+                .desired_entry(&task.child)
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
             DesiredLifecycleState::Running
         );
         assert_eq!(purge_retained(&st, aged, None, usize::MAX), 0);
@@ -9893,7 +11814,11 @@ mod tests {
         st.fleet.mark_stopped(&task.child).unwrap();
         assert_eq!(purge_retained(&st, aged, None, usize::MAX), 1);
         assert_eq!(
-            st.fleet.desired_entry(&task.child).unwrap().unwrap().lifecycle_state,
+            st.fleet
+                .desired_entry(&task.child)
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
             DesiredLifecycleState::Decommissioned
         );
         assert!(st.delegation_store.tasks().unwrap().is_empty());
@@ -9903,10 +11828,22 @@ mod tests {
     /// Dépose une remise native sous la clé et le périmètre de la tâche, puis l'accuse ou non.
     fn remise_native_150(st: &mut DaemonState, task: &Task, prefix: &str, accuser: bool) -> String {
         let id = format!("{prefix}{}", task.task_id);
-        let key = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &id).unwrap();
+        let key = IdempotencyKey::new(
+            &crate::communication::issuer_scope(&task.task_id),
+            OperationKind::Send,
+            &id,
+        )
+        .unwrap();
         let now = unix_timestamp();
         st.idempotency
-            .reserve(&key, id.as_bytes(), now, CLIENT_IDEMPOTENCY_HORIZON_SECS, now, CLIENT_ISSUED_AT_TOLERANCE_SECS)
+            .reserve(
+                &key,
+                id.as_bytes(),
+                now,
+                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                now,
+                CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            )
             .unwrap();
         let mut message = bridget_core::BridgetMessage::new(&task.child, &task.owner, "sortie");
         message.id = id.clone();
@@ -9919,7 +11856,9 @@ mod tests {
         };
         st.idempotency.begin_send_delivery(&key, &delivery).unwrap();
         if accuser {
-            st.idempotency.acknowledge_send_delivery(&delivery.delivery_id, "instance-1", 1).unwrap();
+            st.idempotency
+                .acknowledge_send_delivery(&delivery.delivery_id, "instance-1", 1)
+                .unwrap();
         }
         delivery.delivery_id
     }
@@ -9936,7 +11875,9 @@ mod tests {
         task.result_sent = etat == "result_available";
         task.failure_sent = etat == "failed";
         task.completed_at = Some(unix_timestamp() + 120 * JOUR_150);
-        st.delegation_store.insert(&task, &format!("req-150-{i:04}"), b"canon").unwrap();
+        st.delegation_store
+            .insert(&task, &format!("req-150-{i:04}"), b"canon")
+            .unwrap();
         task
     }
 
@@ -9953,7 +11894,10 @@ mod tests {
         assert_eq!(copy_delivery_acks(&st).unwrap(), 2);
         let acked = |id: &str| st.delegation_store.get(id).unwrap().unwrap().delivery_acked;
         assert!(acked(&resultat.task_id) && acked(&echec.task_id));
-        assert!(!acked(&non_accusee.task_id), "remise en vol : aucune preuve");
+        assert!(
+            !acked(&non_accusee.task_id),
+            "remise en vol : aucune preuve"
+        );
         assert_eq!(copy_delivery_acks(&st).unwrap(), 0, "idempotent");
         cleanup(&config);
     }
@@ -9964,15 +11908,24 @@ mod tests {
         let modele = tache_soldee_150(&mut st, "modele");
         let task = semer_terminale_150(&st, &modele, 1, "result_available");
         let livraison = remise_native_150(&mut st, &task, "native-result-", false);
-        st.idempotency.mark_delivery_indeterminate(&livraison, "instance-1", 1).unwrap();
-        assert_eq!(copy_delivery_acks(&st).unwrap(), 0, "remise indéterminée : pas d'accusé");
+        st.idempotency
+            .mark_delivery_indeterminate(&livraison, "instance-1", 1)
+            .unwrap();
+        assert_eq!(
+            copy_delivery_acks(&st).unwrap(),
+            0,
+            "remise indéterminée : pas d'accusé"
+        );
         // L'entretien efface la remise (ligne absente) : toujours aucune preuve.
         let loin = unix_timestamp() + 2 * CLIENT_IDEMPOTENCY_HORIZON_SECS;
         assert_eq!(st.idempotency.purge_expired_sends(loin, 0).unwrap(), 1);
         assert_eq!(copy_delivery_acks(&st).unwrap(), 0);
         // L'arbre ne se purge pas, même très ancien et sous pression de borne :
         // seul l'arbre modèle (annulé, sans remise due) part.
-        assert_eq!(purge_retained(&st, unix_timestamp() + 90 * JOUR_150, Some(1), usize::MAX), 1);
+        assert_eq!(
+            purge_retained(&st, unix_timestamp() + 90 * JOUR_150, Some(1), usize::MAX),
+            1
+        );
         assert!(st.delegation_store.get(&task.task_id).unwrap().is_some());
         cleanup(&config);
     }
@@ -9993,10 +11946,22 @@ mod tests {
         // Les tâches finissent dans le futur : l'âge les protège de la purge d'arbre.
         let loin = unix_timestamp() + 90 * JOUR_150;
         super::super::maintain_stores(&st, loin);
-        let cle = IdempotencyKey::new(&crate::communication::issuer_scope(&ids[0]), OperationKind::Send, &format!("native-result-{}", ids[0])).unwrap();
-        assert_eq!(st.idempotency.send_delivery_phase(&cle).unwrap(), None, "remise effacée");
+        let cle = IdempotencyKey::new(
+            &crate::communication::issuer_scope(&ids[0]),
+            OperationKind::Send,
+            &format!("native-result-{}", ids[0]),
+        )
+        .unwrap();
+        assert_eq!(
+            st.idempotency.send_delivery_phase(&cle).unwrap(),
+            None,
+            "remise effacée"
+        );
         for id in &ids {
-            assert!(st.delegation_store.get(id).unwrap().unwrap().delivery_acked, "{id}");
+            assert!(
+                st.delegation_store.get(id).unwrap().unwrap().delivery_acked,
+                "{id}"
+            );
         }
         cleanup(&config);
     }
@@ -10015,7 +11980,8 @@ mod tests {
         fin_base: i64,
     ) {
         let mut conn = rusqlite::Connection::open(&config.db_path).unwrap();
-        conn.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
         let tx = conn.transaction().unwrap();
         for i in debut..debut + nombre {
             let mut task = modele.clone();
@@ -10042,7 +12008,9 @@ mod tests {
     fn modele_150(st: &mut DaemonState) -> Task {
         let mut modele = tache_soldee_150(st, "modele-admission");
         // Le modèle est purgé du magasin : seules ses données servent de gabarit.
-        st.delegation_store.purge_trees(unix_timestamp() + 90 * JOUR_150, None, usize::MAX, |_| true).unwrap();
+        st.delegation_store
+            .purge_trees(unix_timestamp() + 90 * JOUR_150, None, usize::MAX, |_| true)
+            .unwrap();
         modele.parent_task_id = None;
         modele
     }
@@ -10051,12 +12019,24 @@ mod tests {
     fn native150_admission_apres_5000_terminees() {
         let (mut st, config, _rx, _reader) = fixture("n150-5000");
         let modele = modele_150(&mut st);
-        semer_brut_150(&config, &modele, 0, 5000, "result_available", true, "instance-autre", 1_000);
+        semer_brut_150(
+            &config,
+            &modele,
+            0,
+            5000,
+            "result_available",
+            true,
+            "instance-autre",
+            1_000,
+        );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 5000);
         let admise = handle_locked("conn-1", request("apres-5000"), &mut st).unwrap();
         assert_eq!(admise["status"], "queued");
         let restantes = st.delegation_store.tasks().unwrap().len();
-        assert!(restantes <= 4096, "la borne de rétention tient : {restantes}");
+        assert!(
+            restantes <= 4096,
+            "la borne de rétention tient : {restantes}"
+        );
         cleanup(&config);
     }
 
@@ -10065,12 +12045,25 @@ mod tests {
         let (mut st, config, _rx, _reader) = fixture("n150-saturation");
         let modele = modele_150(&mut st);
         // 4096 résultats jamais accusés : rien n'est purgeable, aucune perte permise.
-        semer_brut_150(&config, &modele, 0, 4096, "result_available", false, "instance-autre", 1_000);
+        semer_brut_150(
+            &config,
+            &modele,
+            0,
+            4096,
+            "result_available",
+            false,
+            "instance-autre",
+            1_000,
+        );
         assert_eq!(
             handle_locked("conn-1", request("sature"), &mut st).unwrap_err(),
             "retention_saturated"
         );
-        assert_eq!(st.delegation_store.tasks().unwrap().len(), 4096, "aucune écriture ni purge");
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            4096,
+            "aucune écriture ni purge"
+        );
         cleanup(&config);
     }
 
@@ -10080,11 +12073,26 @@ mod tests {
         let modele = modele_150(&mut st);
         // 16 actives pour l'instance appelante : la 17e est refusée.
         semer_brut_150(&config, &modele, 0, 16, "working", false, "instance-1", 0);
-        assert_eq!(handle_locked("conn-1", request("17e"), &mut st).unwrap_err(), "task_limit");
+        assert_eq!(
+            handle_locked("conn-1", request("17e"), &mut st).unwrap_err(),
+            "task_limit"
+        );
         // 128 actives au total (autres instances) : refus aussi pour une instance libre.
         sqlite_supprimer_instance_150(&config, "instance-1");
-        semer_brut_150(&config, &modele, 16, 128, "working", false, "instance-autre", 0);
-        assert_eq!(handle_locked("conn-1", request("129e"), &mut st).unwrap_err(), "task_limit");
+        semer_brut_150(
+            &config,
+            &modele,
+            16,
+            128,
+            "working",
+            false,
+            "instance-autre",
+            0,
+        );
+        assert_eq!(
+            handle_locked("conn-1", request("129e"), &mut st).unwrap_err(),
+            "task_limit"
+        );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 128);
         cleanup(&config);
     }
@@ -10092,7 +12100,10 @@ mod tests {
     fn sqlite_supprimer_instance_150(config: &DaemonConfig, instance: &str) {
         rusqlite::Connection::open(&config.db_path)
             .unwrap()
-            .execute("DELETE FROM native_delegations WHERE owner_instance=?1", [instance])
+            .execute(
+                "DELETE FROM native_delegations WHERE owner_instance=?1",
+                [instance],
+            )
             .unwrap();
     }
 
@@ -10102,12 +12113,30 @@ mod tests {
         let modele = modele_150(&mut st);
         // 4096 arbres soldés de moins de 7 jours : l'âge ne protège plus sous pression.
         let recent = unix_timestamp() - 3600;
-        semer_brut_150(&config, &modele, 0, 4096, "result_available", true, "instance-autre", recent - 5000);
+        semer_brut_150(
+            &config,
+            &modele,
+            0,
+            4096,
+            "result_available",
+            true,
+            "instance-autre",
+            recent - 5000,
+        );
         let admise = handle_locked("conn-1", request("borne"), &mut st).unwrap();
         assert_eq!(admise["status"], "queued");
-        let ids: HashSet<String> = st.delegation_store.tasks().unwrap().into_iter().map(|t| t.task_id).collect();
+        let ids: HashSet<String> = st
+            .delegation_store
+            .tasks()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.task_id)
+            .collect();
         assert_eq!(ids.len(), 4096, "le total ne dépasse jamais 4096");
-        assert!(!ids.contains("b150-00000"), "le plus ancien est purgé en premier");
+        assert!(
+            !ids.contains("b150-00000"),
+            "le plus ancien est purgé en premier"
+        );
         assert!(ids.contains("b150-00001"), "un seul arbre est libéré");
         assert!(ids.contains(admise["task_id"].as_str().unwrap()));
         cleanup(&config);
@@ -10138,9 +12167,24 @@ mod tests {
     #[test]
     fn control158_halt_refuse_nouvelle_cle() {
         let (mut st, config, rx, _reader) = fixture("h158-neuve");
-        st.delegation_store.set_delegation_halt("halt-neuve", true, "humain", Some("fixture158"), || Ok(0), unix_timestamp()).unwrap();
-        assert_eq!(handle_locked("conn-1", request("neuve158"), &mut st).unwrap_err(), "delegations_halted");
-        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée pendant l’arrêt");
+        st.delegation_store
+            .set_delegation_halt(
+                "halt-neuve",
+                true,
+                "humain",
+                Some("fixture158"),
+                || Ok(0),
+                unix_timestamp(),
+            )
+            .unwrap();
+        assert_eq!(
+            handle_locked("conn-1", request("neuve158"), &mut st).unwrap_err(),
+            "delegations_halted"
+        );
+        assert!(
+            st.delegation_store.tasks().unwrap().is_empty(),
+            "aucune tâche créée pendant l’arrêt"
+        );
         assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         cleanup(&config);
     }
@@ -10150,7 +12194,16 @@ mod tests {
         let (mut st, config, rx, _reader) = fixture("h158-rejeu");
         let original = request("admise158");
         let first = handle_locked("conn-1", original.clone(), &mut st).unwrap();
-        st.delegation_store.set_delegation_halt("halt-rejeu", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+        st.delegation_store
+            .set_delegation_halt(
+                "halt-rejeu",
+                true,
+                "humain",
+                None,
+                || Ok(0),
+                unix_timestamp(),
+            )
+            .unwrap();
         assert_eq!(handle_locked("conn-1", original, &mut st).unwrap(), first);
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
         assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
@@ -10161,10 +12214,31 @@ mod tests {
     fn control158_halt_cle_libre_apres_levee() {
         let (mut st, config, rx, _reader) = fixture("h158-levee");
         let original = request("libre158");
-        st.delegation_store.set_delegation_halt("halt-libre", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
-        assert_eq!(handle_locked("conn-1", original.clone(), &mut st).unwrap_err(), "delegations_halted");
+        st.delegation_store
+            .set_delegation_halt(
+                "halt-libre",
+                true,
+                "humain",
+                None,
+                || Ok(0),
+                unix_timestamp(),
+            )
+            .unwrap();
+        assert_eq!(
+            handle_locked("conn-1", original.clone(), &mut st).unwrap_err(),
+            "delegations_halted"
+        );
         assert!(st.delegation_store.tasks().unwrap().is_empty());
-        st.delegation_store.set_delegation_halt("resume-libre", false, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+        st.delegation_store
+            .set_delegation_halt(
+                "resume-libre",
+                false,
+                "humain",
+                None,
+                || Ok(0),
+                unix_timestamp(),
+            )
+            .unwrap();
         let admitted = handle_locked("conn-1", original, &mut st).unwrap();
         assert_eq!(admitted["status"], "queued");
         assert_eq!(
@@ -10181,12 +12255,34 @@ mod tests {
         let (mut st, config, rx, _reader) = fixture("h158-lecture");
         let first = handle_locked("conn-1", request("lecture158"), &mut st).unwrap();
         let task_id = first["task_id"].as_str().unwrap().to_owned();
-        st.delegation_store.set_delegation_halt("halt-lecture", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
-        let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+        st.delegation_store
+            .set_delegation_halt(
+                "halt-lecture",
+                true,
+                "humain",
+                None,
+                || Ok(0),
+                unix_timestamp(),
+            )
+            .unwrap();
+        let catalogue =
+            handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
         assert_eq!(catalogue["delegations_halted"], true);
-        let status = handle_locked("conn-1", NativeDelegationRequest::Status { task_id:task_id.clone() }, &mut st).unwrap();
+        let status = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Status {
+                task_id: task_id.clone(),
+            },
+            &mut st,
+        )
+        .unwrap();
         assert_eq!(status["task_id"], first["task_id"]);
-        let cancelled = handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id }, &mut st).unwrap();
+        let cancelled = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Cancel { task_id },
+            &mut st,
+        )
+        .unwrap();
         assert_eq!(cancelled["status"], "cancelling");
         assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         cleanup(&config);
@@ -10208,7 +12304,16 @@ mod tests {
             {
                 pauser_150(&st, paused);
             }
-            st.delegation_store.set_delegation_halt("halt-matrice", halted, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+            st.delegation_store
+                .set_delegation_halt(
+                    "halt-matrice",
+                    halted,
+                    "humain",
+                    None,
+                    || Ok(0),
+                    unix_timestamp(),
+                )
+                .unwrap();
             let result = handle_locked("conn-1", request("matrice158"), &mut st);
             if let Some(code) = refusal {
                 assert_eq!(result.unwrap_err(), code, "pause={paused}, arrêt={halted}");
@@ -10250,7 +12355,16 @@ mod tests {
             {
                 pauser_150(&st, paused);
             }
-            st.delegation_store.set_delegation_halt("halt-ronde", halted, "humain", None, || Ok(0), unix_timestamp()).unwrap();
+            st.delegation_store
+                .set_delegation_halt(
+                    "halt-ronde",
+                    halted,
+                    "humain",
+                    None,
+                    || Ok(0),
+                    unix_timestamp(),
+                )
+                .unwrap();
             let next = NativeDelegationRequest::Continue {
                 task_id: id.clone(),
                 request_id: "ronde-2-158".into(),
@@ -10273,8 +12387,18 @@ mod tests {
                 assert_eq!(admitted["status"], "mission_pending");
                 assert_eq!(admitted["round"], 2);
                 pauser_150(&st, true);
-                st.delegation_store.set_delegation_halt("halt-rejeu-ronde", true, "humain", None, || Ok(0), unix_timestamp()).unwrap();
-                let task_before = serde_json::to_value(st.delegation_store.get(&id).unwrap().unwrap()).unwrap();
+                st.delegation_store
+                    .set_delegation_halt(
+                        "halt-rejeu-ronde",
+                        true,
+                        "humain",
+                        None,
+                        || Ok(0),
+                        unix_timestamp(),
+                    )
+                    .unwrap();
+                let task_before =
+                    serde_json::to_value(st.delegation_store.get(&id).unwrap().unwrap()).unwrap();
                 let mut expected = admitted;
                 expected["suspended"] = json!(true); // Vue dynamique de la pause réellement posée.
                 assert_eq!(handle_locked("conn-1", next, &mut st).unwrap(), expected);
@@ -10297,18 +12421,41 @@ mod tests {
     fn native150_pause_refuse_nouvelle_cle() {
         let (mut st, config, rx, _reader) = fixture("n150-pause");
         pauser_150(&st, true);
-        assert_eq!(handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(), "referent_paused");
-        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée");
+        assert_eq!(
+            handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(),
+            "referent_paused"
+        );
+        assert!(
+            st.delegation_store.tasks().unwrap().is_empty(),
+            "aucune tâche créée"
+        );
         assert!(rx.try_recv().is_err());
         cleanup(&config);
     }
 
     #[test]
     fn mcp158_plafond_posture_omise_suit_effective() {
-        use super::native_delegation_permissions149_tests::{fixture_with_reader, codex_fact, insert_fact};
+        use super::native_delegation_permissions149_tests::{
+            codex_fact, fixture_with_reader, insert_fact,
+        };
         let (mut st, config, rx, _parent) = fixture_with_reader("scope158-omise");
-        let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
-        insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"readOnly","networkAccess":false}), "never"), None);
+        let cwd = st
+            .fixture_root
+            .as_ref()
+            .unwrap()
+            .0
+            .join("project-149")
+            .canonicalize()
+            .unwrap();
+        insert_fact(
+            &mut st,
+            codex_fact(
+                cwd.to_str().unwrap(),
+                json!({"type":"readOnly","networkAccess":false}),
+                "never",
+            ),
+            None,
+        );
         let mut original = request("omise158");
         if let NativeDelegationRequest::Delegate {
             posture, cwd: path, ..
@@ -10354,8 +12501,15 @@ mod tests {
             DaemonToWrapper::Registered { .. }
         ));
         st.connections.insert("child-conn".into(), child_writer);
-        st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
-        st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+        st.conn_instances
+            .insert("child-conn".into(), prepared.lease.instance_id.clone());
+        st.fleet
+            .register_connected(
+                &prepared.lease,
+                &prepared.lease.instance_id,
+                unix_timestamp(),
+            )
+            .unwrap();
         st.managed_spawns.get_mut(&task_id).unwrap().wrapper_conn = Some("child-conn".into());
         assert_eq!(
             handle_locked(
@@ -10386,7 +12540,11 @@ mod tests {
             st.connections.insert("conn-1".into(), parent_writer);
             st.connections.insert("child-conn".into(), child_writer);
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
-            let mut response = bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultat Discovery gardé");
+            let mut response = bridget_core::BridgetMessage::new(
+                &task.child,
+                &task.owner,
+                "résultat Discovery gardé",
+            );
             response.in_reply_to = Some(message.id);
             assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
         }
@@ -10424,17 +12582,37 @@ mod tests {
             st.connections.insert("conn-1".into(), parent_writer);
             st.connections.insert("child-conn".into(), child_writer);
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
-            let mut response = bridget_core::BridgetMessage::new(&task.child, &task.owner, "ronde Discovery terminée");
+            let mut response = bridget_core::BridgetMessage::new(
+                &task.child,
+                &task.owner,
+                "ronde Discovery terminée",
+            );
             response.in_reply_to = Some(message.id);
             assert!(capture_reply(&mut st, "child-conn", &response).unwrap());
             task.child
         };
         tick(&shared);
         let mut st = shared.lock().unwrap();
-        assert_eq!(handle_locked("child-conn", NativeDelegationRequest::CallerScope {}, &mut st).unwrap()["caller_read_only"], true);
-        let next = handle_locked("conn-1", NativeDelegationRequest::Continue {
-            task_id:task_id.clone(), request_id:"scope-round2-158".into(), task:"relis le résultat".into(), brief:None,
-        }, &mut st).unwrap();
+        assert_eq!(
+            handle_locked(
+                "child-conn",
+                NativeDelegationRequest::CallerScope {},
+                &mut st
+            )
+            .unwrap()["caller_read_only"],
+            true
+        );
+        let next = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Continue {
+                task_id: task_id.clone(),
+                request_id: "scope-round2-158".into(),
+                task: "relis le résultat".into(),
+                brief: None,
+            },
+            &mut st,
+        )
+        .unwrap();
         assert_eq!(next["status"], "mission_pending");
         assert_eq!(next["round"], 2);
         let task = st.delegation_store.get(&task_id).unwrap().unwrap();
@@ -10462,8 +12640,23 @@ mod tests {
         let stop = {
             let mut st = shared.lock().unwrap();
             st.connections.insert("child-conn".into(), child_writer);
-            assert_eq!(handle_locked("child-conn", NativeDelegationRequest::CallerScope {}, &mut st).unwrap()["caller_read_only"], true);
-            let cancelled = handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id:task_id.clone() }, &mut st).unwrap();
+            assert_eq!(
+                handle_locked(
+                    "child-conn",
+                    NativeDelegationRequest::CallerScope {},
+                    &mut st
+                )
+                .unwrap()["caller_read_only"],
+                true
+            );
+            let cancelled = handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Cancel {
+                    task_id: task_id.clone(),
+                },
+                &mut st,
+            )
+            .unwrap();
             assert_eq!(cancelled["status"], "cancelling");
             st.managed_spawns.get(&task_id).unwrap().stop.clone()
         };
@@ -10516,10 +12709,25 @@ mod tests {
             st.connections.insert("child-conn".into(), child_writer);
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
             assert_eq!(task.effective_posture, Some(SpawnPosture::Discovery));
-            assert_eq!(handle_locked("child-conn", NativeDelegationRequest::CallerScope {}, &mut st).unwrap()["caller_read_only"], true);
-            let mut response = bridget_core::BridgetMessage::new(&task.child, &task.owner, "réponse finale automatique Discovery");
+            assert_eq!(
+                handle_locked(
+                    "child-conn",
+                    NativeDelegationRequest::CallerScope {},
+                    &mut st
+                )
+                .unwrap()["caller_read_only"],
+                true
+            );
+            let mut response = bridget_core::BridgetMessage::new(
+                &task.child,
+                &task.owner,
+                "réponse finale automatique Discovery",
+            );
             response.in_reply_to = Some(message.id.clone());
-            (response, st.managed_spawns.get(&task_id).unwrap().stop.clone())
+            (
+                response,
+                st.managed_spawns.get(&task_id).unwrap().stop.clone(),
+            )
         };
         // Trame de réponse automatique prévue par le wrapper, hors outil MCP.
         assert!(
@@ -10552,9 +12760,18 @@ mod tests {
     #[test]
     fn native150_pause_etat_illisible_refus_ferme() {
         let (mut st, config, _rx, _reader) = fixture("n150-pause-illisible");
-        st.store.connection().execute("DELETE FROM control_state WHERE id = 1", []).unwrap();
-        assert_eq!(handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(), "control_state_unavailable");
-        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche créée");
+        st.store
+            .connection()
+            .execute("DELETE FROM control_state WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(
+            handle_locked("conn-1", request("neuve"), &mut st).unwrap_err(),
+            "control_state_unavailable"
+        );
+        assert!(
+            st.delegation_store.tasks().unwrap().is_empty(),
+            "aucune tâche créée"
+        );
         cleanup(&config);
     }
 
@@ -10565,11 +12782,19 @@ mod tests {
         assert_eq!(first["suspended"], false);
         pauser_150(&st, true);
         first["suspended"] = json!(true);
-        assert_eq!(handle_locked("conn-1", request("admise"), &mut st).unwrap(), first);
+        assert_eq!(
+            handle_locked("conn-1", request("admise"), &mut st).unwrap(),
+            first
+        );
         // Un rejeu d'une clé purgée garde son refus propre, avant la pause.
         solder_150(&st, first["task_id"].as_str().unwrap());
-        st.delegation_store.purge_trees(unix_timestamp() + 8 * JOUR_150, None, usize::MAX, |_| true).unwrap();
-        assert_eq!(handle_locked("conn-1", request("admise"), &mut st).unwrap_err(), "request_expired");
+        st.delegation_store
+            .purge_trees(unix_timestamp() + 8 * JOUR_150, None, usize::MAX, |_| true)
+            .unwrap();
+        assert_eq!(
+            handle_locked("conn-1", request("admise"), &mut st).unwrap_err(),
+            "request_expired"
+        );
         cleanup(&config);
     }
 
@@ -10577,7 +12802,10 @@ mod tests {
     fn native150_pause_cle_libre_apres_levee() {
         let (mut st, config, _rx, _reader) = fixture("n150-pause-levee");
         pauser_150(&st, true);
-        assert_eq!(handle_locked("conn-1", request("k"), &mut st).unwrap_err(), "referent_paused");
+        assert_eq!(
+            handle_locked("conn-1", request("k"), &mut st).unwrap_err(),
+            "referent_paused"
+        );
         pauser_150(&st, false);
         let admise = handle_locked("conn-1", request("k"), &mut st).unwrap();
         assert_eq!(admise["status"], "queued");
@@ -10590,18 +12818,35 @@ mod tests {
         let first = handle_locked("conn-1", request("k"), &mut st).unwrap();
         let task_id = first["task_id"].as_str().unwrap().to_string();
         pauser_150(&st, true);
-        let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+        let catalogue =
+            handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
         assert_eq!(catalogue["version"], 1);
-        let statut = handle_locked("conn-1", NativeDelegationRequest::Status { task_id: task_id.clone() }, &mut st).unwrap();
+        let statut = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Status {
+                task_id: task_id.clone(),
+            },
+            &mut st,
+        )
+        .unwrap();
         assert_eq!(statut["task_id"], first["task_id"]);
-        let annulee = handle_locked("conn-1", NativeDelegationRequest::Cancel { task_id }, &mut st).unwrap();
+        let annulee = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Cancel { task_id },
+            &mut st,
+        )
+        .unwrap();
         assert_eq!(annulee["status"], "cancelling");
         cleanup(&config);
     }
 
     fn request_delai_150(key: &str, reply_timeout: Option<u64>) -> NativeDelegationRequest {
         let mut req = request(key);
-        if let NativeDelegationRequest::Delegate { reply_timeout: slot, .. } = &mut req {
+        if let NativeDelegationRequest::Delegate {
+            reply_timeout: slot,
+            ..
+        } = &mut req
+        {
             *slot = reply_timeout;
         }
         req
@@ -10612,20 +12857,40 @@ mod tests {
         let (mut st, config, _rx, _reader) = fixture("n150-delai-bornes");
         for hors_bornes in [0, 59, 86_401, u64::MAX] {
             assert_eq!(
-                handle_locked("conn-1", request_delai_150("hors", Some(hors_bornes)), &mut st).unwrap_err(),
+                handle_locked(
+                    "conn-1",
+                    request_delai_150("hors", Some(hors_bornes)),
+                    &mut st
+                )
+                .unwrap_err(),
                 "reply_timeout_out_of_range",
                 "{hors_bornes}"
             );
         }
-        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune tâche, aucune valeur corrigée");
+        assert!(
+            st.delegation_store.tasks().unwrap().is_empty(),
+            "aucune tâche, aucune valeur corrigée"
+        );
         for (cle, secs) in [("min", 60), ("max", 86_400), ("milieu", 1_800)] {
-            let admise = handle_locked("conn-1", request_delai_150(cle, Some(secs)), &mut st).unwrap();
-            let task = st.delegation_store.get(admise["task_id"].as_str().unwrap()).unwrap().unwrap();
+            let admise =
+                handle_locked("conn-1", request_delai_150(cle, Some(secs)), &mut st).unwrap();
+            let task = st
+                .delegation_store
+                .get(admise["task_id"].as_str().unwrap())
+                .unwrap()
+                .unwrap();
             assert_eq!(task.reply_timeout, Some(secs as i64));
         }
         // Sans valeur : rien n'est stocké, le défaut 3600 s s'applique plus tard.
         let defaut = handle_locked("conn-1", request_delai_150("defaut", None), &mut st).unwrap();
-        assert_eq!(st.delegation_store.get(defaut["task_id"].as_str().unwrap()).unwrap().unwrap().reply_timeout, None);
+        assert_eq!(
+            st.delegation_store
+                .get(defaut["task_id"].as_str().unwrap())
+                .unwrap()
+                .unwrap()
+                .reply_timeout,
+            None
+        );
         cleanup(&config);
     }
 
@@ -10633,7 +12898,10 @@ mod tests {
     fn native150_delai_rejeu_autre_valeur_envelope_mismatch() {
         let (mut st, config, _rx, _reader) = fixture("n150-delai-rejeu");
         let first = handle_locked("conn-1", request_delai_150("k", Some(120)), &mut st).unwrap();
-        assert_eq!(handle_locked("conn-1", request_delai_150("k", Some(120)), &mut st).unwrap(), first);
+        assert_eq!(
+            handle_locked("conn-1", request_delai_150("k", Some(120)), &mut st).unwrap(),
+            first
+        );
         for autre in [Some(121), None, Some(3600)] {
             assert_eq!(
                 handle_locked("conn-1", request_delai_150("k", autre), &mut st).unwrap_err(),
@@ -10651,7 +12919,16 @@ mod tests {
     }
 
     /// Une mission parente en cours (`working`, échéance posée) dont l'enfant délègue à son tour.
-    fn parent_en_cours_150(native_request: NativeDelegationRequest, retard: i64) -> (Arc<Mutex<DaemonState>>, DaemonConfig, String, i64, bridget_core::BridgetMessage) {
+    fn parent_en_cours_150(
+        native_request: NativeDelegationRequest,
+        retard: i64,
+    ) -> (
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        String,
+        i64,
+        bridget_core::BridgetMessage,
+    ) {
         use std::io::BufRead;
         let (mut st, config, rx, _parent_reader) = fixture("n150-delai-parent");
         let first = handle_locked("conn-1", native_request, &mut st).unwrap();
@@ -10667,53 +12944,96 @@ mod tests {
         let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
             panic!("Start attendu")
         };
-        let (child_writer, mut child_reader) = super::super::presence_tests::control_socket("n150child");
-        child_reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let (child_writer, mut child_reader) =
+            super::super::presence_tests::control_socket("n150child");
+        child_reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
         {
             let mut st = shared.lock().unwrap();
             assert!(matches!(
                 handle_register_with_channel(
-                    "child-conn", 2, "native-test".into(), prepared.lease.name.clone(),
-                    Some(st.host.clone()), Some("codex_app_server".into()),
-                    ChannelReport::Known("unix".into()), Some(PresenceMode::Acp), None,
-                    Some("macOS".into()), Some(prepared.lease.instance_id.clone()), None,
-                    false, Some(true), &mut st
+                    "child-conn",
+                    2,
+                    "native-test".into(),
+                    prepared.lease.name.clone(),
+                    Some(st.host.clone()),
+                    Some("codex_app_server".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("macOS".into()),
+                    Some(prepared.lease.instance_id.clone()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st
                 ),
                 DaemonToWrapper::Registered { .. }
             ));
             st.connections.insert("child-conn".into(), child_writer);
-            st.conn_instances.insert("child-conn".into(), prepared.lease.instance_id.clone());
-            st.fleet.register_connected(&prepared.lease, &prepared.lease.instance_id, unix_timestamp()).unwrap();
+            st.conn_instances
+                .insert("child-conn".into(), prepared.lease.instance_id.clone());
+            st.fleet
+                .register_connected(
+                    &prepared.lease,
+                    &prepared.lease.instance_id,
+                    unix_timestamp(),
+                )
+                .unwrap();
             st.managed_spawns.get_mut(&task_id).unwrap().wrapper_conn = Some("child-conn".into());
         }
         tick(&shared);
         let mut line = String::new();
         child_reader.read_line(&mut line).unwrap();
-        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap() else {
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap()
+        else {
             panic!("mission idempotente attendue")
         };
         let deadline = {
             let st = shared.lock().unwrap();
             let parent = st.delegation_store.get(&task_id).unwrap().unwrap();
             assert_eq!(parent.state, "working");
-            parent.mission_deadline_at.expect("échéance du parent posée")
+            parent
+                .mission_deadline_at
+                .expect("échéance du parent posée")
         };
         (shared, config, task_id, deadline, message)
     }
 
     #[test]
     fn native150_delai_enfant_explicite_trop_long() {
-        let (shared, config, parent_id, deadline, _) = parent_en_cours_150(request_delai_150("parent", None), 0);
+        let (shared, config, parent_id, deadline, _) =
+            parent_en_cours_150(request_delai_150("parent", None), 0);
         let mut st = shared.lock().unwrap();
         // Il reste au plus 3600 s au parent : 3601 s explicites le dépassent.
         assert!(deadline - unix_timestamp() <= 3600);
         assert_eq!(
-            handle_locked("child-conn", request_delai_150("sous-long", Some(3601)), &mut st).unwrap_err(),
+            handle_locked(
+                "child-conn",
+                request_delai_150("sous-long", Some(3601)),
+                &mut st
+            )
+            .unwrap_err(),
             "reply_timeout_exceeds_parent"
         );
-        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1, "aucune tâche créée");
-        let court = handle_locked("child-conn", request_delai_150("sous-court", Some(120)), &mut st).unwrap();
-        let sous = st.delegation_store.get(court["task_id"].as_str().unwrap()).unwrap().unwrap();
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            1,
+            "aucune tâche créée"
+        );
+        let court = handle_locked(
+            "child-conn",
+            request_delai_150("sous-court", Some(120)),
+            &mut st,
+        )
+        .unwrap();
+        let sous = st
+            .delegation_store
+            .get(court["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(sous.parent_task_id.as_deref(), Some(parent_id.as_str()));
         assert_eq!(sous.reply_timeout, Some(120));
         drop(st);
@@ -10722,11 +13042,21 @@ mod tests {
 
     #[test]
     fn native150_delai_enfant_implicite_inchange() {
-        let (shared, config, _parent_id, _deadline, _) = parent_en_cours_150(request_delai_150("parent", None), 0);
+        let (shared, config, _parent_id, _deadline, _) =
+            parent_en_cours_150(request_delai_150("parent", None), 0);
         let mut st = shared.lock().unwrap();
         // Sans délai explicite : aucun contrôle, comme en 149.
-        let implicite = handle_locked("child-conn", request_delai_150("sous-implicite", None), &mut st).unwrap();
-        let sous = st.delegation_store.get(implicite["task_id"].as_str().unwrap()).unwrap().unwrap();
+        let implicite = handle_locked(
+            "child-conn",
+            request_delai_150("sous-implicite", None),
+            &mut st,
+        )
+        .unwrap();
+        let sous = st
+            .delegation_store
+            .get(implicite["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(sous.reply_timeout, None);
         drop(st);
         cleanup(&config);
@@ -10734,14 +13064,31 @@ mod tests {
 
     #[test]
     fn native150_delai_applique_echeance_et_suivi() {
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", Some(120)), 0);
-        assert_eq!(message.reply_timeout, Some(120), "suivi de la demande de mission");
-        let created_at = shared.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap().created_at;
-        assert!((120..=125).contains(&(deadline - created_at)), "échéance = admission + 120 s : {}", deadline - created_at);
+        let (shared, config, task_id, deadline, message) =
+            parent_en_cours_150(request_delai_150("parent", Some(120)), 0);
+        assert_eq!(
+            message.reply_timeout,
+            Some(120),
+            "suivi de la demande de mission"
+        );
+        let created_at = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task_id)
+            .unwrap()
+            .unwrap()
+            .created_at;
+        assert!(
+            (120..=125).contains(&(deadline - created_at)),
+            "échéance = admission + 120 s : {}",
+            deadline - created_at
+        );
         drop(shared);
         cleanup(&config);
         // Sans délai explicite : 3600 s, comme en 149.
-        let (shared, config, _task_id, _deadline, message) = parent_en_cours_150(request_delai_150("parent", None), 0);
+        let (shared, config, _task_id, _deadline, message) =
+            parent_en_cours_150(request_delai_150("parent", None), 0);
         assert_eq!(message.reply_timeout, Some(3600));
         drop(shared);
         cleanup(&config);
@@ -10751,13 +13098,27 @@ mod tests {
     fn native150_pause_precede_refus_de_droits() {
         let (mut st, config, _rx, _reader) = fixture("n150-pause-droits");
         st.delegation_store
-            .grant("instance-1", Path::new("/tmp"), SpawnPosture::Development, true)
+            .grant(
+                "instance-1",
+                Path::new("/tmp"),
+                SpawnPosture::Development,
+                true,
+            )
             .unwrap();
         // Contrôle positif : sans pause, la révocation donne le refus de droits.
-        assert_eq!(handle_locked("conn-1", request("k1"), &mut st).unwrap_err(), "delegation_grant_required");
+        assert_eq!(
+            handle_locked("conn-1", request("k1"), &mut st).unwrap_err(),
+            "delegation_grant_required"
+        );
         pauser_150(&st, true);
-        assert_eq!(handle_locked("conn-1", request("k2"), &mut st).unwrap_err(), "referent_paused");
-        assert!(st.delegation_store.tasks().unwrap().is_empty(), "aucune écriture");
+        assert_eq!(
+            handle_locked("conn-1", request("k2"), &mut st).unwrap_err(),
+            "referent_paused"
+        );
+        assert!(
+            st.delegation_store.tasks().unwrap().is_empty(),
+            "aucune écriture"
+        );
         cleanup(&config);
     }
 
@@ -10767,9 +13128,19 @@ mod tests {
         let first = handle_locked("conn-1", request("k"), &mut st).unwrap();
         let task_id = first["task_id"].as_str().unwrap().to_string();
         solder_150(&st, &task_id);
-        assert_eq!(st.delegation_store.purge_trees(unix_timestamp() + 8 * JOUR_150, None, usize::MAX, |_| true).unwrap(), 1);
         assert_eq!(
-            handle_locked("conn-1", NativeDelegationRequest::Status { task_id }, &mut st).unwrap_err(),
+            st.delegation_store
+                .purge_trees(unix_timestamp() + 8 * JOUR_150, None, usize::MAX, |_| true)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Status { task_id },
+                &mut st
+            )
+            .unwrap_err(),
             "task_unavailable"
         );
         cleanup(&config);
@@ -10777,14 +13148,24 @@ mod tests {
 
     #[test]
     fn native150_delai_enfant_explicite_parent_sans_echeance() {
-        let (shared, config, parent_id, _deadline, _) = parent_en_cours_150(request_delai_150("parent", None), 0);
+        let (shared, config, parent_id, _deadline, _) =
+            parent_en_cours_150(request_delai_150("parent", None), 0);
         let mut st = shared.lock().unwrap();
         // Parent sans échéance durable : aucun contrôle (R8), même pour le maximum.
         let mut parent = st.delegation_store.get(&parent_id).unwrap().unwrap();
         parent.mission_deadline_at = None;
         st.delegation_store.save(&parent).unwrap();
-        let admise = handle_locked("child-conn", request_delai_150("sous-sans-echeance", Some(86_400)), &mut st).unwrap();
-        let sous = st.delegation_store.get(admise["task_id"].as_str().unwrap()).unwrap().unwrap();
+        let admise = handle_locked(
+            "child-conn",
+            request_delai_150("sous-sans-echeance", Some(86_400)),
+            &mut st,
+        )
+        .unwrap();
+        let sous = st
+            .delegation_store
+            .get(admise["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(sous.reply_timeout, Some(86_400));
         drop(st);
         cleanup(&config);
@@ -10796,19 +13177,40 @@ mod tests {
         let modele = tache_soldee_150(&mut st, "modele");
         let task = semer_terminale_150(&st, &modele, 1, "result_available");
         remise_native_150(&mut st, &task, "native-result-", true);
-        let cle = IdempotencyKey::new(&crate::communication::issuer_scope(&task.task_id), OperationKind::Send, &format!("native-result-{}", task.task_id)).unwrap();
+        let cle = IdempotencyKey::new(
+            &crate::communication::issuer_scope(&task.task_id),
+            OperationKind::Send,
+            &format!("native-result-{}", task.task_id),
+        )
+        .unwrap();
         let loin = unix_timestamp() + 90 * JOUR_150;
         // Écriture impossible : la preuve d'accusé ne peut pas être enregistrée.
         let externe = rusqlite::Connection::open(&config.db_path).unwrap();
         externe.execute_batch("CREATE TRIGGER s150_bloque BEFORE UPDATE ON native_delegations BEGIN SELECT RAISE(ABORT,'bloque'); END;").unwrap();
         assert!(copy_delivery_acks(&st).is_err());
         super::super::maintain_stores(&st, loin);
-        assert_eq!(st.idempotency.send_delivery_phase(&cle).unwrap().as_deref(), Some("acked"), "la remise survit au passage");
-        assert!(!st.delegation_store.get(&task.task_id).unwrap().unwrap().delivery_acked);
+        assert_eq!(
+            st.idempotency.send_delivery_phase(&cle).unwrap().as_deref(),
+            Some("acked"),
+            "la remise survit au passage"
+        );
+        assert!(
+            !st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .delivery_acked
+        );
         // L'écriture revient : la preuve est recopiée, puis seulement la remise est purgée.
         externe.execute_batch("DROP TRIGGER s150_bloque;").unwrap();
         super::super::maintain_stores(&st, loin);
-        assert!(st.delegation_store.get(&task.task_id).unwrap().unwrap().delivery_acked);
+        assert!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .delivery_acked
+        );
         assert_eq!(st.idempotency.send_delivery_phase(&cle).unwrap(), None);
         cleanup(&config);
     }
@@ -10829,22 +13231,47 @@ mod tests {
             task.state = "cancelled".into();
             task.cleanup_done = true;
             task.completed_at = Some(unix_timestamp() + 120 * JOUR_150);
-            st.delegation_store.insert(&task, &format!("req-lot150-{i}"), b"canon").unwrap();
-            let lease = match st.fleet.request_spawn(&ordre_lancement_150(&task.child, &format!("saga-lot-{i}")), unix_timestamp()).unwrap() {
+            st.delegation_store
+                .insert(&task, &format!("req-lot150-{i}"), b"canon")
+                .unwrap();
+            let lease = match st
+                .fleet
+                .request_spawn(
+                    &ordre_lancement_150(&task.child, &format!("saga-lot-{i}")),
+                    unix_timestamp(),
+                )
+                .unwrap()
+            {
                 crate::fleet::SpawnSubmission::Start(lease) => lease,
                 other => panic!("réservation inattendue: {other:?}"),
             };
-            st.fleet.mark_starting(&lease, unix_timestamp(), &definition).unwrap();
-            st.fleet.register_connected(&lease, &lease.instance_id, unix_timestamp()).unwrap();
+            st.fleet
+                .mark_starting(&lease, unix_timestamp(), &definition)
+                .unwrap();
+            st.fleet
+                .register_connected(&lease, &lease.instance_id, unix_timestamp())
+                .unwrap();
             st.fleet.mark_stopped(&task.child).unwrap();
             ids.push(task.child);
         }
         let avant = st.fleet.desired_write_count();
-        assert_eq!(purge_retained(&st, unix_timestamp() + 200 * JOUR_150, None, usize::MAX), 2, "modèle + arbre de test");
-        assert_eq!(st.fleet.desired_write_count() - avant, 1, "une seule écriture de flotte pour tout l'arbre");
+        assert_eq!(
+            purge_retained(&st, unix_timestamp() + 200 * JOUR_150, None, usize::MAX),
+            2,
+            "modèle + arbre de test"
+        );
+        assert_eq!(
+            st.fleet.desired_write_count() - avant,
+            1,
+            "une seule écriture de flotte pour tout l'arbre"
+        );
         for child in &ids {
             assert_eq!(
-                st.fleet.desired_entry(child).unwrap().unwrap().lifecycle_state,
+                st.fleet
+                    .desired_entry(child)
+                    .unwrap()
+                    .unwrap()
+                    .lifecycle_state,
                 DesiredLifecycleState::Decommissioned
             );
         }
@@ -10858,28 +13285,43 @@ mod tests {
         let attente = handle_locked("conn-1", request("attente"), &mut st).unwrap();
         pauser_150(&st, true);
         let shared = Arc::new(Mutex::new(st));
-        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("refusee"), &shared) else {
+        let DaemonToWrapper::NativeDelegationResult { result } =
+            handle("conn-1", request("refusee"), &shared)
+        else {
             panic!("résultat attendu")
         };
         assert_eq!(result["code"], "referent_paused", "{result}");
         assert!(rx.try_recv().is_err(), "un refus ne lance aucun tick");
-        let task = shared.lock().unwrap().delegation_store.get(attente["task_id"].as_str().unwrap()).unwrap().unwrap();
+        let task = shared
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(attente["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(task.state, "queued");
         // FR-008 : même un rejeu admis ne lance aucun travail pendant la pause.
-        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("attente"), &shared) else {
+        let DaemonToWrapper::NativeDelegationResult { result } =
+            handle("conn-1", request("attente"), &shared)
+        else {
             panic!("résultat attendu")
         };
         assert_eq!(result["status"], "queued");
         assert_eq!(result["suspended"], true);
         assert!(rx.try_recv().is_err(), "aucun lancement pendant la pause");
         pauser_150(&shared.lock().unwrap(), false);
-        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", request("attente"), &shared) else {
+        let DaemonToWrapper::NativeDelegationResult { result } =
+            handle("conn-1", request("attente"), &shared)
+        else {
             panic!("résultat attendu")
         };
         assert_eq!(result["task_id"], attente["task_id"]);
         assert_eq!(result["status"], "queued");
         assert_eq!(result["suspended"], false);
-        assert!(matches!(rx.try_recv(), Ok(ManagedSupervisorCommand::Start { .. })));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ManagedSupervisorCommand::Start { .. })
+        ));
         drop(shared);
         cleanup(&config);
     }
@@ -10890,13 +13332,25 @@ mod tests {
         let modele = modele_150(&mut st);
         // 5000 arbres soldés et récents : seule la pression de borne peut les purger.
         let recent = unix_timestamp() - 3600;
-        semer_brut_150(&config, &modele, 0, 5000, "result_available", true, "instance-autre", recent - 6000);
+        semer_brut_150(
+            &config,
+            &modele,
+            0,
+            5000,
+            "result_available",
+            true,
+            "instance-autre",
+            recent - 6000,
+        );
         let mut precedent = 5000;
         let mut passes = 0;
         loop {
             super::super::maintain_stores(&st, unix_timestamp());
             let restantes = st.delegation_store.tasks().unwrap().len();
-            assert!(precedent - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS, "au plus 128 arbres par passage");
+            assert!(
+                precedent - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
+                "au plus 128 arbres par passage"
+            );
             if restantes == precedent {
                 break;
             }
@@ -10905,7 +13359,10 @@ mod tests {
             assert!(passes <= 10, "la purge doit converger");
         }
         assert!(precedent < 4096, "total sous la borne : {precedent}");
-        assert!(precedent >= 4096 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS, "pas de purge au-delà du nécessaire : {precedent}");
+        assert!(
+            precedent >= 4096 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
+            "pas de purge au-delà du nécessaire : {precedent}"
+        );
         assert!(passes >= 8, "plusieurs passages : {passes}");
         cleanup(&config);
     }
@@ -10917,8 +13374,26 @@ mod tests {
         // 200 arbres soldés de plus de 7 jours (purge d'âge) et 4100 récents (pression de borne).
         let ancien = unix_timestamp() - 30 * JOUR_150;
         let recent = unix_timestamp() - 3600;
-        semer_brut_150(&config, &modele, 0, 200, "result_available", true, "instance-autre", ancien);
-        semer_brut_150(&config, &modele, 200, 4100, "result_available", true, "instance-autre", recent - 6000);
+        semer_brut_150(
+            &config,
+            &modele,
+            0,
+            200,
+            "result_available",
+            true,
+            "instance-autre",
+            ancien,
+        );
+        semer_brut_150(
+            &config,
+            &modele,
+            200,
+            4100,
+            "result_available",
+            true,
+            "instance-autre",
+            recent - 6000,
+        );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 4300);
         super::super::maintain_stores(&st, unix_timestamp());
         let restantes = st.delegation_store.tasks().unwrap().len();
@@ -10926,7 +13401,11 @@ mod tests {
             4300 - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
             "au plus 128 arbres par passage, âge et borne cumulés : {restantes}"
         );
-        assert_eq!(restantes, 4300 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS, "le quota du passage est consommé");
+        assert_eq!(
+            restantes,
+            4300 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
+            "le quota du passage est consommé"
+        );
         cleanup(&config);
     }
 
@@ -10934,26 +13413,57 @@ mod tests {
     fn native150_delai_suivi_realigne_apres_echec_d_ecriture() {
         // Ancien suivi150 divergent : la date d'émission152 ne nécessite plus
         // d'alignement au premier envoi. Conserver le cas réel d'UPDATE en échec.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", Some(120)), 30);
+        let (shared, config, task_id, deadline, message) =
+            parent_en_cours_150(request_delai_150("parent", Some(120)), 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
-            st.store.set_request_deadline(&message.id, task.created_at + 120).unwrap();
+            st.store
+                .set_request_deadline(&message.id, task.created_at + 120)
+                .unwrap();
         }
         rusqlite::Connection::open(&config.db_path).unwrap()
             .execute_batch("CREATE TRIGGER s150_suivi_bloque BEFORE UPDATE OF deadline_at ON tracked_requests BEGIN SELECT RAISE(ABORT,'bloque'); END;")
             .unwrap();
-        assert!(shared.lock().unwrap().store.set_request_deadline(&message.id, deadline).is_err(), "vrai échec UPDATE");
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .set_request_deadline(&message.id, deadline)
+                .is_err(),
+            "vrai échec UPDATE"
+        );
         let suivi_deadline = |shared: &Arc<Mutex<DaemonState>>| {
-            shared.lock().unwrap().store.get_request(&message.id).unwrap().expect("demande suivie").deadline_at
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request(&message.id)
+                .unwrap()
+                .expect("demande suivie")
+                .deadline_at
         };
         assert_ne!(suivi_deadline(&shared), deadline, "ancien suivi divergent");
         // Tant que l'écriture échoue, le tick réessaie sans casser la tâche.
         tick(&shared);
         assert_ne!(suivi_deadline(&shared), deadline);
-        assert_eq!(shared.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap().state, "working");
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "working"
+        );
         // L'écriture revient : le tick suivant réaligne le suivi sur mission_deadline_at.
-        rusqlite::Connection::open(&config.db_path).unwrap().execute_batch("DROP TRIGGER s150_suivi_bloque;").unwrap();
+        rusqlite::Connection::open(&config.db_path)
+            .unwrap()
+            .execute_batch("DROP TRIGGER s150_suivi_bloque;")
+            .unwrap();
         tick(&shared);
         assert_eq!(suivi_deadline(&shared), deadline, "suivi réaligné");
         drop(shared);
@@ -10963,27 +13473,43 @@ mod tests {
     #[test]
     fn native150_delai_suivi_aligne_sur_admission_apres_lancement_retarde() {
         // Délai explicite, lancement retardé de 30 s : le suivi durable suit l'admission de la mission.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", Some(120)), 30);
+        let (shared, config, task_id, deadline, message) =
+            parent_en_cours_150(request_delai_150("parent", Some(120)), 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
-            let suivi = st.store.get_request(&message.id).unwrap().expect("demande suivie");
-            assert_eq!(suivi.deadline_at, deadline, "suivi aligné sur mission_deadline_at");
+            let suivi = st
+                .store
+                .get_request(&message.id)
+                .unwrap()
+                .expect("demande suivie");
+            assert_eq!(
+                suivi.deadline_at, deadline,
+                "suivi aligné sur mission_deadline_at"
+            );
             assert_eq!(suivi.created_at, task.mission_issued_at.unwrap());
             assert_eq!(suivi.deadline_at, task.mission_issued_at.unwrap() + 120);
             assert_eq!(message.id, task.mission);
-            assert!(deadline - task.created_at >= 150, "l'échéance compte depuis l'admission, pas la création");
+            assert!(
+                deadline - task.created_at >= 150,
+                "l'échéance compte depuis l'admission, pas la création"
+            );
         }
         // L'enveloppe de l'envoi de mission n'a pas changé : le délai reste celui du parent.
         assert_eq!(message.reply_timeout, Some(120));
         drop(shared);
         cleanup(&config);
         // FR-010 : le défaut3600 part aussi de la première émission de mission.
-        let (shared, config, task_id, deadline, message) = parent_en_cours_150(request_delai_150("parent", None), 30);
+        let (shared, config, task_id, deadline, message) =
+            parent_en_cours_150(request_delai_150("parent", None), 30);
         {
             let st = shared.lock().unwrap();
             let task = st.delegation_store.get(&task_id).unwrap().unwrap();
-            let suivi = st.store.get_request(&message.id).unwrap().expect("demande suivie");
+            let suivi = st
+                .store
+                .get_request(&message.id)
+                .unwrap()
+                .expect("demande suivie");
             assert_eq!(suivi.created_at, task.mission_issued_at.unwrap());
             assert_eq!(suivi.deadline_at, task.mission_issued_at.unwrap() + 3600);
             assert_eq!(suivi.deadline_at, deadline);
@@ -10998,7 +13524,7 @@ mod tests {
 
 #[cfg(test)]
 #[path = "native_delegation_permissions149_tests.rs"]
-mod native_delegation_permissions149_tests;
+pub(super) mod native_delegation_permissions149_tests;
 
 #[cfg(test)]
 #[path = "native_workspace154_tests.rs"]

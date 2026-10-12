@@ -125,3 +125,7 @@ Date : 2026-10-12. Branche : session-158-reveils-controle. Racine : /Users/moi/N
 ## Décisions ROOT de contre-revue fraîche158A
 
 CallerScope est une requête interne dans l'enveloppe native existante, sans outil MCP : identité inscrite, lookup indexé côté daemon, résultat booléen obligatoire et panne fermée avant tout effet. Aucune DB cliente. Halt compose Delegate et Continue seulement ; demandes ouvertes/réponses et missions déjà queued/en cours gardent leur contrat de pause. Le snapshot des plus hautes racines actives et leur count est évalué une seule fois via FnOnce avant COMMIT ; verrou daemon jusqu'à human_cancel ; cancelled compte des arbres visés. Replayhalted est historique. Overview transporte les métadonnées courantes since/by/reason Option pour status. Pas d'autre variante, tâche ou test autonome. Journal to absent/null est Reads, autre valeur Sends ; annotations dérivées des bases de la table existante. CLI hors plafond MCP, borne ADR011 conservée.
+
+## Extension158B après livraison158A
+
+La partie B complète US5–US7. Son artefact de référence est /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/plan-158B.md. Les preuves et choix158A ci-dessus restent historiques et conservés.

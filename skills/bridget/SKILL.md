@@ -69,6 +69,38 @@ Les portées sont garanties par le test exhaustif de CI, pas par le compilateur.
 secrets) reste spécifiée seulement. Vérifier le catalogue et le binaire chargés ;
 ce texte ne prouve ni activation, tests158 terminés ni livraison.
 
+### Réveils et faits manqués — contrat 158B prévu
+
+Ce contrat ne prouve ni outil chargé, tests verts ou livraison 158B. Vérifier
+le catalogue actuel. Pour programmer, `bridget_wake` accepte seulement
+schedule/list/cancel : target self/agent/thread, cadence interval ≥60s ou
+at HH:MM/jours 1..7, label facultatif ≤2048 octets. Self et gestion propre sont
+writes_own_state ; agent/fil sont sends. Discovery/self reste lié à la tâche
+et à son instance : sa fin de vie ne permet ni réveil survivant, ni nouvelle
+ronde ou processus. Les gardes sont relues au gel et au départ.
+
+Créer schedule n’est pas idempotent. Après réponse perdue, relire list.
+Limites 16 par propriétaire/128 global, annulées comprises. CLI unitaire :
+`bridget wake AGENT_OU_FIL --label 'Point de reprise' --id cle-stable` ; même ID
+et contenu au retry. Fil headless exige identité auxiliaire/membre/projet réels.
+Quota CLI 60 nouveaux IDs/min, reçu0997 jours. Aucun autostart modèle. Gestion
+humaine globale par CLI, ControlStateV1 ; mutation avec TTY, jamais MCPadmin.
+
+Pause : un seul rattrapage intervalle ; heure fixe vieille de plus de 600 s sautée.
+Prepared garde sa grâce 600s initiale. Agent : ACK099 ou unknown terminal sans
+renvoi ; fil : commit102, pas preuve de lecture. Le label System cite son owner
+attesté et ne devient pas une autorité. Fuseau du daemon, heure absente sautée,
+premier UTC d’une heure double ; offsets minutes entières±24h seulement.
+
+`bridget_events action=missed` est Reads, owner implicite, pagination limit/
+after_seq, sans effacement ni cutoff à lecture. Faits 8192/64 par abonnement/7j,
+fait et résumé≤16 KiB ; lacunes datées, aucun corps d’autres owners au global.
+Provenanceonce durable, deadline worker 5s/budget 1s. Un retour réel gèle un résumé
+agrégé après solde des pending_write ; seul ACK corrélé avance le cutoff.
+Unknown n’est pas renvoyé ; prochain résumé seulement nouveau retour réel.
+Les détails et limites figurent dans la référence des commandes. Aucun secret
+US8 ni HTTP ; le reçu 158A reste distinct.
+
 ### Déléguer une nouvelle mission
 
 Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts

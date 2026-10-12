@@ -1,0 +1,63 @@
+{
+  "at": "2026-10-12T11:03:54.745242+00:00",
+  "method": "Manuel speckit-analyze ; check-prerequisites.sh absent réellementRC127",
+  "required_files": [
+    "spec.md",
+    "plan.md",
+    "plan-158B.md",
+    "tasks.md",
+    "data-model-158B.md",
+    "contracts/wake-158B.md",
+    "quickstart-158B.md",
+    "reuse-audit-158B.md"
+  ],
+  "read": true,
+  "requirements": 7,
+  "user_stories": [
+    "US5",
+    "US6",
+    "US7"
+  ],
+  "B_tasks": 22,
+  "A_tasks_retained": 22,
+  "coverage_percent": 100,
+  "findings_before_autofix": [
+    {
+      "id": "A1",
+      "severity": "MEDIUM",
+      "finding": "T101 demandait30régressionsavantcodealorsqueplancompareauFULLfinal",
+      "fixed": "Référencehistorique/empreintesfresh,T121seulecomparaisonfraîche"
+    },
+    {
+      "id": "A2",
+      "severity": "LOW",
+      "finding": "T118 cheminsabsolusconcaténés",
+      "fixed": "Deuxcheminsdistincts"
+    },
+    {
+      "id": "A3",
+      "severity": "MEDIUM",
+      "finding": "DépendanceT102entieravanttypesT103inapplicablepourSQL",
+      "fixed": "SurfaceREDpuis types, testsdomainebeforecodecorrespondant, caseT102ouvertej_usqu_SQLvert"
+    }
+  ],
+  "reread": true,
+  "unresolved_critical": 0,
+  "unresolved_high": 0,
+  "unmapped_tasks": [],
+  "scope_excluded": [
+    "US8conditionprérequiseabsente",
+    "HTTP",
+    "nouveauxscénariosconfort"
+  ],
+  "fingerprints": {
+    "spec.md": "47193259f92bd0f6957dfcbd6374f051ed5d490399d6ca0f5960bbcc1c0c0297",
+    "plan.md": "223b45ba169df77d4b27c49e6d80e22fc44c7142f8d8044bd9235c345726fc70",
+    "plan-158B.md": "86777b29efcee174d4609074751b3ad181d25a429e446fcb649d72507e799d3b",
+    "tasks.md": "b69b0073863000e32745a489664cbcea13579e3fbe4578ec74e47d9c83e9cab0",
+    "data-model-158B.md": "05b0011bb2a3dc3238424a837574f4f9bf003d5d3a8a5a2d46a94039490b5287",
+    "contracts/wake-158B.md": "daaa7132658e5592d3171bbc2f5b753f87d0163359303bfa527944c74bee4186",
+    "quickstart-158B.md": "240075add2a181b8ef7cf235f633a63a2df7c19e9c5596336fe5a6d7fed5c863",
+    "reuse-audit-158B.md": "0b4ba2197099fba678f2e6d4f6d0fd44bf417682c59bd1ba5349ccbd76d108b9"
+  }
+}

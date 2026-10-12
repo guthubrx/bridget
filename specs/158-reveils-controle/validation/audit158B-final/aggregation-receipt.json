@@ -1,0 +1,536 @@
+{
+  "at": "2026-10-12T13:12:40.342548+00:00",
+  "status": "validated_RC0",
+  "code": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+  "sources_stable": true,
+  "grade": "A",
+  "numeric": 99.95,
+  "coverage": {
+    "files_scanned": 17,
+    "files_total": 39,
+    "lines_analyzed": 3324,
+    "scope_hunks_total": 405,
+    "hunks_semantically_read": 32,
+    "coverage_estimate_percent": 7.9,
+    "read_ranges_by_file": {
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          948,
+          1078
+        ]
+      ],
+      "crates/bridget-daemon/src/communication/client.rs": [
+        [
+          919,
+          986
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          2104,
+          2123
+        ],
+        [
+          2998,
+          3016
+        ],
+        [
+          7079,
+          7101
+        ],
+        [
+          21446,
+          21468
+        ],
+        [
+          24068,
+          24102
+        ],
+        [
+          24952,
+          24984
+        ],
+        [
+          25091,
+          25102
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          490,
+          590
+        ],
+        [
+          889,
+          1048
+        ],
+        [
+          1427,
+          1541
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          664,
+          675
+        ],
+        [
+          704,
+          791
+        ],
+        [
+          2493,
+          2529
+        ],
+        [
+          5562,
+          5688
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          195,
+          245
+        ]
+      ],
+      "crates/bridget-daemon/src/observation.rs": [
+        [
+          52,
+          195
+        ],
+        [
+          319,
+          325
+        ],
+        [
+          331,
+          337
+        ],
+        [
+          343,
+          350
+        ],
+        [
+          450,
+          540
+        ]
+      ],
+      "crates/bridget-daemon/src/referent_control.rs": [
+        [
+          117,
+          124
+        ],
+        [
+          140,
+          147
+        ],
+        [
+          152,
+          160
+        ],
+        [
+          899,
+          919
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          5,
+          15
+        ],
+        [
+          39,
+          161
+        ],
+        [
+          358,
+          388
+        ]
+      ],
+      "crates/bridget-daemon/src/store/observation_missed.rs": [
+        [
+          1,
+          18
+        ],
+        [
+          110,
+          220
+        ],
+        [
+          267,
+          398
+        ],
+        [
+          426,
+          453
+        ]
+      ],
+      "crates/bridget-daemon/src/store/wake_schedules.rs": [
+        [
+          1,
+          641
+        ]
+      ],
+      "crates/bridget-daemon/src/threads.rs": [
+        [
+          350,
+          380
+        ],
+        [
+          1030,
+          1058
+        ]
+      ],
+      "crates/bridget-daemon/src/wake_schedules.rs": [
+        [
+          1,
+          554
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2362,
+          2472
+        ],
+        [
+          3079,
+          3087
+        ],
+        [
+          4062,
+          4070
+        ]
+      ],
+      "specs/158-reveils-controle/data-model-158B.md": [
+        [
+          48,
+          59
+        ]
+      ],
+      "specs/158-reveils-controle/research-158B.md": [
+        [
+          43,
+          43
+        ]
+      ],
+      "specs/158-reveils-controle/reuse-audit-158B.md": [
+        [
+          1,
+          115
+        ]
+      ]
+    },
+    "coverage_basis": "hunks réels contenus dans lectures fraîches ou héritées seulement si SHAinitial/final exactementinchangé, sans date d’origine réécrite",
+    "fresh_read_ranges_by_file": {
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          490,
+          590
+        ],
+        [
+          889,
+          1048
+        ],
+        [
+          1427,
+          1541
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          664,
+          675
+        ],
+        [
+          704,
+          791
+        ],
+        [
+          2493,
+          2529
+        ],
+        [
+          5562,
+          5688
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          195,
+          245
+        ]
+      ],
+      "crates/bridget-daemon/src/observation.rs": [
+        [
+          52,
+          195
+        ],
+        [
+          319,
+          325
+        ],
+        [
+          331,
+          337
+        ],
+        [
+          343,
+          350
+        ],
+        [
+          450,
+          540
+        ]
+      ],
+      "crates/bridget-daemon/src/referent_control.rs": [
+        [
+          117,
+          124
+        ],
+        [
+          140,
+          147
+        ],
+        [
+          152,
+          160
+        ],
+        [
+          899,
+          919
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          5,
+          15
+        ],
+        [
+          39,
+          161
+        ],
+        [
+          358,
+          388
+        ]
+      ],
+      "crates/bridget-daemon/src/store/wake_schedules.rs": [
+        [
+          1,
+          641
+        ]
+      ],
+      "crates/bridget-daemon/src/threads.rs": [
+        [
+          350,
+          380
+        ],
+        [
+          1030,
+          1058
+        ]
+      ],
+      "crates/bridget-daemon/src/wake_schedules.rs": [
+        [
+          1,
+          554
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2362,
+          2472
+        ],
+        [
+          3079,
+          3087
+        ],
+        [
+          4062,
+          4070
+        ]
+      ],
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          948,
+          1078
+        ]
+      ],
+      "crates/bridget-daemon/src/communication/client.rs": [
+        [
+          919,
+          986
+        ]
+      ],
+      "crates/bridget-daemon/src/store/observation_missed.rs": [
+        [
+          1,
+          18
+        ],
+        [
+          110,
+          220
+        ],
+        [
+          267,
+          398
+        ],
+        [
+          426,
+          453
+        ]
+      ],
+      "specs/158-reveils-controle/research-158B.md": [
+        [
+          43,
+          43
+        ]
+      ],
+      "specs/158-reveils-controle/data-model-158B.md": [
+        [
+          48,
+          59
+        ]
+      ],
+      "specs/158-reveils-controle/reuse-audit-158B.md": [
+        [
+          1,
+          115
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          2104,
+          2123
+        ],
+        [
+          2998,
+          3016
+        ],
+        [
+          7079,
+          7101
+        ],
+        [
+          21446,
+          21468
+        ],
+        [
+          24068,
+          24102
+        ],
+        [
+          24952,
+          24984
+        ],
+        [
+          25091,
+          25102
+        ]
+      ]
+    },
+    "inherited_unchanged_read_ranges_by_file": {}
+  },
+  "C1": {
+    "critical": 0,
+    "high": 0,
+    "medium": 5,
+    "low": 1,
+    "total": 6,
+    "by_category": {
+      "tests": 1,
+      "performance": 3,
+      "reliability": 1,
+      "minimalism": 1
+    }
+  },
+  "final": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "total": 1,
+    "by_category": {
+      "minimalism": 1
+    }
+  },
+  "baseline_exists": false,
+  "validator_executed": true,
+  "inputs": [
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_complexite.json",
+      "sha256": "2909ed27a3273b9da3026a4d68718edb3408c87392c11d05b69faf7328ca3f16"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_duplication.json",
+      "sha256": "1d995f0e37c6ffde8c8343337bb381cf39a2954fcf1d0e59bbbb8fa4dbf8a44f"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_minimalisme.json",
+      "sha256": "1088fdee361cf779aae9664d238ad3eedaad3658598c83650c8e8c8fcd519f11"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_performance.json",
+      "sha256": "f0e270c62e0c2fba96e09d338b5ab7880679a824617aaec5f0a977e747d72d7d"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_qualite.json",
+      "sha256": "2496f4721238a2c40f09d7c29a876e85cdd2371f55db9ef19c39658966f45d88"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_securite.json",
+      "sha256": "ce85f150afa7769ce226c9bea531ecd0de4a33393e28aa94c36e8778da1987e7"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle1-original/cycle-1/findings_tests.json",
+      "sha256": "ec0c7d0ec60d16995abb5e70fa1fb3836f140050cb8232daca5a31a1d9d5fd8f"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_complexite.json",
+      "sha256": "28227f41232db3a18bd7817509bcd74636f103d861881b0e9b67f2ca6d35ecb1"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_duplication.json",
+      "sha256": "ff8ff518fcbe8c300394c4b6d8408423573171dc97e9250ee3105b4e9cf58bac"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_minimalisme.json",
+      "sha256": "af9037a17bd8521687f4ed609f87d611fd1b8b8bf58452dc26b356e116283042"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_performance.json",
+      "sha256": "059e263810c3f1df98611f21bc8ae2f9c0aa14e2dfcf94eadd4158c7e06542cc"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_qualite.json",
+      "sha256": "23ba8669de281c9a9dd84f5823b7185bc3eb27a196dc68d4a69eca63c7eb3ddc"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite-return-clock-supplement.json",
+      "sha256": "f953249f048905e51689381bcfee57b36758e1142ed8e829781812442492f835"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_securite.json",
+      "sha256": "e8f5f8c0e8a534d3514c0c093f1d6fa4087af0f93b7967b120dfe867a8321325"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests-return-clock-supplement.json",
+      "sha256": "a667e0002e8f6e9b2e6b32efa9854d933e2739dac9aa5eadd5012deb5e839c2b"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/findings_tests.json",
+      "sha256": "093376662ad37abb280a82974f99782796b82e9a76af11b1da4bcdb997dab343"
+    }
+  ],
+  "outputs": {
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-1/aggregated-findings.json": "1a1135f3be3fe6ffe3faca4273a0b6f9fae7fab1905e7b9d7ab22b19dbd85387",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycle-scoring/aggregated-findings.json": "6ac8d0513ea10f98fe2e72dfcd0a846a1f129cb255675ec1d64f72fa7b7f2154",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/grade.json": "e28aeba5cffb527b214c638b9b3becf46bf4dbd31b6e9ae4e02fbcc21ae694ed",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/scoring.md": "83b9b8a876155358ea611a35388d0b18d5334b5752686b2d042e8c32f4b7e403",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/fix-report.md": "c8536b7c599ec4bed00062ee065868f6b7385c717ebf57047f9c467def8009ea",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/cycles.log": "6db098528f3d64f532317d40dd09185630110842778f39438a3e1a51d65ddee4",
+    "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/read_manifest-aggregation.json": "b0ba02b13c839c4053fe8721d50a97bc8e9eb6a534d4e4c87db4da378a84c150"
+  },
+  "validator_receipt": "/Users/moi/.cache/bridget-audit158B-20261012/session-2026-10-12-spec-158B-01/validation-receipt.json",
+  "validator_receipt_sha256": "99eab3d2bf35f08373e2e4924328c4d5236652485e38c7621449b4db46552f9c"
+}

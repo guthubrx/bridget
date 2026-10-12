@@ -141,3 +141,10 @@ Date : 2026-10-12. Branche : session-158-reveils-controle. Racine : /Users/moi/N
 ## Actualisation du 12 octobre 2026
 
 PASS : 14/14 points de réemploi, aucun doublon restant. Preuve fraîche : validation/reuse-audit-fresh.md. Les notes précédentes restent historiques.
+
+## Extension158B — gate actuel
+
+Réemploi158B PASS,40/40 items. Rapport complet : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/reuse-audit-158B.md. Le rapport158A ci-dessus reste historique.
+
+
+Clôture ROOT après revueplanR1 :15hypothèses tranchées, contrats de cycle de vie/crash/worker/cutoff précisés. Les40items audités restent inchangés ; aucun service/table/module supplémentaire. GatePASS5/5 maintenu. Empreintes actualisées dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/root-plan-tasks158B.json. Pasde validationB/test/Analyze déduite.

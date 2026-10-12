@@ -342,7 +342,7 @@ impl IdempotencyStore {
             .map(|delivery| delivery.phase))
     }
 
-    fn stored_send_delivery(
+    pub(crate) fn stored_send_delivery(
         &self,
         key: &IdempotencyKey,
     ) -> Result<Option<StoredSendDelivery>, IdempotencyError> {
