@@ -1,0 +1,8 @@
+{
+  "stage_removed": "/Users/moi/.cache/bridget-build-159A.lptb6x99",
+  "bytes_logical_stage": 58263393,
+  "verification_extraction_removed": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/verify159A-closed.0_gljuil",
+  "root_useful_debug_cache_retained": true,
+  "backups_and_proof_archive_retained": true,
+  "reason": "Owned inactive delivery stage; signed installed binary and verified archive remain."
+}

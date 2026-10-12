@@ -1,0 +1,10 @@
+{
+  "source_commit": "53863bd09a4ff364dc2b412519b343c77e163685",
+  "build_id": "53863bd09a4f",
+  "stage": "/Users/moi/.cache/bridget-build-159A.lptb6x99",
+  "exit_code": 0,
+  "duration_seconds": 126.94810466701165,
+  "log_sha256": "7023f95e807bd9e1f7936fa7da5758454f4e98428d3d13e890f04a1ee903405b",
+  "binary_sha256": "905ae6e888476cf21138a222386a9920621a9c20c5cdb90a833913fac54a6de9",
+  "signature_verified": true
+}

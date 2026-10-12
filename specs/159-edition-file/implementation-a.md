@@ -1,6 +1,6 @@
-# Mise en œuvre159A — validation close, livraison en attente
+# Mise en œuvre159A — lot A livré
 
-Lot A : 14 tâches (T001–T013 et T028). Lot B : 14 tâches encore ouvertes. Pipeline InProgress jusqu'au cochage et à la livraison par ROOT ; aucun statut Livré ou succès global déduit ici. Source de travail actuelle, daemon.rs :
+Lot A : 14 tâches (T001–T013 et T028). Lot B : 14 tâches encore ouvertes. Lot A14 coché et livré par ROOT ; spec159 InProgress car B14 reste ouvert. Aucun succès global de tests déduit. Source de travail actuelle, daemon.rs :
 abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc
 Base de travail b235998638b3eadf8f8edc0a6e323b762e95cab0 ; source 158B livré e52a96240b6168bf4466712e1bda8852b4ecb43f. Aucun commit 159A futur inventé.
 
@@ -25,7 +25,7 @@ SHA256 ef4c01667fb9102efbffca25234eb81bbdb8d57c0dda6533ab02d5a147b9bf4d
 SHA256 cfb77a6552e97b28fd092ecbd73e82fbfcaa59694264b354fe593cb63e64018c
 Préserver les faits plus récents avant un éventuel rollback. Native0 reste daté ; recontrôle avant activation.
 
-ROOT doit encore cocher A14 puis réaliser Git/build signé/install/activation/cleanup. Champs du reçu de livraison à relever : source159A intégré/poussé et métadonnées séparées ; commande/durée/RC/source/SHA release ; signature/fichier installé ; contrôles natifs frais ; PID/naissance/build daemon et pont, T3 inchangé ; archive et nettoyage WT/branche/cache, sauvegardes et DB conservées. Aucun résultat de production n'est anticipé.
+ROOT a coché A14, intégré et poussé source53863bd09a4ff364dc2b412519b343c77e163685, installé et activé le release signé. Basev7 contrôlée, T3 inchangé ; branche/worktree/stage retirés, archive vérifiée et sauvegardes conservées. Reçu actuel : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159A.md
 
 Preuves/gates A14 et détails de tests :
 /Users/moi/.cache/bridget-docs159A-final-preparation-20261012/matrice-A14-gates.md

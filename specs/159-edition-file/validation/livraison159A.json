@@ -1,0 +1,248 @@
+{
+  "lot": "159A",
+  "state": "DELIVERED",
+  "completed_at": "2026-10-12T17:47:15.506874+00:00",
+  "A_tasks": 14,
+  "A_checked": 14,
+  "B_tasks_open": 14,
+  "global_spec_status": "InProgress",
+  "source_commit": "53863bd09a4ff364dc2b412519b343c77e163685",
+  "source_github_main_verified": true,
+  "build": {
+    "source_commit": "53863bd09a4ff364dc2b412519b343c77e163685",
+    "build_id": "53863bd09a4f",
+    "stage": "/Users/moi/.cache/bridget-build-159A.lptb6x99",
+    "exit_code": 0,
+    "duration_seconds": 126.94810466701165,
+    "log_sha256": "7023f95e807bd9e1f7936fa7da5758454f4e98428d3d13e890f04a1ee903405b",
+    "binary_sha256": "905ae6e888476cf21138a222386a9920621a9c20c5cdb90a833913fac54a6de9",
+    "signature_verified": true
+  },
+  "installed_binary": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+  "installed_sha256": "905ae6e888476cf21138a222386a9920621a9c20c5cdb90a833913fac54a6de9",
+  "signature_verified": true,
+  "runtime": {
+    "status": "Daemon: en ligne\nMachine du daemon: monordinateur\nSocket: /Users/moi/.cache/bridget-core/bridget.sock\nBase de données du daemon: /Users/moi/.cache/bridget-core/bridget.db\nAgents connectés: 30\nMessages en base: total non publié par le daemon — consulter ledger\nBuild-id daemon: 53863bd09a4f",
+    "operations": [
+      {
+        "signal": "SIGTERM",
+        "before": {
+          "label": "com.bridget.daemon",
+          "pid": 20530,
+          "birth": "Mon Oct 12 15:21:38 2026",
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+        },
+        "gate": {
+          "at": 1791826957.746707,
+          "nonterminal": [],
+          "schema": [
+            [
+              2
+            ],
+            [
+              3
+            ],
+            [
+              4
+            ],
+            [
+              5
+            ],
+            [
+              6
+            ]
+          ]
+        },
+        "at": 1791826957.7623858,
+        "after": {
+          "label": "com.bridget.daemon",
+          "pid": 77955,
+          "birth": "Mon Oct 12 19:42:37 2026",
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+        }
+      },
+      {
+        "signal": "SIGTERM",
+        "before": {
+          "label": "com.bridget.t3",
+          "pid": 20607,
+          "birth": "Mon Oct 12 15:21:41 2026",
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+        },
+        "gate": {
+          "at": 1791826960.790085,
+          "nonterminal": [],
+          "schema": [
+            [
+              2
+            ],
+            [
+              3
+            ],
+            [
+              4
+            ],
+            [
+              5
+            ],
+            [
+              6
+            ],
+            [
+              7
+            ]
+          ]
+        },
+        "at": 1791826960.8014982,
+        "after": {
+          "label": "com.bridget.t3",
+          "pid": 78064,
+          "birth": "Mon Oct 12 19:42:40 2026",
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+        }
+      }
+    ],
+    "schema": [
+      [
+        2
+      ],
+      [
+        3
+      ],
+      [
+        4
+      ],
+      [
+        5
+      ],
+      [
+        6
+      ],
+      [
+        7
+      ]
+    ],
+    "quick_check": [
+      [
+        "ok"
+      ]
+    ],
+    "foreign_key_check": [],
+    "before_t3": [
+      {
+        "pid": 60116,
+        "birth": "Sun Oct 11 01:13:35 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      },
+      {
+        "pid": 60228,
+        "birth": "Sun Oct 11 01:13:36 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      }
+    ],
+    "after_t3": [
+      {
+        "pid": 60116,
+        "birth": "Sun Oct 11 01:13:35 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      },
+      {
+        "pid": 60228,
+        "birth": "Sun Oct 11 01:13:36 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      }
+    ],
+    "final_gate": {
+      "at": 1791826964.0537212,
+      "nonterminal": [],
+      "schema": [
+        [
+          2
+        ],
+        [
+          3
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          6
+        ],
+        [
+          7
+        ]
+      ]
+    }
+  },
+  "held_queue_default": false,
+  "default_reason": "SC004 proxy p95 above 250ms delta; not an exact daemon idle-clock measure.",
+  "tests": {
+    "FULL_once": {
+      "passed": 2551,
+      "failed": 9,
+      "ignored": 75,
+      "rc": 101,
+      "historical": true
+    },
+    "original9_latest_exact_replays": "9/9 PASS",
+    "targeted_final": {
+      "R1_PERF": 54,
+      "T028_list": 7,
+      "R2_turnstate": 8
+    },
+    "no_second_FULL": true,
+    "no_GLOBAL_GREEN_claim": true
+  },
+  "Converge": "P3 plus bounded R2 annex CONVERGED",
+  "audit": {
+    "grade": "A",
+    "numeric": 99.95,
+    "active": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 1
+    },
+    "coverage": "16/64 files; 4275/174030 lines; partial",
+    "validator_rc": 0,
+    "errors": 0,
+    "warnings": 0
+  },
+  "archive": {
+    "path": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/proofs159A-closed.tgz",
+    "sha256": "89265f5b2d9a16c8f5e79a0ff71328efc809e944db0d5e20f0b42be8e920b7ea",
+    "count": 244,
+    "extracted_member_hashes_verified": true
+  },
+  "cleanup": {
+    "at": 1791827133.660562,
+    "source_commit": "53863bd09a4ff364dc2b412519b343c77e163685",
+    "delivery_head": "53863bd09a4ff364dc2b412519b343c77e163685",
+    "archive_sha256": "89265f5b2d9a16c8f5e79a0ff71328efc809e944db0d5e20f0b42be8e920b7ea",
+    "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file",
+    "branch": "session-159A-edition-file",
+    "removed": "",
+    "deleted": "Deleted branch session-159A-edition-file (was 53863bd0).",
+    "remaining": "worktree /Users/moi/Nextcloud/10.Scripts/64.bridget\nHEAD 53863bd09a4ff364dc2b412519b343c77e163685\nbranch refs/heads/main",
+    "root_status": "",
+    "claim_binding_proof_sha256": "f98694e8405b0d253cf261bb6384596ab85e2b22d8e768c2effd0e8e810c0599",
+    "database_written": false,
+    "cache_cleaned": false
+  },
+  "stage_cleanup": {
+    "stage_removed": "/Users/moi/.cache/bridget-build-159A.lptb6x99",
+    "bytes_logical_stage": 58263393,
+    "verification_extraction_removed": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/verify159A-closed.0_gljuil",
+    "root_useful_debug_cache_retained": true,
+    "backups_and_proof_archive_retained": true,
+    "reason": "Owned inactive delivery stage; signed installed binary and verified archive remain."
+  },
+  "rollback_db": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-prod-v6.db",
+  "rollback_binary": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-bridget",
+  "rollback_limit": "Binary158B refuses v7; preserve newer facts before restoring v6; no production rollback performed.",
+  "worktree_paths_in_prior_proofs": "Historical; owned159Aworktree removed.",
+  "T3_restarted": false
+}
