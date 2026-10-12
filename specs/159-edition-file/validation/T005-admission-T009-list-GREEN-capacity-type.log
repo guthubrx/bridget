@@ -1,0 +1,66 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+   Compiling bridget-transport v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport)
+warning: function `wake158B_groupe7_cli_quota_rejeu_collision_et_reprise` should have a snake case name
+    --> crates/bridget-daemon/src/idempotency.rs:1563:8
+     |
+1563 |     fn wake158B_groupe7_cli_quota_rejeu_collision_et_reprise() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe7_cli_quota_rejeu_collision_et_reprise`
+     |
+     = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `wake158B_groupe1_sql_limites_physiques_et_annulees` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:305:8
+    |
+305 |     fn wake158B_groupe1_sql_limites_physiques_et_annulees() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_sql_limites_physiques_et_annulees`
+
+warning: function `wake158B_groupe3_intervalle_gel_restart_et_frontieres` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:416:8
+    |
+416 |     fn wake158B_groupe3_intervalle_gel_restart_et_frontieres() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe3_intervalle_gel_restart_et_frontieres`
+
+warning: function `wake158B_groupe1_domaine_ferme_et_bornes` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:356:8
+    |
+356 |     fn wake158B_groupe1_domaine_ferme_et_bornes() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_domaine_ferme_et_bornes`
+
+warning: function `wake158B_groupe2_calendrier_trou_fold_tz_et_date` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:424:8
+    |
+424 |     fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe2_calendrier_trou_fold_tz_et_date`
+
+warning: `bridget-daemon` (lib test) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.85s
+     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)
+
+running 22 tests
+test daemon::presence_tests::held159_hold_busy ... ok
+test daemon::presence_tests::held159_hold_alerte_fil ... ok
+test daemon::presence_tests::held159_hold_fil_t3 ... ok
+test daemon::presence_tests::held159_hold_ferme_identique ... ok
+test daemon::presence_tests::held159_hold_file_pleine ... ok
+test daemon::presence_tests::held159_hold_incident_delegue ... ok
+test daemon::presence_tests::held159_hold_mission_native ... ok
+test daemon::presence_tests::held159_hold_non_busy_avec_retenus ... ok
+test daemon::presence_tests::held159_hold_non_busy_sans_retenus ... ok
+test daemon::presence_tests::held159_hold_intention_presente ... ok
+test daemon::presence_tests::held159_hold_observation ... ok
+[BRIDGET] Send de held159-attach: to=89000000-0000-4000-8000-000000000102, body=humain réel159
+test daemon::presence_tests::held159_hold_origine_human ... ok
+test daemon::presence_tests::held159_hold_origine_system ... ok
+test daemon::presence_tests::held159_hold_sans_turn_attest ... ok
+test daemon::presence_tests::held159_list_fil_t3_et_type_ferme_released_seulement ... ok
+test daemon::presence_tests::held159_list_borne_200 ... ok
+test daemon::presence_tests::held159_list_filtre_par_droits_de_156 ... ok
+test daemon::presence_tests::held159_list_held_dans_l_ordre ... ok
+test daemon::presence_tests::held159_list_ne_modifie_rien ... ok
+test daemon::presence_tests::held159_list_queue_bound_capacite_du_type_sinon_null ... ok
+test registry::held159_hold_ferme_identique ... ok
+test daemon::presence_tests::held159_list_released_pour_dispatching ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1794 filtered out; finished in 2.59s
+
+[build Bridget] Nettoyage : 0.00 Gio de caches ; 6.85 Gio restants (tailles logiques, clones APFS compris)

@@ -10,6 +10,146 @@ use super::{
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl IdempotencyStore {
+    /// O(log N + G + B), G réservations de l'agent, B enveloppe. Un seul candidat.
+    /// Le caller garde State et la preuve de repos jusqu'au COMMIT ; aucune E/S.
+    pub(crate) fn release_next_held(
+        &mut self,
+        agent: &str,
+        now: i64,
+    ) -> Result<(Option<SendDelivery>, Option<OrphanedDeliveryNotice>), IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let control = crate::referent_control::read(&tx)?;
+        if matches!(
+            crate::referent_control::admit_autonomous_effect(
+                crate::referent_control::AutonomousEffect::HeldRelease,
+                &control
+            ),
+            crate::referent_control::Admission::Deferred { .. }
+        ) {
+            return Ok((None, None));
+        }
+        let pending_pause: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM control_pause_interruptions
+             WHERE target_agent=?1 AND resumed_at IS NULL)",
+            [agent],
+            |r| r.get(0),
+        )?;
+        if pending_pause {
+            return Ok((None, None));
+        }
+        // Seul le caller au repos peut expirer une réservation accusée ; >30s.
+        tx.execute(
+            "UPDATE send_deliveries SET turn_gate=0
+            WHERE recipient_agent=?1 AND turn_gate=1 AND phase='acked'
+              AND acked_at IS NOT NULL AND acked_at<?2",
+            params![agent, now.saturating_sub(30)],
+        )?;
+        let gated: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM send_deliveries
+            WHERE recipient_agent=?1 AND turn_gate=1)",
+            [agent],
+            |r| r.get(0),
+        )?;
+        if gated {
+            return Ok((None, None));
+        }
+        let row = tx
+            .query_row(
+                "SELECT d.delivery_id,d.recipient_instance_id,
+            d.delivery_generation,d.expires_at,d.message_bytes,r.expires_at,
+            EXISTS(SELECT 1 FROM send_delivery_execution_links l WHERE l.delivery_id=d.delivery_id)
+            FROM send_deliveries d JOIN idempotency_records r
+              ON r.issuer_scope=d.issuer_scope AND r.operation_kind=d.operation_kind
+                AND r.idempotency_key=d.idempotency_key
+            WHERE d.recipient_agent=?1 AND d.phase='held'
+            ORDER BY d.queue_rank LIMIT 1",
+                [agent],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, u64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, Vec<u8>>(4)?,
+                        r.get::<_, i64>(5)?,
+                        r.get::<_, bool>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            tx.commit()?;
+            return Ok((None, None));
+        };
+        if row.6 {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+        let message: bridget_core::BridgetMessage = serde_json::from_slice(&row.4)
+            .map_err(|_| IdempotencyError::CorruptRecord("enveloppe retenue illisible"))?;
+        let reason = if row.3 <= now || row.5 <= now {
+            Some("expired_in_queue")
+        } else if message.reply {
+            let open: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tracked_requests
+                    WHERE id=?1 AND sender=?2 AND target=?3 AND state='open' AND deadline_at>?4)",
+                params![message.id, message.from, message.to, now],
+                |r| r.get(0),
+            )?;
+            (!open).then_some("request_closed_in_queue")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            let notice = settle_held_in_transaction(&tx, &row.0, reason, now)?;
+            tx.commit()?;
+            return Ok((None, notice));
+        }
+        if tx.execute(
+            "UPDATE send_deliveries SET phase='dispatching',turn_gate=1
+            WHERE delivery_id=?1 AND phase='held' AND turn_gate=0",
+            [&row.0],
+        )? != 1
+        {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        let delivery = SendDelivery {
+            delivery_id: row.0,
+            recipient_instance_id: row.1,
+            delivery_generation: row.2,
+            expires_at: row.3,
+            message_bytes: row.4,
+        };
+        tx.commit()?;
+        Ok((Some(delivery), None))
+    }
+
+    /// O(log N + B + L), L dépôts liés. Réemploi de la transaction de retrait.
+    pub(crate) fn settle_held(
+        &mut self,
+        id: &str,
+        reason: &str,
+        now: i64,
+    ) -> Result<Option<OrphanedDeliveryNotice>, IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let notice = settle_held_in_transaction(&tx, id, reason, now)?;
+        tx.commit()?;
+        Ok(notice)
+    }
+
+    /// O(log N + G), G lignes de l'agent ; seul TurnState true attesté l'appelle.
+    pub(crate) fn clear_held_turn_gate(&self, agent: &str) -> Result<(), IdempotencyError> {
+        self.conn.execute(
+            "UPDATE send_deliveries SET turn_gate=0
+            WHERE recipient_agent=?1 AND turn_gate=1",
+            [agent],
+        )?;
+        Ok(())
+    }
+
     /// Métadonnées figées dans l'enveloppe existante, toutes phases.
     pub(crate) fn stored_send_message(
         &self,
@@ -56,7 +196,7 @@ impl IdempotencyStore {
         key: &IdempotencyKey,
         delivery: &SendDelivery,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_with_guidance(key, delivery, None, None, None)
+        self.begin_send_delivery_with_guidance(key, delivery, None, None, None, None, None)
     }
 
     /// Prépare atomiquement la remise et le suivi d'une réponse attendue.
@@ -66,7 +206,7 @@ impl IdempotencyStore {
         delivery: &SendDelivery,
         reply: &ReplyTracking,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_with_guidance(key, delivery, Some(reply), None, None)
+        self.begin_send_delivery_with_guidance(key, delivery, Some(reply), None, None, None, None)
     }
 
     /// Prépare la remise et son rattachement causal dans la même transaction.
@@ -80,12 +220,14 @@ impl IdempotencyStore {
         reply: Option<&ReplyTracking>,
         link: &DeliveryExecutionLink,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_with_guidance(key, delivery, reply, Some(link), None)
+        self.begin_send_delivery_with_guidance(key, delivery, reply, Some(link), None, None, None)
     }
 
     /// O(B+log n), B enveloppe, n lignes des magasins. Transaction unique réemployée.
     /// guidance=(at,actor,target,action,path,message_id), admis SEULEMENT au COMMIT.
     /// reply/lien gardent leurs types existants ; None conserve les appels historiques.
+    /// held_for_agent choisit Held et fixe l'identité résolue ; None garde Dispatching.
+    /// held_capacity borne ce mode dans la même transaction ; None garde les fixtures.
     pub(crate) fn begin_send_delivery_with_guidance(
         &mut self,
         key: &IdempotencyKey,
@@ -93,6 +235,8 @@ impl IdempotencyStore {
         reply: Option<&ReplyTracking>,
         execution_link: Option<&DeliveryExecutionLink>,
         guidance: Option<(i64, &str, &str, &str, &str, Option<&str>)>,
+        held_capacity: Option<usize>,
+        held_for_agent: Option<&str>,
     ) -> Result<(), IdempotencyError> {
         if key.operation_kind != OperationKind::Send || delivery.delivery_id.is_empty() {
             return Err(IdempotencyError::InvalidDelivery);
@@ -107,6 +251,11 @@ impl IdempotencyStore {
         }) {
             return Err(IdempotencyError::InvalidDelivery);
         }
+        if held_for_agent.is_some_and(str::is_empty)
+            || (held_for_agent.is_some() && execution_link.is_some())
+        {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
         // Jamais de .ok() silencieux : une remise sans enveloppe lisible
         // recréerait la classe « invisible au ledger » que la gravure à
         // begin_send_delivery existe pour supprimer.
@@ -116,6 +265,17 @@ impl IdempotencyStore {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let (Some(agent), Some(capacity)) = (held_for_agent, held_capacity) {
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM send_deliveries
+                 WHERE recipient_agent = ?1 AND phase = 'held'",
+                [agent],
+                |row| row.get(0),
+            )?;
+            if count < 0 || count as u64 >= capacity as u64 {
+                return Err(IdempotencyError::HeldQueueFull);
+            }
+        }
         let transitioned = tx.execute(
             "UPDATE idempotency_records SET state = 'dispatching'
              WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2
@@ -125,11 +285,34 @@ impl IdempotencyStore {
         if transitioned != 1 {
             return Err(IdempotencyError::DispatchUnavailable);
         }
+        // La reprise de pause précède les retenus, y compris avant son premier true.
+        // Réservation dans CE COMMIT, sans effet sur les appels legacy sans retenus.
+        let resumed_gate = if let Some(link) = execution_link {
+            let held: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM send_deliveries
+                WHERE recipient_agent=?1 AND phase='held')",
+                [&emitted_message.to],
+                |r| r.get(0),
+            )?;
+            if held {
+                tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM control_pause_interruptions
+                WHERE resume_execution_id=?1 AND target_agent=?2)",
+                    params![link.execution_id, emitted_message.to],
+                    |r| r.get::<_, bool>(0),
+                )?
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         tx.execute(
             "INSERT INTO send_deliveries (
                 delivery_id, issuer_scope, operation_kind, idempotency_key,
-                recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
-             ) VALUES (?1, ?2, 'send', ?3, ?4, ?5, 'dispatching', ?6, ?7)",
+                recipient_instance_id, delivery_generation, phase, expires_at, message_bytes,
+                recipient_agent, turn_gate
+             ) VALUES (?1, ?2, 'send', ?3, ?4, ?5, ?8, ?6, ?7, ?9, ?10)",
             params![
                 delivery.delivery_id,
                 key.issuer_scope,
@@ -138,6 +321,13 @@ impl IdempotencyStore {
                 delivery.delivery_generation,
                 delivery.expires_at,
                 delivery.message_bytes,
+                if held_for_agent.is_some() {
+                    "held"
+                } else {
+                    "dispatching"
+                },
+                held_for_agent.unwrap_or(&emitted_message.to),
+                resumed_gate,
             ],
         )?;
         if let Some(link) = execution_link {
@@ -244,7 +434,7 @@ impl IdempotencyStore {
             "UPDATE send_deliveries
              SET recipient_instance_id = ?1
              WHERE recipient_instance_id = ?2
-               AND phase = 'dispatching'
+               AND phase IN ('dispatching','held')
                AND expires_at > ?3
                AND (message_bytes IS NULL
                     OR json_valid(CAST(message_bytes AS TEXT)) = 0
@@ -252,6 +442,40 @@ impl IdempotencyStore {
             params![to_instance_id, from_instance_id, now],
         )?;
         Ok(updated)
+    }
+
+    /// Après Register attesté, rattache les retenus et, si activé, les envois ordinaires.
+    /// O(log n + h log n + B), h lignes de l'agent, B enveloppes inspectées en SQL.
+    /// ID, génération, octets, phase et rang conservés ; aucune injection ici.
+    pub(crate) fn adopt_held_for_agent(
+        &mut self,
+        agent_id: &str,
+        instance_id: &str,
+        recover_dispatching: bool,
+    ) -> Result<usize, IdempotencyError> {
+        if agent_id.is_empty() || instance_id.is_empty() {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .min(i64::MAX as u64) as i64;
+        self.conn
+            .execute(
+                "UPDATE send_deliveries SET recipient_instance_id = ?2,
+                    turn_gate = CASE WHEN phase = 'dispatching' THEN 1 ELSE turn_gate END
+                 WHERE recipient_agent = ?1 AND (phase = 'held' OR
+                    (?7 AND phase = 'dispatching' AND recipient_instance_id <> ?2 AND expires_at > ?3
+                     AND issuer_scope NOT IN (?4, ?5, ?6)
+                     AND (message_bytes IS NULL
+                          OR json_valid(CAST(message_bytes AS TEXT)) = 0
+                          OR json_extract(CAST(message_bytes AS TEXT), '$.thread_notice') IS NULL)))",
+                params![agent_id, instance_id, now, crate::wake_schedules::CLI_WAKE_SCOPE,
+                    crate::wake_schedules::SCHEDULED_WAKE_SCOPE, crate::wake_schedules::MISSED_SUMMARY_SCOPE,
+                    recover_dispatching],
+            )
+            .map_err(Into::into)
     }
 
     /// Finalise un refus de clé neuve sans rendre l'état intermédiaire
@@ -397,29 +621,36 @@ impl IdempotencyStore {
             .map_err(Into::into)
     }
 
-    /// O(log n+k log r+B), k candidats de cette instance, r reçus, B octets lus.
-    /// Lecture seule, rang d'insertion conservé par reassign ; au plus200 résultats.
+    /// O(log n+c log c+c log r+B), c candidats de cette instance, r reçus, B octets lus.
+    /// Lecture seule par rang durable ; au plus 200 résultats, sans limiter les candidats examinés.
     /// Les files éphémères et le Send historique ne sont pas représentés ici.
     pub(crate) fn queued_deliveries_for_recipient(
         &self,
         recipient_instance_id: &str,
         now: i64,
         limit: usize,
-    ) -> Result<Vec<(SendDelivery, i64)>, IdempotencyError> {
+        include_held: bool,
+    ) -> Result<Vec<(SendDelivery, i64, bool)>, IdempotencyError> {
         let mut query = self.conn.prepare(
             "SELECT d.delivery_id,d.recipient_instance_id,d.delivery_generation,
-                    d.expires_at,d.message_bytes,r.issued_at
+                    d.expires_at,d.message_bytes,r.issued_at,d.phase='held'
              FROM send_deliveries d
              JOIN idempotency_records r
                ON r.issuer_scope=d.issuer_scope
               AND r.operation_kind=d.operation_kind
               AND r.idempotency_key=d.idempotency_key
-             WHERE d.recipient_instance_id=?1 AND d.phase='dispatching' AND d.expires_at>?2
-             ORDER BY d.rowid LIMIT ?3",
+             WHERE d.recipient_instance_id=?1
+               AND (d.phase='dispatching' OR (?4 AND d.phase='held')) AND d.expires_at>?2
+             ORDER BY d.queue_rank LIMIT ?3",
         )?;
         let rows = query
             .query_map(
-                params![recipient_instance_id, now, limit.min(200) as i64],
+                params![
+                    recipient_instance_id,
+                    now,
+                    limit.min(200) as i64,
+                    include_held
+                ],
                 |row| {
                     Ok((
                         SendDelivery {
@@ -430,6 +661,7 @@ impl IdempotencyStore {
                             message_bytes: row.get(4)?,
                         },
                         row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )?
@@ -453,7 +685,7 @@ impl IdempotencyStore {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let reclassified = tx.execute(
-            "UPDATE send_deliveries SET phase = 'indeterminate'
+            "UPDATE send_deliveries SET phase = 'indeterminate', turn_gate = 0
              WHERE recipient_instance_id = ?1 AND phase = 'dispatching'
                AND message_bytes IS NULL",
             params![recipient_instance_id],
@@ -463,7 +695,7 @@ impl IdempotencyStore {
                 "SELECT delivery_id, recipient_instance_id, delivery_generation, expires_at, message_bytes
                  FROM send_deliveries
                  WHERE recipient_instance_id = ?1 AND phase = 'dispatching' AND expires_at > ?2
-                 ORDER BY delivery_id",
+                 ORDER BY queue_rank",
             )?;
             statement
                 .query_map(params![recipient_instance_id, now], |row| {
@@ -601,7 +833,7 @@ impl IdempotencyStore {
         delivery_generation: u64,
     ) -> Result<(), IdempotencyError> {
         let updated = self.conn.execute(
-            "UPDATE send_deliveries SET phase = 'indeterminate'
+            "UPDATE send_deliveries SET phase = 'indeterminate', turn_gate = 0
              WHERE delivery_id = ?1 AND recipient_instance_id = ?2
                AND delivery_generation = ?3 AND phase = 'dispatching'",
             params![delivery_id, recipient_instance_id, delivery_generation],
@@ -621,7 +853,7 @@ impl IdempotencyStore {
     pub fn settle_expired_dispatching(&self, now: i64) -> Result<usize, IdempotencyError> {
         self.conn
             .execute(
-                "UPDATE send_deliveries SET phase = 'indeterminate'
+                "UPDATE send_deliveries SET phase = 'indeterminate', turn_gate = 0
                  WHERE phase = 'dispatching' AND expires_at <= ?1",
                 params![now],
             )
@@ -661,7 +893,7 @@ impl IdempotencyStore {
         let mut statement = tx.prepare(
             "SELECT delivery_id, issuer_scope, idempotency_key, message_bytes
              FROM send_deliveries
-             WHERE recipient_instance_id = ?1 AND phase = 'dispatching'",
+             WHERE recipient_instance_id = ?1 AND phase IN ('dispatching','held')",
         )?;
         let rows: Vec<(String, String, String, Vec<u8>)> = statement
             .query_map(params![recipient_instance_id], |row| {
@@ -688,8 +920,8 @@ impl IdempotencyStore {
                 ),
             };
             let delivery = tx.execute(
-                "UPDATE send_deliveries SET phase = 'orphaned'
-                 WHERE delivery_id = ?1 AND phase = 'dispatching'",
+                "UPDATE send_deliveries SET phase = 'orphaned', turn_gate = 0
+                 WHERE delivery_id = ?1 AND phase IN ('dispatching','held')",
                 params![delivery_id],
             )?;
             let record = tx.execute(
@@ -771,6 +1003,24 @@ impl IdempotencyStore {
         recipient_instance_id: &str,
         delivery_generation: u64,
     ) -> Result<Option<String>, IdempotencyError> {
+        self.acknowledge_send_delivery_at(
+            delivery_id,
+            recipient_instance_id,
+            delivery_generation,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        )
+    }
+
+    pub(crate) fn acknowledge_send_delivery_at(
+        &mut self,
+        delivery_id: &str,
+        recipient_instance_id: &str,
+        delivery_generation: u64,
+        now: i64,
+    ) -> Result<Option<String>, IdempotencyError> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -802,7 +1052,7 @@ impl IdempotencyStore {
             .5
             .as_deref()
             .and_then(|bytes| serde_json::from_slice::<bridget_core::BridgetMessage>(bytes).ok());
-        let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked' WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id])?;
+        let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked', acked_at = COALESCE(acked_at, ?2) WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id, now])?;
         let record = tx.execute(
             "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
              WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2 AND state = 'dispatching'",
@@ -836,4 +1086,478 @@ impl IdempotencyStore {
         }
         Ok(answered_request)
     }
+}
+
+/// FR006/FR024 : réutilisé par libération et balayage, jamais deux COMMIT.
+/// O(log N+log R+B+L), R demandes, B enveloppe, L dépôts liés ; DTO/table existants.
+fn settle_held_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    reason: &str,
+    now: i64,
+) -> Result<Option<OrphanedDeliveryNotice>, IdempotencyError> {
+    if !matches!(
+        reason,
+        "expired_in_queue" | "request_closed_in_queue" | "cancelled_in_queue"
+    ) {
+        return Err(IdempotencyError::InvalidDelivery);
+    }
+    let row = tx
+        .query_row(
+            "SELECT d.issuer_scope,d.idempotency_key,d.message_bytes,
+            d.expires_at,r.expires_at
+        FROM send_deliveries d JOIN idempotency_records r
+          ON r.issuer_scope=d.issuer_scope AND r.operation_kind=d.operation_kind
+            AND r.idempotency_key=d.idempotency_key
+        WHERE d.delivery_id=?1 AND d.phase='held'",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((scope, key, bytes, delivery_expires, record_expires)) = row else {
+        return Ok(None);
+    };
+    if reason == "expired_in_queue" && delivery_expires > now && record_expires > now {
+        return Ok(None);
+    }
+    let message: bridget_core::BridgetMessage = serde_json::from_slice(&bytes)
+        .map_err(|_| IdempotencyError::CorruptRecord("enveloppe retenue illisible"))?;
+    if reason == "request_closed_in_queue" {
+        if !message.reply {
+            return Ok(None);
+        }
+        let open: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tracked_requests
+             WHERE id=?1 AND sender=?2 AND target=?3 AND state='open' AND deadline_at>?4)",
+            params![message.id, message.from, message.to, now],
+            |row| row.get(0),
+        )?;
+        if open {
+            return Ok(None);
+        }
+    }
+    if tx.execute(
+        "UPDATE send_deliveries SET phase='cancelled',turn_gate=0
+        WHERE delivery_id=?1 AND phase='held'",
+        [id],
+    )? != 1
+    {
+        return Err(IdempotencyError::DispatchUnavailable);
+    }
+    let body = format!(
+        "RETIRÉ DE LA FILE : votre message {} pour {} a été retiré avant livraison ({}). Il ne sera pas livré.",
+        message.id, message.to, reason
+    );
+    if tx.execute("UPDATE idempotency_records SET state='terminal',public_result_kind='rejected',
+        public_result_category=?1,public_result_reason=?2
+        WHERE issuer_scope=?3 AND operation_kind='send' AND idempotency_key=?4 AND state='dispatching'",
+        params![reason,body,scope,key])? != 1 { return Err(IdempotencyError::DispatchUnavailable); }
+    if message.reply {
+        let expired: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tracked_requests
+             WHERE id=?1 AND sender=?2 AND target=?3 AND state='open' AND deadline_at<=?4)",
+            params![message.id, message.from, message.to, now],
+            |row| row.get(0),
+        )?;
+        let request_state = if expired { "timed_out" } else { "cancelled" };
+        let lifecycle = if expired {
+            bridget_transport::protocol::GuichetLifecycleState::TimedOut
+        } else {
+            bridget_transport::protocol::GuichetLifecycleState::Cancelled
+        };
+        let changed = tx.execute(
+            "UPDATE tracked_requests SET state=?1,cancel_reason=?2,completed_at=?3
+            WHERE id=?4 AND sender=?5 AND target=?6 AND state='open'",
+            params![
+                request_state,
+                if expired { None } else { Some(reason) },
+                now,
+                message.id,
+                message.from,
+                message.to
+            ],
+        )?;
+        if changed == 1 {
+            crate::store::record_lifecycle_for_linked_request_in_transaction(
+                tx,
+                &message.id,
+                lifecycle,
+                now,
+            )
+            .map_err(|e| match e {
+                crate::store::StoreError::Sqlite(e) => IdempotencyError::Sqlite(e),
+                _ => IdempotencyError::CorruptRecord("cycle de demande retenue illisible"),
+            })?;
+        }
+    }
+    tx.execute(
+        "INSERT INTO orphan_emitter_notices(delivery_id,sender,body,created_at,notified_at)
+        VALUES(?1,?2,?3,?4,NULL) ON CONFLICT(delivery_id) DO NOTHING",
+        params![id, message.from, body, now],
+    )?;
+    Ok(Some(OrphanedDeliveryNotice {
+        delivery_id: id.into(),
+        message_id: message.id,
+        sender: message.from,
+        target: message.to,
+        reason: reason.into(),
+    }))
+}
+
+#[cfg(test)]
+#[test]
+fn held159_rank_monotone_sous_concurrence() {
+    let path = std::env::temp_dir().join(format!("held159-rank-{}.db", uuid::Uuid::new_v4()));
+    let store = IdempotencyStore::open(&path).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+    let workers=(0..4).map(|index| {
+        let path=path.clone(); let barrier=barrier.clone();
+        std::thread::spawn(move || {
+            let mut store=IdempotencyStore::open(&path).unwrap();
+            let id=format!("held159-concurrent-{index}");
+            let key=IdempotencyKey::new("012_scope_held159_aaaaaaaa",OperationKind::Send,&id).unwrap();
+            let message=bridget_core::BridgetMessage::new("author159",format!("agent159-{index}"),&id);
+            let bytes=serde_json::to_vec(&message).unwrap();
+            store.reserve(&key,&bytes,1_000_000,3600,1_000_000,30).unwrap();
+            barrier.wait();
+            let delivery=SendDelivery { delivery_id:id.clone(),recipient_instance_id:format!("instance159-{index}"),delivery_generation:1,expires_at:1_003_600,message_bytes:bytes };
+            store.begin_send_delivery_with_guidance(&key,&delivery,None,None,None, None,Some(&message.to)).unwrap();
+            let (rank,phase,recipient):(i64,String,String)=store.conn.query_row("SELECT queue_rank,phase,recipient_agent FROM send_deliveries WHERE delivery_id=?1",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            assert_eq!(phase,"held"); assert_eq!(recipient,message.to);
+            assert!(store.delivery_execution_link(&id).unwrap().is_none()); rank
+        })
+    }).collect::<Vec<_>>();
+    let mut ranks = workers
+        .into_iter()
+        .map(|w| w.join().unwrap())
+        .collect::<Vec<_>>();
+    ranks.sort();
+    assert_eq!(ranks.len(), 4);
+    assert!(ranks.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(DISTINCT queue_rank) FROM send_deliveries",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        4
+    );
+    drop(store);
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn held159_rank_survit_a_la_reaffectation() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let entries = [
+        ("z-held", "old159", "held"),
+        ("a-live", "old159", "dispatching"),
+    ];
+    for (index, (id, instance, phase)) in entries.iter().enumerate() {
+        let key =
+            IdempotencyKey::new("012_scope_held159_aaaaaaaa", OperationKind::Send, *id).unwrap();
+        let mut message = bridget_core::BridgetMessage::new("author159", "agent159", *id);
+        message.id = (*id).into();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        store
+            .reserve(&key, &bytes, 1_000_000, 3600, 1_000_000, 30)
+            .unwrap();
+        store
+            .transition(
+                &key,
+                crate::idempotency::RecordState::Prepared,
+                crate::idempotency::RecordState::Dispatching,
+            )
+            .unwrap();
+        store.conn.execute("INSERT INTO send_deliveries(delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,recipient_agent) VALUES(?1,?2,'send',?3,?4,?5,?6,1003600,?7,'agent159')",
+            params![id,key.issuer_scope,key.idempotency_key,instance,index as i64+1,phase,bytes]).unwrap();
+    }
+    let before = store.conn.prepare("SELECT delivery_id,queue_rank,recipient_instance_id,phase,message_bytes FROM send_deliveries ORDER BY queue_rank").unwrap().query_map([],|row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,Vec<u8>>(4)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+    assert_eq!(
+        store
+            .reassign_dispatching_deliveries("old159", "new159", 1_000_000)
+            .unwrap(),
+        2
+    );
+    let after = store.conn.prepare("SELECT delivery_id,queue_rank,recipient_instance_id,phase,message_bytes FROM send_deliveries ORDER BY queue_rank").unwrap().query_map([],|row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,Vec<u8>>(4)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+    for (before, after) in before.iter().zip(&after) {
+        assert_eq!(
+            (&before.0, before.1, &before.3, &before.4),
+            (&after.0, after.1, &after.3, &after.4)
+        );
+        assert_eq!(after.2, "new159");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn held159_rank_reprise_dans_l_ordre() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let entries = [
+        ("z-first", "same159", "dispatching"),
+        ("a-second", "same159", "dispatching"),
+    ];
+    for (index, (id, instance, phase)) in entries.iter().enumerate() {
+        let key =
+            IdempotencyKey::new("012_scope_held159_aaaaaaaa", OperationKind::Send, *id).unwrap();
+        let mut message = bridget_core::BridgetMessage::new("author159", "agent159", *id);
+        message.id = (*id).into();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        store
+            .reserve(&key, &bytes, 1_000_000, 3600, 1_000_000, 30)
+            .unwrap();
+        store
+            .transition(
+                &key,
+                crate::idempotency::RecordState::Prepared,
+                crate::idempotency::RecordState::Dispatching,
+            )
+            .unwrap();
+        store.conn.execute("INSERT INTO send_deliveries(delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,recipient_agent) VALUES(?1,?2,'send',?3,?4,?5,?6,1003600,?7,'agent159')",
+            params![id,key.issuer_scope,key.idempotency_key,instance,index as i64+1,phase,bytes]).unwrap();
+    }
+    let recovered = store
+        .dispatching_deliveries_for_instance("same159", 1_000_000)
+        .unwrap();
+    assert_eq!(
+        recovered
+            .iter()
+            .map(|d| d.delivery_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["z-first", "a-second"]
+    );
+    for delivery in recovered {
+        let original: Vec<u8> = store
+            .conn
+            .query_row(
+                "SELECT message_bytes FROM send_deliveries WHERE delivery_id=?1",
+                [&delivery.delivery_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivery.message_bytes, original);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn held159_rank_sans_collision_entre_instances() {
+    let store = IdempotencyStore::open_in_memory().unwrap();
+    let entries = [
+        ("z-one", "instance159a", "held"),
+        ("a-two", "instance159b", "held"),
+        ("m-three", "instance159a", "dispatching"),
+    ];
+    for (index, (id, instance, phase)) in entries.iter().enumerate() {
+        let key =
+            IdempotencyKey::new("012_scope_held159_aaaaaaaa", OperationKind::Send, *id).unwrap();
+        let mut message = bridget_core::BridgetMessage::new("author159", "agent159", *id);
+        message.id = (*id).into();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        store
+            .reserve(&key, &bytes, 1_000_000, 3600, 1_000_000, 30)
+            .unwrap();
+        store
+            .transition(
+                &key,
+                crate::idempotency::RecordState::Prepared,
+                crate::idempotency::RecordState::Dispatching,
+            )
+            .unwrap();
+        store.conn.execute("INSERT INTO send_deliveries(delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,recipient_agent) VALUES(?1,?2,'send',?3,?4,?5,?6,1003600,?7,'agent159')",
+            params![id,key.issuer_scope,key.idempotency_key,instance,index as i64+1,phase,bytes]).unwrap();
+    }
+    let rows=store.conn.prepare("SELECT delivery_id,queue_rank,recipient_instance_id,phase,message_bytes FROM send_deliveries ORDER BY queue_rank").unwrap().query_map([],|row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?,row.get::<_,Vec<u8>>(4)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        vec!["z-one", "a-two", "m-three"]
+    );
+    assert!(rows.windows(2).all(|w| w[0].1 < w[1].1));
+    assert_eq!(
+        rows.iter()
+            .map(|r| r.1)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn held159_rank_orphelinage_couvre_les_retenus() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let entries = [
+        ("held-orphan159", "gone159", "held"),
+        ("live-orphan159", "gone159", "dispatching"),
+    ];
+    for (index, (id, instance, phase)) in entries.iter().enumerate() {
+        let key =
+            IdempotencyKey::new("012_scope_held159_aaaaaaaa", OperationKind::Send, *id).unwrap();
+        let mut message = bridget_core::BridgetMessage::new("author159", "agent159", *id);
+        message.id = (*id).into();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        store
+            .reserve(&key, &bytes, 1_000_000, 3600, 1_000_000, 30)
+            .unwrap();
+        store
+            .transition(
+                &key,
+                crate::idempotency::RecordState::Prepared,
+                crate::idempotency::RecordState::Dispatching,
+            )
+            .unwrap();
+        store.conn.execute("INSERT INTO send_deliveries(delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,recipient_agent) VALUES(?1,?2,'send',?3,?4,?5,?6,1003600,?7,'agent159')",
+            params![id,key.issuer_scope,key.idempotency_key,instance,index as i64+1,phase,bytes]).unwrap();
+    }
+    let notices = store
+        .orphan_dispatching_for_instance("gone159", "instance disparue159")
+        .unwrap();
+    assert_eq!(notices.len(), 2);
+    let durable = store.pending_orphan_emitter_notices().unwrap();
+    assert_eq!(durable.len(), 2, "chaque auteur reçoit sa notice durable");
+    for (id, _, _) in entries {
+        let phase: String = store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "orphaned");
+        let key =
+            IdempotencyKey::new("012_scope_held159_aaaaaaaa", OperationKind::Send, id).unwrap();
+        assert!(matches!(
+            store.lookup(&key, 1_000_000).unwrap(),
+            crate::idempotency::LookupResult::Orphaned { .. }
+        ));
+        assert!(
+            durable
+                .iter()
+                .any(|notice| notice.0 == id && notice.1 == "author159" && notice.2.contains(id))
+        );
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn held159_rank_reprise_ne_rend_pas_les_retenus() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let entries = [
+        ("a-held159", "same159", "held"),
+        ("z-dispatch159", "same159", "dispatching"),
+    ];
+    for (index, (id, instance, phase)) in entries.iter().enumerate() {
+        let key =
+            IdempotencyKey::new("012_scope_held159_aaaaaaaa", OperationKind::Send, *id).unwrap();
+        let mut message = bridget_core::BridgetMessage::new("author159", "agent159", *id);
+        message.id = (*id).into();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        store
+            .reserve(&key, &bytes, 1_000_000, 3600, 1_000_000, 30)
+            .unwrap();
+        store
+            .transition(
+                &key,
+                crate::idempotency::RecordState::Prepared,
+                crate::idempotency::RecordState::Dispatching,
+            )
+            .unwrap();
+        store.conn.execute("INSERT INTO send_deliveries(delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,recipient_agent) VALUES(?1,?2,'send',?3,?4,?5,?6,1003600,?7,'agent159')",
+            params![id,key.issuer_scope,key.idempotency_key,instance,index as i64+1,phase,bytes]).unwrap();
+    }
+    let recovered = store
+        .dispatching_deliveries_for_instance("same159", 1_000_000)
+        .unwrap();
+    assert_eq!(
+        recovered
+            .iter()
+            .map(|d| d.delivery_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["z-dispatch159"]
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id='a-held159'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "held"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn held159_acked_at_premier_ack_et_rejeu() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let key = IdempotencyKey::new(
+        "012_scope_held159_release",
+        OperationKind::Send,
+        "ack-clock",
+    )
+    .unwrap();
+    let now = 100_000;
+    let message = bridget_core::BridgetMessage::new("peer-a", "peer-b", "premier ACK durable");
+    let bytes = serde_json::to_vec(&message).unwrap();
+    store.reserve(&key, &bytes, now, 3600, now, 300).unwrap();
+    store
+        .begin_send_delivery(
+            &key,
+            &SendDelivery {
+                delivery_id: "ack-clock".into(),
+                recipient_instance_id: "instance-ack".into(),
+                delivery_generation: 1,
+                expires_at: now + 3600,
+                message_bytes: bytes,
+            },
+        )
+        .unwrap();
+    // Précondition de l'oracle ACK : gate de la remise déjà libérée.
+    store
+        .conn
+        .execute(
+            "UPDATE send_deliveries SET turn_gate=1 WHERE delivery_id='ack-clock'",
+            [],
+        )
+        .unwrap();
+    let first_ack = now - 31;
+    store
+        .acknowledge_send_delivery_at("ack-clock", "instance-ack", 1, first_ack)
+        .unwrap();
+    let first: Option<i64> = store
+        .conn
+        .query_row(
+            "SELECT acked_at FROM send_deliveries WHERE delivery_id='ack-clock'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(first, Some(first_ack));
+    store
+        .acknowledge_send_delivery_at("ack-clock", "instance-ack", 1, now)
+        .unwrap();
+    let replay: Option<i64> = store
+        .conn
+        .query_row(
+            "SELECT acked_at FROM send_deliveries WHERE delivery_id='ack-clock'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(replay, first, "le rejeu conserve la première date");
 }

@@ -76,7 +76,8 @@ impl RequestFixture155 {
                 None,
                 false,
                 Some(true),
-                &mut st
+                &mut st,
+                false
             ),
             DaemonToWrapper::Registered { .. }
         ));
@@ -1062,6 +1063,7 @@ fn native155_lifecycle_accord_pending_annulation_puis_reconnexion_void() {
             false,
             Some(true),
             &mut st,
+            false,
         );
         eprintln!("diagnostic reconnexion155 avant désinscription route : {original:?}");
         st.router.unregister_by_conn("child155");
@@ -1082,6 +1084,7 @@ fn native155_lifecycle_accord_pending_annulation_puis_reconnexion_void() {
             false,
             Some(true),
             &mut st,
+            false,
         );
         assert!(
             matches!(registered, DaemonToWrapper::Registered { .. }),

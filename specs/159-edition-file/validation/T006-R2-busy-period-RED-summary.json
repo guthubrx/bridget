@@ -1,0 +1,58 @@
+{
+  "label": "T006-R2-busy-period-RED",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_turnstate_sortie_forcee_depuis_busy_period_start",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:28:50.950747+00:00",
+  "seconds": 11.14,
+  "rc": 101,
+  "test_results": [
+    [
+      "FAILED",
+      "0",
+      "1",
+      "0"
+    ]
+  ],
+  "failed_tests": [
+    "daemon::presence_tests::held159_turnstate_sortie_forcee_depuis_busy_period_start"
+  ],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-busy-period-RED.log",
+  "log_sha256": "a9fdf3c3af895bc5daa38af18c6a021ab032bb67bb71fed09caadc1222f7898b",
+  "private_ns": "/private/tmp/b.y1uf4qpi",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-busy-period-RED.json",
+  "original_receipt_sha256": "d7d6c2de3a559cda43d61b346865bb9abb706ff4ebb0d7aca3da59d4f9c41fd6",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "041d9303a19dd1518224e38bafc39b90c57b6b2fc712fbcce7d2f5971dc4e8ee",
+  "test_names_statuses": [
+    [
+      "daemon::presence_tests::held159_turnstate_sortie_forcee_depuis_busy_period_start",
+      "FAILED"
+    ]
+  ]
+}

@@ -1,0 +1,24 @@
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -6087,10 +6087,6 @@
+     Ok(())
+ }
+ 
+-/// La reprise n'est déclenchée qu'au réenregistrement de l'instance ciblée :
+-/// au démarrage, aucun socket wrapper n'existe encore. Les bytes persistés et
+-/// le couple instance/génération sont les seules autorités ; aucun nom n'est
+-/// résolu une seconde fois.
+ /// FR004 : cinq déclencheurs partagent State, route attestée et transaction.
+ /// O(log N+G+B), G réservations, B enveloppe. Aucun verrou writer ici.
+ fn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> bool {
+@@ -6173,6 +6169,10 @@
+     true
+ }
+ 
++/// La reprise n'est déclenchée qu'au réenregistrement de l'instance ciblée :
++/// au démarrage, aucun socket wrapper n'existe encore. Les bytes persistés et
++/// le couple instance/génération sont les seules autorités ; aucun nom n'est
++/// résolu une seconde fois.
+ fn schedule_idempotent_delivery_recovery(
+     state: &mut DaemonState,
+     conn_id: &str,

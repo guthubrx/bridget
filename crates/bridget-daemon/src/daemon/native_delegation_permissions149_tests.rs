@@ -139,6 +139,7 @@ fn claude_definition(config_dir: &Path) -> crate::registry::AgentDefinition {
         claude_config_dir: Some(config_dir.to_string_lossy().into_owned()),
         permissions: "deny".into(),
         queue_capacity: 4,
+        held_queue: false,
         notify_timeout_secs: 4,
         mcp: Default::default(),
         capabilities: Default::default(),
@@ -1369,7 +1370,8 @@ fn native153_ronde_politique_complete_matrice() {
                         None,
                         false,
                         Some(true),
-                        &mut st
+                        &mut st,
+                        false
                     ),
                     DaemonToWrapper::Registered { .. }
                 ));
@@ -1513,7 +1515,8 @@ fn native153_ronde_sources_changees_et_attestation_courante() {
                 None,
                 false,
                 Some(true),
-                &mut st
+                &mut st,
+                false
             ),
             DaemonToWrapper::Registered { .. }
         ));
@@ -1906,6 +1909,7 @@ fn native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_missi
                 false,
                 Some(true),
                 &mut st,
+                false,
             ),
             DaemonToWrapper::Registered { .. }
         ));

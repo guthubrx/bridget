@@ -1,0 +1,84 @@
+{
+  "label": "T006-R2-turnstate-group-GREEN",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_turnstate_",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:29:16.060162+00:00",
+  "seconds": 7.08,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "8",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-turnstate-group-GREEN.log",
+  "log_sha256": "2fc7e3cdedf74aa7ab3dbb50fe0026d676da692fc825b808b45e74105128b232",
+  "private_ns": "/private/tmp/b.zezw0njk",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-turnstate-group-GREEN.json",
+  "original_receipt_sha256": "8042e275e0e1264999ded169c62b4146b04bcd1d8fa715a43c8a515e3b973ced",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "test_names_statuses": [
+    [
+      "daemon::presence_tests::held159_turnstate_busy_period_start_non_remis_a_zero_par_true_repete",
+      "ok"
+    ],
+    [
+      "daemon::presence_tests::held159_turnstate_busy_since_inchange",
+      "ok"
+    ],
+    [
+      "daemon::presence_tests::held159_turnstate_sortie_forcee_depuis_busy_period_start",
+      "ok"
+    ],
+    [
+      "daemon::presence_tests::held159_turnstate_wrapper_muet_trois_periodes",
+      "ok"
+    ],
+    [
+      "wrapper::native_child_requests155_tests::held159_turnstate_reattestation_d_un_repos_perdu",
+      "ok"
+    ],
+    [
+      "wrapper::native_child_requests155_tests::held159_turnstate_reattestation_periodique",
+      "ok"
+    ],
+    [
+      "wrapper::native_child_requests155_tests::held159_turnstate_refus_de_guidage_en_plein_tour_n_envoie_pas_false",
+      "ok"
+    ],
+    [
+      "wrapper::native_child_requests155_tests::held159_turnstate_refus_sans_tour_en_cours_envoie_false",
+      "ok"
+    ]
+  ]
+}

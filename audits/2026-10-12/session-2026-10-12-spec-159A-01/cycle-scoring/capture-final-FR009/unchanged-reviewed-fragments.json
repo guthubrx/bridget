@@ -1,0 +1,48 @@
+{
+  "at": "2026-10-12T17:22:18.259267+00:00",
+  "prior_daemon_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+  "current_daemon_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+  "fragments": [
+    {
+      "marker": "fn schedule_held_release(",
+      "old_fragment_sha256": "a32e04b601e865598b67970611c9f7e6be8ba33422697420abd3345b6ba96c54",
+      "current_fragment_sha256": "a32e04b601e865598b67970611c9f7e6be8ba33422697420abd3345b6ba96c54",
+      "byte_identical": true,
+      "current_range": [
+        6093,
+        6172
+      ],
+      "source_whole_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "evidence_source_old": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/diff-159a-final.patch",
+      "old_patch_sha256": "a239da798de007b10e6b58d690cb040508ecfd8498e8fcd1aec294d895a12ac6"
+    },
+    {
+      "marker": "fn sweep_held(",
+      "old_fragment_sha256": "f98991251a28a39e70fa76fc12f48aeebefa7b34e51bfdbd62d6765425e2b689",
+      "current_fragment_sha256": "f98991251a28a39e70fa76fc12f48aeebefa7b34e51bfdbd62d6765425e2b689",
+      "byte_identical": true,
+      "current_range": [
+        9362,
+        9430
+      ],
+      "source_whole_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "evidence_source_old": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/diff-159a-final.patch",
+      "old_patch_sha256": "a239da798de007b10e6b58d690cb040508ecfd8498e8fcd1aec294d895a12ac6"
+    },
+    {
+      "marker": "fn should_hold(",
+      "old_fragment_sha256": "0f1c5d9bde0dacbc2f3486fd95618f407a61e8a3c9eb1c198e4533af502611cc",
+      "current_fragment_sha256": "0f1c5d9bde0dacbc2f3486fd95618f407a61e8a3c9eb1c198e4533af502611cc",
+      "byte_identical": true,
+      "current_range": [
+        11379,
+        11402
+      ],
+      "source_whole_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "evidence_source_old": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/diff-159a-final.patch",
+      "old_patch_sha256": "a239da798de007b10e6b58d690cb040508ecfd8498e8fcd1aec294d895a12ac6"
+    }
+  ],
+  "no_whole_file_read_credit": true,
+  "old_range_credit_not_transposed": true
+}

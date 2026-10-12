@@ -133,7 +133,8 @@ fn native155_respond_identite_proprietaire_et_ownself_refusees() {
                 None,
                 false,
                 Some(true),
-                &mut st
+                &mut st,
+                false
             ),
             DaemonToWrapper::Registered { .. }
         ));

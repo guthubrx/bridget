@@ -1,0 +1,32 @@
+{
+  "at_utc": "2026-10-12T17:30:09.450708+00:00",
+  "source_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+  "status": "historical scoring before R2 FR023 correction; not current finalgrade",
+  "entries": [
+    {
+      "source": "/Users/moi/.cache/bridget-audit159A-final-20261012/grade.json",
+      "snapshot": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/grade.json",
+      "sha256": "6b853f72df91ef69c19051d16bcd71bad0c4716a5b65d5d16bc6b4771748e2d7"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-audit159A-final-20261012/scoring.md",
+      "snapshot": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/scoring.md",
+      "sha256": "e6e70a959f93dbcf83c0027407124c5d61c0b137eb398840462cab455060ce69"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-audit159A-final-20261012/validation-scoring.json",
+      "snapshot": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/validation-scoring.json",
+      "sha256": "2f074a0f7aff718399ab79bc51772dbd6c8fa557712afc513e0b281918c88038"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-audit159A-final-20261012/validation-scoring.log",
+      "snapshot": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/validation-scoring.log",
+      "sha256": "59410c3e47259cb6e51ac58fafb6c3b3239a5967f9180be86bf7f97589d4d085"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/aggregated-findings.json",
+      "snapshot": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/aggregated-findings.json",
+      "sha256": "17cd4a8b4e8b93210f3b6adcc20780c6496bbbe57711e1de7063bab2191db870"
+    }
+  ]
+}

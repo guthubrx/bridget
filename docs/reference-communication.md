@@ -256,12 +256,164 @@ L’UI Client attestée peut lire toute la projection ; elle reste Client et
 n’acquiert aucun droit de contrôle explicite par cette lecture.
 La lecture rend au plus 200 entrées : `message_id`, `from`, `intent`, `reply`,
 `age_secs`, `preview` (120 caractères), `position` et
-`state: "pending_or_injecting"`. `queue_bound` vaut 64 pour T3, `null` sinon.
-Elle couvre seulement les remises idempotentes dispatching, sans Send
+`state: "held"` ou `"released"` dans le contrat 159A. `queue_bound` vaut
+queue_capacity du type quand held_queue est ouvert, null sinon.
+Elle couvre les remises idempotentes held et dispatching, sans Send
 historique ni file interne du transport. Elle ne crée ni tour, événement de
 guidage, écriture de pause ou consommation de quota. LIMIT200 borne la sortie,
 pas le scan : coût O(log n + s), avec jointures indexées en plus et s candidats
 examinés, dont expirés. Cette vue ne prouve pas la position interne fournisseur.
+
+
+### File retenue par le daemon — contrat 159A
+
+`held_queue` est fermé par défaut, par type d'agent. Le lot A ne l'ouvre pas
+implicitement. Après SC004, le réglage reste fermé. Cette section décrit le contrat ; les reçus d'implémentation,
+de tests, de restauration et d'installation doivent établir sa disponibilité.
+Les actions `cancel`, `reorder` et `promote` de file restent le lot B.
+
+Le réglage reste fermé après la mesure privée SC004. Le p95 passe de
+27,763792 ms à 1028,132375 ms ; le delta vaut 1000,368583 ms et dépasse 250 ms.
+La mesure suit le proxy Python « avant émission de TurnCompleted vers début
+du tour suivant reçu ». Elle ne mesure pas le repos attesté du daemon.
+Chaque lot a 20 échantillons, avec p95 au rang 19. Après seulement, une
+précondition ListAgents vérifie busy avant admission ; cette attente est hors
+mesure. Les fixtures complètes ne sont donc pas byte-identiques. Aucun SLA,
+fournisseur réel ou cause du surcoût n'est établi. Le reçu canonique est :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/latence-159a.md
+
+Avec le réglage ouvert et une instance `turn_attest`, le daemon retient un
+envoi client idempotent ordinaire (`intent` absent ou `queue`) si la cible
+est occupée, ou si d'autres messages sont déjà retenus pour elle. Les nouveaux
+messages rejoignent la suite sans dépasser les plus anciens. Une instance
+ancienne sans `turn_attest` garde le chemin actuel, sans rétention.
+
+Sont toujours exclus : origine `Human` ou `System`, intentions `steer` et
+`interrupt`, alertes de fil, observations (`bridget-observation:`), incidents
+délégués (`delegated-runtime-`), messages de mission native et fils T3.
+Un type sans `held_queue` ouvert n'utilise pas cette rétention.
+
+| Situation | Ce que la lecture peut établir |
+|---|---|
+| `held` | Message durable avant poussée au porteur ; ordre par rang, pas d'exécution liée. |
+| `released` | Libération engagée (`dispatching`) ; aucune preuve d'injection ou de fin de mission. |
+| `queue_full` | Refus net à l'admission si `queue_capacity` est atteinte ; refus mémorisé. |
+| Message clos ou expiré avant libération | Retiré de la file ; résultat rejeté et auteur prévenu par les voies existantes. |
+
+À l'enregistrement d'une nouvelle instance attestée, avec held_queue ouvert
+et hors T3, le daemon rattache d'abord les retenus et les remises ordinaires
+encore dispatching, non ACKées et non expirées de l'ancienne instance. Le
+rattachement conserve identité, génération, octets et rang ; la remise
+encore dispatching réserve le tour avant libération du message suivant.
+Ce raccord ne transforme pas incidents, notices ou missions natives en
+messages ordinaires. La reprise reste celle de 099. Aucun ACK ni signal
+terminal 149/152 n'est fabriqué ou relancé pour provoquer une libération.
+
+`bridget_queue` reste une lecture, avec les droits156 et 200 entrées au plus.
+La CLI reste `bridget queue --target '<UUID_DESTINATAIRE>'`. Les files internes
+du porteur et les envois historiques sont exclus. Le contrat 159A rend
+`queue_bound` égal à `queue_capacity` du type quand le réglage est ouvert,
+`null` sinon. Lire la file ne fait pas démarrer de tour.
+
+Le wrapper annonce l'état réel de sa session, y compris après un refus de
+guidage, et le réatteste périodiquement (30 s au plus). La minuterie `Instant`
+du heartbeat existant est vérifiée à chaque boucle, même sous trafic continu.
+Un nouveau `true` ne remet pas à zéro `busy_period_start` des instances attestées.
+Les anciennes instances conservent `busy_since` et leur comportement legacy.
+
+Une réservation durable empêche de libérer un second message pour le même
+agent pendant le même cycle de tour. Elle se lève sur `TurnState true` après
+libération, sortie de `dispatching` sans ACK, ou premier ACK datant de plus de
+30 s sans agent occupé. `acked_at` conserve ce premier ACK avec sa phase ; un
+rejeu ne change pas la date. Les anciennes lignes migrées gardent `acked_at=NULL`
+et `turn_gate=0`, sans date fabriquée. La réservation et sa grâce survivent au
+redémarrage du daemon.
+
+Une libération nécessite un repos attesté, **ou l'exception de sortie forcée
+FR025**. Après silence du wrapper, cette sortie suit `notify_timeout_secs + 30 s`
+depuis `busy_period_start`, soit 2730 s avec le défaut 2700 s. C'est une expiration,
+pas un repos prouvé ni une nouvelle attestation. Un fournisseur peut encore
+être occupé. Ne pas présenter cette exception comme une confirmation de repos.
+
+`HeldRelease` est un effet autonome différé pendant la pause. À la levée,
+la reprise d'une exécution interrompue passe d'abord. Repos/réservation/échéance
+et demande suivie restent revérifiés : garde State jusqu'au commit, pause et
+interruptions dans la même transaction. La libération est engagée au commit ;
+le push est hors verrou. Une pause validée après commit ne reprend pas une
+remise déjà libérée. Aucun writer de socket n'est tenu pendant la transaction.
+
+Avant libération, la copie durable et son ordre sont dans le daemon. Après,
+les garanties normales099 s'appliquent. Un reçu `Seen` écrit avant injection
+puis un arrêt du porteur peut conduire à `indeterminate` sans injection.
+Un ACK ne prouve ni la lecture par le modèle ni la fin de la mission.
+Les deux cas de signal perdu restent distincts : repos réel récupéré par
+réattestation, ou silence allant jusqu'à la sortie forcée. Leur latence doit
+être mesurée, pas supposée. Le cadre ADR011 ne protège pas contre un processus
+hostile du même compte Unix qui forge les preuves privées.
+
+#### Sauvegarde et restauration avant migration v7
+
+La migration est à sens unique, même lorsque `held_queue` est fermé.
+La v7 ajoute `queue_rank`, `recipient_agent`, `turn_gate` et `acked_at`.
+Ne pas ouvrir la base réelle avec le candidat 159 pour répéter la restauration.
+T011 a réussi en isolation avec le debug 159A. Les préparations initiales
+ci-dessous restent distinctes du PASS frais et du rollback de la future installation.
+
+Références privées déjà préparées par ROOT, attestées par leurs reçus :
+
+- Snapshot de la base réelle 158B : /Users/moi/.cache/bridget-restoration159A-reference-20261012/bridget158B-real-snapshot.db
+- Reçu du snapshot : /Users/moi/.cache/bridget-restoration159A-reference-20261012/bridget158B-real-snapshot.json
+- Ancien binaire 158B sauvegardé : /Users/moi/.cache/bridget-restoration159A-reference-20261012/bridget158B-reference
+- Reçu du binaire : /Users/moi/.cache/bridget-restoration159A-reference-20261012/reference.json
+
+La référence binaire vient du source e52a96240b6168bf4466712e1bda8852b4ecb43f.
+Son SHA256 est cfb77a6552e97b28fd092ecbd73e82fbfcaa59694264b354fe593cb63e64018c.
+Le snapshot est issu d'une sauvegarde cohérente de la source réelle en lecture
+seule ; son reçu indique quick_check=ok et zéro violation FK. Cela atteste
+la préparation initiale 158B. Le PASS frais ci-dessous utilise une nouvelle
+référence ; aucun état d'installation 159 n'est déduit.
+
+Procédure T011, dans des espaces privés distincts :
+
+1. Conserver et empreinter le binaire 158B et la sauvegarde pré-v7, avant reconstruction 159.
+2. Copier le snapshot privé pour la migration. L'ouvrir avec le candidat 159.
+3. Comparer comptages par phase, ordre, canons, liens et échantillons avec la référence ; exiger `foreign_key_check` à zéro. La migration doit se rejouer sans effet. Les anciennes lignes gardent `acked_at=NULL` et `turn_gate=0`, sans date fabriquée.
+4. Vérifier que l'ancien binaire refuse cette copie v7. Ce refus fermé n'est pas une restauration.
+5. Restaurer la sauvegarde pré-v7 dans un autre espace privé. L'ouvrir avec le vrai binaire 158B sauvegardé et comparer les données à la référence.
+6. Consigner les chemins, empreintes, commandes et résultats dans le reçu T011. Avant activation réelle, disposer d'une sauvegarde cohérente actualisée ; le snapshot de préparation ne la remplace pas.
+
+Référence fraîche utilisée par T011 :
+/Users/moi/.cache/bridget-restoration159A-reference-fresh-20261012/bridget158B-real-snapshot.db
+Copie migrée et restauration privée réellement validées :
+/private/tmp/b159.yppi0yse/v7/bridget.db
+/private/tmp/b159.yppi0yse/restored-v6/bridget.db
+La sauvegarde cohérente de production v6 a été faite le 12 octobre 2026 à 19 h 14 CEST dans /Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-prod-v6.db (SHA-256 ef4c01667fb9102efbffca25234eb81bbdb8d57c0dda6533ab02d5a147b9bf4d). Le contrôle rapide est réussi et aucune violation de clé étrangère n’est présente. Le binaire signé 158B est conservé dans /Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-bridget. Les écritures postérieures doivent être préservées avant une restauration réelle.
+Le snapshot de préparation ne la remplace pas. Reçu de répétition :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/restauration-v7.md
+
+T011 a réussi sur la référence v6 fraîche avec le debug 159A testé :
+migration v7 (RC0), ancien binaire 158B refusant v7 (RC1, DB inchangée), puis
+restauration v6 ouverte par le vrai binaire 158B (RC0). Les 11384 records,
+57 demandes suivies, 10892 remises et zéro lien gardent leurs empreintes
+logiques, échantillons et rangs. quick_check=ok et foreign_key_check=0 aux
+trois étapes. Le debug testé est empreinté :
+48c5ea41e10f4f0867d3754204df351bff548a2256309c5f48be3db520a2bebf
+Cette preuve ne décrit pas le futur binaire release livré.
+
+Le premier FAIL reste historique : l'ancienne référence passait de 62 à 57
+demandes suivies à l'ouverture. Les cinq lignes terminées depuis plus de sept
+jours ont été retirées par la maintenance de démarrage, byte-identique à 158B ;
+la migration T003 n'en est pas la cause. Aucune donnée ni date n'a été corrigée
+pour obtenir le PASS frais. Les phases réelles sont acked/indeterminate ;
+zéro lien reste zéro lien. Les scénarios synthétiques T003 sont distincts.
+Reçu FAIL conservé :
+/Users/moi/.cache/bridget-docs159A-T012-20261012/private/T011-FAIL-original-private.json
+Reçu PASS réel :
+/Users/moi/.cache/bridget-docs159A-T012-20261012/private/T011-PASS-original-private.json
+Les JSON exacts restent privés, hors dépôt. Les résumés sans corps conservent
+identités, empreintes des tables et SHA256 de chaque message_bytes.
+Reçu canonique et diagnostic :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/restauration-v7.md
 
 `bridget_cancel` annule la demande suivie propre et retire sa remise en attente.
 Le tour actif continue si la garde refuse son interruption. S’il passe la garde,

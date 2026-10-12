@@ -1,0 +1,97 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+warning: function `wake158B_groupe7_cli_quota_rejeu_collision_et_reprise` should have a snake case name
+    --> crates/bridget-daemon/src/idempotency.rs:1563:8
+     |
+1563 |     fn wake158B_groupe7_cli_quota_rejeu_collision_et_reprise() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe7_cli_quota_rejeu_collision_et_reprise`
+     |
+     = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `wake158B_groupe1_sql_limites_physiques_et_annulees` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:305:8
+    |
+305 |     fn wake158B_groupe1_sql_limites_physiques_et_annulees() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_sql_limites_physiques_et_annulees`
+
+warning: function `wake158B_groupe3_intervalle_gel_restart_et_frontieres` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:416:8
+    |
+416 |     fn wake158B_groupe3_intervalle_gel_restart_et_frontieres() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe3_intervalle_gel_restart_et_frontieres`
+
+warning: function `wake158B_groupe1_domaine_ferme_et_bornes` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:356:8
+    |
+356 |     fn wake158B_groupe1_domaine_ferme_et_bornes() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_domaine_ferme_et_bornes`
+
+warning: function `wake158B_groupe2_calendrier_trou_fold_tz_et_date` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:424:8
+    |
+424 |     fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe2_calendrier_trou_fold_tz_et_date`
+
+warning: `bridget-daemon` (lib test) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.97s
+     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)
+
+running 54 tests
+test daemon::presence_tests::held159_hold_busy ... ok
+test daemon::presence_tests::held159_hold_alerte_fil ... ok
+test daemon::presence_tests::held159_hold_fil_t3 ... ok
+test daemon::presence_tests::held159_hold_ferme_identique ... ok
+test daemon::presence_tests::held159_hold_incident_delegue ... ok
+test daemon::presence_tests::held159_hold_file_pleine ... ok
+test daemon::presence_tests::held159_hold_mission_native ... ok
+test daemon::presence_tests::held159_hold_non_busy_avec_retenus ... ok
+test daemon::presence_tests::held159_hold_intention_presente ... ok
+test daemon::presence_tests::held159_hold_non_busy_sans_retenus ... ok
+test daemon::presence_tests::held159_hold_observation ... ok
+[BRIDGET] Send de held159-attach: to=89000000-0000-4000-8000-000000000102, body=humain réel159
+test daemon::presence_tests::held159_hold_origine_human ... ok
+test daemon::presence_tests::held159_hold_origine_system ... ok
+test daemon::presence_tests::held159_hold_sans_turn_attest ... ok
+test daemon::presence_tests::held159_release_ack_puis_faux_signal_terminal_ne_libere_pas ... ok
+test daemon::presence_tests::held159_release_balayage_libere_si_repos_reattesté ... ok
+test daemon::presence_tests::held159_release_declencheurs_concurrents_une_seule_liberation ... ok
+test daemon::presence_tests::held159_release_demande_close_juste_avant_ne_libere_pas_et_retire ... ok
+test daemon::presence_tests::held159_release_echeance_de_tour_posee_a_la_liberation ... ok
+test daemon::presence_tests::held159_release_echeance_juste_avant_ne_libere_pas ... ok
+test daemon::presence_tests::held159_release_fin_d_execution_libere ... ok
+test daemon::presence_tests::held159_release_levee_de_pause_reprise_d_abord_puis_liberation ... ok
+test daemon::presence_tests::held159_release_pas_de_liberation_si_busy ... ok
+test daemon::presence_tests::held159_release_pause_interruption_fin_de_tour_aucune_liberation ... ok
+test daemon::presence_tests::held159_release_pause_ne_libere_pas ... ok
+test daemon::presence_tests::held159_release_reconnexion_libere ... ok
+test daemon::presence_tests::held159_release_refus_de_guidage_ne_libere_pas ... ok
+test daemon::presence_tests::held159_release_repos_atteste_libere_le_plus_ancien ... ok
+test daemon::presence_tests::held159_release_reservation_levee_par_remise_indeterminee ... ok
+test daemon::presence_tests::held159_release_reservation_levee_apres_ack_et_30s_sans_busy ... ok
+test daemon::presence_tests::held159_release_reservation_levee_par_true ... ok
+test daemon::presence_tests::held159_release_reservation_survit_au_redemarrage_du_daemon ... ok
+test daemon::presence_tests::held159_release_un_seul_par_cycle_de_tour ... ok
+test daemon::presence_tests::held159_release_wrapper_muet_attend_la_sortie_forcee ... ok
+test daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue ... ok
+test daemon::presence_tests::held159_sweep_auteur_prevenu ... ok
+test daemon::presence_tests::held159_sweep_demande_close_retire ... ok
+test daemon::presence_tests::held159_sweep_demande_expiree_retire ... ok
+test daemon::presence_tests::held159_sweep_enregistrement_expire_retire ... ok
+test daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message ... ok
+test daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage ... ok
+test daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit ... ok
+test daemon::presence_tests::held159_sweep_retenu_non_expire_conserve ... ok
+test daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison ... ok
+test daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont ... ok
+test daemon::presence_tests::held159_turnstate_busy_period_start_non_remis_a_zero_par_true_repete ... ok
+test daemon::presence_tests::held159_turnstate_busy_since_inchange ... ok
+test daemon::presence_tests::held159_turnstate_sortie_forcee_depuis_busy_period_start ... ok
+test registry::held159_hold_ferme_identique ... ok
+test daemon::presence_tests::held159_turnstate_wrapper_muet_trois_periodes ... ok
+test wrapper::native_child_requests155_tests::held159_turnstate_reattestation_d_un_repos_perdu ... ok
+test wrapper::native_child_requests155_tests::held159_turnstate_reattestation_periodique ... ok
+test wrapper::native_child_requests155_tests::held159_turnstate_refus_de_guidage_en_plein_tour_n_envoie_pas_false ... ok
+test wrapper::native_child_requests155_tests::held159_turnstate_refus_sans_tour_en_cours_envoie_false ... ok
+
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 1773 filtered out; finished in 2.79s
+
+[build Bridget] Nettoyage : 0.00 Gio de caches ; 17.86 Gio restants (tailles logiques, clones APFS compris)

@@ -1,0 +1,67 @@
+{
+  "module": "03+06",
+  "supplement_only": true,
+  "completed_at_utc": "2026-10-12T17:19:49.774295+00:00",
+  "current_source_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+  "source_guard": {
+    "before": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+    "after": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+    "identical": true
+  },
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "REL-003",
+      "fingerprint": "afbbb3d551d8",
+      "historical_severity": "MEDIUM",
+      "status": "fixed_verified_code_and_existing_GREEN",
+      "resolution": "stored_send_delivery dans le seul contrôle de propriété ; clé et comparaison delivery_id inchangées.",
+      "proof": "/Users/moi/.cache/bridget-tests159A-20261012/T028-queue-list-existing-group-GREEN.json",
+      "proof_sha256": "bc229376cbb7f4667f7fbc971962d01cfe03db23efd33ff871fccdae3ab8e678",
+      "log_sha256": "f33b212c53b4c1cdb55a52aa6b9da5e3d0c25be2fa250526996b5d6d0dc2ece9"
+    }
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "ranges": [
+        [
+          814,
+          834
+        ],
+        [
+          6110,
+          6128
+        ],
+        [
+          9357,
+          9436
+        ],
+        [
+          11110,
+          11212
+        ],
+        [
+          11385,
+          11403
+        ],
+        [
+          35120,
+          35312
+        ]
+      ],
+      "read_completed_no_later_than_utc": "2026-10-12T17:19:49.774295+00:00",
+      "whole_file_read": false
+    }
+  ],
+  "positive_findings": [
+    "Le contrôle de propriété garde issuer_scope, OperationKind::Send, message.id et delivery_id exact avant aperçu.",
+    "Le test existant négocie de vrais BareClient ; la liste contient Held et Released propres, exclut le texte du scope étranger et conserve les positions visibles."
+  ],
+  "limitations": [
+    "PRAGMA data_version ne prouve pas à lui seul absence de writes dans la même connexion ; lecture getter et oracle list_ne_modifie_rien complètent la preuve.",
+    "Lecture ciblée seulement. Rapports f5ff précédents conservés comme historiques, pas réécrits.",
+    "GREEN7List est ciblé ; FULL RC101 demeure historique, aucun GREEN global."
+  ]
+}

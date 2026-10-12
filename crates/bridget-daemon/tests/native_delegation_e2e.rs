@@ -755,13 +755,28 @@ fn working_native152(nested: bool) -> (Fixture, support::Client, Value) {
         use bridget_transport::protocol::{PresenceMode, ProviderPermissions};
         let mut parent = support::Client::connect(&support::socket(&f.root));
         parent.send(WrapperToDaemon::Register {
-            agent_type:"fixture-codex-parent152".into(), identity_version:2, agent_id:PARENT.into(),
-            host:Some("t1209".into()), transport:Some("codex_app_server".into()), channel:None.into(),
-            mode:Some(PresenceMode::Acp), location:None, os:Some("test".into()),
-            instance_id:Some(INSTANCE.into()), domain:None, journal_available:None, turn_in_progress:false,
+            agent_type: "fixture-codex-parent152".into(),
+            identity_version: 2,
+            agent_id: PARENT.into(),
+            host: Some("t1209".into()),
+            transport: Some("codex_app_server".into()),
+            channel: None.into(),
+            mode: Some(PresenceMode::Acp),
+            location: None,
+            os: Some("test".into()),
+            instance_id: Some(INSTANCE.into()),
+            domain: None,
+            journal_available: None,
+            turn_in_progress: false,
+            turn_attest: false,
         });
-        let DaemonToWrapper::Registered { agent_id, credential:Some(credential) } = parent.receive()
-            else { panic!("identité primaire du parent152 absente"); };
+        let DaemonToWrapper::Registered {
+            agent_id,
+            credential: Some(credential),
+        } = parent.receive()
+        else {
+            panic!("identité primaire du parent152 absente");
+        };
         assert_eq!(agent_id, PARENT);
         support::save_fixture_credential(&support::socket(&f.root), PARENT, INSTANCE, credential);
         let observation = uuid::Uuid::new_v4().to_string();
@@ -775,9 +790,12 @@ fn working_native152(nested: bool) -> (Fixture, support::Client, Value) {
                     "sandbox_policy":{"type":"dangerFullAccess"}}),
             }), request_id:None, observation_id:Some(observation.clone()), unavailable_code:None,
         });
-        assert!(matches!(f.receive(&mut parent), DaemonToWrapper::NativePermissionAcknowledged {
+        assert!(
+            matches!(f.receive(&mut parent), DaemonToWrapper::NativePermissionAcknowledged {
             observation_id, accepted:true,
-        } if observation_id == observation), "politique parentComplete152 non attestée");
+        } if observation_id == observation),
+            "politique parentComplete152 non attestée"
+        );
         parent
     } else {
         let parent = support::register_agent_as(&support::socket(&f.root), PARENT, INSTANCE);
@@ -811,7 +829,10 @@ fn native152_rouge_panne_mission_working() {
     let mission = created["message_id"].as_str().unwrap();
     let original = native_task152(&f, id);
     assert_eq!(original["effective_posture"], "development");
-    assert_eq!(original["permission_snapshot"]["child_policy"]["permission_mode"], "bypassPermissions");
+    assert_eq!(
+        original["permission_snapshot"]["child_policy"]["permission_mode"],
+        "bypassPermissions"
+    );
     let mut previous_instance = original["child_instance"].as_str().unwrap().to_string();
     let mut grandchild_before = None::<Value>;
     support::private_write(&f.root.join("delegate-152"), []).unwrap();
@@ -822,13 +843,28 @@ fn native152_rouge_panne_mission_working() {
         f.start();
         parent = support::Client::connect(&support::socket(&f.root));
         parent.send(WrapperToDaemon::Register {
-            agent_type:"fixture-codex-parent152".into(), identity_version:2, agent_id:PARENT.into(),
-            host:Some("t1209".into()), transport:Some("codex_app_server".into()), channel:None.into(),
-            mode:Some(bridget_transport::protocol::PresenceMode::Acp), location:None, os:Some("test".into()),
-            instance_id:Some(INSTANCE.into()), domain:None, journal_available:None, turn_in_progress:false,
+            agent_type: "fixture-codex-parent152".into(),
+            identity_version: 2,
+            agent_id: PARENT.into(),
+            host: Some("t1209".into()),
+            transport: Some("codex_app_server".into()),
+            channel: None.into(),
+            mode: Some(bridget_transport::protocol::PresenceMode::Acp),
+            location: None,
+            os: Some("test".into()),
+            instance_id: Some(INSTANCE.into()),
+            domain: None,
+            journal_available: None,
+            turn_in_progress: false,
+            turn_attest: false,
         });
-        let DaemonToWrapper::Registered { agent_id, credential:Some(credential) } = parent.receive()
-            else { panic!("reconnexion primaire du parent152 absente"); };
+        let DaemonToWrapper::Registered {
+            agent_id,
+            credential: Some(credential),
+        } = parent.receive()
+        else {
+            panic!("reconnexion primaire du parent152 absente");
+        };
         assert_eq!(agent_id, PARENT);
         support::save_fixture_credential(&support::socket(&f.root), PARENT, INSTANCE, credential);
         let resumed = f.status_until(&mut parent, id, "working");
@@ -863,7 +899,10 @@ fn native152_rouge_panne_mission_working() {
             .unwrap_or("");
         let child = wait_native_ready152(&f, child_id, previous_child_instance);
         assert_eq!(child["effective_posture"], "discovery");
-        assert_eq!(child["permission_snapshot"]["child_policy"]["permission_mode"], "plan");
+        assert_eq!(
+            child["permission_snapshot"]["child_policy"]["permission_mode"],
+            "plan"
+        );
         assert_eq!(child["parent_task_id"], id);
         assert_eq!(child["root_owner_agent_id"], PARENT);
         assert_eq!(child["restart_resumes"], restart - 1);
@@ -1141,6 +1180,7 @@ for line in sys.stdin:
             domain: None,
             journal_available: None,
             turn_in_progress: false,
+            turn_attest: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,

@@ -8350,7 +8350,8 @@ mod tests {
                     instance_id: Some("test-recipient138".into()),
                     domain: Some("same-visible-name".into()),
                     turn_in_progress: false,
-                    journal_available: Some(false)
+                    journal_available: Some(false),
+                    turn_attest: false,
                 })
                 .unwrap(),
             DaemonToWrapper::Registered { .. }

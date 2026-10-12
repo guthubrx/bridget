@@ -28,7 +28,9 @@ fn start_mcp_as(root: &Path, agent: &str, instance: &str) -> McpProcess {
     );
     mcp.notify(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     let who = mcp.request(json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
-        "params":{"name":"bridget_who","arguments":{}}}));
+        "params":{"name":"bridget_who","arguments":{"scope":"global"}}}));
+    // Oracle d'identité sans projet annoncé : vue globale explicite du contrat138.
+    assert_eq!(who["result"]["structuredContent"]["scope"], "global");
     assert!(
         who["result"]["structuredContent"]["agents"]
             .as_array()
@@ -139,6 +141,7 @@ fn noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper() 
     let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
     wait_for_registered_agent(&socket(&root), ACP_AGENT);
     let timestamp = issued_at();
+    let owner = register_agent_as(&socket(&root), ACTOR, "identity-instance-a");
     let mut mcp = start_mcp(&root, "identity-instance-a");
     let accepted = wait_accepted(&mut mcp, timestamp);
     wait_for_counter(&counter, 1);
@@ -146,13 +149,38 @@ fn noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper() 
     assert_eq!(before.len(), 1);
     let identity_files = fs::read_dir(root.join("state/agent-names"))
         .unwrap()
-        .map(|entry| {
+        .filter_map(|entry| {
             let path = entry.unwrap().path();
-            (path.clone(), fs::read(path).unwrap())
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("instance-")
+                .then(|| (path.clone(), fs::read(path).unwrap()))
         })
         .collect::<Vec<_>>();
-    assert!(!identity_files.is_empty(), "fichiers du vrai wrapper");
-    let name_file = &identity_files[0].0;
+    assert!(
+        !identity_files.is_empty(),
+        "fichiers de nom du vrai wrapper"
+    );
+    let name_file = &identity_files
+        .iter()
+        .find(|(_, bytes)| bytes.as_slice() == ACP_AGENT.as_bytes())
+        .expect("nom persistant du destinataire ACP")
+        .0;
+    let credentials = fs::read_dir(root.join("state/agent-names"))
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            let proof: Value = serde_json::from_slice(&fs::read(&path).unwrap()).ok()?;
+            (proof["agent_id"] == ACTOR || proof["agent_id"] == ACP_AGENT).then_some((path, proof))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        credentials.len(),
+        2,
+        "preuves Registered des deux propriétaires"
+    );
     let instance = name_file
         .file_name()
         .unwrap()
@@ -250,11 +278,44 @@ fn noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper() 
     // Barrière = issue Accepted observée après l'ACK du vrai wrapper, puis
     // modification de profil confirmée par l'annuaire. Pas de sommeil métier.
     daemon.crash();
+    drop(owner);
     let restarted = spawn_daemon(&root, None);
+    let _resumed_owner = register_agent_as(&socket(&root), ACTOR, "identity-instance-a");
     wait_for_registered_agent(&socket(&root), ACP_AGENT);
     assert_eq!(listed_name(&root, ACP_AGENT), "Destinataire renommé");
     for (path, bytes) in identity_files {
-        assert_eq!(fs::read(path).unwrap(), bytes);
+        assert_eq!(
+            fs::read(path).unwrap(),
+            bytes,
+            "nom et instance du wrapper stables"
+        );
+    }
+    // Un nouveau daemon émet une nouvelle preuve, sans changer l'incarnation.
+    // Register peut précéder l'écriture du fichier côté wrapper : attendre ce fait.
+    let credential_deadline = Instant::now() + Duration::from_secs(5);
+    for (path, previous) in credentials {
+        loop {
+            let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            if current["agent_id"] == previous["agent_id"]
+                && current["instance_id"] == previous["instance_id"]
+                && current["credential"].is_string()
+                && current["credential"] != previous["credential"]
+            {
+                let mut auxiliary = Client::connect(&socket(&root));
+                attest_agent(
+                    &socket(&root),
+                    &mut auxiliary,
+                    current["agent_id"].as_str().unwrap(),
+                    current["instance_id"].as_str().unwrap(),
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < credential_deadline,
+                "credential renouvelé attendu à incarnation constante"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     let mut resumed_mcp = start_mcp(&root, "identity-instance-a");
     assert_eq!(wait_accepted(&mut resumed_mcp, timestamp), accepted);
@@ -280,14 +341,50 @@ fn deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance() {
     let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
     wait_for_registered_agent(&socket(&root), ACP_AGENT);
     let timestamp = issued_at();
+    // Deux incarnations successives respectent l'unique owner actif du contrat 149.
+    let mut owner_a = register_agent_as(&socket(&root), ACTOR, "identity-instance-a");
     let mut first = start_mcp(&root, "identity-instance-a");
+    let a = wait_accepted(&mut first, timestamp);
+    wait_for_counter(&counter, 1);
+    let record_a = records(&db);
+    assert_eq!(record_a.len(), 1);
+    assert_eq!(wait_accepted(&mut first, timestamp), a);
+    assert_eq!(
+        records(&db),
+        record_a,
+        "rejeu A avant retrait du propriétaire"
+    );
+    owner_a.send(WrapperToDaemon::Unregister);
+    owner_a.send(WrapperToDaemon::ListAgents);
+    let DaemonToWrapper::AgentList { agents } = owner_a.receive() else {
+        panic!("annuaire attendu après retrait réel du propriétaire A");
+    };
+    let stopped_a = agents
+        .iter()
+        .find(|agent| agent.agent_id == ACTOR)
+        .expect("présence conservée de l'incarnation A");
+    assert_eq!(stopped_a.state, "stopped");
+    assert!(
+        stopped_a.connection_id.is_empty(),
+        "aucune route active pour A"
+    );
+    // AgentInfo ne publie pas l'instance : relire la preuve du vrai Registered A.
+    let proof_a = fs::read_dir(root.join("state/agent-names"))
+        .unwrap()
+        .filter_map(|entry| {
+            serde_json::from_slice::<Value>(&fs::read(entry.unwrap().path()).unwrap()).ok()
+        })
+        .find(|proof| proof["agent_id"] == ACTOR)
+        .expect("preuve privée de l'incarnation inscrite A");
+    assert_eq!(proof_a["instance_id"], "identity-instance-a");
+    drop(owner_a);
+    let _owner_b = register_agent_as(&socket(&root), ACTOR, "identity-instance-b");
     let mut second = start_mcp(&root, "identity-instance-b");
     assert_ne!(
         first.child.id(),
         second.child.id(),
         "même binaire, processus distincts"
     );
-    let a = wait_accepted(&mut first, timestamp);
     let b = wait_accepted(&mut second, timestamp);
     wait_for_counter(&counter, 2);
     let before = records(&db);
@@ -306,7 +403,29 @@ fn deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance() {
         deliveries, 2,
         "deux scopes : deux remises durablement distinctes"
     );
-    assert_eq!(wait_accepted(&mut first, timestamp), a);
+    assert!(
+        before.contains(&record_a[0]),
+        "le record A reste byte-identique"
+    );
+    let scopes: i64 = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(DISTINCT issuer_scope) FROM idempotency_records",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        scopes, 2,
+        "la même clé conserve deux scopes d'incarnation distincts"
+    );
+    let stale = first.request(call(32, timestamp));
+    assert_eq!(
+        stale["result"]["isError"], true,
+        "ancien owner refusé : {stale}"
+    );
+    assert_eq!(stale["result"]["code"], "auxiliary_identity_unproven");
+    assert_eq!(records(&db), before, "le refus de A ne change aucun reçu");
     assert_eq!(wait_accepted(&mut second, timestamp), b);
     assert_eq!(records(&db), before);
     assert_eq!(fs::read(&counter).unwrap(), b"xx");
@@ -322,6 +441,8 @@ fn deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance() {
 fn spec094_mcp_modifie_uniquement_sa_propre_presence() {
     let root = test_root("spec094-mcp-self");
     let daemon = spawn_daemon(&root, None);
+    let _owner = register_agent_as(&socket(&root), ACTOR, "spec094-instance");
+    let mut other_owner = register_agent_as(&socket(&root), ACP_AGENT, "spec094-other-instance");
     let mut mcp = start_mcp(&root, "spec094-instance");
     let mut other = start_mcp_as(&root, ACP_AGENT, "spec094-other-instance");
     let reserved = other.request(json!({"jsonrpc":"2.0","id":8,"method":"tools/call",
@@ -329,6 +450,35 @@ fn spec094_mcp_modifie_uniquement_sa_propre_presence() {
     assert_eq!(reserved["result"]["structuredContent"]["status"], "applied");
     other.stop();
     fs::write(root.join("state/mcp-agent-name"), ACTOR).unwrap();
+    other_owner.send(WrapperToDaemon::ListAgents);
+    let DaemonToWrapper::AgentList { agents } = other_owner.receive() else {
+        panic!("annuaire attendu avant la tentative sur autrui");
+    };
+    let foreign_domain = agents
+        .into_iter()
+        .find(|agent| agent.agent_id == ACP_AGENT)
+        .unwrap()
+        .domain;
+    let mut auxiliary = Client::connect(&socket(&root));
+    attest_agent(&socket(&root), &mut auxiliary, ACTOR, "spec094-instance");
+    auxiliary.send(WrapperToDaemon::Domain {
+        agent: ACP_AGENT.into(),
+        domain: Some("foreign159".into()),
+    });
+    assert!(matches!(auxiliary.receive(), DaemonToWrapper::Nack { .. }));
+    other_owner.send(WrapperToDaemon::ListAgents);
+    let DaemonToWrapper::AgentList { agents } = other_owner.receive() else {
+        panic!("annuaire attendu après la tentative sur autrui");
+    };
+    assert_eq!(
+        agents
+            .into_iter()
+            .find(|agent| agent.agent_id == ACP_AGENT)
+            .unwrap()
+            .domain,
+        foreign_domain,
+        "l'auxiliaire authentifié ne modifie pas le domaine d'autrui"
+    );
     let conflict = mcp.request(json!({"jsonrpc":"2.0","id":9,"method":"tools/call",
         "params":{"name":"bridget_rename","arguments":{"display_name":"Nom réservé 094"}}}));
     assert_eq!(
@@ -362,7 +512,7 @@ fn spec094_mcp_modifie_uniquement_sa_propre_presence() {
         responses.push(mcp.request(request));
     }
     let who = mcp.request(json!({"jsonrpc":"2.0","id":14,"method":"tools/call",
-        "params":{"name":"bridget_who","arguments":{}}}));
+        "params":{"name":"bridget_who","arguments":{"scope":"global"}}}));
     let status = mcp.request(json!({"jsonrpc":"2.0","id":15,"method":"tools/call",
         "params":{"name":"bridget_status","arguments":{}}}));
     let control = mcp.request(json!({"jsonrpc":"2.0","id":16,"method":"tools/call",
@@ -374,7 +524,7 @@ fn spec094_mcp_modifie_uniquement_sa_propre_presence() {
     );
     let mut resumed = start_mcp(&root, "spec094-instance");
     let after_reconnect = resumed.request(json!({"jsonrpc":"2.0","id":17,"method":"tools/call",
-        "params":{"name":"bridget_who","arguments":{}}}));
+        "params":{"name":"bridget_who","arguments":{"scope":"global"}}}));
     resumed.stop();
 
     for response in responses {

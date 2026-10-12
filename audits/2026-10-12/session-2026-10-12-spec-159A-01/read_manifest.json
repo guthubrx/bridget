@@ -1,0 +1,114 @@
+{
+  "at": "2026-10-12T16:39:56.206040+00:00",
+  "reads": [
+    {
+      "file": "/Users/moi/dotfiles/audit/commands/audit.md",
+      "sha256": "1a6947ecec093c019406b1d0fee5f35adf91219c518a4ef094c4a56f14ae9866",
+      "ranges": [
+        [
+          1,
+          167
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "canonical_full_read"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/00-parametres.md",
+      "sha256": "0cc510e8467258c6c34684604da4079b3bec980f10d41a059eddf416340c8d4e",
+      "ranges": [
+        [
+          1,
+          224
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "canonical_full_read"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/01-anti-hallucination.md",
+      "sha256": "8cebedd870489c551fbce7c7b045aa7359aa247b0eefea4c85ebdf7832d12552",
+      "ranges": [
+        [
+          1,
+          217
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "canonical_full_read"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/02-decouverte.md",
+      "sha256": "90b5f7a16b4715e8bcb6f15c90e642aff3435b23ec04a090a9e1cfb2dc175f8e",
+      "ranges": [
+        [
+          1,
+          310
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "canonical_full_read"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/11-regles-or.md",
+      "sha256": "c65a5eeeefad14d5dff9a173dd809fe626970e2e701f102358982391315f55a5",
+      "ranges": [
+        [
+          1,
+          281
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "canonical_full_read"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "ranges": [
+        [
+          6090,
+          6155
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "discovery_context_only_not_thematic_audit"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "ranges": [
+        [
+          1,
+          95
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "discovery_context_only_not_thematic_audit"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/receipt_store.rs",
+      "sha256": "94bc4ac767d35e5f98154e96d9f512297fd7ce294c3e9f6a861113d986643f61",
+      "ranges": [
+        [
+          123,
+          190
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "discovery_context_only_not_thematic_audit"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/Cargo.toml",
+      "sha256": "52293175462770fc5d52722391c952428c9c3a40dad2472e527042042d3aab42",
+      "ranges": [
+        [
+          1,
+          22
+        ]
+      ],
+      "read_at": "2026-10-12T16:39:56.206040+00:00",
+      "kind": "manifest_full_read"
+    }
+  ],
+  "inventory_does_not_imply_source_read": true
+}

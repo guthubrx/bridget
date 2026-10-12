@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "task": "T010159A",
+  "updated_at_utc": "2026-10-12T16:38:30.208586+00:00",
+  "status": "PLANNED_TARGETED_CASES_PROVEN_GLOBAL_VALIDATION_NOT_CLAIMED",
+  "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+  "source_sha256_at_matrix": "86c99ced3bfa1515fcd58fcf14e1fe23374611f15604997644cf4ab2b927e1a5",
+  "rows": [
+    {
+      "case": "daemon après rétention",
+      "test": "held159_daemon_arrete_apres_retention_conserve_la_remise",
+      "checkpoint": "SQL held après SendIdempotent attesté, avant toute libération",
+      "precondition": "parent réel + cible busy attestée + message ordinaire ; TERM daemon cfg(test)",
+      "oracle": "phase held, id, génération, octets et rang identiques après reprise",
+      "status": "PASS confirmé ROOT dans lot 1P/3F ; lot global RC101",
+      "receipt": "T010-four-crash-and-SC004-real-busy",
+      "patch": "03/04/07 déjà appliqués"
+    },
+    {
+      "case": "transaction libération puis arrêt avant push ; point21T007",
+      "test": "held159_release_panne_entre_transaction_et_push_relivree_par_la_reprise",
+      "checkpoint": "after_held_release_commit",
+      "precondition": "3 admissions réelles Held ; FIFO observée après COMMIT ; aucun writer après TERM",
+      "oracle": "reprise dispatching, ordinary1→2→3, ACK réels ; id/génération/octets/rang préservés",
+      "status": "PASS 2P/0F exacts avec ACK absence",
+      "receipt": "T010-consumed-markers-ACK-absence-GREEN",
+      "patch": "04/07/09 + correctif adoption ROOT"
+    },
+    {
+      "case": "daemon après vraie poussée socket",
+      "test": "held159_daemon_arrete_apres_push_reprise_dans_l_ordre",
+      "checkpoint": "after_idempotent_socket_push ET after_receipt_seen_before_injection",
+      "precondition": "deux ready réels ; push writeln+flush effectué, Seen durable, zéro injection ancienne ; arrêt daemon puis wrapper/provider individuels",
+      "oracle": "nouvelle incarnation, ordinary1→2→3 et trois ACK réels ; identités et enveloppes conservées",
+      "status": "PASS 1P/0F exact",
+      "receipt": "T010-after-real-push-dual-barrier",
+      "patch": "/Users/moi/.cache/bridget-code159A-T010-after-push-preparation-20261012/01-after-real-push-test-and-checkpoint.patch",
+      "limit": "montage contrôlé ; aucune garantie exactement une injection pour toute panne après push (R17)"
+    },
+    {
+      "case": "daemon après ACK",
+      "test": "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas",
+      "checkpoint": "after_delivery_acked",
+      "precondition": "ordinary1 acked et suivants2/3 Held ; cible native terminale volontairement absente à la reprise",
+      "oracle": "aucune réinjection1 cible absente ; id/génération/octets/rang2/3 préservés ; relance explicite ensuite",
+      "status": "PASS 2P/0F exacts ACK/busy final",
+      "receipt": "T010-completed-bootstrap-real-held-start",
+      "patch": "09/11/14/15"
+    },
+    {
+      "case": "daemon puis porteur nouvelle incarnation (SC015)",
+      "test": "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas (même scénario, pas test doublon)",
+      "checkpoint": "ACK → daemon TERM → absence AgentList → RelaunchOrder réel",
+      "precondition": "mission terminale non rouverte ; nouvelle instance effectivement observée après relance explicite",
+      "oracle": "ordinary1 ancien déjàACKED, ordinary2 puis3 nouvelle instance ; rang/id/génération/octets conservés",
+      "status": "PASS partagé avec ACK",
+      "receipt": "T010-completed-bootstrap-real-held-start",
+      "patch": "11/14/15"
+    },
+    {
+      "case": "porteur sans message en cours",
+      "test": "held159_porteur_arrete_sans_message_en_cours",
+      "checkpoint": "AgentList connected après Carte bridget-reprise réellement completed",
+      "precondition": "SpawnOrder réel, aucune ordinary ; TERM porteur/provider prouvés, relance explicite nouvelle instance",
+      "oracle": "seules cartes identifiées peuvent être terminées ; zéro ordinaire inventé",
+      "status": "PASS confirmé ROOT dans lot1P/2F ; échecs ACK/busy exclus",
+      "receipt": "T010-generic-policy-bootstrap-card-corrected",
+      "patch": "11/12/14"
+    },
+    {
+      "case": "porteur avec message en cours",
+      "test": "held159_porteur_arrete_avec_message_en_cours_preserve_ordre",
+      "checkpoint": "AgentList busy réel, seed initial en cours, deux Held",
+      "precondition": "Carte startup drainée seulement si from bridget-reprise ; seed ordinaire réellement démarré",
+      "oracle": "nouvelle instance, ordre1→2 sans doublon ;2 resteHeld tant que1 réel actif ; identité/octets/rang figés",
+      "status": "PASS 2P/0F exacts ACK/busy final",
+      "receipt": "T010-completed-bootstrap-real-held-start",
+      "patch": "11/12/14/15"
+    },
+    {
+      "case": "porteur après Seen durable, avant injection ; même incarnation",
+      "test": "held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee",
+      "checkpoint": "after_receipt_seen_before_injection → after_delivery_indeterminate",
+      "precondition": "deux Held réels ; Seen intact ; daemon TERM avant wrapper ; bootstrap API réelle avec ancienne instance/commande/génération et nouveau PID/birth après daemon prêt",
+      "oracle": "report indeterminate du vrai wrapper ; même namespace/reçu ; zéro injection1 et suivant Held à frontière ; id/génération/octets/rang préservés",
+      "status": "PASS 1P/0F exact ; dernier montage validé",
+      "receipt": "T010-Seen-daemon-before-real-READY",
+      "patch": "/Users/moi/.cache/bridget-code159A-T010-20261012/17-seen-daemon-before-ready.patch",
+      "limit": "frontière indeterminate bornée par checkpoint ; aucune promesse Held après un futur vrai repos",
+      "historical_failure_receipt": "T010-Seen-same-instance-real-managed-restart"
+    },
+    {
+      "case": "réglage fermé SC001 : message/remise/phase/push",
+      "test": "daemon::presence_tests::held159_hold_ferme_identique + registry::held159_hold_ferme_identique",
+      "checkpoint": "handler réel, registre privé, flags None puis false",
+      "precondition": "même message canonique et heure ; capturer vraie DeliverIdempotent via writer",
+      "oracle": "canon, octets remise et phase dispatching identiques ; poussée réelle ; flux auxiliaire de réattestation séparé",
+      "status": "PASS dans lot22P/0F",
+      "receipt": "T005-admission-T009-list-GREEN-capacity-type",
+      "patch": "T005 ROOT (aucun nouveau scénario)"
+    },
+    {
+      "case": "ordre3 / réaffectation SC003",
+      "test": "tests avant push et après push partagés",
+      "checkpoint": "frontières COMMIT/push ; nouvelles incarnations réelles",
+      "precondition": "3 messages ordinaires réellement retenus ; compteur Python réinitialisé distingué de id enveloppe",
+      "oracle": "ordinary1→2→3 exact, aucune perte/duplication contrôlée ; id/génération/octets/rang stables",
+      "status": "PASS via les deux cas de libération",
+      "receipt": "T010-after-real-push-dual-barrier",
+      "patch": "correctif métier adoption ROOT + oracles07/09"
+    },
+    {
+      "case": "latence SC004 / défaut fermé",
+      "test": "held159_latency_baseline_codex_simule + held159_latency_retenue_codex_simule",
+      "checkpoint": "20 échantillons proxy Python completed→nextturnstart, rang19",
+      "precondition": "worker performance10000 distinct worker crash8 ; after busy barrière réelle avant admission, hors mesure",
+      "oracle": "27.763792→1028.132375ms ; écart1000.368583ms >250 ; défaut reste false",
+      "status": "sampler PASS ; seuil dépassé ; activation par défaut refusée",
+      "receipt": "T010-SC004-real-busy-native-result-demux",
+      "patch": "06 + busy/demux ROOT ; preuveSC004 existante",
+      "limit": "ni intervalle exact du daemon ni SLA production ; aucune optimisation/mesure bonus"
+    }
+  ],
+  "execution_receipts": {
+    "T005-admission-T009-list-GREEN-capacity-type": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.json",
+      "sha256": "8a1eb7ab366b05cec8d429d1413ad7306ad26c233a51153293c402e542d99190",
+      "rc": 0,
+      "seconds": 61.0,
+      "test_results": [
+        [
+          "ok",
+          "22",
+          "0",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.log",
+      "log_sha256": "3df5a7fa1f6179d9dcb49d7c99b762b26e1cc220a5bd2ad8405986a06f1ebd41",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-four-crash-and-SC004-real-busy": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-four-crash-and-SC004-real-busy.json",
+      "sha256": "9ecf9ef054048871a4edaea4ee37f719ada4f1c39d66cdb1b375d8ca4f81913c",
+      "rc": 101,
+      "seconds": 51.82,
+      "test_results": [
+        [
+          "FAILED",
+          "1",
+          "3",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-four-crash-and-SC004-real-busy.log",
+      "log_sha256": "86d1780438a9d00107c5cec8b4cc9ac4ab9114d5f5dc34099e0ae1fa1790b0c3",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-consumed-markers-ACK-absence-GREEN": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-consumed-markers-ACK-absence-GREEN.json",
+      "sha256": "adfc6afdf6dd7f0eb5557d467d44af33b15aadc54190843bfb497dbaebb1ec18",
+      "rc": 0,
+      "seconds": 31.51,
+      "test_results": [
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-consumed-markers-ACK-absence-GREEN.log",
+      "log_sha256": "5468da328f95b4f0115985fa415e5316f36005aaa95f715d13ec41ff90c15491",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-completed-bootstrap-real-held-start": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-completed-bootstrap-real-held-start.json",
+      "sha256": "6f1688a9b67972b225082a4bb567dd72256bed1f6ccda8f820274a4639e89466",
+      "rc": 0,
+      "seconds": 23.53,
+      "test_results": [
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-completed-bootstrap-real-held-start.log",
+      "log_sha256": "684626e80642df1b8fa3a900bb3aec2ed881bfc33abd8452984766d4ad8c5fa7",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-generic-policy-bootstrap-card-corrected": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-generic-policy-bootstrap-card-corrected.json",
+      "sha256": "d49f6d8923d3d929bd96c13a0ea171839c0657ce53a334e138ee6254dbee0fc4",
+      "rc": 101,
+      "seconds": 43.19,
+      "test_results": [
+        [
+          "FAILED",
+          "1",
+          "2",
+          "0"
+        ]
+      ],
+      "failed_tests": [
+        "held159_porteur_arrete_avec_message_en_cours_preserve_ordre",
+        "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas"
+      ],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-generic-policy-bootstrap-card-corrected.log",
+      "log_sha256": "20fd78b23a31437fc503d60d6b76fee42fcf45a91adfaf359ab0f1220c2459f8",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-after-real-push-dual-barrier": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.json",
+      "sha256": "20d46612bc1f50aac564398c82b98bdeb08985f605924806d1897915ec4bee75",
+      "rc": 0,
+      "seconds": 32.13,
+      "test_results": [
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.log",
+      "log_sha256": "2715b78ee78669e5f04922587c90c2462c258cc8f9fd46079c30ad6aaf113fe6",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-SC004-real-busy-native-result-demux": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-SC004-real-busy-native-result-demux.json",
+      "sha256": "6d954ec1ee14943358de96d5abdba5bb3c1c1fe911ba867ae7e5fc0650efacf2",
+      "rc": 0,
+      "seconds": 54.72,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-SC004-real-busy-native-result-demux.log",
+      "log_sha256": "db13405c7215d46cd4f85217d13c3a091e24da35da488eb11675592ae55a35de",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-Seen-same-instance-real-managed-restart": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-same-instance-real-managed-restart.json",
+      "sha256": "9472047e72b5eb137869865432a32c5496edab7a7125108deb7b887af7356c49",
+      "rc": 101,
+      "seconds": 23.11,
+      "test_results": [
+        [
+          "FAILED",
+          "0",
+          "1",
+          "0"
+        ]
+      ],
+      "failed_tests": [
+        "held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee"
+      ],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-same-instance-real-managed-restart.log",
+      "log_sha256": "a76cbbb696de5e8789455dd477a20281b995002e5517d97c95d4b665f0fecfaa",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    },
+    "T010-Seen-daemon-before-real-READY": {
+      "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.json",
+      "sha256": "173fea24454e54402f617e9f930edcc617741e934b622c9ab45c175b21fff47f",
+      "rc": 0,
+      "seconds": 23.49,
+      "test_results": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "failed_tests": [],
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.log",
+      "log_sha256": "6d78f9a2ebb3368bf361cb045e90749fba05a7ae12ccf22f96d0137809b7aac6",
+      "sources_stable": true,
+      "source_hash_proof": "source_hashes_before/source_hashes_after dans le reçu canonique référencé et hashé"
+    }
+  },
+  "sc004_proof": "/Users/moi/.cache/bridget-code159A-T010-20261012/SC004-latence-preuve.json",
+  "sc004_proof_sha256": "5fa8698019f921244926dbd68ba306cd4dd055341f5096cd8d37ddb7c9cd0acb",
+  "history_classification": [
+    {
+      "kind": "confirmed_business_defect_after_initial_T007",
+      "description": "Dispatching ordinary1 ancien destinataire stranded, ordinary2 parti avant1 ; constat runtime/SQL, correction adoption par ROOT, ordre strict conservé."
+    },
+    {
+      "kind": "fixture_mount_failures",
+      "description": "busy non encore attesté ; ListAgents interdit au RoleClient ; marqueurs release-turn consommés réutilisés ; compteur Python nouvelle incarnation ; absence cible native terminale ; policies Native supposées sur Spawn/Relaunch Discovery ; état connected transitoire déjà consommé par Held ; READY vivant créé avant réconciliation startup. Aucun de ces échecs n’est présenté comme RED métier avant implémentation."
+    }
+  ],
+  "limits": [
+    "Aucun test/Cargo/signal/service exécuté par cet owner. ROOT réalise les exécutions et applique les patches.",
+    "Réussites ciblées reliées aux empreintes de leurs reçus historiques et dernier Seen frais ; aucune réussite globale finale n’est déduite de ces cas ciblés.",
+    "Pannes établies par daemon libtest cfg(test) et featuretest-support : disposition TERM par défaut distincte du shutdown coopératif production.",
+    "AfterPush double barrière contrôlée ; hors cette fenêtre l’indeterminate après libération reste possible.",
+    "UI/T3 hors lot ; aucune capacité file-écran-fermée extrapolée depuis ces tests."
+  ],
+  "last_seen_run_source_sha256": "a0496d6c7805515aea629202a4a08fefed2951f4235f1887c15f425fe4dbb689",
+  "last_seen_result": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "rc": 0,
+    "seconds": 23.49,
+    "receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.json",
+    "log_sha256": "6d78f9a2ebb3368bf361cb045e90749fba05a7ae12ccf22f96d0137809b7aac6",
+    "sources_stable": true
+  }
+}

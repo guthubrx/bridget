@@ -3523,6 +3523,9 @@ pub enum WrapperToDaemon {
         /// État ACP re-déclaré après chaque reconnexion du wrapper.
         #[serde(default)]
         turn_in_progress: bool,
+        /// Attestation périodique de tour ; une absence historique reste fausse.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        turn_attest: bool,
         /// `Some(false)` est envoyé par les wrappers qui connaissent
         /// `JournalReady`. L'absence est réservée à la transition des
         /// wrappers historiques, dont le journal ACP est déjà une garantie du
@@ -4069,7 +4072,7 @@ pub enum DaemonToWrapper {
     QueueListResult {
         entries: Vec<serde_json::Value>,
         /// null hors fil T3 : la clé reste présente.
-        queue_bound: Option<u32>,
+        queue_bound: Option<usize>,
     },
     ChildRequestAnswer {
         answer: ChildRequestAnswer,
@@ -5575,6 +5578,26 @@ mod tests {
     }
 
     #[test]
+    fn held159_turnstate_register_sans_turn_attest_octets_inchanges() {
+        // API JSON publique : absence/faux conservent les octets158B, vrai reste attesté.
+        let legacy = r#"{"type":"Register","identity_version":2,"agent_type":"codex","agent_id":"550e8400-e29b-41d4-a716-446655440000","host":"test-host","transport":"unix","channel":"unix","mode":"acp","location":null,"os":"Linux","instance_id":"instance-test","domain":"bridget","turn_in_progress":false,"journal_available":false}"#;
+        let register: WrapperToDaemon = decode(legacy).unwrap();
+        assert_eq!(encode(&register).unwrap(), legacy);
+        let mut value: serde_json::Value = serde_json::from_str(legacy).unwrap();
+        value["turn_attest"] = serde_json::json!(false);
+        let register: WrapperToDaemon = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(encode(&register).unwrap(), legacy, "faux doit être omis");
+        value["turn_attest"] = serde_json::json!(true);
+        let register: WrapperToDaemon = serde_json::from_value(value).unwrap();
+        let encoded: serde_json::Value = serde_json::from_str(&encode(&register).unwrap()).unwrap();
+        assert_eq!(
+            encoded["turn_attest"],
+            serde_json::json!(true),
+            "déclaration vraie conservée sur le fil"
+        );
+    }
+
+    #[test]
     fn test_encode_decode_register() {
         let msg = WrapperToDaemon::Register {
             identity_version: 2,
@@ -5590,6 +5613,7 @@ mod tests {
             domain: Some("bridget".to_string()),
             turn_in_progress: false,
             journal_available: Some(false),
+            turn_attest: false,
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Register\""));
@@ -5609,6 +5633,7 @@ mod tests {
                 domain,
                 turn_in_progress,
                 journal_available,
+                turn_attest,
             } => {
                 assert_eq!(identity_version, 2);
                 assert_eq!(agent_type, "codex");
@@ -5623,6 +5648,7 @@ mod tests {
                 assert_eq!(domain.as_deref(), Some("bridget"));
                 assert!(!turn_in_progress);
                 assert_eq!(journal_available, Some(false));
+                assert!(!turn_attest);
             }
             _ => panic!("mauvais type"),
         }

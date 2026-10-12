@@ -1,0 +1,204 @@
+{
+  "at": "2026-10-12T16:39:56.206040+00:00",
+  "base": "b235998638b3eadf8f8edc0a6e323b762e95cab0",
+  "pre_fmt_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.json",
+  "pre_fmt_receipt_sha256": "173fea24454e54402f617e9f930edcc617741e934b622c9ab45c175b21fff47f",
+  "accepted": [
+    {
+      "path": "crates/bridget-daemon/src/cli_lineage.rs",
+      "before_format_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "head_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "current_sha256": "c516c1285e6b989a60d5f727e5f1df7c23d8c85157211106d18bc4024ea73840",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "before_format_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "head_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "current_sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation.rs",
+      "before_format_sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "head_sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "current_sha256": "daa72df90be400f7972eb1e550b5c516cbf502e6cefd51f0e16ce001049cc942",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_lineage.rs",
+      "before_format_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "head_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "current_sha256": "5e521b54112f897f157a9a83504412187358d15084dc7be11e44026e48ebe10d",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "before_format_sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+      "head_sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+      "current_sha256": "71d5d6b2e1cc9ce062282bffa3dbca743b8276a240630a1835ef9dd716dcfdd8",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "before_format_sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "head_sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "current_sha256": "6a435e40cd8f21cbf0c55510dd2d1ceb9f383dd32def8120de5412e729ea7a96",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77"
+    },
+    {
+      "path": "crates/bridget-daemon/src/desired_state.rs",
+      "before_format_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "head_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "current_sha256": "4eed549fddec4b61e3d537dcba25383831b6585e202ea7568b0317a5139dc05a",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f"
+    },
+    {
+      "path": "crates/bridget-daemon/src/lifecycle.rs",
+      "before_format_sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "head_sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "current_sha256": "17d4b5027229bc977a8f562b07c00d225b7628391454232bf73d4ff2eccb9df2",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478"
+    },
+    {
+      "path": "crates/bridget-daemon/src/lineage_client.rs",
+      "before_format_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "head_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "current_sha256": "1cda55a80b302f735b6be5251985e9a2ebab78ae5f53f2cc0d2a77fea9f807b2",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7"
+    },
+    {
+      "path": "crates/bridget-daemon/src/managed_process.rs",
+      "before_format_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "head_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "current_sha256": "a71aa1ae0a858473736f6880f6a164f9b1ff45194b32d7c68d1e92a4b76361ff",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197"
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permission_observer.rs",
+      "before_format_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "head_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "current_sha256": "4abdfa6e5d40cd05ffb7819bdc2dc3a7cb1641622783b1525bff2f4cce3af92f",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33"
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permissions.rs",
+      "before_format_sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "head_sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "current_sha256": "a479aa6db3a533998d9e289d1081b468f2c9af0c315c8520f72058ec170b4ffc",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52"
+    },
+    {
+      "path": "crates/bridget-daemon/src/provider_limits.rs",
+      "before_format_sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "head_sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "current_sha256": "89a463481af5d81f0de50e2598d7a06495c50f08dad4c9e799621eed45204ddd",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12"
+    },
+    {
+      "path": "crates/bridget-daemon/src/t3code_mcp.rs",
+      "before_format_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "head_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "current_sha256": "b127a60abe58367935e9a4534c4e06a972d063a990c7c29acb014ab75918e710",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2"
+    },
+    {
+      "path": "crates/bridget-daemon/src/workspace_git.rs",
+      "before_format_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "head_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "current_sha256": "4a555951358a121aee787d247631637ab6d089e5167bea177f972c8744a4a1e5",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4"
+    },
+    {
+      "path": "crates/bridget-daemon/src/workspace_git_tests.rs",
+      "before_format_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "head_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "current_sha256": "215803bd6ffeb838bbd1ed2d9259f4f6c88c4345ab9ad98916d6949a0c1c68c4",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "before_format_sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "head_sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "current_sha256": "6f2dbb16c98e52a6f74194fa75b397a393aa083409c338b0ec7dd25bb8c83e5f",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "before_format_sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "head_sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "current_sha256": "dd10a05671bd46720208d47fa770e6b5d3c55afd3b6dfcd6538f2616ca606e1d",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080"
+    },
+    {
+      "path": "crates/bridget-transport/src/claude_stream_json.rs",
+      "before_format_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "head_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "current_sha256": "a4657ebb34d7320083bef245f0a74e7cf394b5c3c9f862387c51158969185635",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5"
+    },
+    {
+      "path": "crates/bridget-transport/src/lineage_protocol.rs",
+      "before_format_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "head_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "current_sha256": "9ff600f971766d3dd35cbb16091d1aedf5dc362dec39a1685e8b62357c1c1c55",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66"
+    },
+    {
+      "path": "crates/bridget-transport/src/native_permissions.rs",
+      "before_format_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "head_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "current_sha256": "b4a1ea82fa18e01bf350d4216578b87dc15fbbf0e0e18eeeecdacff903d5cc52",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3"
+    },
+    {
+      "path": "crates/bridget-transport/tests/lineage_contract_test.rs",
+      "before_format_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "head_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "current_sha256": "1053a795c962d989df901a2695d6e0ce23ffd89d77512675f829e55df0078da8",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4"
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "before_format_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "head_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "current_sha256": "ab7f9f8a457e6fb29e615207ffa9dc6db7587adcadfe140f6963fb29cf12905f",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc"
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_permissions149_test.rs",
+      "before_format_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "head_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "current_sha256": "dba4ebceebb6c155844519aeecefdf460acedfeab2c2c5df597942542ff5b187",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes",
+      "restore_to_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e"
+    }
+  ],
+  "rejected": [],
+  "patch_sha256": "1ad0c530af7fd1d1795bb25fb92e5066988b53372cfe92d55cc23aaf47a35223",
+  "repository_writes": false,
+  "root_must_check_current_hash_before_apply": true
+}

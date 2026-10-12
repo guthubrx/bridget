@@ -1,0 +1,17 @@
+{
+  "created_at_utc": "2026-10-12T17:01:40.138713+00:00",
+  "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+  "source_sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+  "base_fragment_sha256": "4f36823a23317ff755c6068ca70602045af68f655c444fa863315cc4c6dda88f",
+  "new_fragment_sha256": "84d7202407daccfc6a57495e8b59421a992244e6a50e490c96a887e49c14f05b",
+  "base_fragment_start_line": 9347,
+  "base": "fragment sweep du gel courant ; hunks indépendants des deux corrections métier préparées par audit_existant",
+  "patch": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/PERF-001-sweep.patch",
+  "patch_sha256": "05b26265f2efbd0321ceb71880eb93b9b724f5c7eddbc93d5fc8dfe598c0fbce",
+  "candidate_sha256_from_this_base": "1c85cbf22130670d290f0ceca263fa5351abba6705a485dfed3e7a350d018540",
+  "existing_pattern": "daemon.rs251 : Result local dans une closure ; HashSet importé existant ; aucune nouvelle abstraction",
+  "SQL_unchanged": true,
+  "partial_error_cleanup": "Retain unique après closure, même quand result est Err après des COMMIT réussis ; seuls IDs de notices effectivement committées insérés.",
+  "tests_run": false,
+  "WT_modified": false
+}

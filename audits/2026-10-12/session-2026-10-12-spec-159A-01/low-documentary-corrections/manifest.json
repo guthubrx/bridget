@@ -1,0 +1,54 @@
+{
+  "at": "2026-10-12T17:04:25.874720+00:00",
+  "ownership": "CACHE only; ROOT applies after own source coordination",
+  "changes": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "relative_path": "crates/bridget-daemon/src/daemon.rs",
+      "base_sha256": "48b07b2070564a644173f4081295b0ce1737c08ec26d9146cb94a0a737828b7d",
+      "candidate_sha256": "7d52efac1607b2d7b616b799cb5e0ee8f845ef79265cc05973024227cc393ceb",
+      "patch": "01-comment-only.patch",
+      "patch_sha256": "f5a88a4fc676ff593108b0b2d068ab87534f831253d3ab47f2e611f181753619",
+      "guards": [
+        {
+          "fragment": "/// La reprise n'est déclenchée qu'au réenregistrement de l'instance ciblée :\n/// au démarrage, aucun socket wrapper n'existe encore. Les bytes persistés et\n/// le couple instance/génération sont les seules autorités ; aucun nom n'est\n/// résolu une seconde fois.\n",
+          "sha256": "a72119d892f01b22885496d6e685bc828ee810bdf66da5af0a169fef036886f1",
+          "expected_occurrences": 1
+        },
+        {
+          "fragment": "fn schedule_idempotent_delivery_recovery(\n",
+          "sha256": "5c7568f61ae0f6a3a90f1f71f79ae62a090dbb4a4d74bea7fb182a218deaf956",
+          "expected_occurrences": 1
+        }
+      ],
+      "change": "Move four existing comment lines only; no executable syntax changes; independent of R1/performance body hunks."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+      "relative_path": "specs/159-edition-file/data-model.md",
+      "base_sha256": "5422ef055f7cc128d3022b88c20e4ae6861b40e9455fe563e2ff08d05008874b",
+      "candidate_sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+      "patch": "02-data-model-only.patch",
+      "patch_sha256": "5186304a99c45d2c12a46d39c17cb1553cc68fe28ff60b237867a975cdf3cd09",
+      "guards": [
+        {
+          "fragment": "- `adopt_held_for_agent(agent_id, instance_id)` : `UPDATE send_deliveries SET recipient_instance_id = ?2 WHERE recipient_agent = ?1 AND phase = 'held'`, appelé à chaque enregistrement d'agent. Ne dépend pas de `presences`.\n",
+          "sha256": "719f120118c48356db02251018f976155d92cfb427f67fa8cbf09ce08fa8ec8f",
+          "expected_occurrences": 1
+        }
+      ],
+      "change": "Signature three arguments + conditional Dispatching adoption; no new behavior or claim about native relaunch."
+    }
+  ],
+  "source_writes": false,
+  "tests_run": false,
+  "DUP001": {
+    "id": "DUP-001",
+    "fingerprint": "6e7f97dc8103",
+    "severity": "LOW",
+    "root_triage": "accepted_cold_fixture_duplication_no_refactor_requested",
+    "lines": 57,
+    "occurrences": 3,
+    "proof_fragment_sha256": "a11cc55d72bd083e8ab6d713a4841a70ece5dab8fe18d0230fe41235ccd19d26"
+  }
+}

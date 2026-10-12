@@ -73,7 +73,9 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         workspace: None,
         child: crate::t3code::stable_uuid(&format!("child:{task_id}")),
         workspace_report_mission: None,
-        child_instance: Some(crate::t3code::stable_uuid(&format!("child-instance:{task_id}"))),
+        child_instance: Some(crate::t3code::stable_uuid(&format!(
+            "child-instance:{task_id}"
+        ))),
         mission: format!("mission-{task_id}"),
         mission_deadline_at: None,
         created_at: 100,
@@ -123,7 +125,8 @@ fn fixture(label: &str, capability: &str) -> (Arc<Mutex<DaemonState>>, String, U
             None,
             false,
             Some(false),
-            &mut st
+            &mut st,
+            false
         ),
         DaemonToWrapper::Registered { .. }
     ));
@@ -159,10 +162,9 @@ fn fixture(label: &str, capability: &str) -> (Arc<Mutex<DaemonState>>, String, U
             ..
         }
     ));
-    let fact = serde_json::from_value(
-        json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3}),
-    )
-    .unwrap();
+    let fact =
+        serde_json::from_value(json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3}))
+            .unwrap();
     assert!(handle_wrapper_message("t3", fact, &state).is_none());
     (state, root, peer)
 }
@@ -199,7 +201,10 @@ fn native149_validate_ferme_les_formes_ouvertes() {
 
     let mut version = base.clone();
     version["version"] = json!(2);
-    assert!(matches!(validate(&parse(version)), Err(E::UnsupportedVersion)));
+    assert!(matches!(
+        validate(&parse(version)),
+        Err(E::UnsupportedVersion)
+    ));
 
     let mut formes: Vec<Value> = Vec::new();
     let mut vide = base.clone();
@@ -240,11 +245,13 @@ fn native149_validate_ferme_les_formes_ouvertes() {
     formes.push(show);
     for borne in [0u32, 101] {
         let mut journal = base.clone();
-        journal["request"] = json!({"action":"journal","task_id":id,"after_seq":0,"limit":borne,"follow":false});
+        journal["request"] =
+            json!({"action":"journal","task_id":id,"after_seq":0,"limit":borne,"follow":false});
         formes.push(journal);
     }
     let mut journal = base.clone();
-    journal["request"] = json!({"action":"journal","task_id":"pas-un-uuid","after_seq":0,"limit":50,"follow":false});
+    journal["request"] =
+        json!({"action":"journal","task_id":"pas-un-uuid","after_seq":0,"limit":50,"follow":false});
     formes.push(journal);
     let mut journal = base.clone();
     journal["request"] = json!({"action":"journal","task_id":id,"after_seq":bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ + 1,"limit":50,"follow":false});
@@ -263,7 +270,8 @@ fn native149_validate_ferme_les_formes_ouvertes() {
 
     // Le journal en suivi passe la fermeture ; c'est la garde qui décide après.
     let mut suivi = base;
-    suivi["request"] = json!({"action":"journal","task_id":id,"after_seq":0,"limit":50,"follow":true});
+    suivi["request"] =
+        json!({"action":"journal","task_id":id,"after_seq":0,"limit":50,"follow":true});
     assert!(validate(&parse(suivi)).is_ok());
 }
 
@@ -300,7 +308,9 @@ fn native149_gardes_client_et_authorite() {
             NegotiatedClient {
                 version: 1,
                 issuer_scope: "l149".into(),
-                capabilities: vec![serde_json::from_value(json!("human_lineage_watch_v1")).unwrap()],
+                capabilities: vec![
+                    serde_json::from_value(json!("human_lineage_watch_v1")).unwrap(),
+                ],
             },
         );
     }
@@ -363,11 +373,18 @@ fn native149_gardes_client_et_authorite() {
     }
     // Projet annoncé ≠ projet demandé.
     assert_eq!(
-        call(&state, "/bridget-149-root-absent", json!({"action":"list","limit":10}))["code"],
+        call(
+            &state,
+            "/bridget-149-root-absent",
+            json!({"action":"list","limit":10})
+        )["code"],
         "project_mismatch"
     );
     // Le chemin légal redevient servi.
-    assert_eq!(call(&state, &root, json!({"action":"list","limit":10}))["status"], "ok");
+    assert_eq!(
+        call(&state, &root, json!({"action":"list","limit":10}))["status"],
+        "ok"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -380,18 +397,31 @@ fn native149_list_show_journal_et_disponibilite_journal() {
     let task_id = "14900000-0000-4000-8000-000000000001";
     // `sessions/<child>` vit sous le parent du db_path, partagé entre tests et
     // exécutions : un reliquat rendrait le journal disponible à tort.
-    let stale = state.lock().unwrap().db_path.parent().unwrap().join("sessions").join(crate::t3code::stable_uuid(&format!("child:{task_id}")));
+    let stale = state
+        .lock()
+        .unwrap()
+        .db_path
+        .parent()
+        .unwrap()
+        .join("sessions")
+        .join(crate::t3code::stable_uuid(&format!("child:{task_id}")));
     let _ = std::fs::remove_dir_all(&stale);
     {
         let st = state.lock().unwrap();
         st.delegation_store
-            .insert(&lineage_task(task_id, &owner_agent(), "queued"), "req-v1", b"c")
+            .insert(
+                &lineage_task(task_id, &owner_agent(), "queued"),
+                "req-v1",
+                b"c",
+            )
             .unwrap();
-        let mut autre = lineage_task("14900000-0000-4000-8000-0000000000aa", "autre-racine-149", "queued");
+        let mut autre = lineage_task(
+            "14900000-0000-4000-8000-0000000000aa",
+            "autre-racine-149",
+            "queued",
+        );
         autre.mission = "mission-autre-149".into();
-        st.delegation_store
-            .insert(&autre, "req-aa", b"c")
-            .unwrap();
+        st.delegation_store.insert(&autre, "req-aa", b"c").unwrap();
     }
     let liste = call(&state, &root, json!({"action":"list","limit":10}));
     assert_eq!(liste["status"], "ok");
@@ -401,18 +431,33 @@ fn native149_list_show_journal_et_disponibilite_journal() {
     assert_eq!(tasks[0]["task_id"], task_id);
     assert_eq!(tasks[0]["journal_available"], false);
 
-    let show = call(&state, &root, json!({"action":"show","task_id":task_id,"offset":0,"limit":100}));
+    let show = call(
+        &state,
+        &root,
+        json!({"action":"show","task_id":task_id,"offset":0,"limit":100}),
+    );
     assert_eq!(show["status"], "ok");
     assert!(show["result"].is_null(), "tâche non terminale : {show}");
 
     // Tâche d'une autre racine : même refus fermé qu'une tâche absente.
-    for absent in ["14900000-0000-4000-8000-0000000000aa", "00000000-0000-4000-8000-000000000000"] {
-        let show = call(&state, &root, json!({"action":"show","task_id":absent,"offset":0,"limit":100}));
+    for absent in [
+        "14900000-0000-4000-8000-0000000000aa",
+        "00000000-0000-4000-8000-000000000000",
+    ] {
+        let show = call(
+            &state,
+            &root,
+            json!({"action":"show","task_id":absent,"offset":0,"limit":100}),
+        );
         assert_eq!(show["code"], "task_unavailable", "{show}");
     }
 
     // Journal sans dossier : refus fermé.
-    let journal = call(&state, &root, json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":50,"follow":false}));
+    let journal = call(
+        &state,
+        &root,
+        json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":50,"follow":false}),
+    );
     assert_eq!(journal["code"], "journal_unavailable", "{journal}");
 
     // Le dossier sessions/<child> privé rend le journal disponible.
@@ -435,7 +480,10 @@ fn native149_list_show_journal_et_disponibilite_journal() {
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(directory.join(format!("{}.jsonl", bridget_transport::journal::current_host_date())))
+            .open(directory.join(format!(
+                "{}.jsonl",
+                bridget_transport::journal::current_host_date()
+            )))
             .unwrap();
         writeln!(
             &file,
@@ -450,12 +498,20 @@ fn native149_list_show_journal_et_disponibilite_journal() {
         )
         .unwrap();
     }
-    let journal = call(&state, &root, json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":50,"follow":false}));
+    let journal = call(
+        &state,
+        &root,
+        json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":50,"follow":false}),
+    );
     assert_eq!(journal["status"], "ok", "{journal}");
     assert_eq!(journal["events"].as_array().unwrap().len(), 2);
     assert_eq!(journal["next_seq"], 2);
     assert_eq!(journal["caught_up"], true);
-    let journal = call(&state, &root, json!({"action":"journal","task_id":task_id,"after_seq":2,"limit":50,"follow":false}));
+    let journal = call(
+        &state,
+        &root,
+        json!({"action":"journal","task_id":task_id,"after_seq":2,"limit":50,"follow":false}),
+    );
     assert_eq!(journal["events"].as_array().unwrap().len(), 0);
 
     // Aucune mutation ne doit avoir traversé ces lectures.
@@ -478,24 +534,59 @@ fn native149_cancel_recu_rejeu_et_mismatch_via_flux() {
     {
         let st = state.lock().unwrap();
         st.delegation_store
-            .insert(&lineage_task("14900000-0000-4000-8000-000000000003", &owner_agent(), "queued"), "req-c3", b"c")
+            .insert(
+                &lineage_task(
+                    "14900000-0000-4000-8000-000000000003",
+                    &owner_agent(),
+                    "queued",
+                ),
+                "req-c3",
+                b"c",
+            )
             .unwrap();
         st.delegation_store
-            .insert(&lineage_task("14900000-0000-4000-8000-000000000004", &owner_agent(), "result_available"), "req-c4", b"c")
+            .insert(
+                &lineage_task(
+                    "14900000-0000-4000-8000-000000000004",
+                    &owner_agent(),
+                    "result_available",
+                ),
+                "req-c4",
+                b"c",
+            )
             .unwrap();
     }
     let task_id = "14900000-0000-4000-8000-000000000003";
     let request_id = "49000000-0000-4000-8000-000000000009";
-    let cancel = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":request_id}));
-    assert_eq!(cancel, json!({"version":1,"task_id":task_id,"status":"cancelling"}));
+    let cancel = call(
+        &state,
+        &root,
+        json!({"action":"cancel","task_id":task_id,"request_id":request_id}),
+    );
+    assert_eq!(
+        cancel,
+        json!({"version":1,"task_id":task_id,"status":"cancelling"})
+    );
     // Le reçu est rejoué à l'identique.
-    let rejoue = call(&state, &root, json!({"action":"cancel","task_id":task_id,"request_id":request_id}));
+    let rejoue = call(
+        &state,
+        &root,
+        json!({"action":"cancel","task_id":task_id,"request_id":request_id}),
+    );
     assert_eq!(rejoue, cancel);
     // Même request_id sur une autre tâche : mismatch d'enveloppe.
-    let mismatch = call(&state, &root, json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000004","request_id":request_id}));
+    let mismatch = call(
+        &state,
+        &root,
+        json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000004","request_id":request_id}),
+    );
     assert_eq!(mismatch["code"], "envelope_mismatch", "{mismatch}");
     // Tâche terminale : reçu sans mutation.
-    let terminal = call(&state, &root, json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000004","request_id":"49000000-0000-4000-8000-000000000008"}));
+    let terminal = call(
+        &state,
+        &root,
+        json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000004","request_id":"49000000-0000-4000-8000-000000000008"}),
+    );
     assert_eq!(terminal["status"], "result_available", "{terminal}");
 }
 
@@ -567,7 +658,15 @@ fn native149_watch_ready_changed_silence_resync_et_invalidation() {
     {
         let st = state.lock().unwrap();
         st.delegation_store
-            .insert(&lineage_task("14900000-0000-4000-8000-00000000000a", &owner_agent(), "queued"), "req-wa", b"c")
+            .insert(
+                &lineage_task(
+                    "14900000-0000-4000-8000-00000000000a",
+                    &owner_agent(),
+                    "queued",
+                ),
+                "req-wa",
+                b"c",
+            )
             .unwrap();
     }
     let generation = {
@@ -577,14 +676,25 @@ fn native149_watch_ready_changed_silence_resync_et_invalidation() {
     let (client, mut reader, handle) = open_watch_socket(&state, &root);
     let ready = next_event(&mut reader);
     assert_eq!(ready["status"], "ready", "{ready}");
-    assert_eq!(ready["seq"], 0, "le marqueur Ready est distinct de la seq du magasin");
+    assert_eq!(
+        ready["seq"], 0,
+        "le marqueur Ready est distinct de la seq du magasin"
+    );
     assert_eq!(ready["generation"], generation);
 
     // Une mutation de la racine suivie devient un Changed croissant.
     {
         let st = state.lock().unwrap();
         st.delegation_store
-            .insert(&lineage_task("14900000-0000-4000-8000-00000000000b", &owner_agent(), "queued"), "req-wb", b"c")
+            .insert(
+                &lineage_task(
+                    "14900000-0000-4000-8000-00000000000b",
+                    &owner_agent(),
+                    "queued",
+                ),
+                "req-wb",
+                b"c",
+            )
             .unwrap();
     }
     let changed = next_event(&mut reader);
@@ -598,7 +708,11 @@ fn native149_watch_ready_changed_silence_resync_et_invalidation() {
     }
     {
         let st = state.lock().unwrap();
-        let identique = st.delegation_store.get("14900000-0000-4000-8000-00000000000a").unwrap().unwrap();
+        let identique = st
+            .delegation_store
+            .get("14900000-0000-4000-8000-00000000000a")
+            .unwrap()
+            .unwrap();
         st.delegation_store.save(&identique).unwrap();
     }
     silent(&mut reader);
@@ -606,7 +720,15 @@ fn native149_watch_ready_changed_silence_resync_et_invalidation() {
     {
         let st = state.lock().unwrap();
         st.delegation_store
-            .insert(&lineage_task("14900000-0000-4000-8000-0000000000xc", "autre-racine-149", "queued"), "req-wc", b"c")
+            .insert(
+                &lineage_task(
+                    "14900000-0000-4000-8000-0000000000xc",
+                    "autre-racine-149",
+                    "queued",
+                ),
+                "req-wc",
+                b"c",
+            )
             .unwrap();
     }
     silent(&mut reader);
@@ -639,7 +761,11 @@ fn native149_watch_ready_changed_silence_resync_et_invalidation() {
     assert_eq!(error["status"], "error", "{error}");
     assert_eq!(error["code"], "binding_unavailable");
     let mut line = String::new();
-    assert_eq!(reader.read_line(&mut line).unwrap(), 0, "watch non fermé : {line}");
+    assert_eq!(
+        reader.read_line(&mut line).unwrap(),
+        0,
+        "watch non fermé : {line}"
+    );
     drop(reader);
     drop(client);
     drop(handle); // handle_connection est libéré par la fermeture ; sans assertion.
@@ -651,7 +777,12 @@ fn native149_watch_ready_changed_silence_resync_et_invalidation() {
 fn native149_watch_refuse_sans_socket_ou_sans_capacite() {
     // Négociation view seulement : le watch est refusé avant la socket.
     let (state, root, _peer) = fixture("l149-watchcap", "human_lineage_view_v1");
-    let response = handle_wrapper_message("human", lineage_request(&root, json!({"action":"watch"})), &state).unwrap();
+    let response = handle_wrapper_message(
+        "human",
+        lineage_request(&root, json!({"action":"watch"})),
+        &state,
+    )
+    .unwrap();
     let event = serde_json::to_value(response).unwrap()["event"].clone();
     assert_eq!(event["status"], "error", "{event}");
     assert_eq!(event["code"], "unsupported_version");
@@ -659,7 +790,12 @@ fn native149_watch_refuse_sans_socket_ou_sans_capacite() {
 
     // Négociation exacte mais aucune socket cliente : refus de liaison.
     let (state, root, _peer) = fixture("l149-watchnosock", "human_lineage_watch_v1");
-    let response = handle_wrapper_message("human", lineage_request(&root, json!({"action":"watch"})), &state).unwrap();
+    let response = handle_wrapper_message(
+        "human",
+        lineage_request(&root, json!({"action":"watch"})),
+        &state,
+    )
+    .unwrap();
     let event = serde_json::to_value(response).unwrap()["event"].clone();
     assert_eq!(event["status"], "error", "{event}");
     assert_eq!(event["code"], "binding_unavailable");
@@ -671,8 +807,10 @@ fn native149_watch_refuse_sans_socket_ou_sans_capacite() {
 // ---------------------------------------------------------------------------
 
 fn journal_tree(label: &str) -> std::path::PathBuf {
-    let base = std::env::temp_dir()
-        .join(format!("bridget-l149-journal-{label}-{}", uuid::Uuid::new_v4()));
+    let base = std::env::temp_dir().join(format!(
+        "bridget-l149-journal-{label}-{}",
+        uuid::Uuid::new_v4()
+    ));
     let directory = base.join("sessions").join("child-149");
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -707,16 +845,25 @@ fn native149_page_journal_bornes_permissions_et_fermeture() {
     let task_id = "14900000-0000-4000-8000-000000000002";
     for limite in [0u32, 101] {
         let directory = journal_tree("bornes");
-        assert!(matches!(lineage_journal_page(&directory, task_id, 0, limite), Err(E::InvalidRequest)));
+        assert!(matches!(
+            lineage_journal_page(&directory, task_id, 0, limite),
+            Err(E::InvalidRequest)
+        ));
         std::fs::remove_dir_all(directory.parent().unwrap().parent().unwrap()).unwrap();
     }
     // Dossier absent : indisponible, jamais une page vide.
     let absent = std::env::temp_dir().join(format!("bridget-l149-absent-{}", uuid::Uuid::new_v4()));
-    assert!(matches!(lineage_journal_page(&absent, task_id, 0, 50), Err(E::JournalUnavailable)));
+    assert!(matches!(
+        lineage_journal_page(&absent, task_id, 0, 50),
+        Err(E::JournalUnavailable)
+    ));
     // Dossier lisible par le groupe : refus.
     let ouvert = journal_tree("ouvert");
     std::fs::set_permissions(&ouvert, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(matches!(lineage_journal_page(&ouvert, task_id, 0, 50), Err(E::JournalUnavailable)));
+    assert!(matches!(
+        lineage_journal_page(&ouvert, task_id, 0, 50),
+        Err(E::JournalUnavailable)
+    ));
     std::fs::set_permissions(&ouvert, std::fs::Permissions::from_mode(0o700)).unwrap();
     // Fichier trop permissif : refus.
     {
@@ -728,9 +875,13 @@ fn native149_page_journal_bornes_permissions_et_fermeture() {
             .unwrap();
         writeln!(file, "{}", json!({"v":1,"seq":1,"event":"note"})).unwrap();
         // L'umask du processus masque `mode(0o644)` : la permissivité est posée explicitement.
-        file.set_permissions(std::fs::Permissions::from_mode(0o644)).unwrap();
+        file.set_permissions(std::fs::Permissions::from_mode(0o644))
+            .unwrap();
     }
-    assert!(matches!(lineage_journal_page(&ouvert, task_id, 0, 50), Err(E::JournalUnavailable)));
+    assert!(matches!(
+        lineage_journal_page(&ouvert, task_id, 0, 50),
+        Err(E::JournalUnavailable)
+    ));
     std::fs::remove_dir_all(ouvert.parent().unwrap().parent().unwrap()).unwrap();
 
     // Contenu nominal : trois événements, rattrapé.
@@ -802,7 +953,10 @@ fn native149_page_journal_bornes_permissions_et_fermeture() {
             .unwrap();
         writeln!(file, "{{v:1}}").unwrap();
     }
-    assert!(matches!(lineage_journal_page(&directory_sale, task_id, 0, 50), Err(E::JournalUnavailable)));
+    assert!(matches!(
+        lineage_journal_page(&directory_sale, task_id, 0, 50),
+        Err(E::JournalUnavailable)
+    ));
     std::fs::remove_dir_all(directory_sale.parent().unwrap().parent().unwrap()).unwrap();
 
     // Plus de 256 fichiers : limite de ressources.
@@ -815,7 +969,10 @@ fn native149_page_journal_bornes_permissions_et_fermeture() {
             .open(directory_volume.join(format!("{i:04}.jsonl")))
             .unwrap();
     }
-    assert!(matches!(lineage_journal_page(&directory_volume, task_id, 0, 50), Err(E::ResourceLimit)));
+    assert!(matches!(
+        lineage_journal_page(&directory_volume, task_id, 0, 50),
+        Err(E::ResourceLimit)
+    ));
     std::fs::remove_dir_all(directory_volume.parent().unwrap().parent().unwrap()).unwrap();
 }
 
@@ -901,10 +1058,9 @@ fn native149_snapshot_v2_exclut_le_filtre_avant_normalisation() {
     });
     // Un fil porteur du marqueur, sans providerInstanceId : exclu AVANT la
     // normalisation, sinon l'exigence providerInstanceId refuserait tout.
-    coquille["threads"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"id":"t-natif","projectId":"p","title":"Mission 149","bridgetTaskRef":marker()}));
+    coquille["threads"].as_array_mut().unwrap().push(
+        json!({"id":"t-natif","projectId":"p","title":"Mission 149","bridgetTaskRef":marker()}),
+    );
     let parse = crate::t3code_contract_v2::parse_snapshot(&coquille.to_string()).unwrap();
     let ids: Vec<&str> = parse.threads.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(ids, vec!["t"]);
@@ -938,21 +1094,40 @@ fn native150_purge_entretien_signale_resync() {
     let task_id = "15000000-0000-4000-8000-00000000000a";
     {
         let st = state.lock().unwrap();
-        st.delegation_store.insert(&tache_ancienne_150(task_id, &owner_agent()), "req-150a", b"c").unwrap();
+        st.delegation_store
+            .insert(
+                &tache_ancienne_150(task_id, &owner_agent()),
+                "req-150a",
+                b"c",
+            )
+            .unwrap();
     }
     let (client, mut reader, handle) = open_watch_socket(&state, &root);
     assert_eq!(next_event(&mut reader)["status"], "ready");
-    let avant = state.lock().unwrap().delegation_store.projection_meta().unwrap();
+    let avant = state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .projection_meta()
+        .unwrap();
     {
-        let st = state.lock().unwrap();
-        super::super::maintain_stores(&st, super::super::unix_now_secs());
-        assert!(st.delegation_store.get(task_id).unwrap().is_none(), "arbre purgé");
+        let mut st = state.lock().unwrap();
+        super::super::maintain_stores(&mut st, super::super::unix_now_secs());
+        assert!(
+            st.delegation_store.get(task_id).unwrap().is_none(),
+            "arbre purgé"
+        );
     }
     let resync = next_event(&mut reader);
     assert_eq!(resync["status"], "resync", "{resync}");
     assert_ne!(resync["generation"], json!(avant.generation));
     // Le lecteur refait une lecture complète : plus de tâche fantôme.
-    let page = state.lock().unwrap().delegation_store.lineage_page(&owner_agent(), 10, None, |_| false).unwrap();
+    let page = state
+        .lock()
+        .unwrap()
+        .delegation_store
+        .lineage_page(&owner_agent(), 10, None, |_| false)
+        .unwrap();
     assert!(page["tasks"].as_array().unwrap().is_empty());
     drop(reader);
     drop(client);
@@ -962,11 +1137,21 @@ fn native150_purge_entretien_signale_resync() {
 #[test]
 fn native150_purge_ouverture_du_daemon_ne_purge_rien() {
     let (st, config) = crate::daemon::presence_tests::state_with_registered_agent("l150-ouverture");
-    st.delegation_store.insert(&tache_ancienne_150("15000000-0000-4000-8000-00000000000b", "proprietaire-150"), "req-150b", b"c").unwrap();
+    st.delegation_store
+        .insert(
+            &tache_ancienne_150("15000000-0000-4000-8000-00000000000b", "proprietaire-150"),
+            "req-150b",
+            b"c",
+        )
+        .unwrap();
     drop(st);
     let (tx, _rx) = mpsc::channel();
     let rouvert = DaemonState::new(&config, tx).unwrap();
-    assert_eq!(rouvert.delegation_store.tasks().unwrap().len(), 1, "aucune purge à l'ouverture");
+    assert_eq!(
+        rouvert.delegation_store.tasks().unwrap().len(),
+        1,
+        "aucune purge à l'ouverture"
+    );
     drop(rouvert);
     let _ = std::fs::remove_file(&config.db_path);
 }
@@ -977,7 +1162,13 @@ fn native150_pause_annulation_humaine_disponible() {
     let task_id = "15000000-0000-4000-8000-00000000000c";
     {
         let st = state.lock().unwrap();
-        st.delegation_store.insert(&lineage_task(task_id, &owner_agent(), "queued"), "req-150c", b"c").unwrap();
+        st.delegation_store
+            .insert(
+                &lineage_task(task_id, &owner_agent(), "queued"),
+                "req-150c",
+                b"c",
+            )
+            .unwrap();
         let conn = st.store.connection();
         let generation = crate::referent_control::read(conn).unwrap().generation;
         crate::referent_control::set(

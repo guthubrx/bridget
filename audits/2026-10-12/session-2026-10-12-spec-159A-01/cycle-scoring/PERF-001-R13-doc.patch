@@ -1,0 +1,11 @@
+--- a/specs/159-edition-file/research.md
++++ b/specs/159-edition-file/research.md
+@@ -177,7 +177,7 @@
+ 
+ ## R13 - Complexité
+ 
+-Rétention : O(log n) (index existant non unique `idx_send_deliveries_recipient_phase`, étendu à `(recipient_instance_id, phase, queue_rank)` ; pas un deuxième index recipient). Libération : O(log n), plus les lignes bornées du destinataire et les contrôles de suivi. Balayage : O(n + h log n), n = remises persistantes parcourues et h = messages retenus ; aucun index global de phase ajouté. `cancel` : O(log n), plus les écritures et contrôles de suivi. `reorder` : O(m log n) avec écritures indexées. `list` : O(log n + k), k ≤ 200. Garde : O(1).
++Rétention : O(log n) (index existant non unique `idx_send_deliveries_recipient_phase`, étendu à `(recipient_instance_id, phase, queue_rank)` ; pas un deuxième index recipient). Libération : O(log n), plus les lignes bornées du destinataire et les contrôles de suivi. Balayage : O(n + B + h(log n + log r) + L + P), n = remises persistantes parcourues, h = messages retenus, r = demandes, B = octets des enveloppes, L = dépôts liés et P = suivis mémoire. Les notices effectivement committées sont regroupées dans un HashSet existant puis pending_replies est filtré une seule fois, même si une erreur tardive suit un COMMIT réussi ; aucun index global de phase ajouté. `cancel` : O(log n), plus les écritures et contrôles de suivi. `reorder` : O(m log n) avec écritures indexées. `list` : O(log n + k), k ≤ 200. Garde : O(1).
+ 
+ ## R14 - Évaluation : file tenue par le daemon (Art. XIX), preuves et coûts
+ 

@@ -1,0 +1,89 @@
+{
+  "created_at_utc": "2026-10-12T17:25:56.804094+00:00",
+  "kind": "targeted_counter_review_R2_after_historical_P3",
+  "verdict": "CONFIRMED_NORMATIVE_GAP_SOURCE_ONLY",
+  "requirements": [
+    "FR-023",
+    "FR-025"
+  ],
+  "existing_task": "T006",
+  "new_task_proposed": false,
+  "new_test_proposed": false,
+  "because": "L’expiration transforme busy en connected mais ne prouve pas repos et conserve busy_period_start. Le true suivant réinitialise pourtant cette date sur state!=busy, sans false entretemps. FR023 interdit ce reset par un nouveau true sans exception.",
+  "exact_quotes": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "line": 154,
+      "quote": "busy_period_start, non remis à zéro par un nouveau true"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "line": 156,
+      "quote": "Cette expiration ne prouve pas le repos du fournisseur."
+    }
+  ],
+  "production_correction": "daemon.rs5327 : if presence.busy_period_start.is_none() seulement.",
+  "existing_oracle_correction": "held159_turnstate_sortie_forcee_depuis_busy_period_start, daemon.rs39165–39168 : attendre Some(start), au lieu de Some(start+122s), après le true suivant expiration.",
+  "safety": "Le true réactualise last_attested_at et state=busy ; silence frais interdit l’expiration pendant90s. Seul false réel efface busy_period_start (5331) et autorise un nouveau début au true suivant. Le chemin legacy busy_since est inchangé.",
+  "limits": [
+    "Aucun runtime nouveau lancé par cet agent. L’oracle courant est vert mais porte un attendu contraire au texte explicite.",
+    "Pas nouvelle exigence, ni confortliveness, ni tâche/scénario/framework.",
+    "P3 CONVERGED sur18ad reste une preuve historique avant cette contre-revue ; ne vaut pas clôture du manque R2."
+  ],
+  "source_guard": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "ranges": [
+        [
+          5320,
+          5380
+        ],
+        [
+          39099,
+          39169
+        ]
+      ],
+      "read_at_utc": "2026-10-12T17:25:56.804094+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "2402a470fef4e1f3a1f3e4f796874315ea716d577cbaa81f88fc5fa52f2438b9",
+      "ranges": [
+        [
+          154,
+          156
+        ]
+      ],
+      "read_at_utc": "2026-10-12T17:25:56.804094+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+      "sha256": "6f1981aa0529288b4e3963c09c40b07f756aa06e1f1b2552f2c89e123207a65c",
+      "ranges": [
+        [
+          105,
+          115
+        ]
+      ],
+      "read_at_utc": "2026-10-12T17:25:56.804094+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "c7dd1edb2a5c289759ff640b9137e8e0787c9f422c01c978e45189c9b5e836fa",
+      "ranges": [
+        [
+          35,
+          35
+        ]
+      ],
+      "read_at_utc": "2026-10-12T17:25:56.804094+00:00"
+    }
+  ],
+  "historical_P3": {
+    "file": "/Users/moi/.cache/bridget-converge159A-pass3-20261012/converge159A-pass3.json",
+    "sha256": "af5e740c7eafefd0dcba880773080bfffeba67677ae36275d46a3e6c213b0d65"
+  },
+  "tasks_sha256": "c7dd1edb2a5c289759ff640b9137e8e0787c9f422c01c978e45189c9b5e836fa",
+  "project_mutated": false
+}

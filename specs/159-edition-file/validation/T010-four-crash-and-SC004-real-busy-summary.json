@@ -1,0 +1,53 @@
+{
+  "label": "T010-four-crash-and-SC004-real-busy",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_daemon_arrete_",
+    "held159_release_panne_",
+    "held159_latency_retenue_",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "started_at": "2026-10-12T15:13:59.068961+00:00",
+  "seconds": 51.82,
+  "rc": 101,
+  "test_results": [
+    [
+      "FAILED",
+      "1",
+      "3",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-four-crash-and-SC004-real-busy.log",
+  "log_sha256": "86d1780438a9d00107c5cec8b4cc9ac4ab9114d5f5dc34099e0ae1fa1790b0c3",
+  "private_ns": "/private/tmp/b.m59ybwap",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 1,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-four-crash-and-SC004-real-busy.json",
+  "original_receipt_sha256": "9ecf9ef054048871a4edaea4ee37f719ada4f1c39d66cdb1b375d8ca4f81913c",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

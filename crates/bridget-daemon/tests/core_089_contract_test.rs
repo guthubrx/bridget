@@ -369,6 +369,7 @@ fn register_identity(
         domain: None,
         turn_in_progress: false,
         journal_available: None,
+        turn_attest: false,
     });
     let DaemonToWrapper::Registered { credential, .. } = client.receive() else {
         panic!("inscription attendue");

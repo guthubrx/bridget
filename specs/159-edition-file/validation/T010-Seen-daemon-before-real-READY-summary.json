@@ -1,0 +1,51 @@
+{
+  "label": "T010-Seen-daemon-before-real-READY",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T16:36:19.239906+00:00",
+  "seconds": 23.49,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.log",
+  "log_sha256": "6d78f9a2ebb3368bf361cb045e90749fba05a7ae12ccf22f96d0137809b7aac6",
+  "private_ns": "/private/tmp/b.yz84ebsf",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.json",
+  "original_receipt_sha256": "173fea24454e54402f617e9f930edcc617741e934b622c9ab45c175b21fff47f",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

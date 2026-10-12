@@ -1,0 +1,40 @@
+{
+  "status": "MIGRATION_GREEN_REPRISE_RED_OBSERVES",
+  "migration_initial": {
+    "passed": 10,
+    "rc": 0,
+    "seconds": 33.38
+  },
+  "migration_acked_at": {
+    "passed": 10,
+    "in_combined_run": {
+      "passed": 13,
+      "failed": 4,
+      "rc": 101,
+      "seconds": 40.52
+    }
+  },
+  "red_expected": [
+    "rank_orphelinage_couvre_les_retenus",
+    "rank_reprise_dans_l_ordre",
+    "rank_survit_a_la_reaffectation",
+    "hold_ferme_identique"
+  ],
+  "root_followup_not_yet_tested": [
+    "rank/reassign/orphan SQL",
+    "begin_send_delivery_with_guidance held_for_agent and explicit recipient_agent",
+    "four Register adoption oracles",
+    "fresh-v7 fixture recipient"
+  ],
+  "new_column_decision": {
+    "acked_at": "Nullable first ACK timestamp required by existing FR024 30s grace across restart; no equivalent timestamp exists; migrated ACK NULL and gate0."
+  },
+  "not_claimed": [
+    "Full green",
+    "T004 complete",
+    "T005 complete",
+    "T006 complete",
+    "T011 restored",
+    "159A delivered"
+  ]
+}

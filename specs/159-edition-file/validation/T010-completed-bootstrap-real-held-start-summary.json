@@ -1,0 +1,52 @@
+{
+  "label": "T010-completed-bootstrap-real-held-start",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas",
+    "held159_porteur_arrete_avec_message_en_cours_preserve_ordre",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T16:17:26.228040+00:00",
+  "seconds": 23.53,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "2",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-completed-bootstrap-real-held-start.log",
+  "log_sha256": "684626e80642df1b8fa3a900bb3aec2ed881bfc33abd8452984766d4ad8c5fa7",
+  "private_ns": "/private/tmp/b.uggub1dq",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-completed-bootstrap-real-held-start.json",
+  "original_receipt_sha256": "6f1688a9b67972b225082a4bb567dd72256bed1f6ccda8f820274a4639e89466",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

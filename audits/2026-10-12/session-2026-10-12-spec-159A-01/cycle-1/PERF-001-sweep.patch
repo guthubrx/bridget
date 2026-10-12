@@ -1,0 +1,94 @@
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -9345,7 +9345,8 @@
+ const IDENTITY_FILES_MIN_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+ 
+ /// FR006 : deux puits (tick des relances et entretien), un retrait transactionnel.
+-/// O(N + B + H(log N + log R) + L), N lignes SQL, R demandes, H retenus.
++/// O(N + B + H(log N + log R) + L + P), N lignes SQL, R demandes, H retenus,
++/// P suivis mémoire ; les identifiants retirés sont regroupés pour un seul retain.
+ /// B enveloppes et L dépôts liés ; le balayage global n’est pas un scan borné par LIMIT.
+ /// Le caller garde State ; la mémoire ne change qu'après le COMMIT de settle_held.
+ fn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {
+@@ -9374,39 +9375,48 @@
+         rows.collect::<Result<Vec<_>, _>>()
+             .map_err(|error| error.to_string())?
+     };
+-    for (delivery_id, bytes, delivery_expires, record_expires) in held {
+-        let message: bridget_core::BridgetMessage = serde_json::from_slice(&bytes)
+-            .map_err(|error| format!("retenu {delivery_id} illisible: {error}"))?;
+-        let reason = if delivery_expires <= now || record_expires <= now {
+-            Some("expired_in_queue")
+-        } else if message.reply {
+-            let request = st
+-                .store
+-                .get_request(&message.id)
+-                .map_err(|error| error.to_string())?;
+-            (!request.is_some_and(|request| {
+-                request.state == "open"
+-                    && request.sender == message.from
+-                    && request.target == message.to
+-                    && request.deadline_at > now
+-            }))
+-            .then_some("request_closed_in_queue")
+-        } else {
+-            None
+-        };
+-        if let Some(reason) = reason {
+-            if let Some(notice) = st
+-                .idempotency
+-                .settle_held(&delivery_id, reason, now)
+-                .map_err(|error| error.to_string())?
+-            {
+-                st.held_ids.remove(&notice.message_id);
+-                st.pending_replies
+-                    .retain(|pending| pending.msg_id != notice.message_id);
+-            }
+-        }
+-    }
+-    Ok(())
++    let mut settled_ids = HashSet::new();
++    // Même pattern Result local que wait_request : les erreurs SQL restent inchangées.
++    let result = (|| -> Result<(), String> {
++        for (delivery_id, bytes, delivery_expires, record_expires) in held {
++            let message: bridget_core::BridgetMessage = serde_json::from_slice(&bytes)
++                .map_err(|error| format!("retenu {delivery_id} illisible: {error}"))?;
++            let reason = if delivery_expires <= now || record_expires <= now {
++                Some("expired_in_queue")
++            } else if message.reply {
++                let request = st
++                    .store
++                    .get_request(&message.id)
++                    .map_err(|error| error.to_string())?;
++                (!request.is_some_and(|request| {
++                    request.state == "open"
++                        && request.sender == message.from
++                        && request.target == message.to
++                        && request.deadline_at > now
++                }))
++                .then_some("request_closed_in_queue")
++            } else {
++                None
++            };
++            if let Some(reason) = reason {
++                if let Some(notice) = st
++                    .idempotency
++                    .settle_held(&delivery_id, reason, now)
++                    .map_err(|error| error.to_string())?
++                {
++                    st.held_ids.remove(&notice.message_id);
++                    settled_ids.insert(notice.message_id);
++                }
++            }
++        }
++        Ok(())
++    })();
++    // Une erreur tardive ne doit pas conserver les suivis des COMMIT déjà réussis.
++    if !settled_ids.is_empty() {
++        st.pending_replies
++            .retain(|pending| !settled_ids.contains(&pending.msg_id));
++    }
++    result
+ }
+ 
+ /// Entretien des magasins SQLite, sous le verrou de l'état. Ordre imposé (session 150) :

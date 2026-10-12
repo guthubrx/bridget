@@ -1,0 +1,464 @@
+   Compiling memchr v2.8.3
+   Compiling log v0.4.33
+   Compiling tungstenite v0.26.2
+   Compiling serde_json v1.0.151
+   Compiling bridget-core v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-core)
+   Compiling bridget-transport v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport)
+warning: function `wake158B_protocol_objets_fermes` should have a snake case name
+    --> crates/bridget-transport/src/protocol.rs:8700:8
+     |
+8700 |     fn wake158B_protocol_objets_fermes() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_protocol_objets_fermes`
+     |
+     = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `wake158B_protocol_legacy_octets_preserves` should have a snake case name
+    --> crates/bridget-transport/src/protocol.rs:8768:8
+     |
+8768 |     fn wake158B_protocol_legacy_octets_preserves() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_protocol_legacy_octets_preserves`
+
+warning: `bridget-transport` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.03s
+     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_transport-fde7a29f8bcbdaca)
+
+running 328 tests
+test acp::tests::TEMOIN_TOOL_acp_permission_remplace_MCP_tool_par_vrai_nom ... ok
+test acp::tests::TEMOIN_TOOL_acp_retranscrit_rawInput_et_titre_enrichi ... ok
+test acp::tests::active_reply_deadline_uses_cancel_grace_then_drains_queue ... ok
+test acp::tests::agent_thought_chunk_rend_reasoning_available_true ... ok
+test acp::tests::anomalie_acp_ne_ferme_le_tour_qu_apres_un_terminal_atteste ... ok
+test acp::tests::cancelled_turn_waits_for_adapter_before_the_next_prompt ... ok
+test acp::tests::claude_spike_fixture_collects_text_then_stop_reason ... ok
+test acp::tests::codex_spike_fixture_collects_text_then_stop_reason ... ok
+test acp::tests::consigne_privee_preserve_le_corps_visible_du_message ... ok
+test acp::tests::echec_avant_flush_n_emet_pas_prompt_dispatched ... ok
+test acp::tests::enabled_journal_records_a_complete_transport_turn ... ok
+test acp::tests::eof_fails_every_pending_waiter ... ok
+test acp::tests::evenement_interne_est_explicitement_distingue_de_la_ligne_source ... ok
+test acp::tests::expired_delivery_is_rejected_before_it_reaches_the_prompt_queue ... ok
+test acp::tests::false_adapter_asserts_the_raw_official_permission_envelope ... ok
+test acp::tests::false_adapter_eof_rejects_an_active_turn ... ok
+test acp::tests::false_adapter_exercises_stdio_reader_writer_and_prompt ... ok
+test acp::tests::false_adapter_handles_permission_during_a_prompt ... ok
+test acp::tests::flux_sans_thought_chunk_rend_reasoning_available_false ... ok
+test acp::tests::foreign_session_update_is_ignored_and_diagnosed ... ok
+test acp::tests::generic_fixture_covers_json_rpc_matrix ... ok
+test acp::tests::guidance156_acp_cancel_queued_atomique ... ok
+test acp::tests::ignored_cancel_kills_transport_and_drains_the_queue ... ok
+test acp::tests::incompatible_protocol_version_is_explicit ... ok
+test acp::tests::message_humain_actif_interrompt_le_tour_acp_et_garde_fifo ... ok
+test acp::tests::notification_timeout_uses_cancel_grace_then_forced_drain ... ok
+test acp::tests::prompt_dispatched_suit_le_flush_et_le_faux_adaptateur_lit_la_frame ... ok
+test acp::tests::prompt_preserves_the_body_byte_for_byte ... ok
+test acp::tests::queue_is_fifo_and_capacity_rejection_is_terminal ... ok
+test acp::tests::queued_message_is_purged_by_id_without_reordering_others ... ok
+test acp::tests::raw_source_line_survives_unusual_spacing_and_unknown_notification ... ok
+test acp::tests::reasoning_terminal_est_unique_par_prise ... ok
+test acp::tests::responses_are_correlated_by_exact_id_even_out_of_order ... ok
+test acp::tests::saturated_journal_becomes_a_terminal_event ... ok
+test acp::tests::sc005_deux_vues_ne_degradent_pas_le_p95_d_append_de_plus_de_cinq_pourcent ... ignored, remplacé par le banc SC-005 à vues attach réelles
+test acp::tests::session_acp_recoit_le_serveur_mcp_ephemere ... ok
+test acp::tests::shutdown_is_idempotent_before_a_process_is_spawned ... ok
+test acp::tests::spec100_acp_correlates_completed_write_not_read_or_failure ... ok
+test acp::tests::spec100_acp_correlates_permission_path_and_separate_edit_kind ... ok
+test acp::tests::spec100_acp_saturation_does_not_rearm_completed_writes ... ok
+test acp::tests::spec105_acp_contrat_explicite_et_corps_intact ... ok
+test acp::tests::spec133_acp_affiche_la_delegation_sans_session_native ... ok
+test acp::tests::taille_evenement_bornee_et_message_terminal_preserve ... ok
+test acp::tests::terminal_acp_est_normalise_avant_la_frontiere_commune ... ok
+test acp::tests::thought_chunk_n_est_plus_rejete_par_le_filtre_de_session_update ... ok
+test acp::tests::tool_call_journal_prefers_title_then_name_then_kind ... ok
+test acp::tests::turn_normal_empty_and_error_have_distinct_events ... ok
+test act_kind::tests::TEMOIN_ecriture_valide_passe_puis_hors_vocabulaire_est_refusee ... ok
+test act_kind::tests::mutant_accepte_kind_inconnu_tue_TEMOIN_ecriture_hors_vocabulaire ... ok
+test claude_provider_session::tests::TEMOIN_P1_reprise_injecte_resume_quand_session_persistee ... ok
+test claude_provider_session::tests::TEMOIN_P2_echec_reprise_produit_un_message_nomme ... ok
+test claude_provider_session::tests::TEMOIN_P3_premier_lancement_sans_session_ne_tente_pas_resume ... ok
+test claude_provider_session::tests::store_clear_et_relecture ... ok
+test claude_provider_session::tests::system_init_extrait_le_session_id ... ok
+test claude_stream_json::tests::TEMOIN_A_claude_stream_json_retranscrit_les_deltas_en_update ... ok
+test claude_stream_json::tests::TEMOIN_B_claude_stream_json_reponse_finale_result_only_dans_le_fil ... ok
+test claude_stream_json::tests::TEMOIN_C_claude_stream_json_turn_end_porte_stop_reason_completed ... ok
+test claude_stream_json::tests::TEMOIN_P2_spawn_repli_nomme_apres_echec_resume ... ok
+test claude_stream_json::tests::TEMOIN_P4_session_persistee_ne_bloque_pas_le_lancement_sous_delai_daemon ... ok
+test claude_stream_json::tests::TEMOIN_TOOL_claude_stream_json_retranscrit_tool_use_nom_et_contenu ... ok
+test claude_stream_json::tests::TEMOIN_claude_pilote_kind_interdit_emet_JournalFailed_bout_en_bout ... ok
+test claude_stream_json::tests::TEMOIN_claude_refus_update_hors_vocabulaire_emet_JournalFailed ... ok
+test claude_stream_json::tests::consigne_privee_preserve_le_corps_visible_du_message ... ok
+test claude_stream_json::tests::flux_muet_ou_modele_identique_ne_produit_aucun_ecart ... ok
+test claude_stream_json::tests::formats_fournisseur_imposes_ne_peuvent_pas_etre_ecrases ... ok
+test claude_stream_json::tests::init_annonce_un_modele_distinct_et_le_journalise ... ok
+test claude_stream_json::tests::interruption_active_coupe_le_tour_sans_tuer_l_agent_claude ... ok
+test claude_stream_json::tests::message_humain_actif_interrompt_claude_et_declenche_la_remise ... ok
+test claude_stream_json::tests::mutant_avale_err_record_tue_TEMOIN_claude_JournalFailed ... ok
+test claude_stream_json::tests::provider_kind_reste_celui_declare_par_le_registre ... ok
+test claude_stream_json::tests::rate_limit_event_reel_devient_un_fait_sans_inventer_de_retour ... ok
+test claude_stream_json::tests::session_native_preserve_les_lignes_et_termine_le_tour ... ok
+test claude_stream_json::tests::spec100_claude_requires_success_and_keeps_path_before_truncation ... ok
+test claude_stream_json::tests::spec105_claude_trame_transmet_le_contrat_et_le_corps ... ok
+test claude_stream_json::tests::terminal_fournisseur_en_erreur_refuse_la_livraison ... ok
+test claude_stream_json::tests::usage_assistant_puis_result_ne_compte_qu_un_echantillon ... ok
+test claude_stream_json::tests::usage_incomplet_ne_devient_pas_un_zero_invente ... ok
+test claude_stream_json::tests::usage_result_reel_devient_un_fait_complet ... ok
+test codex_app_server::tests::TEMOIN_A_codex_app_server_retranscrit_les_deltas_en_update ... ok
+test codex_app_server::tests::TEMOIN_B_codex_app_server_reponse_finale_sans_delta_dans_le_fil ... ok
+test codex_app_server::tests::TEMOIN_C_codex_app_server_turn_end_porte_stop_reason_completed ... ok
+test codex_app_server::tests::TEMOIN_D_codex_app_server_echeance_ecrit_error_sans_turn_end ... ok
+test codex_app_server::tests::TEMOIN_E_codex_message_arrive_est_pilote_dans_le_tour_en_cours ... ok
+test acp::tests::TEMOIN_deadline_daemon_sauve_un_tour_reply_false_malgre_notify_fige ... ok
+test codex_app_server::tests::TEMOIN_G_codex_message_humain_interrompt_et_recoit_un_tour_dedie ... ok
+test codex_app_server::tests::TEMOIN_F_codex_tour_non_pilotable_rend_le_message_a_la_file ... ok
+test codex_app_server::tests::TEMOIN_I_codex_user_message_corrige_acquitte_la_remise_humaine ... ok
+test codex_app_server::tests::TEMOIN_J_codex_item_started_client_id_distingue_id_fournisseur ... ok
+test codex_app_server::tests::TEMOIN_K_codex_item_started_refuse_mauvais_client_id_et_tour_tardif ... ok
+test codex_app_server::tests::TEMOIN_L_codex_item_started_sans_client_id_ne_consomme_pas ... ok
+test codex_app_server::tests::TEMOIN_TOOL_codex_app_server_retranscrit_command_execution_nom ... ok
+test codex_app_server::tests::TEMOIN_codex_approbation_repond_et_le_tour_se_poursuit ... ok
+test codex_app_server::tests::TEMOIN_codex_pilote_kind_interdit_emet_JournalFailed_bout_en_bout ... ok
+test codex_app_server::tests::TEMOIN_codex_refus_update_hors_vocabulaire_emet_JournalFailed ... ok
+test codex_app_server::tests::absence_de_signaux_codex_ne_cree_aucun_fait ... ok
+test codex_app_server::tests::annulation_interrompt_le_tour_natif ... ok
+test codex_app_server::tests::approval_response_choisit_accept_ou_decline_selon_permissions ... ok
+test codex_app_server::tests::catalogue_reprise_pagine_sans_ignorer_la_borne_ni_un_curseur_invalide ... ok
+test codex_app_server::tests::consigne_privee_preserve_le_corps_visible_du_message ... ok
+test codex_app_server::tests::consigne_reponse_distingue_mcp_interactif_et_relais_gere ... ok
+test codex_app_server::tests::document_html_reste_un_corps_sans_consigne_ui_implicite ... ok
+test codex_app_server::tests::elicitation_bridget_formulaire_implicite_est_acceptee ... ok
+test codex_app_server::tests::elicitation_mcp_externe_ou_avec_champ_requis_est_declinee ... ok
+test codex_app_server::tests::elicitation_mcp_vide_de_bridget_est_acceptee_et_un_formulaire_est_refuse ... ok
+test codex_app_server::tests::TEMOIN_H_codex_steer_ack_sans_consommation_ne_solde_pas_la_remise ... ok
+test codex_app_server::tests::eof_pendant_un_tour_reveille_le_worker_et_nettoie_le_groupe ... ok
+test codex_app_server::tests::lecteur_interactif_ne_repond_jamais_pour_humain_et_conserve_raw ... ok
+test codex_app_server::tests::mutant_avale_err_record_tue_TEMOIN_codex_JournalFailed ... ok
+test codex_app_server::tests::journal_codex_atteste_presence_puis_absence_et_ne_valide_pas_approbation ... ok
+test codex_app_server::tests::native155_transport_mcp_tiers_et_exception_bridget ... ok
+test codex_app_server::tests::native155_transport_methodes_et_offres_refusees ... ok
+test codex_app_server::tests::native155_transport_user_input_secret_et_reponses ... ok
+test codex_app_server::tests::outil_dynamique_codex_rejoint_lexecuteur_bridget_atteste ... ok
+test codex_app_server::tests::outil_dynamique_inconnu_est_refuse_explicitement ... ok
+test codex_app_server::tests::outil_dynamique_lecture_conserve_reference_et_document_inerte ... ok
+test codex_app_server::tests::outil_dynamique_lecture_sans_autorite_ou_en_echec_ne_pretend_pas_reussir ... ok
+test codex_app_server::tests::passerelle_codex_marque_seulement_les_erreurs_terminales ... ok
+test codex_app_server::tests::percent_hors_bornes_conserve_la_fenetre_sans_pourcent ... ok
+test codex_app_server::tests::provider_item_id_est_observe_uniquement_sur_le_tour_actif ... ok
+test codex_app_server::tests::reprise_et_bifurcation_codex_emettent_la_requete_attestee_ou_refusent ... ok
+test codex_app_server::tests::reprise_geree_projette_les_restrictions_effectives_ou_refuse_avant_le_fil ... ok
+test codex_app_server::tests::requete_fournisseur_inconnue_recoit_un_refus_json_rpc_redacte ... ok
+test codex_app_server::tests::reroutage_codex_atteste_le_modele_sans_inventer_si_muet ... ok
+test codex_app_server::tests::session_native_respecte_sequence_saturation_et_octets_sources ... ok
+test codex_app_server::tests::snapshot_codex_emet_primary_et_secondary_sans_ecrasement ... ok
+test codex_app_server::tests::spec090_catalogue_interactif_utilise_state_db_seul_a_chaque_page ... ok
+test codex_app_server::tests::spec091_catalogue_muet_expire_sans_accumuler_de_reponses_en_attente ... ok
+test codex_app_server::tests::spec091_selection_reelle_du_prochain_tour_sans_prompt_cache_ni_perte_du_fil ... ok
+test codex_app_server::tests::spec093_lecteur_interactif_ignore_les_fils_codex_tiers_sans_fermer_le_parent ... ok
+test codex_app_server::tests::spec105_codex_sans_demande_ne_prescrit_aucun_envoi ... ok
+test codex_app_server::tests::spec133_codex_affiche_la_delegation_sans_session_native ... ok
+test codex_app_server::tests::spec_088_signalement_de_sandbox_exige_la_ligne_et_l_echec_du_meme_item ... ok
+test codex_app_server::tests::stop_pendant_un_tour_termine_le_groupe_enfant ... ok
+test codex_app_server::tests::test_019_empreintes_sont_stables_et_separees_par_domaine ... ok
+test codex_app_server::tests::test_019_eof_reste_correle_a_la_derniere_requete_fournisseur ... ok
+test codex_app_server::tests::test_019_identifiant_chaine_valide_est_opaque ... ok
+test codex_app_server::tests::test_019_identifiant_de_tour_est_opaque ... ok
+test codex_app_server::tests::test_019_identifiant_json_rpc_invalide_ne_recopie_pas_son_contenu ... ok
+test codex_app_server::tests::native155_transport_command_forward_borne_et_fin_tour ... ok
+test codex_app_server::tests::test_019_raison_fournisseur_est_opaque_et_sans_controle ... ok
+test codex_app_server::tests::test_019_requete_fournisseur_est_tracee_avant_echeance_sans_payload ... ok
+test codex_app_server::tests::test_019_saturation_du_journal_devient_un_echec_observable ... ok
+test codex_socket::tests::borne_et_binaire_sont_refuses_sans_troncature ... ok
+test codex_socket::tests::fermeture_writer_reveille_la_lecture_sans_attendre_un_evenement ... ok
+test codex_socket::tests::lecture_inactive_ne_bloque_pas_le_rpc_et_raw_reste_exact ... ok
+test codex_socket::tests::socket_privee_refuse_parent_public_lien_meme_pendant_et_chemin_long ... ok
+test codex_socket::tests::upgrade_reel_et_budget_du_pair_silencieux ... ok
+
+running 1 test
+
+running 1 test
+test fsutil::tests::atomic_temporary_names_are_unique_across_processes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 327 filtered out; finished in 0.03s
+
+test fsutil::tests::atomic_temporary_names_are_unique_across_processes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 327 filtered out; finished in 0.03s
+
+test fsutil::tests::atomic_temporary_names_are_unique_across_processes ... ok
+test fsutil::tests::private_helpers_enforce_permissions_and_replace_content ... ok
+test greffe_authorization::tests::agent_autorise_est_atteste_au_depot_et_reverifie_avant_effet ... ok
+test greffe_authorization::tests::attestation_absente_fausse_ou_rejouee_sur_une_autre_action_est_refusee ... ok
+test greffe_authorization::tests::connexion_cli_send_est_refusee_avant_mutation_durable ... ok
+test greffe_authorization::tests::defaut_deny_couvre_principal_et_action_non_declares ... ok
+test greffe_authorization::tests::exemple_de_politique_adapte_autorise_exactement_les_trois_mutations ... ok
+test greffe_authorization::tests::expiration_et_revocation_serveur_sont_reverifiees_avant_effet ... ok
+test greffe_authorization::tests::from_forge_est_refuse_avant_mutation_durable ... ok
+test greffe_authorization::tests::hmac_sha256_est_confronte_a_un_vecteur_rfc4231_litteral ... ok
+test greffe_authorization::tests::instance_canonique_absente_est_refusee_avant_mutation_durable ... ok
+test greffe_authorization::tests::instance_remplacee_est_refusee_avant_mutation_durable ... ok
+test greffe_authorization::tests::issuer_scope_copie_est_refuse_avant_mutation_durable ... ok
+test greffe_authorization::tests::nom_canonique_absent_est_refuse_avant_mutation_durable ... ok
+test greffe_authorization::tests::octet_canonique_substitue_est_refuse_avant_mutation_durable ... ok
+test greffe_authorization::tests::politique_absente_invalide_ou_non_privee_refuse_et_journalise ... ok
+test greffe_authorization::tests::politique_et_audit_refusent_les_liens_symboliques ... ok
+test greffe_policy_refresh::tests::chemin_lie_ne_peut_pas_creer_un_second_verrou_sur_la_meme_politique ... ok
+test greffe_policy_refresh::tests::droits_divergents_et_generation_epuisee_ne_sont_jamais_arbitres ... ok
+test greffe_policy_refresh::tests::ensemble_des_sources_est_exact_sans_oubli_ajout_ni_doublon ... ok
+test greffe_policy_refresh::tests::erreur_avant_renommage_garde_l_original_et_apres_rend_l_issue_indeterminee ... ok
+test greffe_policy_refresh::tests::exemple_038_adapte_est_regenerable_sans_ouvrir_de_nouveau_droit ... ok
+test greffe_policy_refresh::tests::generation_croit_et_remplacement_reste_atomique ... ok
+test greffe_policy_refresh::tests::instance_deja_alignee_ne_reecrit_ni_ne_rafraichit_la_generation ... ok
+test greffe_policy_refresh::tests::inventaire_incomplet_vide_ou_absent_preserve_exactement_la_politique ... ok
+test greffe_policy_refresh::tests::inventaire_perime_ou_futur_est_refuse_avant_ecriture ... ok
+test greffe_policy_refresh::tests::politique_a_plusieurs_entrees_est_refusee_avant_le_plan ... ok
+test greffe_policy_refresh::tests::politique_historique_reste_lisible_par_la_garde_mais_pas_regenerable ... ok
+test greffe_policy_refresh::tests::principal_sur_mauvaise_source_ou_duplique_est_refuse ... ok
+test greffe_policy_refresh::tests::regenere_seulement_l_instance_vivante_et_la_garde_accepte_son_effet ... ok
+test greffe_policy_refresh::tests::verrou_a_plusieurs_entrees_est_refuse_avant_le_plan ... ok
+test journal::tests::TEMOIN_append_entry_refuse_meme_si_enqueue_contourne ... ok
+test journal::tests::TEMOIN_journal_writer_refuse_un_kind_hors_vocabulaire ... ok
+test journal::tests::TEMOIN_session_journal_append_at_refuse_un_kind_hors_vocabulaire ... ok
+test journal::tests::fenetres_resolvent_rotation_seq_inclusif_et_vide ... ok
+test journal::tests::lecteur_borne_une_ligne_surdimensionnee_et_reprend_apres_newline ... ok
+test journal::tests::lecteur_incremental_garde_la_queue_partielle_et_signale_la_ligne_corrompue ... ok
+test journal::tests::lecteur_mesure_la_borne_sur_la_premiere_ligne_et_non_le_tampon_entier ... ok
+test journal::tests::mutant_retire_garde_append_entry_tue_TEMOIN_append_entry ... ok
+test journal::tests::next_sequence_recovers_from_normal_empty_partial_and_corrupt_tails ... ok
+test journal::tests::partial_tail_is_isolated_before_a_same_day_append ... ok
+test journal::tests::sequence_survives_rotation_and_payload_is_versioned ... ok
+test journal::tests::spec100_observation_feed_is_independent_and_bounded ... ok
+test journal::tests::spec100_observation_requires_confirmed_structured_write ... ok
+test journal::tests::spec100_post_flush_turns_do_not_reobserve_notifications ... ok
+test journal::tests::versioned_reader_fixtures_skip_partial_and_corrupt_lines ... ok
+test journal::tests::writer_emits_a_terminal_event_when_an_append_fails ... ok
+test journal::tests::writer_omits_an_absent_message_id ... ok
+test jsonl::tests::borne_lf_inclus_et_deux_trames_preservees ... ok
+test jsonl::tests::eof_propre_distinct_d_une_trame_partielle ... ok
+test jsonl::tests::native151_fd_observe_avant_connect_sur_backlog_reel_plein ... ok
+test managed_session::tests::contexte_fournisseur_et_attente_restent_deux_faits_distincts ... ok
+test codex_app_server::tests::test_019_methode_libre_est_opaque_et_sans_controle ... ok
+test managed_session::tests::native155_managed_pilote_sans_implementation_refuse ... ok
+test managed_session::tests::reprise_sans_capacite_est_reconstruite_et_capacite_non_implantee_est_refusee ... ok
+test protocol::control_and_inbox_contract_tests::spec_087_delegate_avec_origine_ou_focus_exige_la_version_revue ... ok
+test protocol::control_and_inbox_contract_tests::spec_087_kind_sql_derive_d_une_seule_source ... ok
+test protocol::control_and_inbox_contract_tests::spec_087_trames_boite_humaine_font_l_aller_retour ... ok
+test protocol::control_and_inbox_contract_tests::spec_087_trames_etat_de_controle_font_l_aller_retour ... ok
+test protocol::project_profile::tests::spec_067_contrat_commun_accepte_les_quatre_fournisseurs_sans_heuristique ... ok
+test protocol::project_profile::tests::spec_067_proposition_ne_porte_pas_de_revision_source ... ok
+test protocol::spec102_thread_contract_tests::spec102_v05_notify_all_est_une_chaine_explicite ... ok
+test protocol::spec102_thread_contract_tests::spec102_v22_enveloppe_versionnee_et_variantes_de_protocole ... ok
+test protocol::spec102_thread_contract_tests::spec102_v27_capacite_d_alerte_annoncee_apres_enregistrement ... ok
+test protocol::spec102_thread_contract_tests::spec102_v33_huit_actions_fermees_et_champs_inconnus_refuses ... ok
+test protocol::spec102_thread_contract_tests::spec136_post_metadata_is_closed_and_legacy_wire_unchanged ... ok
+test protocol::spec104_search_contract_tests::control158_transport_six_variantes_aller_retour ... ok
+test protocol::spec104_search_contract_tests::native150_delai_requete_sans_champ_garde_les_octets_149 ... ok
+test protocol::spec104_search_contract_tests::native151_protocole_attente_aller_retour_et_champs_fermes ... ok
+test protocol::spec104_search_contract_tests::native151_protocole_demande_et_reponse_aller_retour ... ok
+test protocol::spec104_search_contract_tests::native151_protocole_identite_ancienne_liste_vide ... ok
+test protocol::spec104_search_contract_tests::native151_protocole_variantes_historiques_octets_stables ... ok
+test protocol::spec104_search_contract_tests::native153_protocole_brief_serialisation_deterministe ... ok
+test protocol::spec104_search_contract_tests::native153_protocole_continue_aller_retour ... ok
+test protocol::spec104_search_contract_tests::native153_protocole_delegate_sans_champs_garde_octets150 ... ok
+test protocol::spec104_search_contract_tests::native154_contrat_partage_explicite_enveloppe_distincte ... ok
+test protocol::spec104_search_contract_tests::native154_contrat_sans_workspace_octets153 ... ok
+test protocol::spec104_search_contract_tests::native154_contrat_workspace_objet_ferme ... ok
+test protocol::spec104_search_contract_tests::native155_protocol_delegate_sans_option_garde_octets154 ... ok
+test protocol::spec104_search_contract_tests::native155_protocol_respond_refuse_champ_inconnu ... ok
+test protocol::spec104_search_contract_tests::native157_protocole_delegate_sans_fallback_garde_octets150 ... ok
+test protocol::spec104_search_contract_tests::spec104_ancien_contrat_ledger_inchange ... ok
+test protocol::spec104_search_contract_tests::spec104_requete_de_recherche_stricte_et_sans_identite ... ok
+test protocol::spec104_search_contract_tests::spec104_trames_serialisees_par_nom_et_resultats_types ... ok
+test protocol::spec145_protocol_tests::spec145_human_request_and_capability_are_closed ... ok
+test protocol::spec145_protocol_tests::spec146_recent_requests_are_closed_and_require_distinct_capability ... ok
+test protocol::spec147_watch_contract_tests::spec147_members_contract_is_closed_and_capability_exact ... ok
+test protocol::spec147_watch_contract_tests::spec147_watch_capability_and_request_are_available ... ok
+test protocol::spec147_watch_contract_tests::spec147_watch_signal_is_closed_and_safe_for_javascript ... ok
+test protocol::tests::attach_client_messages_roundtrip ... ok
+test protocol::tests::attach_daemon_messages_roundtrip ... ok
+test protocol::tests::attach_rejected_historique_omet_les_details_de_presence ... ok
+test protocol::tests::attach_relay_messages_roundtrip ... ok
+test protocol::tests::client_idempotency_messages_roundtrip_and_stay_outside_attach ... ok
+test protocol::tests::client_welcome_historique_signale_un_build_id_inconnu ... ok
+test protocol::tests::contrat_revue_valide_ref_et_sha_fermes ... ok
+test protocol::tests::coordination_events_v1_emploie_la_fixture_canonique_fermee ... ok
+test protocol::tests::coordination_stream_v2_emploie_la_fixture_canonique_fermee ... ok
+test protocol::tests::cwd_gone_transporte_les_deux_machines_et_les_distingue ... ok
+test protocol::tests::delegation_historique_reste_v1_et_cible_de_revue_exige_v2 ... ok
+test protocol::tests::delivery_report_ordinaire_conserve_ses_octets_sans_bloc_revue ... ok
+test protocol::tests::execution_control_contract_roundtrip_et_version_explicit ... ok
+test protocol::tests::execution_control_refusal_reste_ferme_sur_le_fil ... ok
+test protocol::tests::fait_espace_disque_post_enregistrement_garde_sa_valeur_attestee ... ok
+test protocol::tests::fait_mono_fenetre_ancien_se_relit_en_vec_sans_inventer ... ok
+test protocol::tests::fragment_base64_reste_sous_la_borne_filaire_pour_des_octets_hostiles ... ok
+test protocol::tests::from_phase_garde_indetermine_parmi_les_trois_etats ... ok
+test protocol::tests::guidance156_protocol_flags_allers_retours ... ok
+test protocol::tests::guidance156_protocol_queue_et_refus_allers_retours ... ok
+test protocol::tests::guidance156_protocol_trames_historiques_byte_identiques ... ok
+test protocol::tests::held159_turnstate_register_sans_turn_attest_octets_inchanges ... ok
+test protocol::tests::issue_differee_attach_reste_correlee_parmi_le_flux ... ok
+test protocol::tests::journal_ready_est_un_signal_wrapper_hors_du_role_attach ... ok
+test protocol::tests::le_daemon_atteste_sa_machine_sa_base_et_son_instance ... ok
+test protocol::tests::lifecycle_messages_roundtrip_and_stay_outside_attach ... ok
+test protocol::tests::model_mismatch_observe_exige_les_deux_etiquettes_distinctes ... ok
+test protocol::tests::motif_compose_de_revue_fait_un_roundtrip_filaire_exact ... ok
+test protocol::tests::mutations_du_greffe_et_resultat_terminal_font_un_roundtrip_ferme ... ok
+test protocol::tests::protocol_007_register_legacy_est_refuse ... ok
+test protocol::tests::refus_type_inconnu_historique_reste_lisible_apres_l_ajout_du_diagnostic ... ok
+test protocol::tests::register_historique_est_refuse_sans_contrat_identite_v2 ... ok
+test protocol::tests::register_v2_conserve_la_distinction_de_canal ... ok
+test protocol::tests::role_attach_refuse_les_messages_wrapper_et_reply_suivi ... ok
+test protocol::tests::runtime_et_limite_codex_app_server_sont_fermes ... ok
+test protocol::tests::runtime_source_claude_transcript_est_stable ... ok
+test protocol::tests::service_guichet_messages_roundtrip_et_restent_hors_attach ... ok
+test protocol::tests::service_negotiation_v1_emploie_la_fixture_canonique_partagee ... ok
+test protocol::tests::spawn_accepted_transporte_la_definition_resolue_complete ... ok
+test protocol::tests::spec091_selection_fermee_bornee_et_sans_permissions ... ok
+test protocol::tests::spec099_credential_optionnel_compatible_et_masque_dans_debug ... ok
+test protocol::tests::spec_024_agent_info_expose_protocole_et_canal_independants ... ok
+test protocol::tests::spec_065_registre_projet_est_ferme_directionnel_et_negocie ... ok
+test protocol::tests::spec_066_handshake_ingress_est_ferme_et_versionne ... ok
+test protocol::tests::spec_066_runtime_local_est_versionne_ferme_et_sans_chemin_hote ... ok
+test protocol::tests::spec_068_trames_incident_deleguees_sont_fermees_et_redacted ... ok
+test protocol::tests::spec_079_contrat_ronde_projet_est_ferme_versionne_et_rejouable ... ok
+test protocol::tests::spec_079_deliver_idempotent_historique_sans_contexte_reste_decodable ... ok
+test protocol::tests::spec_079_deliver_idempotent_projette_le_contexte_execution_optionnel ... ok
+test protocol::tests::spec_085_activate_docker_exige_une_reference_fermee_et_reste_versionne ... ok
+test protocol::tests::spec_086_contrat_systeme_est_separe_du_registre_standard ... ok
+test protocol::tests::spec_086_role_projet_est_ferme_et_ancien_projection_reste_standard ... ok
+test protocol::tests::terminal_session_ready_contrat_filaire ... ok
+test protocol::tests::test_agent_info_sans_runtime_reste_decodable ... ok
+test protocol::tests::test_encode_decode_acp_delivery_lifecycle ... ok
+test protocol::tests::test_encode_decode_bounded_ledger_projection ... ok
+test protocol::tests::test_encode_decode_deliver ... ok
+test protocol::tests::test_encode_decode_nack ... ok
+test protocol::tests::test_encode_decode_rate_limit_et_absence_de_retour ... ok
+test protocol::tests::test_encode_decode_register ... ok
+test protocol::tests::test_encode_decode_runtime ... ok
+test protocol::tests::test_encode_decode_send ... ok
+test protocol::tests::test_encode_decode_served_model ... ok
+test protocol::tests::test_encode_decode_usage_et_fenetre_inconnue ... ok
+test protocol::tests::test_runtime_effort_absent_est_decodable ... ok
+test protocol::tests::test_runtime_source_inconnue_est_refusee ... ok
+test protocol::wake158b_protocol_tests::wake158B_protocol_legacy_octets_preserves ... ok
+test protocol::wake158b_protocol_tests::wake158B_protocol_objets_fermes ... ok
+test pty::tests::corps_avec_sequence_d_echappement_n_ecrit_rien ... ok
+test pty::tests::enfant_termine_rend_agent_dead_sans_ecriture ... ok
+test pty::tests::la_copie_du_maitre_est_fermee_a_l_exec ... ok
+test managed_session::tests::enfant_reel_ignore_term_puis_int_ferme_le_groupe_sous_borne ... ok
+test pty::tests::le_transport_possede_sa_copie_du_maitre ... ok
+test pty::tests::maitre_non_accueillant_echoue_dans_le_delai_sans_bloquer ... ok
+test pty::tests::le_retour_chariot_n_arrive_qu_apres_le_delai_de_digestion ... ok
+test refusals::tests::bwrap_operation_not_permitted_est_un_refus_de_sandbox ... ok
+test refusals::tests::bwrap_permission_denied_et_seatbelt_sont_reconnus ... ok
+test refusals::tests::la_ligne_brute_est_bornee_sans_couper_un_caractere ... ok
+test refusals::tests::les_couches_se_parsent_dans_les_deux_sens ... ok
+test refusals::tests::une_ligne_sans_motif_n_est_pas_un_refus ... ok
+test tmux::tests::garde_commune_accepte_les_mots_tmux_mais_refuse_esc_et_taille ... ok
+test tmux::tests::test_is_alive_current_process ... ok
+test tmux::tests::test_is_alive_dead_process ... ok
+test tmux::tests::test_tmux_transport_creation ... ok
+test tmux::tests::test_validate_tmux_content_ansi_escape ... ok
+test tmux::tests::test_validate_tmux_content_at_limit ... ok
+test tmux::tests::test_validate_tmux_content_case_insensitive ... ok
+test tmux::tests::test_validate_tmux_content_dangerous_bind_key ... ok
+test tmux::tests::test_validate_tmux_content_dangerous_send_keys ... ok
+test tmux::tests::test_validate_tmux_content_normal ... ok
+test tmux::tests::test_validate_tmux_content_too_large ... ok
+test pty::tests::remise_ecrit_le_collage_encadre_puis_le_retour_chariot ... ok
+
+test result: ok. 327 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.55s
+
+     Running tests/core_089_wire_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_wire_test-a2dbb27d8bfdd49d)
+
+running 2 tests
+test core_089_materialize_reference ... ignored, matérialisation explicite de la référence, jamais une validation
+test core_089_wire_matches_reference_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/lineage_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/lineage_contract_test-596099af7266140e)
+
+running 6 tests
+test lineage149_capacite_exigee_par_action ... ok
+test lineage149_codes_erreur_fermes_et_result ... ok
+test lineage149_actions_snake_case_roundtrip_et_fermeture ... ok
+test lineage149_evenements_watch_fermes ... ok
+test lineage149_version_et_borne_seq_figees ... ok
+test lineage149_enveloppes_wire_humaines ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_alias149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_alias149_test-7bcce7ed96f77cd0)
+
+running 2 tests
+test native149_alias_dangereux_est_refuse_avant_tout_lancement_et_laisse_l_existant_intact ... ok
+test native149_alias_dans_un_dossier_prive_hors_home_demarre_et_l_arret_retire_le_socket ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/native_permissions149_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_permissions149_e2e-70b81fe769155b4d)
+
+running 5 tests
+test native149_control_request_sans_request_id_n_obtient_aucune_reponse ... ok
+test native149_fait_claude_incremente_la_revision_quand_le_cwd_change ... ok
+test native149_remise_positive_termine_le_tour_sans_refus ... ok
+test native149_result_avec_permission_denials_est_refuse_sans_trame ... ok
+test native149_can_use_tool_deny_est_correle_par_request_id_exact_et_refuse_la_remise ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.03s
+
+     Running tests/native_permissions149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_permissions149_test-9bca99ca46fcbf85)
+
+running 8 tests
+test native149_bornes_identite_revolution_et_taille_du_fait ... ok
+test native149_formes_fermees_claude_et_callback_correle_au_canal ... ok
+test native149_formes_fermees_codex_accepte_quatre_sandbox_et_refuse_le_reste ... ok
+test native149_options_lancement_cli_resolvent_la_politique_ferme ... ok
+test native149_contexte_lancement_compose_digests_sources_et_overrides ... ok
+test native149_recheck_des_sources_detecte_mutation_ajout_et_suppression ... ok
+test native149_revision_de_source_fichier_dossier_symlink_et_absent ... ok
+test native149_recheck_gele_resout_le_launcher_par_path_et_detecte_le_changement ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_stop149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_stop149_test-c7dedbb5546fcdb4)
+
+running 5 tests
+test native149_stop_native_d_une_autre_mission_n_interrompt_pas_le_tour_actif ... ok
+test native149_stop_native_est_idempotent ... ok
+test native149_stop_native_ferme_l_admission_et_ne_demarre_aucun_message_en_file ... ok
+test native149_stop_native_interrompt_le_tour_exact_puis_arrete_le_fournisseur ... ok
+test native149_temoin_stop_ordinaire_n_envoie_aucune_interruption ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.12s
+
+     Running tests/permission_source_revision_vectors149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/permission_source_revision_vectors149_test-9ddce974c239411b)
+
+running 3 tests
+test native149_recheck_refuse_un_contenu_de_meme_taille_a_mtime_restaure ... ok
+test native149_revision_vecteurs_fips_180_2 ... ok
+test native149_revision_vecteurs_externes_aux_bords_de_bloc_et_de_lecture ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/project_runtime_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_runtime_contract_test-6079852474dca9eb)
+
+running 2 tests
+test spec_066_refus_docker_sans_repli_est_structure_et_stable ... ok
+test spec_066_docker_contract_is_additive_for_host_history ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/provider_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/provider_contract_test-1d7cf3dbc92bf777)
+
+running 2 tests
+test version_inconnue_capacite_absente_et_evenement_futur_ne_deviennent_pas_supportes ... ok
+test contrats_codex_claude_et_cursor_acp_attestent_leur_interruption_sans_inference ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests bridget_transport
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[build Bridget] Nettoyage : 0.00 Gio de caches ; 13.94 Gio restants (tailles logiques, clones APFS compris)

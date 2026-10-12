@@ -1,0 +1,50 @@
+{
+  "label": "T028-queue-list-existing-group-GREEN",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_list_",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:18:42.962292+00:00",
+  "seconds": 11.64,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "7",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T028-queue-list-existing-group-GREEN.log",
+  "log_sha256": "f33b212c53b4c1cdb55a52aa6b9da5e3d0c25be2fa250526996b5d6d0dc2ece9",
+  "private_ns": "/private/tmp/b.rcz5pmco",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T028-queue-list-existing-group-GREEN.json",
+  "original_receipt_sha256": "bc229376cbb7f4667f7fbc971962d01cfe03db23efd33ff871fccdae3ab8e678",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8"
+}

@@ -1,0 +1,436 @@
+{
+  "status": "TECHNICAL_GATES_CLOSED_ROOT_CHECKBOX_AND_PRODUCTION_PENDING",
+  "canonical_validation_root": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation",
+  "proofs_to_copy_by_ROOT": [
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.json",
+      "original_sha256": "8a1eb7ab366b05cec8d429d1413ad7306ad26c233a51153293c402e542d99190",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T005-admission-T009-list-GREEN-capacity-type-summary.json",
+      "sha256": "c7f101544eb796ef24e9c3ee253fa1fdbcdcf38c258cbdc63e9432b2c0fe5ebc",
+      "canonical_name": "T005-admission-T009-list-GREEN-capacity-type-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T005-admission-T009-list-GREEN-capacity-type.log",
+      "sha256": "3df5a7fa1f6179d9dcb49d7c99b762b26e1cc220a5bd2ad8405986a06f1ebd41",
+      "canonical_name": "T005-admission-T009-list-GREEN-capacity-type.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-four-crash-and-SC004-real-busy.json",
+      "original_sha256": "9ecf9ef054048871a4edaea4ee37f719ada4f1c39d66cdb1b375d8ca4f81913c",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-four-crash-and-SC004-real-busy-summary.json",
+      "sha256": "e6234e5b602bc85c662173cec6db9ff5f880bf31f5b0f0720183062a6444cb57",
+      "canonical_name": "T010-four-crash-and-SC004-real-busy-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-four-crash-and-SC004-real-busy.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-four-crash-and-SC004-real-busy.log",
+      "sha256": "86d1780438a9d00107c5cec8b4cc9ac4ab9114d5f5dc34099e0ae1fa1790b0c3",
+      "canonical_name": "T010-four-crash-and-SC004-real-busy.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-consumed-markers-ACK-absence-GREEN.json",
+      "original_sha256": "adfc6afdf6dd7f0eb5557d467d44af33b15aadc54190843bfb497dbaebb1ec18",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-consumed-markers-ACK-absence-GREEN-summary.json",
+      "sha256": "8086c6b6a3ea243ed57472b2bfc0ca2587f0b07b729c75b697d2d6f21de3f383",
+      "canonical_name": "T010-consumed-markers-ACK-absence-GREEN-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-consumed-markers-ACK-absence-GREEN.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-consumed-markers-ACK-absence-GREEN.log",
+      "sha256": "5468da328f95b4f0115985fa415e5316f36005aaa95f715d13ec41ff90c15491",
+      "canonical_name": "T010-consumed-markers-ACK-absence-GREEN.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-completed-bootstrap-real-held-start.json",
+      "original_sha256": "6f1688a9b67972b225082a4bb567dd72256bed1f6ccda8f820274a4639e89466",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-completed-bootstrap-real-held-start-summary.json",
+      "sha256": "7ea67b1a88bda5f9892446b21a802020d48ccdcc093ce62ecc40a4acc985fc4b",
+      "canonical_name": "T010-completed-bootstrap-real-held-start-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-completed-bootstrap-real-held-start.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-completed-bootstrap-real-held-start.log",
+      "sha256": "684626e80642df1b8fa3a900bb3aec2ed881bfc33abd8452984766d4ad8c5fa7",
+      "canonical_name": "T010-completed-bootstrap-real-held-start.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-generic-policy-bootstrap-card-corrected.json",
+      "original_sha256": "d49f6d8923d3d929bd96c13a0ea171839c0657ce53a334e138ee6254dbee0fc4",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-generic-policy-bootstrap-card-corrected-summary.json",
+      "sha256": "5fccc61e8539c384c0278f2b056314c2a33f96d22c9866a7fe557b9fd7ed77db",
+      "canonical_name": "T010-generic-policy-bootstrap-card-corrected-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-generic-policy-bootstrap-card-corrected.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-generic-policy-bootstrap-card-corrected.log",
+      "sha256": "20fd78b23a31437fc503d60d6b76fee42fcf45a91adfaf359ab0f1220c2459f8",
+      "canonical_name": "T010-generic-policy-bootstrap-card-corrected.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.json",
+      "original_sha256": "20d46612bc1f50aac564398c82b98bdeb08985f605924806d1897915ec4bee75",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-after-real-push-dual-barrier-summary.json",
+      "sha256": "e52f7fb577541e36837dd99cab4c29d8f9191d54f94ed335cc5fff310ef6bae4",
+      "canonical_name": "T010-after-real-push-dual-barrier-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-after-real-push-dual-barrier.log",
+      "sha256": "2715b78ee78669e5f04922587c90c2462c258cc8f9fd46079c30ad6aaf113fe6",
+      "canonical_name": "T010-after-real-push-dual-barrier.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-SC004-real-busy-native-result-demux.json",
+      "original_sha256": "6d954ec1ee14943358de96d5abdba5bb3c1c1fe911ba867ae7e5fc0650efacf2",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-SC004-real-busy-native-result-demux-summary.json",
+      "sha256": "02cb2f43f7068a63f7760f7d307691e6cabd9da4ca0830ef0bb7982849c74176",
+      "canonical_name": "T010-SC004-real-busy-native-result-demux-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-SC004-real-busy-native-result-demux.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-SC004-real-busy-native-result-demux.log",
+      "sha256": "db13405c7215d46cd4f85217d13c3a091e24da35da488eb11675592ae55a35de",
+      "canonical_name": "T010-SC004-real-busy-native-result-demux.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-same-instance-real-managed-restart.json",
+      "original_sha256": "9472047e72b5eb137869865432a32c5496edab7a7125108deb7b887af7356c49",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-Seen-same-instance-real-managed-restart-summary.json",
+      "sha256": "671ccd535f2bcd43ee8694fade827b10a10eac853783b932fa3b558edbd835bf",
+      "canonical_name": "T010-Seen-same-instance-real-managed-restart-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-same-instance-real-managed-restart.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-Seen-same-instance-real-managed-restart.log",
+      "sha256": "a76cbbb696de5e8789455dd477a20281b995002e5517d97c95d4b665f0fecfaa",
+      "canonical_name": "T010-Seen-same-instance-real-managed-restart.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.json",
+      "original_sha256": "173fea24454e54402f617e9f930edcc617741e934b622c9ab45c175b21fff47f",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-Seen-daemon-before-real-READY-summary.json",
+      "sha256": "775a0d3c79794d6dd994fda07941130e3f9a8c6618e460f041d5ce09033a9249",
+      "canonical_name": "T010-Seen-daemon-before-real-READY-summary.json",
+      "kind": "compact_receipt_summary"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.log",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-Seen-daemon-before-real-READY.log",
+      "sha256": "6d78f9a2ebb3368bf361cb045e90749fba05a7ae12ccf22f96d0137809b7aac6",
+      "canonical_name": "T010-Seen-daemon-before-real-READY.log",
+      "kind": "execution_log"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-code159A-T010-20261012/T010-matrice.json",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-matrice.json",
+      "sha256": "fa3fbb77ff063cf480cf2e21d6edb12f361568803ad22ad4314a2c9b1fc18585",
+      "canonical_name": "T010-matrice.json",
+      "kind": "matrix_or_measure_proof"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-code159A-T010-20261012/T010-matrice.md",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-matrice.md",
+      "sha256": "a21916948c9dc6662dee8d47c1e5332b4d96f2cde386d24fd601900a39ffaaab",
+      "canonical_name": "T010-matrice.md",
+      "kind": "matrix_or_measure_proof"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-code159A-T010-20261012/SC004-latence-preuve.json",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/SC004-latence-preuve.json",
+      "sha256": "5fa8698019f921244926dbd68ba306cd4dd055341f5096cd8d37ddb7c9cd0acb",
+      "canonical_name": "SC004-latence-preuve.json",
+      "kind": "matrix_or_measure_proof"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T001-baseline-latence159A.json",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T001-baseline-latence159A.json",
+      "sha256": "64719880c8ebaaa095c812f2f3b8a648160569273a49338811edb032df002244",
+      "canonical_name": "T001-baseline-latence159A.json",
+      "kind": "twenty_sample_measure"
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-latence159A.json",
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T010-closed-proofs/T010-after-latence159A.json",
+      "sha256": "e0b03c6074e51a02a75a331eaea8a0f44c632e9b03163c7ce20663be675f966d",
+      "canonical_name": "T010-after-latence159A.json",
+      "kind": "twenty_sample_measure"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R1-closed-proofs/T013-R1-existing-oracles-RED-summary.json",
+      "canonical_name": "T013-R1-existing-oracles-RED-summary.json",
+      "sha256": "aa9a925f68421be847a3d32a493efca2d8c0c636b9bbd2837a2ae2f3fd0726ff",
+      "kind": "summary_without_giant_source_maps"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R1-closed-proofs/T013-R1-existing-oracles-RED.log",
+      "canonical_name": "T013-R1-existing-oracles-RED.log",
+      "sha256": "8553f2fb7e3aad9f4641a6bc9beefc409591a4b899798e688874355424d0da6d",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R1-closed-proofs/T013-R1-PERF-existing-groups-GREEN-summary.json",
+      "canonical_name": "T013-R1-PERF-existing-groups-GREEN-summary.json",
+      "sha256": "f2234a0ddf565d30f0f91d2aeb716332d59612b7ff4aa07737f8ea25f864d389",
+      "kind": "summary_without_giant_source_maps"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R1-closed-proofs/T013-R1-PERF-existing-groups-GREEN.log",
+      "canonical_name": "T013-R1-PERF-existing-groups-GREEN.log",
+      "sha256": "75f33ca46a9f1979ee371f84f7cd6b024315c83d36067d86131c30d826c84b62",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-spec102-v7-expected-replay-summary.json",
+      "canonical_name": "T013-spec102-v7-expected-replay-summary.json",
+      "sha256": "0848d0a3e4e52a3f8b446571d44fa6c5e9c804f6ef79935211f5a9f466c09ad1",
+      "kind": "closed_summary_or_receipt",
+      "supersedes_older_compact_format": true
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-spec102-v7-expected-replay.log",
+      "canonical_name": "T013-spec102-v7-expected-replay.log",
+      "sha256": "b516dbf4365bce8a11bf16143b86c97cb39db06d1cd595e6b880aa702c24d8e8",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-FULL159A-final-summary.json",
+      "canonical_name": "T013-FULL159A-final-summary.json",
+      "sha256": "da95f72d40372124eb5150641cf17abc178fe277d85cf8186a2c46b4c0ff5409",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-FULL159A-final.log",
+      "canonical_name": "T013-FULL159A-final.log",
+      "sha256": "a641ae723bffce15f2868c0532cbe7b79b2faee2b2f578588a4999816d0cfde2",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-eight-legacy-fixtures-replay1-summary.json",
+      "canonical_name": "T013-eight-legacy-fixtures-replay1-summary.json",
+      "sha256": "5efee1007ac522ee3e449419da9934cb7fa36bc4dc58ce3d02704de034599c9b",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-eight-legacy-fixtures-replay1.log",
+      "canonical_name": "T013-eight-legacy-fixtures-replay1.log",
+      "sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-remaining-legacy-fixtures-replay1-summary.json",
+      "canonical_name": "T013-remaining-legacy-fixtures-replay1-summary.json",
+      "sha256": "74f624392098588f6c079df0963b868ee777aec08dc0ef0c93380267ab42242d",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-remaining-legacy-fixtures-replay1.log",
+      "canonical_name": "T013-remaining-legacy-fixtures-replay1.log",
+      "sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-three-identity-fixtures-replay2-summary.json",
+      "canonical_name": "T013-three-identity-fixtures-replay2-summary.json",
+      "sha256": "54b46870355a8555b29b2288b1ac6fd9901dc8e2c0c8b2de9ec9000ed38cd061",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-three-identity-fixtures-replay2.log",
+      "canonical_name": "T013-three-identity-fixtures-replay2.log",
+      "sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-two-incarnations-identity-replay3-summary.json",
+      "canonical_name": "T013-two-incarnations-identity-replay3-summary.json",
+      "sha256": "2ab6c07bc551dae9b631d1af22f58fa21d8230e7c3123657dd7ba3bf6c308cce",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T013-two-incarnations-identity-replay3.log",
+      "canonical_name": "T013-two-incarnations-identity-replay3.log",
+      "sha256": "51d3968a5ac1e52bf3892cc974355276f426399f3d04df2faa9bf27b292075ea",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T028-existing-queue-list-RED-summary.json",
+      "canonical_name": "T028-existing-queue-list-RED-summary.json",
+      "sha256": "757548f2e613b64d11931062a2db34992ccaa6bcc07b6557a6afb1d38cacebac",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T028-existing-queue-list-RED.log",
+      "canonical_name": "T028-existing-queue-list-RED.log",
+      "sha256": "30887cf1f158edc6901add27d3efcedfd15af5b09a38092a8be4034a071a6701",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T028-queue-list-existing-group-GREEN-summary.json",
+      "canonical_name": "T028-queue-list-existing-group-GREEN-summary.json",
+      "sha256": "33067dc233662571a9f5ae3efc0bdc2d8680d5eb377eef1b21085791cbd5da43",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/T028-queue-list-existing-group-GREEN.log",
+      "canonical_name": "T028-queue-list-existing-group-GREEN.log",
+      "sha256": "f33b212c53b4c1cdb55a52aa6b9da5e3d0c25be2fa250526996b5d6d0dc2ece9",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/closure-T013.json",
+      "canonical_name": "closure-T013.json",
+      "sha256": "1be34ac1843afd64f99df1fde7b2a9b5bed8f403830c4192bd06dd6f1ce3763b",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/global-T013.json",
+      "canonical_name": "global-T013.json",
+      "sha256": "58a9a438914e993d0960c557b47677c17874778ba30c2a8431e2d2af7c80c770",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/T013-T028-closed-proofs/rollback158B-before-v7.json",
+      "canonical_name": "rollback158B-before-v7.json",
+      "sha256": "a5e46f02380c9b21674030b21a258eb92254b5ad558574435d1d1b68c2dc2f7a",
+      "kind": "closed_summary_or_receipt"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R2-closed-proofs/T006-R2-busy-period-RED-summary.json",
+      "canonical_name": "T006-R2-busy-period-RED-summary.json",
+      "sha256": "5dfc63b66afd659d46a4768056d80498f34d82facb1211166619d46a037deeb9",
+      "kind": "compact_runner_summary"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R2-closed-proofs/T006-R2-busy-period-RED.log",
+      "canonical_name": "T006-R2-busy-period-RED.log",
+      "sha256": "a9fdf3c3af895bc5daa38af18c6a021ab032bb67bb71fed09caadc1222f7898b",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R2-closed-proofs/T006-R2-turnstate-group-GREEN-summary.json",
+      "canonical_name": "T006-R2-turnstate-group-GREEN-summary.json",
+      "sha256": "f91dc14ba1965bb96647bf6effffbc2f9e941b75b56a2c9b8179752baa38c27f",
+      "kind": "compact_runner_summary"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/R2-closed-proofs/T006-R2-turnstate-group-GREEN.log",
+      "canonical_name": "T006-R2-turnstate-group-GREEN.log",
+      "sha256": "2fc7e3cdedf74aa7ab3dbb50fe0026d676da692fc825b808b45e74105128b232",
+      "kind": "log"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/adversarial-review-claude-r2.md",
+      "canonical_name": "adversarial-review-claude-r2.md",
+      "sha256": "c74a67fd8aac8a9c11fd4b005f6ae01f6362db87c760d35fa22a41188039d781",
+      "kind": "review_R2_trace_attributed_ROOT"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-converge159A-pass3-20261012/converge159A-P3-R2-annexe.json",
+      "canonical_name": "converge159A-P3-R2-annexe.json",
+      "sha256": "d121f099f93d0f28db8214ffae50eb7a01d5b6387e5ce80327000372b240f9b5",
+      "kind": "closed_proof"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-converge159A-pass3-20261012/converge159A-P3-R2-annexe.md",
+      "canonical_name": "converge159A-P3-R2-annexe.md",
+      "sha256": "0b69179b64394ca96c54a73f349d9eefa089887ad855faee0147010ac934b8ec",
+      "kind": "closed_proof"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/ROOT-review159A-r2-terminal.json",
+      "canonical_name": "ROOT-review159A-r2-terminal.json",
+      "sha256": "a9f414ccb5fe2d4f606a5858b02965d9c3cf2a65ad2f5020d1f755cf5fc88798",
+      "kind": "closed_proof"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/matrice-A14-gates.json",
+      "canonical_name": "matrice-A14-gates.json",
+      "sha256": "dc4166a323ca90ec07141b9359904b8637aeba1237510bcb7227b68b3d36011f",
+      "kind": "closed_proof"
+    },
+    {
+      "cache_to_copy": "/Users/moi/.cache/bridget-docs159A-final-preparation-20261012/matrice-A14-gates.md",
+      "canonical_name": "matrice-A14-gates.md",
+      "sha256": "953c9dee993b5cd8e83d591fa6aad2868d8ebe8ee79c2d65e942fd431c21272e",
+      "kind": "closed_proof"
+    }
+  ],
+  "original9_exact_replayed_PASS": true,
+  "FULL_global_green": false,
+  "T028_green": {
+    "passed": 7,
+    "failed": 0,
+    "seconds": 11.64
+  },
+  "A_task_count": 14,
+  "B_task_count": 14,
+  "no_task_checkbox_changed": true,
+  "current_daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "authority_capture": "git154 demandée par ROOT, non encore lue",
+  "pending": [
+    "Cochage A14 par ROOT",
+    "Livraison/Git/build/install/activation/cleanup"
+  ],
+  "private_items_NEVER_COPY_TO_GIT": [
+    "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-prod-v6.db",
+    "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-bridget",
+    "/Users/moi/.cache/bridget-docs159A-T012-20261012/private/T011-PASS-original-private.json",
+    "/Users/moi/.cache/bridget-docs159A-T012-20261012/private/T011-FAIL-original-private.json"
+  ],
+  "real_message_body_not_copied": true,
+  "source_maps_omitted_from_summaries": true,
+  "current_daemon_sha256_verified_by_read": true,
+  "T006_R2": {
+    "RED": {
+      "passed": 0,
+      "failed": 1,
+      "seconds": 11.14
+    },
+    "GREEN": {
+      "passed": 8,
+      "failed": 0,
+      "seconds": 7.08
+    },
+    "source_equal_AV_AP": true,
+    "daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc"
+  },
+  "historical_P3_CONVERGED_source": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+  "historical_audit": {
+    "grade": "A99.95",
+    "coverage": "16/64, partielle",
+    "source": "18ad"
+  },
+  "Converge": "P3 + annexe R2 CONVERGED",
+  "audit_final": {
+    "grade": "A99.95",
+    "findings": "0C0H0M1LOW",
+    "coverage": "16/64;4275/174030;2.4565%",
+    "validator": "RC0/0E/0W",
+    "daemon": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc"
+  },
+  "audit_proofs_verified_readonly": {
+    "/Users/moi/.cache/bridget-audit159A-final-20261012/grade.json": "f8ec1987d3220af098901a214a8de9ece22ee010e12442809e185e8bc0cff9a2",
+    "/Users/moi/.cache/bridget-audit159A-final-20261012/validation-scoring.json": "51447e114fbf4a95d053c80ee5f04b4549e6094e51165b37537f153fa2811598",
+    "/Users/moi/.cache/bridget-audit159A-final-20261012/scoring.md": "554f0a5424e9e49530e98c92645c2033bdef710049ed7aea69685eea63a36dea",
+    "/Users/moi/.cache/bridget-audit159A-final-20261012/fix-report.md": "0af258dcdd8c5e5718881d1e7059098cfd20d515ce6498a6489bd958afd0b910",
+    "/Users/moi/.cache/bridget-audit159A-final-20261012/cycles.log": "53fe46bfbbb3eff84a045095a52c26869b57aa19bf0bdaeddab5e59aef579ba4",
+    "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-R2-delta.json": "682f785135f97499efd6a1f8f7d322171c50ae96169f2bd8da341d02636aeb73"
+  }
+}

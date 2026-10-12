@@ -1,0 +1,1123 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+warning: variant `Control` is never constructed
+    --> crates/bridget-daemon/src/daemon.rs:2838:5
+     |
+2837 | enum ObservationJob {
+     |      -------------- variant in this enum
+2838 |     Control(Instant, DeferredControl),
+     |     ^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `due_child_requests` is never used
+   --> crates/bridget-daemon/src/delegation.rs:652:12
+    |
+315 | impl DelegationStore {
+    | -------------------- method in this implementation
+...
+652 |     pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: function `format_cited_paths` is never used
+   --> crates/bridget-daemon/src/native_permissions.rs:218:15
+    |
+218 | pub(crate) fn format_cited_paths(paths: &[String]) -> String {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: `bridget-daemon` (lib) generated 3 warnings
+warning: function `wake158B_groupe7_cli_quota_rejeu_collision_et_reprise` should have a snake case name
+    --> crates/bridget-daemon/src/idempotency.rs:1563:8
+     |
+1563 |     fn wake158B_groupe7_cli_quota_rejeu_collision_et_reprise() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe7_cli_quota_rejeu_collision_et_reprise`
+     |
+     = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `wake158B_groupe1_sql_limites_physiques_et_annulees` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:305:8
+    |
+305 |     fn wake158B_groupe1_sql_limites_physiques_et_annulees() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_sql_limites_physiques_et_annulees`
+
+warning: function `wake158B_groupe3_intervalle_gel_restart_et_frontieres` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:416:8
+    |
+416 |     fn wake158B_groupe3_intervalle_gel_restart_et_frontieres() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe3_intervalle_gel_restart_et_frontieres`
+
+warning: function `wake158B_groupe1_domaine_ferme_et_bornes` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:356:8
+    |
+356 |     fn wake158B_groupe1_domaine_ferme_et_bornes() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_domaine_ferme_et_bornes`
+
+warning: function `wake158B_groupe2_calendrier_trou_fold_tz_et_date` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:424:8
+    |
+424 |     fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe2_calendrier_trou_fold_tz_et_date`
+
+warning: `bridget-daemon` (lib test) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 24s
+     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)
+
+running 548 tests
+test cli::guidance156_tests::control158_halt_aucun_outil_mcp ... ok
+test cli::guidance156_tests::guidance156_cli_intent_inconnue ... ok
+test cli::guidance156_tests::control158_delegations_cli_parse ... ok
+test cli::guidance156_tests::guidance156_cli_intent_valide ... ok
+test cli::guidance156_tests::guidance156_cli_sans_intent_inchange ... ok
+test cli::guidance156_tests::guidance156_cli_queue_parse ... ok
+test cli::idempotency_projection_tests::depot_delegate_versionne_atomiquement_sa_cible_de_revue ... ok
+test cli::idempotency_projection_tests::depot_guichet_parse_les_trois_mutations_sans_chemin_ni_principal_annexe ... ok
+test cli::idempotency_projection_tests::depot_guichet_refuse_les_formes_ouvertes_ou_incompletes ... ok
+test cli::idempotency_projection_tests::depot_guichet_rejoue_le_canon_ferme_avec_les_trois_cles ... ok
+test cli::idempotency_projection_tests::json_publie_la_persistance_meme_indeterminee ... ok
+test cli::idempotency_projection_tests::options_idempotentes_sont_obligatoires_ensemble ... ok
+test cli::idempotency_projection_tests::projection_cli_et_client_reference_produisent_le_meme_envoi_et_le_meme_rejet ... ok
+test cli::idempotency_projection_tests::projection_cli_et_reference_partagent_le_canon_du_daemon_reel ... ok
+test cli::idempotency_projection_tests::status_ne_compte_pas_les_messages_d_une_base_qui_n_est_pas_celle_du_daemon ... ok
+test cli::idempotency_projection_tests::who_affiche_mode_et_localisation_sans_dependre_d_un_tty ... ok
+test cli::idempotency_projection_tests::who_distingue_persistant_ephemere_et_non_atteste ... ok
+test cli::idempotency_projection_tests::who_et_status_signalent_exactement_un_daemon_perime ... ok
+test cli::idempotency_projection_tests::who_marque_l_ecart_de_modele_et_reste_muet_sans_signal ... ok
+test cli::idempotency_projection_tests::who_rend_une_limite_compacte_par_fenetre_et_garde_l_absence ... ok
+test cli::guidance156_tests::wake158b_cli_g7_formes_fermees_et_identifiant_retry ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_bail_actif_d_un_enfant_natif_n_est_pas_un_candidat_de_reprise ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_catalogue_parent_lecteur_et_confinement_refuses_par_nom ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_developpement_d_un_parent_lecteur_refuse_sans_tache_ni_invitation ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_apres_redemarrage_le_tick_admet_le_queue_et_ne_relance_aucune_mission_echouee ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_e2_enfant_en_file_au_proprietaire_perdu_echoue_et_la_racine_livre_son_vrai_resultat_une_fois ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l_enfant ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_autorite_retenue_recoupe_chaque_champ_du_resultat ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_cas_d_execution_refuse_un_instantane_perime ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_e2_proprietaire_hors_ligne_garde_le_resultat_puis_livre_une_fois_a_la_reconnexion ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_execution_d_un_autre_agent_est_refusee_sans_etre_modifiee ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_descendant_perdu_en_running_est_ferme_puis_la_racine_livre_son_vrai_resultat_une_fois ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_execution_terminale_n_est_jamais_rouverte_au_redemarrage ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_ligne_de_reprise_d_une_mission_native_perdue_ne_bloque_pas_la_racine ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_reste_intact ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_message_externe_au_meme_format_ne_recoit_aucune_capacite_privee ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_reponse_reelle_capturee_survit_au_redemarrage_et_au_descendant_perdu ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_annulation_et_execution_active_sont_fermees_une_fois_au_redemarrage ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_cancel_tree_ferme_l_execution_exacte_avant_de_publier_cancelled ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f2_proprietaire_hors_ligne_garde_le_resultat_en_attente_puis_livre_une_seule_fois ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_execution_d_un_autre_agent_refuse_la_fermeture_d_une_tache_annulee ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_execution_terminale_d_une_tache_annulee_n_est_jamais_rouverte ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_f3_une_tache_annulee_a_execution_interrompue_ne_bloque_pas_la_racine ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_groupe_ordinaire_garde_sigterm_puis_sigkill_apres_sa_moitie_de_delai ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_identite_native_incoherente_refuse_avant_tout_signal_meme_pour_un_autre_groupe ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_la_grace_est_commune_tous_les_wrappers_natifs_recoivent_sigterm_avant_l_attente ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_aucune_escalade_native_marqueur_conserve_et_wrapper_vivant_apres_la_grace ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_les_identites_de_demarrage_viennent_de_la_saga_et_pilotent_l_arret_cooperatif ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_naissance_differente_ou_groupe_disparu_ne_recoit_aucun_signal ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_lot_mixte_garde_la_grace_native_et_l_escalade_ordinaire ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_posture_omise_resout_le_developpement_effectif_du_fait ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_reconnexion_ne_rejoue_pas_la_remise_incertaine_d_une_mission_native ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_redemarrage_echoue_les_missions_engagees_sans_relancer_ni_toucher_aux_durables ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_o4_wrapper_natif_recoit_sigterm_et_sort_de_lui_meme_sans_sigkill ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_revocation_de_la_racine_coupe_enfant_et_petit_enfant ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_reprise_d_execution_ignore_la_mission_native_et_garde_l_ordinaire ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_sans_fait_le_v1_est_refuse_et_les_lectures_survivent_au_tombstone ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_spawn_refuse_les_entrees_gelees_changees_sans_lancement ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native149_un_fait_d_autre_demande_ne_donne_aucun_droit ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::guidance156_cancel_parent_mission_sans_interruption ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::guidance156_control_parent_mission_steer_origine_humaine_forgee ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::guidance156_mission_interrupt_enfant_refuse ... ok
+test daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::guidance156_mission_steer_enfant_admis ... ok
+test daemon::native_delegation::tests::native148_agent_revocation_survives_a_new_instance_until_explicit_grant ... ok
+test daemon::native_delegation::tests::native148_cancel_stops_native_descendants_before_parent ... ok
+test daemon::native_delegation::tests::native148_capture_database_failure_never_acks_or_delivers_directly ... ok
+test daemon::native_delegation::tests::native148_completed_without_reply_expires_at_its_frozen_mission_deadline ... ok
+test daemon::native_delegation::tests::native148_cut_after_admission_retains_exact_ids_and_frozen_model ... ok
+test daemon::native_delegation::tests::native148_cwd_and_development_grants_are_closed ... ok
+test daemon::native_delegation::tests::native148_failed_cleanup_does_not_require_a_live_proved_parent ... ok
+test daemon::native_delegation::tests::native148_glm_catalogue_uses_native_registry_and_discovery_permissions ... ok
+test daemon::native_delegation::tests::native148_live_original_owner_blocks_replay_status_and_cancel ... ok
+test daemon::native_delegation::tests::native148_attested_git_discovery_accepts_repo_and_external_worktree_only ... ok
+test daemon::native_delegation::tests::native148_only_human_can_grant ... ok
+test daemon::native_delegation::tests::native148_other_project_is_refused_before_admission ... ok
+test daemon::native_delegation::tests::native148_parent_and_model_refusals_have_no_effect ... ok
+test daemon::native_delegation::tests::native148_reincarnated_parent_requires_proof_and_reuses_the_same_task ... ok
+test daemon::native_delegation::tests::native148_mission_replay_and_result_wait_for_children_without_t3 ... ok
+test daemon::native_delegation::tests::native148_replay_precedes_grant_revocation_and_definition_change ... ok
+test daemon::native_delegation::tests::native148_retry_ten_times_one_task_and_one_spawn ... ok
+test daemon::native_delegation::tests::native148_status_cancel_are_owner_scoped_and_repeatable ... ok
+test daemon::native_delegation::tests::native148_turn_completed_alone_never_makes_result_available ... ok
+test daemon::native_delegation::tests::native150_admission_limites_actives_inchangees ... ok
+test daemon::native_delegation::tests::native150_admission_purge_de_borne_plus_ancien_d_abord ... ok
+test daemon::native_delegation::tests::native150_admission_apres_5000_terminees ... ok
+test daemon::native_delegation::tests::native150_delai_applique_echeance_et_suivi ... ok
+test daemon::native_delegation::tests::native150_delai_bornes ... ok
+test daemon::native_delegation::tests::native150_delai_enfant_explicite_parent_sans_echeance ... ok
+test daemon::native_delegation::tests::native150_delai_enfant_explicite_trop_long ... ok
+test daemon::native_delegation::tests::native150_delai_enfant_implicite_inchange ... ok
+test daemon::native_delegation::tests::native150_delai_rejeu_autre_valeur_envelope_mismatch ... ok
+test daemon::native_delegation::tests::native150_admission_saturation_sans_purgeable ... ok
+test daemon::native_delegation::tests::native150_delai_suivi_realigne_apres_echec_d_ecriture ... ok
+test daemon::native_delegation::tests::native150_delai_suivi_aligne_sur_admission_apres_lancement_retarde ... ok
+test daemon::native_delegation::tests::native150_entretien_borne_et_age_cumulent_au_plus_128 ... ok
+test daemon::native_delegation::tests::native150_pause_cle_libre_apres_levee ... ok
+test daemon::native_delegation::tests::native150_pause_etat_illisible_refus_ferme ... ok
+test daemon::native_delegation::tests::native150_pause_precede_refus_de_droits ... ok
+test daemon::native_delegation::tests::native150_pause_refus_par_le_gestionnaire_complet_ne_fait_rien_avancer ... ok
+test daemon::native_delegation::tests::native150_pause_refuse_nouvelle_cle ... ok
+test daemon::native_delegation::tests::native150_pause_rejeu_cle_admise_rend_la_tache ... ok
+test daemon::native_delegation::tests::native150_pause_statut_et_annulation_disponibles ... ok
+test daemon::native_delegation::tests::native150_purge_129_accuses_expires_tous_recopies ... ok
+test daemon::native_delegation::tests::native150_purge_accuse_recopie ... ok
+test daemon::native_delegation::tests::native150_purge_agent_route_conserve ... ok
+test daemon::native_delegation::tests::native150_purge_arbre_volumineux_une_ecriture_de_flotte ... ok
+test daemon::native_delegation::tests::native150_purge_decommission_en_cours_conserve ... ok
+test daemon::native_delegation::tests::native150_purge_echec_recopie_suspend_purge_des_envois ... ok
+test daemon::native_delegation::tests::native150_purge_enfant_present_conserve ... ok
+test daemon::native_delegation::tests::native150_purge_entree_stopped_decommissionnee ... ok
+test daemon::native_delegation::tests::native150_purge_lancement_en_cours_conserve ... ok
+test daemon::native_delegation::tests::native150_purge_outcome_unknown_puis_remise_effacee_conserve ... ok
+test daemon::native_delegation::tests::native150_purge_pierre_expiree_libere_la_cle ... ok
+test daemon::native_delegation::tests::native150_purge_rejeu_cle_purgee ... ok
+test daemon::native_delegation::tests::native150_statut_tache_purgee_rend_task_unavailable ... ok
+test daemon::native_lineage::native_lineage_tests::native149_cancel_recu_rejeu_et_mismatch_via_flux ... ok
+test daemon::native_lineage::native_lineage_tests::native149_gardes_client_et_authorite ... ok
+test daemon::native_lineage::native_lineage_tests::native149_list_show_journal_et_disponibilite_journal ... ok
+test daemon::native_lineage::native_lineage_tests::native149_marqueur_projection_ferme_et_exclut ... ok
+test daemon::native_lineage::native_lineage_tests::native149_page_journal_bornes_permissions_et_fermeture ... ok
+test daemon::native_lineage::native_lineage_tests::native149_snapshot_v2_exclut_le_filtre_avant_normalisation ... ok
+test daemon::native_lineage::native_lineage_tests::native149_validate_ferme_les_formes_ouvertes ... ok
+test daemon::native_lineage::native_lineage_tests::native149_watch_ready_changed_silence_resync_et_invalidation ... ok
+test daemon::native_lineage::native_lineage_tests::native149_watch_refuse_sans_socket_ou_sans_capacite ... ok
+test daemon::native_lineage::native_lineage_tests::native150_pause_annulation_humaine_disponible ... ok
+test daemon::native_lineage::native_lineage_tests::native150_purge_entretien_signale_resync ... ok
+test daemon::native_lineage::native_lineage_tests::native150_purge_ouverture_du_daemon_ne_purge_rien ... ok
+test daemon::presence_tests::TEMOIN_send_idempotent_reply_false_pose_deadline_codex_sans_agents_json ... ok
+test daemon::presence_tests::guidance156_cancel_interruption_comptee ... ok
+test daemon::presence_tests::guidance156_cancel_pair_demande_active_acp_sans_interruption ... ok
+test daemon::presence_tests::guidance156_cancel_pair_demande_en_file_retiree ... ok
+test daemon::presence_tests::guidance156_cancel_parent_interrompt ... ok
+test daemon::presence_tests::guidance156_cancel_parent_pause_sans_interruption ... ok
+test daemon::presence_tests::guidance156_cancel_parent_plafond_sans_interruption ... ok
+test daemon::presence_tests::guidance156_combo_envoi_controle_annulation_pause ... ok
+test daemon::presence_tests::guidance156_control_interrupt_client_non_autorise ... ok
+test daemon::presence_tests::guidance156_control_pause_interne_admise ... ok
+test daemon::presence_tests::guidance156_control_steer_pair_refuse ... ok
+test daemon::presence_tests::guidance156_guard_autre_projet ... ok
+test daemon::presence_tests::guidance156_guard_from_forge ... ok
+test daemon::presence_tests::guidance156_guard_non_atteste ... ok
+test daemon::presence_tests::guidance156_guard_pair_meme_projet ... ok
+test daemon::presence_tests::guidance156_guard_preuve_enfant ... ok
+test daemon::native_delegation::tests::native150_entretien_purge_de_borne_sans_admission ... ok
+test daemon::presence_tests::guidance156_guard_soi_meme ... ok
+test daemon::presence_tests::guidance156_human_attach_admis ... ok
+test daemon::presence_tests::guidance156_human_client_nu_refuse_pour_controle ... ok
+test daemon::presence_tests::guidance156_human_reconnexion_agent_sans_autorite ... ok
+test daemon::presence_tests::guidance156_human_cli_sans_preuve_refuse ... ok
+test daemon::presence_tests::guidance156_midturn_enfant_vers_parent_immediat ... ok
+test daemon::presence_tests::guidance156_midturn_humain_attache_immediat ... ok
+test daemon::presence_tests::guidance156_midturn_pair_attend_fin_de_tour ... ok
+test daemon::presence_tests::guidance156_midturn_parent_immediat ... ok
+test daemon::presence_tests::guidance156_midturn_reprise_recalcule ... ok
+test daemon::presence_tests::guidance156_midturn_trame_sans_valeur_attend ... ok
+test daemon::presence_tests::guidance156_origin_human_attach_conservee ... ok
+test daemon::presence_tests::guidance156_origin_human_forgee_par_agent_retiree ... ok
+test daemon::presence_tests::guidance156_pause_aucun_tour_cree ... ok
+test daemon::presence_tests::guidance156_pause_humain_admis ... ok
+test daemon::presence_tests::guidance156_pause_interrupt_agent_refuse ... ok
+test daemon::presence_tests::guidance156_pause_queue_admise ... ok
+test daemon::presence_tests::guidance156_pause_steer_agent_refuse ... ok
+test daemon::presence_tests::guidance156_queue_bound_t3_64_sinon_null ... ok
+test daemon::presence_tests::guidance156_queue_list_apres_reaffectation_meme_ordre ... ok
+test daemon::presence_tests::guidance156_queue_list_filtre_par_droits ... ok
+test daemon::presence_tests::guidance156_queue_list_ne_modifie_rien ... ok
+test daemon::presence_tests::guidance156_queue_list_borne_200 ... ok
+test daemon::presence_tests::guidance156_queue_list_ordre_rowid ... ok
+test daemon::presence_tests::guidance156_queue_negociation_requise ... ok
+test daemon::presence_tests::guidance156_rate_cooldown_30s ... ok
+test daemon::presence_tests::guidance156_rate_humain_exempt ... ok
+test daemon::presence_tests::guidance156_rate_plafond_3_par_10min ... ok
+test daemon::presence_tests::guidance156_rate_retry_after_exact ... ok
+test daemon::presence_tests::guidance156_rate_survit_au_redemarrage ... ok
+test daemon::presence_tests::guidance156_rate_refus_non_compte ... ok
+test daemon::presence_tests::guidance156_send_canon_intention_demandee ... ok
+test daemon::presence_tests::guidance156_send_autre_intent_envelope_mismatch ... ok
+test daemon::presence_tests::guidance156_send_queue_octets_inchanges ... ok
+test daemon::presence_tests::guidance156_send_interrupt_admet_execution ... ok
+test daemon::presence_tests::guidance156_send_rejeu_actif_puis_inactif_identique ... ok
+test daemon::presence_tests::guidance156_send_steer_transmis_tel_quel ... ok
+test daemon::presence_tests::send_idempotent_conserve_les_invariants_de_reponse_et_dnd ... ok
+test daemon::presence_tests::send_idempotent_persiste_un_refus_et_la_voie_historique_ne_contamine_pas_le_socle ... ok
+test daemon::presence_tests::send_idempotent_rejoue_sans_rerouter_et_isole_les_scopes ... ok
+test daemon::presence_tests::spec099_t3code_aucun_rappel_ne_devient_un_tour_fournisseur ... ok
+test daemon::presence_tests::spec_087_levee_de_pause_agent_absent_reprend_a_la_reconnexion ... ok
+test daemon::presence_tests::spec_087_levee_de_pause_agent_occupe_ne_relance_pas ... ok
+test daemon::presence_tests::spec_087_levee_de_pause_relance_l_execution_interrompue ... ok
+test daemon::presence_tests::spec_087_origine_humaine_fabriquee_par_le_daemon_et_refusee_aux_agents ... ok
+test daemon::presence_tests::spec_087_pause_differe_la_continuation_de_reprise ... ok
+test daemon::presence_tests::spec_087_pause_differe_les_relances_mais_pas_le_palier_trois ... ok
+test daemon::presence_tests::spec_087_pause_interrompt_le_tour_en_cours ... ok
+test daemon::presence_tests::spec_087_reprise_d_une_route_humaine_vivante_est_signalee ... ok
+test daemon::presence_tests::spec_087_pause_survit_a_la_reconstruction_de_l_etat ... ok
+test daemon::presence_tests::spec_087_un_agent_par_ses_outils_declares_ne_mute_rien ... ok
+test delegation::lineage::delegation_lineage_tests::native150_champs_absents_relus_par_defaut_et_accuse_silencieux ... ok
+test daemon::spec099_classic_delivery_tests::spec099_t3code_recoit_annulation_structuree_sans_nouveau_tour ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_annule_sans_remise_purge ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_arbre_recent_conserve_hors_pression ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_arbre_termine_et_accuse_purge ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_borne_par_passage_et_plus_ancien_d_abord ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_deux_arbres_du_meme_proprietaire_sont_independants ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_echec_sans_avis_envoye_conserve ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_le_garde_de_vivacite_peut_refuser_un_arbre ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_nettoyage_inacheve_conserve ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_resultat_non_accuse_conserve ... ok
+test delegation::lineage::delegation_lineage_tests::native150_purge_tache_active_dans_l_arbre_le_conserve ... ok
+test delegation_mcp::tests::closed_arguments_reject_forged_parent_without_connecting ... ok
+test delegation_mcp::tests::native150_delai_schema_liste_blanche_et_forme ... ok
+test delegation_mcp::tests::native151_facade_task_wait_bornes_et_types_avant_connexion ... ok
+test delegation_mcp::tests::native151_facade_task_wait_schema_ferme_et_lecture_pure ... ok
+test delegation_mcp::tests::native154_mcp_workspace_schema_ferme_et_champs_interdits ... ok
+test delegation_mcp::tests::native157_fallback_mcp_formes_et_canonique ... ok
+test delegation_mcp::tests::native157_fallback_mcp_schema_ferme ... ok
+test delegation_mcp::tests::native157_quota_detail_visible_cote_mcp ... ok
+test execution_store::focus_priority_tests::spec_087_une_remise_de_focus_passe_devant_le_travail_ordinaire ... ok
+test guidance::tests::guidance156_matrix_droits ... ok
+test guidance::tests::guidance156_matrix_mid_turn_et_queue ... ok
+test guidance::tests::guidance156_matrix_pause_mission_rythme ... ok
+test idempotency::send_delivery::held159_acked_at_premier_ack_et_rejeu ... ok
+test idempotency::send_delivery::held159_rank_monotone_sous_concurrence ... ok
+test idempotency::send_delivery::held159_rank_orphelinage_couvre_les_retenus ... ok
+test idempotency::send_delivery::held159_rank_reprise_dans_l_ordre ... ok
+test idempotency::send_delivery::held159_rank_reprise_ne_rend_pas_les_retenus ... ok
+test idempotency::send_delivery::held159_rank_sans_collision_entre_instances ... ok
+test idempotency::send_delivery::held159_rank_survit_a_la_reaffectation ... ok
+test idempotency::tests::a_single_byte_difference_is_an_envelope_mismatch ... ok
+test idempotency::tests::accuse_sans_enveloppe_respecte_les_trois_verdicts_metier ... ok
+test idempotency::tests::begin_send_refuse_enveloppe_illisible_sans_creer_remise ... ok
+test idempotency::tests::chemin_reel_sur_base_migree_depuis_v3 ... ok
+test idempotency::tests::creation_spawn_et_saga_sont_atomiques_sous_la_meme_fk ... ok
+test idempotency::tests::dispatch_and_delivery_are_persisted_in_one_transaction ... ok
+test idempotency::tests::echec_de_finalisation_socle_annule_la_finalisation_saga ... ok
+test idempotency::tests::failed_delivery_insert_rolls_back_the_dispatch_transition ... ok
+test idempotency::tests::failed_reply_tracking_rolls_back_then_a_retry_after_restart_prepares_both ... ok
+test idempotency::tests::first_send_outside_its_horizon_is_expired ... ok
+test idempotency::tests::guidance156_store_compteurs_aux_bornes_30s_10min ... ok
+test idempotency::tests::guidance156_store_file_rowid_apres_reaffectation ... ok
+test idempotency::tests::guidance156_store_migration150_sans_perte_et_retention24h ... ok
+test idempotency::tests::guidance156_store_rejeu_sans_lecture_des_evenements ... ok
+test delegation::lineage::delegation_lineage_tests::native150_ouverture_10000_lignes ... ok
+test idempotency::tests::held159_migration_fantomes_ecartes_avec_warn ... ok
+test idempotency::tests::held159_migration_liens_execution_conserves ... ok
+test idempotency::tests::held159_migration_ordre_preserve ... ok
+test idempotency::tests::held159_migration_phases_held_et_cancelled_admises ... ok
+test idempotency::tests::held159_migration_recipient_agent_rempli ... ok
+test idempotency::tests::held159_migration_rejeu_sans_effet ... ok
+test idempotency::tests::held159_migration_rollback_si_echec ... ok
+test idempotency::tests::held159_migration_turn_gate_defaut_zero ... ok
+test idempotency::tests::invalid_horizons_are_refused_for_a_first_reservation ... ok
+test idempotency::tests::issuer_scope_requires_a_base64url_sized_opaque_value ... ok
+test idempotency::tests::jury_lecture_totale_chemin_accuse ... ok
+test idempotency::tests::jury_lecture_totale_chemin_reprise ... ok
+test idempotency::tests::ledger_visible_pendant_dispatching_avant_accuse ... ok
+test idempotency::tests::lien_causal_de_livraison_preserve_le_rejeu_exact ... ok
+test idempotency::tests::migration_v1_classe_les_remises_sans_payload_sans_bloquer_les_valides ... ok
+test idempotency::tests::migration_v3_ajoute_la_definition_resolue_aux_sagas_existantes ... ok
+test idempotency::tests::migration_v4_elargit_le_check_pour_accepter_orphaned ... ok
+test idempotency::tests::held159_migration_sans_perte ... ok
+test idempotency::tests::migration_v4_nettoie_les_enfants_sans_parent_sans_bloquer_le_daemon ... ok
+test idempotency::tests::native150_purge_phase_de_remise_cinq_cas ... ok
+test idempotency::tests::migration_v6_ajoute_les_references_projet_apres_une_base_deja_en_v5 ... ok
+test idempotency::tests::native151_envoi_resume_fige_deux_scopes_resistent_au_remplacement_du_ledger ... ok
+test idempotency::tests::native151_envoi_resume_fige_et_accuse_sont_atomiques ... ok
+test idempotency::tests::native151_envoi_resume_fige_frontieres_utf8_et_taille_du_corps ... ok
+test idempotency::tests::purge_expired_removes_its_delivery_through_the_foreign_key ... ok
+test idempotency::tests::purge_orpheline_les_remises_dispatching_sans_outcome_unknown ... ok
+test idempotency::tests::native151_envoi_resume_fige_migration_idempotence_preserve_ancienne_demande ... ok
+test idempotency::tests::purge_uses_each_record_expiry_not_a_new_configuration ... ok
+test idempotency::tests::reject_prepared_publishes_only_the_terminal_refusal ... ok
+test idempotency::tests::remises_dispatching_migrees_au_changement_d_instance ... ok
+test idempotency::tests::reprise_isole_deux_remises_valides_d_une_sans_enveloppe ... ok
+test idempotency::tests::reprise_reclasse_sans_enveloppe_en_indeterminate ... ok
+test idempotency::tests::reserve_then_replay_uses_the_same_record ... ok
+test idempotency::tests::retry_en_vol_rejoue_unknown_puis_accepted_apres_accuse ... ok
+test idempotency::tests::retry_keeps_the_original_horizon_after_a_configuration_drop ... ok
+test idempotency::tests::spec116_purge_des_envois_epargne_les_lancements_et_respecte_la_marge ... ok
+test idempotency::tests::spec116_remise_expiree_encore_en_vol_devient_sort_inconnu ... ok
+test idempotency::tests::spec_068_faits_runtime_delegues_restent_ordonnes_et_accuses ... ok
+test idempotency::tests::spec_079_remise_dispatching_bloque_une_nouvelle_continuation ... ok
+test idempotency::tests::terminal_result_is_replayed_without_mutation ... ok
+test idempotency::tests::spec_079_remise_et_lien_execution_partagent_la_transaction ... ok
+test idempotency::tests::transitions_are_monotone ... ok
+test idempotency::tests::une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol ... ok
+test idempotency::tests::two_concurrent_reservations_have_one_winner ... ok
+test idempotency::tests::une_remise_mise_en_quarantaine_par_la_migration_n_atteste_plus_un_depot ... ok
+test lifecycle::tests::native148_child_never_inherits_t3_session_credentials ... ok
+test mcp::tests::accuse_retarde_rend_un_statut_honnete_puis_le_rejeu_lit_le_sort_sans_dupliquer ... ok
+test mcp::tests::catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe ... ok
+test mcp::tests::connexion_non_bloquante_refuse_un_budget_expire_avant_toute_attente ... ok
+test mcp::tests::coupure_apres_depot_mcp_reste_outcome_unknown_sans_succes_invente ... ok
+test mcp::tests::coupure_apres_transmission_devient_outcome_unknown_et_le_retry_reste_identique ... ok
+test mcp::tests::daemon_coupe_est_un_is_error_technique_immediat ... ok
+test mcp::tests::delegate_mcp_transporte_atomiquement_la_cible_de_revue_en_v2 ... ok
+test mcp::tests::deux_appels_outil_ne_partagent_pas_l_identite_resolue ... ok
+test mcp::tests::dto_ledger_respectent_le_contrat_outil ... ok
+test mcp::tests::guidance156_mcp_intent_inconnue_refusee ... ok
+test mcp::tests::guidance156_mcp_interrupt_pose_interrupt_and_start ... ok
+test mcp::tests::guidance156_mcp_queue_egal_absent ... ok
+test mcp::tests::guidance156_mcp_queue_schema ... ok
+test mcp::tests::guidance156_mcp_schema_intent ... ok
+test mcp::tests::guidance156_mcp_steer_pose_steer_current ... ok
+test idempotency::wake158b_tests::wake158B_groupe7_cli_quota_rejeu_collision_et_reprise ... ok
+test mcp::tests::identite_mcp_ascii_declenche_exactement_une_execution ... ok
+test mcp::tests::identite_mcp_unicode_est_refusee_avant_toute_execution ... ok
+test mcp::tests::issues_idempotentes_deterministes_restent_metier_et_inconnues_sont_preservees ... ok
+test mcp::tests::la_consigne_de_rejeu_nomme_ses_trois_invariants_et_l_absence_de_doublon ... ok
+test mcp::tests::huit_connexions_simultanees_gardent_le_principal_resolu_et_la_neuvieme_est_busy ... ok
+test mcp::tests::la_remise_en_vol_et_le_sort_inconnu_ne_partagent_pas_leur_statut ... ok
+test mcp::tests::le_statut_mcp_et_le_depot_du_binaire_ne_peuvent_pas_se_contredire ... ok
+test mcp::tests::la_coupure_apres_ecriture_rend_les_cles_de_rejeu_et_les_trois_invariants ... ok
+test mcp::tests::ledger_requests_scope_mine_par_defaut_et_all_accepte ... ok
+test mcp::tests::limite_d_appels_simultanes_refuse_avant_toute_connexion ... ok
+test mcp::tests::matrice_fr009_couvre_les_quinze_cas ... ok
+test mcp::tests::lecture_de_contenu_refuse_l_elargissement_de_portee_avant_connexion ... ok
+test mcp::tests::mcp158_discovery_events_sub_unsub_permis ... ok
+test mcp::tests::mcp158_discovery_chaque_action_de_fil ... ok
+test mcp::tests::mcp158_discovery_journal_avec_et_sans_to ... ok
+test mcp::tests::mcp158_discovery_lecture_artefact_permise ... ok
+test mcp::tests::mcp158_discovery_partage_journal_refuse_sans_effet ... ok
+test mcp::tests::mcp158_discovery_publication_artefact_refusee_sans_effet ... ok
+test mcp::tests::mcp158_plafond_aucun_effet_de_bord_au_refus ... ok
+test mcp::tests::mcp158_plafond_enfant_discovery_refuse_ecriture ... ok
+test mcp::tests::mcp158_discovery_lecture_ack_page_suivante ... ok
+test mcp::tests::mutation_mcp_declare_l_identite_une_fois_et_ne_vend_pas_queued_comme_un_effet ... ok
+test mcp::tests::mutation_mcp_refuse_toute_seconde_source_de_principal_ou_de_registre ... ok
+test mcp::tests::native151_ack_facade_ancien_daemon_sans_trame_nouvelle ... ok
+test mcp::tests::native151_ack_facade_schema_ferme_bornes_et_annotations ... ok
+test mcp::tests::native151_ack_facade_trame_ordonne_refus_et_quota_nonwait ... ok
+test mcp::tests::native151_facade_annulation_apres ... ok
+test mcp::tests::native151_facade_annulation_avant_enregistrement ... ok
+test mcp::tests::native151_facade_annulation_pendant ... ok
+test mcp::tests::mcp158_plafond_parent_garde_tous_les_outils ... ok
+test mcp::tests::native151_facade_annulation_sonde_et_authentification_reelles ... ok
+test mcp::tests::native151_facade_attentes_transmettent_et_rendent_les_contrats ... ok
+test mcp::tests::native151_facade_enregistrement_apres_eof_refuse ... ok
+test mcp::tests::native151_facade_eof_ferme_les_attentes ... ok
+test mcp::tests::native151_facade_eof_attente_et_statut_bloque ... ok
+test mcp::tests::native151_facade_notification_nonwait_preserve_connexion_auth_et_operation ... ok
+test mcp::tests::native151_facade_eof_preserve_nonwait_rapide ... ok
+test mcp::tests::native151_facade_request_wait_schema_et_bornes ... ok
+test mcp::tests::native153_mcp_continue_catalogue_et_champs_fermes ... ok
+test mcp::tests::native151_facade_quatre_attentes_gardent_les_controles ... ok
+test mcp::tests::publication_d_artefact_refuse_les_champs_non_contractuels_avant_connexion ... ok
+test mcp::tests::publication_html_est_annoncee_comme_un_contenu_inerte ... ok
+test mcp::tests::publication_d_artefact_transporte_un_contrat_canonique_et_un_recu_atteste ... ok
+test mcp::tests::resultat_mcp_duplique_le_payload_dans_textcontent ... ok
+test mcp::tests::resultats_metier_conservent_les_categories_de_refus_fermees ... ok
+test mcp::tests::request_status_relit_les_identifiants_terminaux_du_maitre ... ok
+test mcp::tests::schema_send_expose_in_reply_to_non_vide ... ok
+test mcp::tests::send_transmet_in_reply_to_dans_l_enveloppe_idempotente ... ok
+test mcp::tests::send_transmet_un_corps_riche_octet_pour_octet_et_negocie_le_client ... ok
+test mcp::tests::seul_le_diagnostic_de_remise_en_vol_atteste_quelque_chose ... ok
+test mcp::tests::spec094_catalogue_expose_les_six_outils_sans_cible_libre ... ok
+test mcp::tests::spec094_inventaire_documente_toutes_les_commandes_du_repartiteur ... ok
+test mcp::tests::spec094_parametres_invalides_sont_refuses_avant_connexion ... ok
+test mcp::tests::spec100_mcp_shares_exact_excerpt_with_reply_and_closed_events_contract ... ok
+test mcp::tests::spec102_v33_bridget_thread_transmet_le_contrat_et_refuse_les_champs_inconnus ... ok
+test mcp::tests::spec133_identite_deleguee_limite_les_outils_avant_execution ... ok
+test mcp::tests::spec133_send_signe_par_le_parent_et_transporte_la_provenance ... ok
+test mcp::tests::spec138_invalid_reasons_and_scope_are_rejected_before_transport ... ok
+test mcp::tests::spec138_old_server_without_capability_receives_no_message ... ok
+test mcp::tests::spec138_real_agent_loop_cli_daemon_scoped_replay ... ignored, requiert un script Agent Loop et un binaire local explicites, jamais la production
+test mcp::tests::retry_rejoue_scope_et_horodatage_malgre_rename ... ok
+test mcp::tests::spec138_send_returns_structured_warning_outside_exact_body ... ok
+test mcp::tests::spec138_valid_send_reason_reaches_transport_without_rewriting_body ... ok
+test mcp::tests::spec138_who_inherits_project_and_defaults_to_local_directory ... ok
+test mcp::tests::spec147_thread_catalogue_explains_ack_then_same_read ... ok
+test mcp::tests::spec147_uuid_mcp_facade_ipc_and_business_replay_case ... ok
+test mcp::tests::statut_orphelin_distinct_de_in_flight_et_outcome_unknown ... ok
+test mcp::tests::stdout_ne_contient_que_des_reponses_json_rpc ... ok
+test mcp::tests::tools_call_resout_l_identite_a_chaque_appel ... ok
+test mcp::tests::un_sort_indetermine_ne_promet_pas_une_remise ... ok
+test mcp::tests::une_remise_en_vol_ne_s_annonce_pas_comme_un_accuse_perdu ... ok
+test mcp::tests::wake158b_mcp_events_missed_passe_par_identite_attestee ... ok
+test mcp::tests::wake158b_mcp_surface_wake_et_arguments_fermes ... ok
+test mcp::tests::spec138_real_daemon_mcp_directory_and_cross_project_send_share_guard ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_cycle_de_vie_fichiers_prives_et_nettoyage_raii ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_acquittement_negatif_bloque_le_hook_par_nom ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_fait_capacities_est_informationnel_et_corrige ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_delegation_sans_request_id_est_refusee_sans_fait ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_lancement_refuse_un_settings_preexistant_sans_trace ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_fait_publie_acquitte_le_hook_avant_sa_reprise ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_liaison_d_un_pid_mort_est_refusee_et_ne_recupere_jamais ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_overlay_modifie_est_refuse_par_un_refus_nomme ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_session_attendue_filtre_les_demandes_hors_session ... ok
+test native_permissions::native_permissions149_tests::native149_capture_refuse_les_sources_opaques_et_garde_les_inline ... ok
+test native_permissions::native_permissions149_tests::native149_claude_meme_famille_exige_contexte_vivant_et_meme_racine ... ok
+test native_permissions::native_permissions149_tests::native149_claude_vers_codex_allowlist_et_inventaire_vide_ne_devienne_jamais_complet ... ok
+test native_permissions::native_permissions149_tests::native149_claude_vers_codex_exige_lire_ou_complet_sans_regles ... ok
+test native_permissions::native_permissions149_tests::native149_codex_complet_devise_bypass_sans_yolo ... ok
+test native_permissions::native_permissions149_tests::native149_codex_lecteur_refuse_le_developpement_et_reduit_en_decouverte ... ok
+test native_permissions::native_permissions149_tests::native149_decouverte_reduit_et_conserve_les_refus_existant ... ok
+test native_permissions::native_permissions149_tests::native149_entrees_claude_sans_regles_sont_classees ... ok
+test native_permissions::native_permissions149_tests::native149_fait_observe_atteste_la_session_et_le_canal_natif ... ok
+test native_permissions::native_permissions149_tests::native149_mode_runtime_suit_la_politique_reelle ... ok
+test native_permissions::native_permissions149_tests::native149_recheck_detecte_la_mutation_du_settings_utilisateur ... ok
+test native_permissions::native_permissions149_tests::native149_snapshot_fige_et_deduplique_les_contextes ... ok
+test native_permissions::native_permissions149_tests::native149_workspace_codex_vers_claude_refuse_le_confinement ... ok
+test referent_control::tests::guidance156_pause_garde_table ... ok
+test native_permission_observer::native_permission_observer149_tests::native149_nonce_inconnu_et_pair_etranger_restant_silencieux ... ok
+test t3code::tests::guidance156_t3_guidage_derriere_tete_bloquee ... ok
+test t3code::tests::guidance156_t3_groupable_claude_inchange ... ok
+test t3code::tests::guidance156_t3_guidage_hors_lot ... ok
+test t3code::tests::native151_groupe_remises_natives_message ... ok
+test t3code::tests::spec098_correlation_attend_la_fin_du_tour ... ok
+test t3code::tests::spec098_correlation_par_rang_fifo_avec_message_humain_intercale ... ok
+test t3code::tests::spec098_correlation_sans_message_ni_tour ... ok
+test t3code::tests::spec098_etat_de_fil_borne_et_relu ... ok
+test t3code::tests::spec098_fil_neuf_sans_session_reste_joignable_par_son_modele ... ok
+test t3code::tests::spec098_fil_range_n_est_pas_un_agent ... ok
+test t3code::tests::spec098_identifiant_de_reponse_est_stable_par_demande ... ok
+test t3code::tests::spec098_identite_stable_et_v4_canonique ... ok
+test t3code::tests::spec098_journal_du_service_reste_hors_du_namespace ... ok
+test t3code::tests::spec098_tour_sans_reponse_n_attribue_pas_le_tour_du_voisin ... ok
+test t3code::tests::spec098_tour_supplementaire_sans_message_utilisateur_est_ambigu ... ok
+test t3code::tests::spec098_type_d_agent_depuis_le_fournisseur ... ok
+test t3code::tests::spec099_ancien_etat_pending_reste_lisible ... ok
+test t3code::tests::spec099_annulation_signalee_par_lecteur_interdit_la_frontiere_http ... ok
+test t3code::tests::spec099_controles_retirent_seulement_la_demande_annulee ... ok
+test t3code::tests::guidance156_t3_steer_fournisseur_hors_liste_refuse ... ok
+test t3code::tests::spec099_journal_conserve_dix_mille_caracteres_unicode ... ok
+test t3code::tests::spec099_journal_echec_apres_enqueue_ne_confirme_rien ... ok
+test t3code::tests::spec099_journal_hors_borne_rend_une_lacune_explicite ... ok
+test t3code::tests::spec099_journal_refuse_n_avance_pas_le_repere ... ok
+test t3code::tests::spec099_peremption_demande_et_tour_avant_tout_http ... ok
+test t3code::tests::spec099_refus_publication_est_repris_sur_tick_inchange ... ok
+test t3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation ... ok
+test t3code::tests::spec099_reponse_non_acquittee_et_autres_attentes_survivent ... ok
+test t3code::tests::spec099_reponse_rechargee_sans_reexecution_et_ack_perdu_reconcilie ... ok
+test t3code::tests::spec099_reprise_journal_apres_flush_sans_curseur_ne_duplique_pas ... ok
+test t3code::tests::spec101_t3_fin_sans_texte_et_origine_non_ambigue ... ok
+test t3code::tests::spec101_t3_journal_confirme_fin_permission_et_fichiers_sans_doublon ... ok
+test t3code::tests::spec101_t3_lectures_et_echecs_ne_sont_pas_ecritures ... ok
+test t3code::tests::spec101_t3_observation_notification_ne_demande_pas_de_reponse ... ok
+test t3code::tests::spec101_http_capacites_honnetes_et_lacune_signalee ... ok
+test t3code::tests::spec101_t3_seed_ignore_fin_historique_sans_texte ... ok
+test t3code::tests::spec101_t3_terminal_state_is_closed ... ok
+test t3code::tests::spec101_t3_seed_ne_consomme_pas_la_fin_future_du_tour_actif ... ok
+test t3code::tests::spec101_t3_tour_notification_porte_origine_exclue_du_collecteur ... ok
+test t3code::tests::spec102_v28_alerte_de_fil_injectee_sans_attente_ni_relais ... ok
+test t3code::tests::spec105_ancienne_reponse_prete_ne_part_pas_sans_preuve ... ok
+test t3code::tests::spec105_dispatch_sans_demande_ne_cree_aucune_attente ... ok
+test t3code::tests::spec105_notification_et_reponse_ne_demandent_pas_de_relais ... ok
+test t3code::tests::spec105_question_suivie_relayee_une_fois_puis_arret ... ok
+test t3code::tests::spec105_reprise_exige_demande_ouverte_et_identites_exactes ... ok
+test t3code::tests::spec111_file_saturee_ecarte_la_plus_ancienne ... ok
+test t3code::tests::spec111_remise_avec_echeance_depassee_est_toujours_ecartee ... ok
+test t3code::tests::spec111_remise_sans_echeance_survit_a_une_longue_attente ... ok
+test t3code::tests::spec112_attente_en_file_ne_consomme_pas_le_budget_de_tour ... ok
+test t3code::tests::spec112_echeance_deja_passee_a_la_reception_reste_ecartee ... ok
+test t3code::tests::spec113_demande_close_clot_la_saga_sans_second_echec ... ok
+test t3code::tests::spec113_echeance_passee_signale_refus_et_saga_close ... ok
+test t3code::tests::spec113_saturation_signale_la_remise_ecartee_au_daemon ... ok
+test t3code::tests::spec114_enveloppe_d_un_message_seul_est_inchangee ... ok
+test t3code::tests::spec114_lot_borne_en_nombre_et_en_taille ... ok
+test t3code::tests::spec114_lot_sans_reponse_attendue_partage_un_seul_tour ... ok
+test t3code::tests::spec114_message_a_consigne_propre_n_est_jamais_groupe ... ok
+test t3code::tests::spec116_preuve_directe_n_attribue_jamais_le_tour_de_l_humain ... ok
+test t3code::tests::spec116_reveils_en_arriere_plan_exclus_de_la_reponse ... ok
+test t3code::tests::spec116_silence_engage_apres_lectures_concordantes_seulement ... ok
+test t3code::tests::spec116_tour_prouve_en_cours_attend ... ok
+test t3code::tests::spec116_tour_silencieux_ne_fausse_plus_les_demandes_voisines ... ok
+test t3code::tests::spec117_blocage_du_journal_signale_une_fois_apres_le_delai ... ok
+test t3code::tests::spec118_journal_en_retard_une_seule_annonce_sans_alternance ... ok
+test t3code::tests::spec118_oubli_limite_a_ce_que_t3_ne_montre_plus ... ok
+test t3code::tests::spec118_un_grand_fil_n_est_recopie_qu_une_fois ... ok
+test t3code::tests::spec120_declaration_retablie_seulement_si_absente_et_serveur_vivant ... ok
+test t3code::tests::spec121_fil_claude_observable_malgre_un_reveil_d_arriere_plan ... ok
+test t3code::tests::spec121_reponse_incertaine_marquee_et_bornee_au_message_suivant ... ok
+test t3code::tests::spec121_tour_spontane_prouve_seulement_si_la_page_le_couvre ... ok
+test t3code::tests::spec125_tour_suivi_de_pres_fin_observable_si_origine_connue ... ok
+test t3code::tests::spec129_remise_pendant_un_tour_seulement_si_pilotable_et_sans_reponse ... ok
+test t3code::tests::spec130_notifications_successives_partagent_un_tour_sans_messages ... ok
+test t3code::tests::spec130_seul_un_message_sans_reponse_pilote_un_tour_en_cours ... ok
+test t3code::tests::spec131_reponse_relayee_signalee_a_l_utilisateur_du_fil ... ok
+test t3code::tests::spec133_enveloppe_affiche_le_parent_et_la_reference_opaque ... ok
+test t3code::tests::spec134_lot_associe_chaque_nom_au_bon_uuid ... ok
+test t3code::tests::spec138_t3_owner_announces_unknown_project_instead_of_using_adapter_cwd ... ok
+test t3code::tests::spec138_t3_reannounces_only_changed_project_facts_and_keeps_verdict_out_of_conversation ... ok
+test t3code::tests::spec140_titre_json_borne_et_entete_historique_inchange ... ok
+test t3code::tests::spec145_t3_binding_follows_each_changed_project_fact ... ok
+test t3code::tests::spec147_v2_correlation_uses_run_not_rank_and_waits_for_completion ... ok
+test t3code::tests::spec147_v2_lost_receipt_keeps_pending_and_recovers_exact_answer ... ok
+test t3code::tests::spec147_v2_queued_run_does_not_close_running_observation ... ok
+test t3code::tests::spec149_state_legacy_migre_exactement_puis_ecrit_seulement_le_nouveau ... ok
+test t3code::tests::spec149_state_legacy_refuse_chemins_hors_dossier_et_noms_trop_longs ... ok
+test t3code::tests::spec149_state_link_worker_garde_l_id_original_et_ecrit_le_nouveau_chemin ... ok
+test t3code::tests::spec149_state_nom_borne_deterministe_et_ecriture_privee ... ok
+test t3code::tests::spec149_state_nouveau_prime_et_invalide_ne_ressuscite_pas_legacy ... ok
+test t3code_contract::tests::commande_de_tour_porte_les_identifiants_du_pont ... ok
+test t3code_contract::tests::detail_reel_distingue_utilisateur_et_tours_assistant ... ok
+test t3code_contract::tests::iso_now_est_une_date_utc_plausible ... ok
+test t3code_contract::tests::runtime_valide_reconstruit_la_boucle_locale_et_refuse_le_reste ... ok
+test t3code_contract::tests::session_emise_et_liste_sont_lues_par_libelle ... ok
+test t3code_contract::tests::snapshot_reel_0_0_40_est_lu_et_les_champs_manquants_sont_nommes ... ok
+test t3code_contract::tests::spec098_runtime_du_mode_web_sans_host_est_lu_par_son_origine ... ok
+test t3code_contract::tests::spec138_snapshot_missing_or_ambiguous_project_stays_unknown ... ok
+test t3code_contract::tests::spec138_snapshot_uses_project_id_not_worktree_or_title ... ok
+test t3code_contract_v2::tests::guidance156_t3_interrupt_pose_restart ... ok
+test t3code_contract_v2::tests::guidance156_t3_steer_pose_delivery_intent ... ok
+test t3code_contract_v2::tests::spec147_v2_announced_protocol_requires_authenticated_snapshot ... ok
+test t3code_contract_v2::tests::spec147_v2_client_detects_reads_and_replays_stable_rpc_ids ... ok
+test t3code_contract_v2::tests::spec147_v2_detail_preserves_text_and_run_without_child_reply ... ok
+test t3code_contract_v2::tests::spec147_v2_detail_refuses_wrong_thread_and_unknown_run_state ... ok
+test t3code_contract_v2::tests::spec147_v2_detection_never_masks_auth_or_malformed_response ... ok
+test t3code_contract_v2::tests::spec147_v2_lost_rpc_reply_is_uncertain_without_http_fallback ... ok
+test t3code_contract_v2::tests::spec147_v2_real_server_interop ... ignored, requires a disposable T3 V2 server and scoped fixture token
+test t3code_contract_v2::tests::spec147_v2_run_end_states_are_explicit ... ok
+test t3code_contract_v2::tests::spec147_v2_shell_preserves_busy_state_and_project ... ok
+test t3code_contract_v2::tests::spec147_v2_unknown_status_and_incomplete_shell_refuse ... ok
+test t3code_contract_v2::tests::spec147_v2_v1_detection_preserves_legacy_detail ... ok
+test t3code_identity::spec101_identity::claude_exige_flag_exact_et_unique ... ok
+test t3code_identity::spec101_identity::deux_fils_meme_cwd_sous_agent_plus_recent_ne_change_pas_identite ... ok
+test t3code_identity::spec101_identity::disparition_et_ambiguite_revoquent_uniquement_marqueurs_possedes ... ok
+test t3code_identity::spec101_identity::double_echec_inventaire_ouvert_revoque_le_marqueur ... ok
+test t3code_identity::spec101_identity::fournisseur_interne_n_est_pas_un_agent_t3_principal ... ok
+test t3code_identity::spec101_identity::inventaire_os_borne_conserve_tous_fichiers_ouverts_avec_espaces ... ok
+test t3code_identity::spec101_identity::inventaire_ouvert_transitoire_est_retente_avant_retrait ... ok
+test t3code_identity::spec101_identity::inventaire_partiellement_illisible_ne_rend_pas_autre_processus_unique ... ok
+test t3code_identity::spec101_identity::marqueur_prive_retire_sur_clear_sans_ecraser_autre_proprietaire ... ok
+test t3code_identity::spec101_identity::pid_recycle_ou_parent_recycle_refuse ... ok
+test t3code_identity::spec101_identity::plusieurs_correspondances_ou_processus_refuses ... ok
+test t3code_identity::spec101_identity::remplacement_possede_prepare_la_nouvelle_identite_avant_la_bascule ... ok
+test t3code_identity::spec101_identity::reprise_apres_crash_retire_orphelin_mais_preserve_pont_vivant_et_tiers ... ok
+test t3code_identity::spec101_identity::rollout_lit_metadata_exacte_et_refuse_fragment ... ok
+test t3code_identity::spec101_identity::spec114_fichier_d_etat_etranger_ne_revoque_pas_les_identites ... ok
+test t3code_identity::spec101_identity::spec114_inventaire_trie_les_fichiers_par_fournisseur ... ok
+test t3code_identity::spec101_identity::spec114_session_cursor_lue_dans_le_dossier_acp ... ok
+test t3code_identity::spec101_identity::spec133_clear_retire_seulement_le_marqueur_enfant_possede ... ok
+test t3code_identity::spec101_identity::spec133_fournisseur_interne_recoit_le_parent_unique_et_une_reference_opaque ... ok
+test t3code_identity::spec101_identity::spec147_native_t3_refresh_publishes_and_revokes_real_os_processes ... ok
+test t3code_identity::spec101_identity::spec147_v2_identity_reads_only_current_primary_strong_session ... ok
+test t3code_identity::spec101_identity::spec147_v2_real_database_schema_is_readable ... ignored, requires a disposable T3 V2 server database
+test t3code_identity::spec101_identity::sqlite_absent_ne_cree_pas_de_base_et_curseur_nul_ignore ... ok
+test t3code_identity::spec101_identity::sqlite_alias_reel_claude_agent_utilise_la_normalisation_du_pont ... ok
+test t3code_mcp::tests::endpoint_cannot_redirect_or_choose_another_runtime ... ok
+test t3code_mcp::tests::http_keeps_sessions_distinct_and_checks_revocation_on_next_call ... ok
+test t3code_mcp::tests::http_redirect_never_forwards_the_private_credential ... ok
+test t3code_mcp::tests::local_binding_requires_current_daemon_admission ... ok
+test t3code_mcp::tests::session_is_revalidated_and_refusals_are_closed ... ok
+test t3code_mcp::tests::sse_is_bounded_to_one_json_response ... ok
+test wrapper::prompt_tests::native148_mission_context_is_retained_until_success_and_preserves_envelope ... ok
+test wrapper::prompt_tests::native148_mission_context_requires_its_exact_managed_instance ... ok
+test wrapper::reconnect_tests::native148_claude_allows_native_delegation_without_global_mcp_approval ... ok
+test t3code::tests::spec105_attente_non_attestee_ne_correlle_ni_ne_force_la_lecture ... ok
+
+test result: ok. 545 passed; 0 failed; 3 ignored; 0 measured; 1279 filtered out; finished in 50.98s
+
+     Running unittests src/main.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget-e28ab0ef1375e70c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/bridget-greffe-policy-refresh.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_greffe_policy_refresh-d111d5e2d97171a6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/agent_graph_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/agent_graph_test-b4a88fe133fe1403)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/artifact_lifecycle_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_lifecycle_test-1cb838f9a57e596d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/artifact_policy_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_policy_test-3fd00776f4dfcd0d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/artifact_publication_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_publication_test-5b4702d4a8e44ca3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/artifact_service_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_service_test-f777bba7d2425e9f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/artifact_store_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/artifact_store_test-f93907f8781a6257)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/attach_journal_attestation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/attach_journal_attestation_test-ab8e9c84fee358ad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/build_id_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/build_id_integration_test-c3e85c7d8bab32fb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/capabilities_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/capabilities_integration_test-21be0372e4be3000)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/channel_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/channel_observation_test-c8090d8e09e8beb5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/claude_interactive_097_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/claude_interactive_097_test-a04688e62da4f14f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/claude_native_permissions_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/claude_native_permissions_test-d3c9579ef83bb3a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/cli_arguments_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/cli_arguments_integration_test-1638681b20b4ad51)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+     Running tests/codex_interactive_090_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/codex_interactive_090_test-e530aa51a6356db2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/coordination_events_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/coordination_events_test-3147641b194c347d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/core_089_attach_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_attach_test-3c706e2e2706012d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_089_concurrency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_concurrency_test-23c741dda04db4b0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/core_089_content_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_content_test-3e807681533e0d7f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/core_089_dependency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_dependency_test-08d5d0d3cc73b29a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_089_federation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_federation_test-f951d52fa2ca4045)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/core_089_host_session_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_host_session_test-124f3cf257c6d9fa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/core_089_isolation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_isolation_test-04d97126b11b43c9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/core_089_ledger_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_ledger_test-fce84ffa075b44f7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/core_089_migration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_migration_test-22990b6a6f5f986f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/core_089_native_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_native_test-21f4f5e052a21f5d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/core_089_removed_surface_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_removed_surface_test-5b73d63261df8516)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_089_reply_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_reply_test-0f9d08e31efe6482)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_089_retired_runtime_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_retired_runtime_test-efbb4eb1c8324ff8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_089_security_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_security_test-840f80620c4ca9bf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/core_089_service_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_service_test-bbd0a39927596d22)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/core_089_skill_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_skill_test-e129e3078774130d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_089_status_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_status_test-60969aafbfc9c4ad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/core_089_storage_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_storage_test-254ad878c3f99728)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/daemon_shutdown_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/daemon_shutdown_test-5533d58ee1548c9e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/execution_budget_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_budget_test-921c85e05e947acb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/execution_lifecycle_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_lifecycle_test-91d7eab2078821bf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/execution_observability_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_observability_test-6d15465b944c0cdd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/execution_resume_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_resume_test-61bc2eb960aa2232)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/execution_scale_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_scale_test-0e63759cc90cae63)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/execution_store_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/execution_store_test-679a8b80a38c30a8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+
+     Running tests/federate_096_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/federate_096_test-18df7f3799ba17bb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/greffe_policy_refresh_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/greffe_policy_refresh_test-5b81e4272d0f31ee)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/guidance156_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/guidance156_e2e-c0817decaa777735)
+
+running 3 tests
+test guidance156_e2e_codex_actif_parent_steer_meme_tour ... ok
+test guidance156_e2e_claude_refuse_steer_interrupt_et_fifo ... ok
+test guidance156_e2e_codex_inactif_steer_refuse_sans_effet ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 5.27s
+
+     Running tests/handoff_103_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/handoff_103_test-a755e3407e5655e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/held159_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/held159_e2e-90c8cae5cc3746aa)
+
+running 1 test
+test held159_latency_baseline_codex_simule ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 7.87s
+
+     Running tests/idempotency_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/idempotency_test-39963ec1be26c24a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/identity_migration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/identity_migration_test-09ef870975a898fe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/identity_probe_timeout_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/identity_probe_timeout_test-27692f1e00df992f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/integration_test-aadd913ed198d05c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/lineage_cli_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/lineage_cli_test-bd8f2e59d6afba7c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/managed_parity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/managed_parity_test-3acf1b44c226fa07)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/managed_wrapper_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/managed_wrapper_test-1bfed8a33485508f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/mcp_cancel_091_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mcp_cancel_091_test-f5484133b5b25f8e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/mcp_injection_smoke_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mcp_injection_smoke_test-cb5548fbd6251441)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/mission_boundary_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/mission_boundary_test-a29800a4bc1b9c0f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/native_delegation_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_delegation_e2e-4a977dc8ac454336)
+
+running 1 test
+test native148_sans_t3_retry_reponse_correllee_annulation_et_reprise_durable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 5.53s
+
+     Running tests/native_delegation_real_glm.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_delegation_real_glm-44a449f4ab54ce38)
+
+running 4 tests
+test native148_parent_codex_fixture_delegates_once_to_real_glm ... ignored, GLM réel : opt-in explicite après validation de l’identité
+test native148_real_fixture_auth_requires_explicit_unique_private_route ... ok
+test native148_real_fixture_mcp_cleanup_after_eof ... ok
+test native148_real_fixture_mcp_cleanup_during_unwind ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 1 filtered out; finished in 0.01s
+
+     Running tests/native_provider_death149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_provider_death149_test-198c1e02c0a13ec6)
+
+running 2 tests
+test native149_fournisseur_natif_tue_n_est_jamais_relance ... ok
+test native149_temoin_fournisseur_ordinaire_tue_est_relance ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.42s
+
+     Running tests/native_wrapper_stop149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/native_wrapper_stop149_test-7c650553428dc1d7)
+
+running 4 tests
+test native149_eof_du_daemon_arrete_le_wrapper_natif_et_son_fournisseur ... ok
+test native149_sigterm_du_wrapper_natif_arrete_le_fournisseur_sans_reconnexion ... ok
+test native149_temoin_ordinaire_eof_se_reconnecte_et_garde_son_fournisseur ... ok
+test native149_temoin_ordinaire_sigterm_garde_la_disposition_par_defaut ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.34s
+
+     Running tests/project_binding_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_binding_integration_test-f43c0ec846805dd6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/project_profile_surface_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/project_profile_surface_test-1f839fb7fc88f407)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/runtime_selection_integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/runtime_selection_integration_test-865b5aaa078f01d4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/sc005_attach_budget.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/sc005_attach_budget-9d375ecbd0041ade)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/search_104_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/search_104_test-0adb32476ff90329)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.00s
+
+     Running tests/service_file_limit149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/service_file_limit149_test-229225b4a3c6728b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/spawn_refusal_hosts_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spawn_refusal_hosts_test-58900cf4a0dc3936)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/spec100_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec100_observation_test-4d51d9b709968921)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/spec101_observation_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec101_observation_test-f8c7b03489a6f18a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+     Running tests/spec138_project_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec138_project_test-a30fc75be4e84903)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/spec145_human_cli.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec145_human_cli-239eff3fc089ff89)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/spec146_recent_human_cli.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec146_recent_human_cli-10fb9d0051f105b7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/t3_session_identity_env.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3_session_identity_env-40370aa199d20e10)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/t3code_098_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_098_test-291f5efdcba34642)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/t3code_opaque_identifiers149_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_opaque_identifiers149_test-4e740ff6ffc56eb4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/work_submission_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/work_submission_test-9b18a7e7a5a4a22a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+   Doc-tests bridget_daemon
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[build Bridget] Nettoyage : 0.00 Gio de caches ; 13.00 Gio restants (tailles logiques, clones APFS compris)

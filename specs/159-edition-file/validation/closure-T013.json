@@ -1,0 +1,1046 @@
+{
+  "scope": "Clôture probatoire des neuf FAIL originaux FULL159A par replays ciblés ; une seule FULL historique",
+  "created_at": "2026-10-12T17:16:05.436822+00:00",
+  "FULL_preserved": {
+    "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-FULL159A-final.json",
+    "receipt_sha256": "1afc4a46e8dba47c6f0b407e02d4072e622335eec4cca7e7b8e85c292a7d8561",
+    "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-FULL159A-final.log",
+    "log_sha256": "a641ae723bffce15f2868c0532cbe7b79b2faee2b2f578588a4999816d0cfde2",
+    "rc": 101,
+    "seconds": 779.06,
+    "counts_parent": {
+      "passed": 2551,
+      "failed": 9,
+      "ignored": 75
+    },
+    "source_files_stable": 222,
+    "no_new_FULL": true,
+    "global_report_frozen_file": "/Users/moi/.cache/bridget-validation159A-T013-final-20261012/global-T013.json",
+    "global_report_frozen_sha256": "58a9a438914e993d0960c557b47677c17874778ba30c2a8431e2d2af7c80c770"
+  },
+  "original9_exact_mapping_latestPASS": [
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_contract_test.rs",
+      "name": "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-eight-legacy-fixtures-replay1",
+        "started_at": "2026-10-12T17:07:13.160724+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+        "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+        "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+        "test_line": 32
+      },
+      "replay_history": [
+        {
+          "label": "T013-eight-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:07:13.160724+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+          "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+          "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+          "test_line": 32
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_contract_test.rs",
+      "name": "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-eight-legacy-fixtures-replay1",
+        "started_at": "2026-10-12T17:07:13.160724+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+        "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+        "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+        "test_line": 33
+      },
+      "replay_history": [
+        {
+          "label": "T013-eight-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:07:13.160724+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+          "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+          "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+          "test_line": 33
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_crash_test.rs",
+      "name": "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-eight-legacy-fixtures-replay1",
+        "started_at": "2026-10-12T17:07:13.160724+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+        "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+        "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+        "test_line": 40
+      },
+      "replay_history": [
+        {
+          "label": "T013-eight-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:07:13.160724+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+          "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+          "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+          "test_line": 40
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_identity_test.rs",
+      "name": "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-two-incarnations-identity-replay3",
+        "started_at": "2026-10-12T17:13:01.301517+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.json",
+        "receipt_sha256": "96cf0c6c788914abe27dc9ccc7b2d1f5b299e4fe92243b7ce292abe555e3a5f5",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.log",
+        "log_sha256": "51d3968a5ac1e52bf3892cc974355276f426399f3d04df2faa9bf27b292075ea",
+        "test_line": 32
+      },
+      "replay_history": [
+        {
+          "label": "T013-eight-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:07:13.160724+00:00",
+          "result": "FAILED",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+          "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+          "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+          "test_line": 55
+        },
+        {
+          "label": "T013-three-identity-fixtures-replay2",
+          "started_at": "2026-10-12T17:09:44.693536+00:00",
+          "result": "FAILED",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+          "receipt_sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+          "log_sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+          "test_line": 36
+        },
+        {
+          "label": "T013-two-incarnations-identity-replay3",
+          "started_at": "2026-10-12T17:13:01.301517+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.json",
+          "receipt_sha256": "96cf0c6c788914abe27dc9ccc7b2d1f5b299e4fe92243b7ce292abe555e3a5f5",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.log",
+          "log_sha256": "51d3968a5ac1e52bf3892cc974355276f426399f3d04df2faa9bf27b292075ea",
+          "test_line": 32
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_identity_test.rs",
+      "name": "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-three-identity-fixtures-replay2",
+        "started_at": "2026-10-12T17:09:44.693536+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+        "receipt_sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+        "log_sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+        "test_line": 37
+      },
+      "replay_history": [
+        {
+          "label": "T013-eight-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:07:13.160724+00:00",
+          "result": "FAILED",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+          "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+          "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+          "test_line": 54
+        },
+        {
+          "label": "T013-three-identity-fixtures-replay2",
+          "started_at": "2026-10-12T17:09:44.693536+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+          "receipt_sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+          "log_sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+          "test_line": 37
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_identity_test.rs",
+      "name": "spec094_mcp_modifie_uniquement_sa_propre_presence",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-three-identity-fixtures-replay2",
+        "started_at": "2026-10-12T17:09:44.693536+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+        "receipt_sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+        "log_sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+        "test_line": 38
+      },
+      "replay_history": [
+        {
+          "label": "T013-eight-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:07:13.160724+00:00",
+          "result": "FAILED",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+          "receipt_sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+          "log_sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8",
+          "test_line": 59
+        },
+        {
+          "label": "T013-three-identity-fixtures-replay2",
+          "started_at": "2026-10-12T17:09:44.693536+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+          "receipt_sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+          "log_sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+          "test_line": 38
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "core_089_reply_test.rs",
+      "name": "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-remaining-legacy-fixtures-replay1",
+        "started_at": "2026-10-12T17:08:00.659390+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.json",
+        "receipt_sha256": "957f8fd7efc0ce420d90bb83b48bfba005770387ca5ccf6dcae62d05e1285983",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+        "log_sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7",
+        "test_line": 32
+      },
+      "replay_history": [
+        {
+          "label": "T013-remaining-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:08:00.659390+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.json",
+          "receipt_sha256": "957f8fd7efc0ce420d90bb83b48bfba005770387ca5ccf6dcae62d05e1285983",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+          "log_sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7",
+          "test_line": 32
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "spec102_threads_test.rs",
+      "name": "spec102_v34_migration_base_pre102_et_contraintes_effectives",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-spec102-v7-expected-replay",
+        "started_at": "2026-10-12T16:55:20.621325+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.json",
+        "receipt_sha256": "3638d86829aa53eb58dd7f1775cd5af00b5081d523ea3e56dda981fb5a4fb4f1",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.log",
+        "log_sha256": "b516dbf4365bce8a11bf16143b86c97cb39db06d1cd595e6b880aa702c24d8e8",
+        "test_line": 33
+      },
+      "replay_history": [
+        {
+          "label": "T013-spec102-v7-expected-replay",
+          "started_at": "2026-10-12T16:55:20.621325+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.json",
+          "receipt_sha256": "3638d86829aa53eb58dd7f1775cd5af00b5081d523ea3e56dda981fb5a4fb4f1",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.log",
+          "log_sha256": "b516dbf4365bce8a11bf16143b86c97cb39db06d1cd595e6b880aa702c24d8e8",
+          "test_line": 33
+        }
+      ]
+    },
+    {
+      "package": "bridget-daemon",
+      "target": "t3code_098_test.rs",
+      "name": "spec098_pont_expose_remet_repond_renouvelle_et_retire",
+      "FULL_original_status": "FAILED",
+      "latest_replay_status": "ok",
+      "latest_PASS": {
+        "label": "T013-remaining-legacy-fixtures-replay1",
+        "started_at": "2026-10-12T17:08:00.659390+00:00",
+        "result": "ok",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.json",
+        "receipt_sha256": "957f8fd7efc0ce420d90bb83b48bfba005770387ca5ccf6dcae62d05e1285983",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+        "log_sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7",
+        "test_line": 47
+      },
+      "replay_history": [
+        {
+          "label": "T013-remaining-legacy-fixtures-replay1",
+          "started_at": "2026-10-12T17:08:00.659390+00:00",
+          "result": "ok",
+          "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.json",
+          "receipt_sha256": "957f8fd7efc0ce420d90bb83b48bfba005770387ca5ccf6dcae62d05e1285983",
+          "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+          "log_sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7",
+          "test_line": 47
+        }
+      ]
+    }
+  ],
+  "original9_resolved_by_targeted_replays": true,
+  "targeted_runs": [
+    {
+      "label": "T013-spec102-v7-expected-replay",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.json",
+        "sha256": "3638d86829aa53eb58dd7f1775cd5af00b5081d523ea3e56dda981fb5a4fb4f1"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.log",
+        "sha256": "b516dbf4365bce8a11bf16143b86c97cb39db06d1cd595e6b880aa702c24d8e8"
+      },
+      "started_at": "2026-10-12T16:55:20.621325+00:00",
+      "seconds": 13.19,
+      "rc": 0,
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--test",
+        "spec102_threads_test",
+        "--features",
+        "test-support",
+        "--",
+        "spec102_v34_migration_base_pre102_et_contraintes_effectives",
+        "--exact",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "targets_completed": [
+        {
+          "target": "spec102_threads_test.rs",
+          "header": "Running tests/spec102_threads_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/spec102_threads_test-0eb7e98049cf1069)",
+          "summaries": [
+            {
+              "line": 35,
+              "state": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 35,
+            "state": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        }
+      ],
+      "tests_exact": [
+        {
+          "package": "bridget-daemon",
+          "target": "spec102_threads_test.rs",
+          "name": "spec102_v34_migration_base_pre102_et_contraintes_effectives",
+          "status": "ok",
+          "line": 33
+        }
+      ],
+      "sources_stable": true,
+      "source_files_count": 222,
+      "source_snapshot_digest_sha256": "cf90f3feba2304a9f0e9358ef9357d3df91c4630c473ab0ce8b023efd5daaab0",
+      "relevant_test_source_sha256": {
+        "crates/bridget-daemon/tests/core_089_contract_test.rs": "f69f7dc63b5ac425c3eec5fab916cc31a746d04d6e70e85c256c98215f387abe",
+        "crates/bridget-daemon/tests/core_089_crash_test.rs": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+        "crates/bridget-daemon/tests/core_089_identity_test.rs": "49d2593295907445a18c83bc660514e36edb4a7ba6d25966f3510b569cfa21ed",
+        "crates/bridget-daemon/tests/core_089_reply_test.rs": "8e4910a2d57296b8768ee5d35a9983253370c93812ef981fbc0006aa12d2c64b",
+        "crates/bridget-daemon/tests/spec102_threads_test.rs": "c2905ebb45ee24477e728b37e0fd80159a7a4cdbde0813c9a792b99a83279f68",
+        "crates/bridget-daemon/tests/support/idempotent.rs": "f0c43ed73e11c1152cddee0f5d510752f36fb40390d360cc072d19ae115acec1",
+        "crates/bridget-daemon/tests/t3code_098_test.rs": "3d6b7d1b60bf062c9609c8ed07433f5cd2f2e65452525f1c7e38c73d7ca95179"
+      },
+      "private_namespace": "/private/tmp/b.qa3g2s8l",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      }
+    },
+    {
+      "label": "T013-eight-legacy-fixtures-replay1",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.json",
+        "sha256": "ab5f22f2868b79adb534d23155bf890d365bd70d5370c2e5018de11ac859c786"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-eight-legacy-fixtures-replay1.log",
+        "sha256": "31bbe8de6d30d48714e7c2e5256839fd0ba2ff728e39962ba8c612ea0c0576b8"
+      },
+      "started_at": "2026-10-12T17:07:13.160724+00:00",
+      "seconds": 12.36,
+      "rc": 101,
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--test",
+        "core_089_contract_test",
+        "--test",
+        "core_089_crash_test",
+        "--test",
+        "core_089_identity_test",
+        "--test",
+        "core_089_reply_test",
+        "--test",
+        "t3code_098_test",
+        "--test",
+        "integration_test",
+        "--features",
+        "test-support",
+        "--",
+        "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+        "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+        "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+        "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+        "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+        "spec094_mcp_modifie_uniquement_sa_propre_presence",
+        "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+        "spec098_pont_expose_remet_repond_renouvelle_et_retire",
+        "test_only_sender_can_cancel_request",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "counts": {
+        "passed": 3,
+        "failed": 3,
+        "ignored": 0
+      },
+      "targets_completed": [
+        {
+          "target": "core_089_contract_test.rs",
+          "header": "Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)",
+          "summaries": [
+            {
+              "line": 35,
+              "state": "ok",
+              "passed": 2,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 35,
+            "state": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "core_089_crash_test.rs",
+          "header": "Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)",
+          "summaries": [
+            {
+              "line": 42,
+              "state": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 42,
+            "state": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "core_089_identity_test.rs",
+          "header": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+          "summaries": [
+            {
+              "line": 68,
+              "state": "FAILED",
+              "passed": 0,
+              "failed": 3,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 68,
+            "state": "FAILED",
+            "passed": 0,
+            "failed": 3,
+            "ignored": 0
+          }
+        }
+      ],
+      "tests_exact": [
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_contract_test.rs",
+          "name": "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+          "status": "ok",
+          "line": 32
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_contract_test.rs",
+          "name": "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+          "status": "ok",
+          "line": 33
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_crash_test.rs",
+          "name": "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+          "status": "ok",
+          "line": 40
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+          "status": "FAILED",
+          "line": 54
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+          "status": "FAILED",
+          "line": 55
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "spec094_mcp_modifie_uniquement_sa_propre_presence",
+          "status": "FAILED",
+          "line": 59
+        }
+      ],
+      "sources_stable": true,
+      "source_files_count": 222,
+      "source_snapshot_digest_sha256": "a052a4bce7e4a5cd9cc04304dcf05ee7d620641bacf5292ade0578ac1b934274",
+      "relevant_test_source_sha256": {
+        "crates/bridget-daemon/tests/core_089_contract_test.rs": "f69f7dc63b5ac425c3eec5fab916cc31a746d04d6e70e85c256c98215f387abe",
+        "crates/bridget-daemon/tests/core_089_crash_test.rs": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+        "crates/bridget-daemon/tests/core_089_identity_test.rs": "b461c9ff3252fa4790886fef27b87a3476c39dfeb303cafde09de8ab7855a52d",
+        "crates/bridget-daemon/tests/core_089_reply_test.rs": "8e4910a2d57296b8768ee5d35a9983253370c93812ef981fbc0006aa12d2c64b",
+        "crates/bridget-daemon/tests/spec102_threads_test.rs": "c2905ebb45ee24477e728b37e0fd80159a7a4cdbde0813c9a792b99a83279f68",
+        "crates/bridget-daemon/tests/support/idempotent.rs": "0b0e7ab1a2cc31147c3de6fb7a6aabd5d693089a66d0f4cf9008001ea2140105",
+        "crates/bridget-daemon/tests/t3code_098_test.rs": "3d6b7d1b60bf062c9609c8ed07433f5cd2f2e65452525f1c7e38c73d7ca95179"
+      },
+      "private_namespace": "/private/tmp/b.1nxaxaez",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      }
+    },
+    {
+      "label": "T013-remaining-legacy-fixtures-replay1",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.json",
+        "sha256": "957f8fd7efc0ce420d90bb83b48bfba005770387ca5ccf6dcae62d05e1285983"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+        "sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7"
+      },
+      "started_at": "2026-10-12T17:08:00.659390+00:00",
+      "seconds": 21.74,
+      "rc": 0,
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--test",
+        "core_089_reply_test",
+        "--test",
+        "t3code_098_test",
+        "--test",
+        "integration_test",
+        "--no-fail-fast",
+        "--features",
+        "test-support",
+        "--",
+        "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+        "spec098_pont_expose_remet_repond_renouvelle_et_retire",
+        "test_only_sender_can_cancel_request",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "counts": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "targets_completed": [
+        {
+          "target": "core_089_reply_test.rs",
+          "header": "Running tests/core_089_reply_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_reply_test-0f9d08e31efe6482)",
+          "summaries": [
+            {
+              "line": 34,
+              "state": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 34,
+            "state": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "integration_test.rs",
+          "header": "Running tests/integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/integration_test-aadd913ed198d05c)",
+          "summaries": [
+            {
+              "line": 41,
+              "state": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 41,
+            "state": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "t3code_098_test.rs",
+          "header": "Running tests/t3code_098_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_098_test-291f5efdcba34642)",
+          "summaries": [
+            {
+              "line": 49,
+              "state": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 49,
+            "state": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        }
+      ],
+      "tests_exact": [
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_reply_test.rs",
+          "name": "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+          "status": "ok",
+          "line": 32
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "integration_test.rs",
+          "name": "test_only_sender_can_cancel_request",
+          "status": "ok",
+          "line": 39
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "t3code_098_test.rs",
+          "name": "spec098_pont_expose_remet_repond_renouvelle_et_retire",
+          "status": "ok",
+          "line": 47
+        }
+      ],
+      "sources_stable": true,
+      "source_files_count": 222,
+      "source_snapshot_digest_sha256": "a052a4bce7e4a5cd9cc04304dcf05ee7d620641bacf5292ade0578ac1b934274",
+      "relevant_test_source_sha256": {
+        "crates/bridget-daemon/tests/core_089_contract_test.rs": "f69f7dc63b5ac425c3eec5fab916cc31a746d04d6e70e85c256c98215f387abe",
+        "crates/bridget-daemon/tests/core_089_crash_test.rs": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+        "crates/bridget-daemon/tests/core_089_identity_test.rs": "b461c9ff3252fa4790886fef27b87a3476c39dfeb303cafde09de8ab7855a52d",
+        "crates/bridget-daemon/tests/core_089_reply_test.rs": "8e4910a2d57296b8768ee5d35a9983253370c93812ef981fbc0006aa12d2c64b",
+        "crates/bridget-daemon/tests/spec102_threads_test.rs": "c2905ebb45ee24477e728b37e0fd80159a7a4cdbde0813c9a792b99a83279f68",
+        "crates/bridget-daemon/tests/support/idempotent.rs": "0b0e7ab1a2cc31147c3de6fb7a6aabd5d693089a66d0f4cf9008001ea2140105",
+        "crates/bridget-daemon/tests/t3code_098_test.rs": "3d6b7d1b60bf062c9609c8ed07433f5cd2f2e65452525f1c7e38c73d7ca95179"
+      },
+      "private_namespace": "/private/tmp/b.725kf7vk",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      }
+    },
+    {
+      "label": "T013-three-identity-fixtures-replay2",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+        "sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+        "sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315"
+      },
+      "started_at": "2026-10-12T17:09:44.693536+00:00",
+      "seconds": 6.89,
+      "rc": 101,
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--test",
+        "core_089_identity_test",
+        "--features",
+        "test-support",
+        "--",
+        "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+        "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+        "spec094_mcp_modifie_uniquement_sa_propre_presence",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "counts": {
+        "passed": 2,
+        "failed": 1,
+        "ignored": 0
+      },
+      "targets_completed": [
+        {
+          "target": "core_089_identity_test.rs",
+          "header": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+          "summaries": [
+            {
+              "line": 45,
+              "state": "FAILED",
+              "passed": 2,
+              "failed": 1,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 45,
+            "state": "FAILED",
+            "passed": 2,
+            "failed": 1,
+            "ignored": 0
+          }
+        }
+      ],
+      "tests_exact": [
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+          "status": "FAILED",
+          "line": 36
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+          "status": "ok",
+          "line": 37
+        },
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "spec094_mcp_modifie_uniquement_sa_propre_presence",
+          "status": "ok",
+          "line": 38
+        }
+      ],
+      "sources_stable": true,
+      "source_files_count": 222,
+      "source_snapshot_digest_sha256": "c0db149c612ec06ee2d75d6842575b399d988a280971a6044963146c6d234add",
+      "relevant_test_source_sha256": {
+        "crates/bridget-daemon/tests/core_089_contract_test.rs": "f69f7dc63b5ac425c3eec5fab916cc31a746d04d6e70e85c256c98215f387abe",
+        "crates/bridget-daemon/tests/core_089_crash_test.rs": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+        "crates/bridget-daemon/tests/core_089_identity_test.rs": "78baae99101ef959027ea847e2a7a707c1388dcb7752fa3c70232c6e7956a0ef",
+        "crates/bridget-daemon/tests/core_089_reply_test.rs": "8e4910a2d57296b8768ee5d35a9983253370c93812ef981fbc0006aa12d2c64b",
+        "crates/bridget-daemon/tests/spec102_threads_test.rs": "c2905ebb45ee24477e728b37e0fd80159a7a4cdbde0813c9a792b99a83279f68",
+        "crates/bridget-daemon/tests/support/idempotent.rs": "0b0e7ab1a2cc31147c3de6fb7a6aabd5d693089a66d0f4cf9008001ea2140105",
+        "crates/bridget-daemon/tests/t3code_098_test.rs": "3d6b7d1b60bf062c9609c8ed07433f5cd2f2e65452525f1c7e38c73d7ca95179"
+      },
+      "private_namespace": "/private/tmp/b.8hfxnrlo",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      }
+    },
+    {
+      "label": "T013-two-incarnations-identity-replay3",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.json",
+        "sha256": "96cf0c6c788914abe27dc9ccc7b2d1f5b299e4fe92243b7ce292abe555e3a5f5"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.log",
+        "sha256": "51d3968a5ac1e52bf3892cc974355276f426399f3d04df2faa9bf27b292075ea"
+      },
+      "started_at": "2026-10-12T17:13:01.301517+00:00",
+      "seconds": 8.72,
+      "rc": 0,
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--test",
+        "core_089_identity_test",
+        "--features",
+        "test-support",
+        "--",
+        "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "targets_completed": [
+        {
+          "target": "core_089_identity_test.rs",
+          "header": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+          "summaries": [
+            {
+              "line": 34,
+              "state": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0
+            }
+          ],
+          "parent_summary": {
+            "line": 34,
+            "state": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0
+          }
+        }
+      ],
+      "tests_exact": [
+        {
+          "package": "bridget-daemon",
+          "target": "core_089_identity_test.rs",
+          "name": "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+          "status": "ok",
+          "line": 32
+        }
+      ],
+      "sources_stable": true,
+      "source_files_count": 222,
+      "source_snapshot_digest_sha256": "654e5df7427827b7b3ca0de4255b95aa2b92f8f75f50585a497e670460bc376d",
+      "relevant_test_source_sha256": {
+        "crates/bridget-daemon/tests/core_089_contract_test.rs": "f69f7dc63b5ac425c3eec5fab916cc31a746d04d6e70e85c256c98215f387abe",
+        "crates/bridget-daemon/tests/core_089_crash_test.rs": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+        "crates/bridget-daemon/tests/core_089_identity_test.rs": "493babbeff137ba6bafd84ab2ce5fd548d3c9bba2179a2693cd40ebcd8a57757",
+        "crates/bridget-daemon/tests/core_089_reply_test.rs": "8e4910a2d57296b8768ee5d35a9983253370c93812ef981fbc0006aa12d2c64b",
+        "crates/bridget-daemon/tests/spec102_threads_test.rs": "c2905ebb45ee24477e728b37e0fd80159a7a4cdbde0813c9a792b99a83279f68",
+        "crates/bridget-daemon/tests/support/idempotent.rs": "0b0e7ab1a2cc31147c3de6fb7a6aabd5d693089a66d0f4cf9008001ea2140105",
+        "crates/bridget-daemon/tests/t3code_098_test.rs": "3d6b7d1b60bf062c9609c8ed07433f5cd2f2e65452525f1c7e38c73d7ca95179"
+      },
+      "private_namespace": "/private/tmp/b.nw6yv723",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      }
+    }
+  ],
+  "support_negative_regression_not_originalFAIL": [
+    {
+      "package": "bridget-daemon",
+      "target": "integration_test.rs",
+      "name": "test_only_sender_can_cancel_request",
+      "status": "ok",
+      "line": 39
+    }
+  ],
+  "R1_PERF_distinct": {
+    "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.json",
+    "receipt_sha256": "f32874930674a433fc97a16e3ca75631116633f277978f4c3fd43b5ce2f1724d",
+    "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.log",
+    "log_sha256": "75f33ca46a9f1979ee371f84f7cd6b024315c83d36067d86131c30d826c84b62",
+    "rc": 0,
+    "passed": 54,
+    "failed": 0,
+    "sources_stable": true,
+    "source_files_count": 222,
+    "test_names_exact": [
+      "daemon::presence_tests::held159_hold_busy",
+      "daemon::presence_tests::held159_hold_alerte_fil",
+      "daemon::presence_tests::held159_hold_fil_t3",
+      "daemon::presence_tests::held159_hold_ferme_identique",
+      "daemon::presence_tests::held159_hold_incident_delegue",
+      "daemon::presence_tests::held159_hold_file_pleine",
+      "daemon::presence_tests::held159_hold_mission_native",
+      "daemon::presence_tests::held159_hold_non_busy_avec_retenus",
+      "daemon::presence_tests::held159_hold_intention_presente",
+      "daemon::presence_tests::held159_hold_non_busy_sans_retenus",
+      "daemon::presence_tests::held159_hold_observation",
+      "daemon::presence_tests::held159_hold_origine_human",
+      "daemon::presence_tests::held159_hold_origine_system",
+      "daemon::presence_tests::held159_hold_sans_turn_attest",
+      "daemon::presence_tests::held159_release_ack_puis_faux_signal_terminal_ne_libere_pas",
+      "daemon::presence_tests::held159_release_balayage_libere_si_repos_reattesté",
+      "daemon::presence_tests::held159_release_declencheurs_concurrents_une_seule_liberation",
+      "daemon::presence_tests::held159_release_demande_close_juste_avant_ne_libere_pas_et_retire",
+      "daemon::presence_tests::held159_release_echeance_de_tour_posee_a_la_liberation",
+      "daemon::presence_tests::held159_release_echeance_juste_avant_ne_libere_pas",
+      "daemon::presence_tests::held159_release_fin_d_execution_libere",
+      "daemon::presence_tests::held159_release_levee_de_pause_reprise_d_abord_puis_liberation",
+      "daemon::presence_tests::held159_release_pas_de_liberation_si_busy",
+      "daemon::presence_tests::held159_release_pause_interruption_fin_de_tour_aucune_liberation",
+      "daemon::presence_tests::held159_release_pause_ne_libere_pas",
+      "daemon::presence_tests::held159_release_reconnexion_libere",
+      "daemon::presence_tests::held159_release_refus_de_guidage_ne_libere_pas",
+      "daemon::presence_tests::held159_release_repos_atteste_libere_le_plus_ancien",
+      "daemon::presence_tests::held159_release_reservation_levee_par_remise_indeterminee",
+      "daemon::presence_tests::held159_release_reservation_levee_apres_ack_et_30s_sans_busy",
+      "daemon::presence_tests::held159_release_reservation_levee_par_true",
+      "daemon::presence_tests::held159_release_reservation_survit_au_redemarrage_du_daemon",
+      "daemon::presence_tests::held159_release_un_seul_par_cycle_de_tour",
+      "daemon::presence_tests::held159_release_wrapper_muet_attend_la_sortie_forcee",
+      "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+      "daemon::presence_tests::held159_sweep_auteur_prevenu",
+      "daemon::presence_tests::held159_sweep_demande_close_retire",
+      "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+      "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+      "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+      "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+      "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+      "daemon::presence_tests::held159_sweep_retenu_non_expire_conserve",
+      "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+      "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont",
+      "daemon::presence_tests::held159_turnstate_busy_period_start_non_remis_a_zero_par_true_repete",
+      "daemon::presence_tests::held159_turnstate_busy_since_inchange",
+      "daemon::presence_tests::held159_turnstate_sortie_forcee_depuis_busy_period_start",
+      "registry::held159_hold_ferme_identique",
+      "daemon::presence_tests::held159_turnstate_wrapper_muet_trois_periodes",
+      "wrapper::native_child_requests155_tests::held159_turnstate_reattestation_d_un_repos_perdu",
+      "wrapper::native_child_requests155_tests::held159_turnstate_reattestation_periodique",
+      "wrapper::native_child_requests155_tests::held159_turnstate_refus_de_guidage_en_plein_tour_n_envoie_pas_false",
+      "wrapper::native_child_requests155_tests::held159_turnstate_refus_sans_tour_en_cours_envoie_false"
+    ],
+    "scope": "Oracles R1/PERF ciblés ; ni une FULL ni54nouveauxPASSàadditionner auFULL historique."
+  },
+  "python098_source_guard": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/fixtures/t3code_server_098.py",
+    "sha256_observed_after_closed_replays": "c69412b0bb801d86fa0a3c9024e5972dd349340a54bd8a0ff3ce44c51326bd21",
+    "observed_at": "2026-10-12T17:16:05.436097+00:00",
+    "not_in_222_Rust_Cargo_source_maps": true,
+    "ROOT_exclusive_mutator_attestation": "ROOT indique aucune mutation WT pendant Cargo ; seul ROOT écrit/applique et exécute",
+    "guard_method_limit": "Empreinte Python actuelle relevée après les replays et revérifiée pendant ce reçu. Les JSON222 ne prouvent pas automatiquement une égalité Python AV/AP de chaque run. Pas de faux compteur223 stable.",
+    "test_execution_proof": "spec098 exact PASS dans T013-remaining-legacy-fixtures-replay1, sourcepythonchargée par /usr/bin/python3 fixture098."
+  },
+  "cleanup15797": {
+    "warning_observed": "nettoyage enfant 15797 non attesté dans la borne",
+    "warning_file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+    "warning_line": 46,
+    "test_result_after_warning": "spec098 ... ok, RC0 du run",
+    "ROOT_attestation": "ROOT rapporte un ps ciblé qui a prouvé PID15797 disparu après098",
+    "independent_ps_executed_by_agent": false,
+    "persisted_ps_receipt_provided_to_agent": false,
+    "limit": "Ne pas présenter le ps ROOT comme un reçu durable indépendant non fourni. Aucune fuite persistante déduite du seul warning."
+  },
+  "pending_not_covered": {
+    "FR009_queue_own": "Nouveau correctif en préparation selonROOT ; T009 RED/GREEN pending",
+    "Converge_tasks_delivery": "ROOT seul décide ; aucun cochage ni livraison crédités ici"
+  },
+  "verdict": "Neuf nomsFULL initialementFAIL ont chacun un dernierPASS ciblé réel, même package/cible. La FULL reste2551P9F75I etRC101 historique, aucune suite2551transposée au dernierhash. R1/PERF54P et supportnégatif1P restent distincts. Le correctifFR009 n’estpasvalidé par ces reçus.",
+  "FULL_GLOBAL_GREEN": false,
+  "agent_tests_build_WT_Git_services_models": false
+}

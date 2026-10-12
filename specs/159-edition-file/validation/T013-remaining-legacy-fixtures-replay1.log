@@ -1,0 +1,51 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+warning: variant `Control` is never constructed
+    --> crates/bridget-daemon/src/daemon.rs:2847:5
+     |
+2846 | enum ObservationJob {
+     |      -------------- variant in this enum
+2847 |     Control(Instant, DeferredControl),
+     |     ^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `due_child_requests` is never used
+   --> crates/bridget-daemon/src/delegation.rs:652:12
+    |
+315 | impl DelegationStore {
+    | -------------------- method in this implementation
+...
+652 |     pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: function `format_cited_paths` is never used
+   --> crates/bridget-daemon/src/native_permissions.rs:218:15
+    |
+218 | pub(crate) fn format_cited_paths(paths: &[String]) -> String {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: `bridget-daemon` (lib) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.30s
+     Running tests/core_089_reply_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_reply_test-0f9d08e31efe6482)
+
+running 1 test
+test cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 7.39s
+
+     Running tests/integration_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/integration_test-aadd913ed198d05c)
+
+running 1 test
+test test_only_sender_can_cancel_request ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.51s
+
+     Running tests/t3code_098_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_098_test-291f5efdcba34642)
+
+running 1 test
+nettoyage enfant 15797 non attesté dans la borne
+test spec098_pont_expose_remet_repond_renouvelle_et_retire ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 9.73s
+
+[build Bridget] Nettoyage : 0.00 Gio de caches ; 18.19 Gio restants (tailles logiques, clones APFS compris)

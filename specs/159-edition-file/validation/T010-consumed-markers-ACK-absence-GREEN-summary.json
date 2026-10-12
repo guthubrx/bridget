@@ -1,0 +1,52 @@
+{
+  "label": "T010-consumed-markers-ACK-absence-GREEN",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_release_panne_entre_transaction_et_push_relivree_par_la_reprise",
+    "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T15:38:14.616690+00:00",
+  "seconds": 31.51,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "2",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-consumed-markers-ACK-absence-GREEN.log",
+  "log_sha256": "5468da328f95b4f0115985fa415e5316f36005aaa95f715d13ec41ff90c15491",
+  "private_ns": "/private/tmp/b.t81l8m60",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-consumed-markers-ACK-absence-GREEN.json",
+  "original_receipt_sha256": "adfc6afdf6dd7f0eb5557d467d44af33b15aadc54190843bfb497dbaebb1ec18",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

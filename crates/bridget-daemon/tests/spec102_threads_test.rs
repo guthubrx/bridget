@@ -80,6 +80,7 @@ fn register138(socket: &Path, agent: &str, instance: &str) -> Client {
         domain: None,
         journal_available: None,
         turn_in_progress: false,
+        turn_attest: false,
     });
     assert!(matches!(
         client.receive(),
@@ -1290,7 +1291,7 @@ fn spec102_v34_migration_base_pre102_et_contraintes_effectives() {
         )
         .unwrap();
     assert_eq!(
-        idempotence, 6,
+        idempotence, 7,
         "la version idempotence n'est pas réaffectée"
     );
     // Contraintes effectives : une entrée d'un non-membre est refusée par la base.

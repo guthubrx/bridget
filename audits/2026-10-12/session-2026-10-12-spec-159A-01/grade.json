@@ -1,0 +1,136 @@
+{
+  "grade": "A",
+  "numeric": 99.95,
+  "date": "2026-10-12",
+  "spec": "159A",
+  "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file ; lot159A fixed64source entries,partialreading,finalR2delta",
+  "authority": {
+    "base_capture": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/manifest.json",
+    "base_capture_sha256": "e4827c152916caf2c95c94c054ec7183e23b492d4efe626ddde7a6eeb96d4dc4",
+    "targeted_final_delta": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-R2-delta.json",
+    "targeted_final_delta_sha256": "682f785135f97499efd6a1f8f7d322171c50ae96169f2bd8da341d02636aeb73",
+    "daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+    "hash_guard_before_after_identical": true,
+    "scope_stage": "fixed64source entries rehashed; ROOT metadata/proofs closure distinct"
+  },
+  "coverage_percent": 2.4565,
+  "coverage_files": {
+    "read": 16,
+    "total": 64
+  },
+  "coverage_lines": {
+    "read": 4275,
+    "total": 174030
+  },
+  "justification": "Note calculée sur les constats vérifiés des plages lues.0C/0H/0M/1LOWduplication assumé ; couverture limitée, aucun succès global de tests ou runtime déduit.",
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 3,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 2,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 2,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 2,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 2,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 2,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 99,
+      "weight": 1,
+      "findings_count": 1,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "Note arithmétique sur constats observés ; domaine non audité intégralement."
+    },
+    "ux": {
+      "grade": "N/A",
+      "numeric": null,
+      "weight": 1,
+      "findings_count": 0,
+      "note": "has_ui=false ; exclu de la moyenne."
+    }
+  },
+  "release_blocked": false,
+  "limitations": [
+    "Couverture partielle par unions de plages effectivement lues ; pas une couverture de tests ni un audit intégral des64fichiers.",
+    "Le daemon f5ff n’est plus courant ; ses anciennes plages ne sont pas automatiquement créditées. Supplément frais18ad98 relu, guard avant/après identique.",
+    "Les03/06 ont contribué à des patches du lot ; leurs contrôles concernés sont auto-revue, pas une revue indépendante.",
+    "FULL unique RC101/neuf échecs reste historique ; replays et diagnostic de ROOT ne donnent aucun GREEN global dans ce rapport.",
+    "GREEN54 précède commentaire/fmt ciblés ; GREEN7List porte le SHA18ad98 courant. Aucun runtime actif, fournisseur réel ou modèle validé par cet audit.",
+    "Pas de scanner sécurité/dépendances, benchmark, EXPLAIN ou mesure cyclomatique exécuté. Les100 arithmétiques ne prouvent pas absence universelle de défauts.",
+    "Capture code/scope précédant clôture documentaire finale et cochage ROOT ; score ne clôt ni les tâches ni la livraison."
+  ]
+}

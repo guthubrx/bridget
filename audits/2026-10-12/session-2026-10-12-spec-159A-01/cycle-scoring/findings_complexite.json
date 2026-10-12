@@ -1,0 +1,494 @@
+{
+  "module": "04",
+  "findings": [],
+  "scope_sha256": "6850eaeced7f122fb921f93d018da6496f8a9655022604f42c1d589e5f956ee9",
+  "scope_reference_files_count": 62,
+  "scope_reference_note": "scope présent dans le CACHE à la clôture ; la capture finale64/460 est assemblée par le reporter ROOT",
+  "read_at_utc": "2026-10-12T17:14:05.722297+00:00",
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+      "ranges": [
+        [
+          9357,
+          9431
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T17:10:56.454105Z",
+      "hash_after": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+      "hash_unchanged_at_close": true
+    }
+  ],
+  "historical_read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "ranges": [
+        [
+          240,
+          291
+        ],
+        [
+          5315,
+          5388
+        ],
+        [
+          6085,
+          6270
+        ],
+        [
+          6760,
+          6807
+        ],
+        [
+          9145,
+          9202
+        ],
+        [
+          9335,
+          9480
+        ],
+        [
+          11105,
+          11232
+        ],
+        [
+          11290,
+          11398
+        ],
+        [
+          11640,
+          11770
+        ],
+        [
+          12970,
+          13069
+        ],
+        [
+          24310,
+          24366
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:53:20.800083Z",
+      "scope_member": true,
+      "hash_after": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+      "hash_unchanged_at_close": false,
+      "note": "sources du gel cycle1 ; changement ROOT postlecture distinct",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "ranges": [
+        [
+          1,
+          1215
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:52:37.904623Z",
+      "scope_member": true,
+      "hash_after": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "ranges": [
+        [
+          883,
+          1038
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:52:37.905282Z",
+      "scope_member": true,
+      "hash_after": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store.rs",
+      "sha256": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+      "ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.183880Z",
+      "scope_member": true,
+      "hash_after": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "ranges": [
+        [
+          1,
+          106
+        ],
+        [
+          332,
+          386
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.184445Z",
+      "scope_member": true,
+      "hash_after": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "ranges": [
+        [
+          4396,
+          4451
+        ],
+        [
+          4723,
+          4760
+        ],
+        [
+          6620,
+          6650
+        ],
+        [
+          6710,
+          6741
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.185841Z",
+      "scope_member": true,
+      "hash_after": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": true,
+      "hash_after": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    },
+    {
+      "file": "crates/bridget-daemon/src/receipt_store.rs",
+      "sha256": "94bc4ac767d35e5f98154e96d9f512297fd7ce294c3e9f6a861113d986643f61",
+      "ranges": [
+        [
+          76,
+          187
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.186067Z",
+      "scope_member": false,
+      "hash_after": "94bc4ac767d35e5f98154e96d9f512297fd7ce294c3e9f6a861113d986643f61",
+      "hash_unchanged_at_close": true,
+      "note": "lecture contextuelle hors delta, non créditée au périmètre",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "ranges": [
+        [
+          250,
+          284
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": false,
+      "hash_after": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "hash_unchanged_at_close": true,
+      "note": "lecture contextuelle hors delta, non créditée au périmètre",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    },
+    {
+      "file": "specs/159-edition-file/research.md",
+      "sha256": "cede674e3f28e439042783d59edc94c5c4d2072dd103252098dbf1725edb303b",
+      "ranges": [
+        [
+          178,
+          185
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": true,
+      "hash_after": "e4529d168d00e1e5290376dd614887632873d0bf4cdd82d827b714a3a5ccccfd",
+      "hash_unchanged_at_close": false,
+      "note": "sources du gel cycle1 ; changement ROOT postlecture distinct",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    },
+    {
+      "file": "docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "ranges": [
+        [
+          32,
+          47
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": true,
+      "hash_after": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    }
+  ],
+  "historical_coverage": {
+    "scope_files": 62,
+    "scope_hunks": 443,
+    "source_files_with_ranges": 11,
+    "scope_files_with_ranges": 9,
+    "fully_read_source_current_sides_hunks": [
+      15,
+      16,
+      17,
+      18,
+      20,
+      28,
+      29,
+      30,
+      31,
+      35,
+      36,
+      37,
+      38,
+      40,
+      219,
+      220,
+      221,
+      222,
+      223,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234,
+      235,
+      236,
+      237,
+      238,
+      239,
+      240,
+      292,
+      294,
+      302,
+      305,
+      306,
+      316,
+      319,
+      326,
+      327
+    ],
+    "partially_read_source_current_sides_hunks": [
+      14,
+      44,
+      55,
+      241,
+      427,
+      443
+    ],
+    "coverage_kind": "plages de sources courantes du gel initial ; ne signifie pas lecture des côtés supprimés du patch ni audit complet des fichiers",
+    "scope_lines_read": 3073,
+    "scope_lines_total": 172871,
+    "full_scope_coverage_percent": null
+  },
+  "historical_scope_sha256": "6850eaeced7f122fb921f93d018da6496f8a9655022604f42c1d589e5f956ee9",
+  "fresh_coverage": {
+    "files": 1,
+    "ranges": [
+      [
+        9357,
+        9431
+      ]
+    ],
+    "lines": 75,
+    "coverage_percent": null,
+    "note": "delta sweep seul ; pas sept audits frais ni fichier daemon entier"
+  },
+  "warnings": [
+    "Relecture finale limitée au fragment sweep modifié ; les autres lectures C1 sont historiques et séparées.",
+    "Aucune couverture des autres plages daemon58e93 créditée comme lecture actuelle de daemonf5ff16.",
+    "Les fichiers C1 dont SHA ne change pas gardent leurs plages historiques ; aucun crédit frais automatique.",
+    "Les54 tests GREEN concernent la version48b07 ; f5ff16 suit seulement commentaire/fmt selon ROOT. Aucun second run demandé.",
+    "Aucun benchmark/profiling/EXPLAIN/DB/provider/Cargo/test/service exécuté par cet owner.",
+    "Les données SC004 sont les mêmes preuves privées historiques : pas gain mesuré après PERF001, pas p95/p99 production.",
+    "La liste est limitée200 résultats, pas tous les candidats ; busy_timeout2s et balayage SQL global restent des limites documentées.",
+    "Les défauts métier R1 relèvent des modules03/06 ; aucune copie de leurs findings ici.",
+    "Aucun grade global ni couverture100%. La FULL RC101 historique n’est pas remplacée par un GLOBAL_GREEN."
+  ],
+  "metrics": {
+    "SC004": {
+      "proof_path": "/Users/moi/.cache/bridget-code159A-T010-20261012/SC004-latence-preuve.json",
+      "proof_sha256": "5fa8698019f921244926dbd68ba306cd4dd055341f5096cd8d37ddb7c9cd0acb",
+      "before_p95_ns": 27763792,
+      "after_p95_ns": 1028132375,
+      "delta_ns": 1000368583,
+      "threshold_ns": 250000000,
+      "samples_each": 20,
+      "nearest_rank": 19,
+      "measurement": "provider_before_emit_turn_completed_to_next_turn_start_received",
+      "daemon_idle_attestation_measured": false,
+      "default": "held_queue=false",
+      "production_latency_p95_ms": null,
+      "production_latency_p99_ms": null
+    },
+    "new_measures": null
+  },
+  "positives": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 9357,
+      "description": "Les IDs ne sont collectés qu’après un COMMIT réussi ; un seul retain après le Result local, y compris en erreur tardive."
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 9357,
+      "description": "Les SQL, motifs et transactions existantes restent inchangés ; HashSet std réemploie l’import existant."
+    }
+  ],
+  "resolved_findings": [
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "HIGH",
+      "counter_audit": "CONFIRMED",
+      "counter_audit_evidence": "Contre-audit indépendant git154, verdict CONFIRMED transmis par ROOT ; H=P=10000 implique 50005000 visites, calcul analytique, aucun banc.",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 9404,
+      "title": "Balayage retenu : parcours répété des suivis mémoire en O(H×P)",
+      "description": "Chaque notice de retrait committée déclenche un retain complet de pending_replies dans la boucle globale des retenus. Pour H retraits et P suivis, le travail mémoire est O(H×P), et devient quadratique si les suivis sont tous retenus. Le retain précédent conserve ces suivis via held_ids ; queue_capacity borne chaque destinataire, pas P global. La documentation R13 et le commentaire du balayage omettent ce terme.",
+      "evidence": "            if let Some(notice) = st\n                .idempotency\n                .settle_held(&delivery_id, reason, now)\n                .map_err(|error| error.to_string())?\n            {\n                st.held_ids.remove(&notice.message_id);\n                st.pending_replies\n                    .retain(|pending| pending.msg_id != notice.message_id);",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Dans un namespace isolé avec held_queue=true et queue_capacity=H, un agent attesté envoie H demandes idempotentes reply=true sans intention à une cible busy/turn_attest. Les demandes restent Held et présentes dans pending_replies. À leur clôture/expiration simultanée, collect_reminder_actions appelle sweep_held ; H retraits committés filtrent P puis P−1 ... suivis. Pour H=P=10000, somme analytique10000×10001/2=50005000 visites, sans mesure de latence.",
+      "impact": "Travail RAM superlinéaire sous le mutex State au tick des relances et à l’entretien. Le coût annoncé omet P. Aucun incident ni temps de blocage production mesuré.",
+      "path_type": "hot",
+      "complexity_current": "RAM O(H×P), plus SQL/mémoire documentés O(N+B+H(log N+log R)+L)",
+      "complexity_target": "RAM O(P+S), S notices committées ; SQL et revalidations inchangés",
+      "remediation": "Collecter les message_id des notices après chaque COMMIT dans le HashSet std existant ; retirer held_ids immédiatement, puis filtrer pending_replies une fois. Exécuter ce nettoyage aussi quand une erreur SQL/JSON tardive survient après des COMMIT réussis.",
+      "remediation_code": "/// FR006 : deux puits (tick des relances et entretien), un retrait transactionnel.\n/// O(N + B + H(log N + log R) + L + P), N lignes SQL, R demandes, H retenus,\n/// P suivis mémoire ; les identifiants retirés sont regroupés pour un seul retain.\n/// B enveloppes et L dépôts liés ; le balayage global n’est pas un scan borné par LIMIT.\n/// Le caller garde State ; la mémoire ne change qu'après le COMMIT de settle_held.\nfn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {\n    let held = {\n        let mut statement = st\n            .store\n            .connection()\n            .prepare(\n                \"SELECT d.delivery_id, d.message_bytes, d.expires_at, r.expires_at\n             FROM send_deliveries d JOIN idempotency_records r\n               ON r.issuer_scope=d.issuer_scope AND r.operation_kind=d.operation_kind\n                 AND r.idempotency_key=d.idempotency_key\n             WHERE d.phase='held' ORDER BY d.queue_rank\",\n            )\n            .map_err(|error| error.to_string())?;\n        let rows = statement\n            .query_map([], |row| {\n                Ok((\n                    row.get::<_, String>(0)?,\n                    row.get::<_, Vec<u8>>(1)?,\n                    row.get::<_, i64>(2)?,\n                    row.get::<_, i64>(3)?,\n                ))\n            })\n            .map_err(|error| error.to_string())?;\n        rows.collect::<Result<Vec<_>, _>>()\n            .map_err(|error| error.to_string())?\n    };\n    let mut settled_ids = HashSet::new();\n    // Même pattern Result local que wait_request : les erreurs SQL restent inchangées.\n    let result = (|| -> Result<(), String> {\n        for (delivery_id, bytes, delivery_expires, record_expires) in held {\n            let message: bridget_core::BridgetMessage = serde_json::from_slice(&bytes)\n                .map_err(|error| format!(\"retenu {delivery_id} illisible: {error}\"))?;\n            let reason = if delivery_expires <= now || record_expires <= now {\n                Some(\"expired_in_queue\")\n            } else if message.reply {\n                let request = st\n                    .store\n                    .get_request(&message.id)\n                    .map_err(|error| error.to_string())?;\n                (!request.is_some_and(|request| {\n                    request.state == \"open\"\n                        && request.sender == message.from\n                        && request.target == message.to\n                        && request.deadline_at > now\n                }))\n                .then_some(\"request_closed_in_queue\")\n            } else {\n                None\n            };\n            if let Some(reason) = reason {\n                if let Some(notice) = st\n                    .idempotency\n                    .settle_held(&delivery_id, reason, now)\n                    .map_err(|error| error.to_string())?\n                {\n                    st.held_ids.remove(&notice.message_id);\n                    settled_ids.insert(notice.message_id);\n                }\n            }\n        }\n        Ok(())\n    })();\n    // Une erreur tardive ne doit pas conserver les suivis des COMMIT déjà réussis.\n    if !settled_ids.is_empty() {\n        st.pending_replies\n            .retain(|pending| !settled_ids.contains(&pending.msg_id));\n    }\n    result\n}\n",
+      "verification": "ROOT réemploie les tests planifiés held159_sweep_* et held159_sweep_pending_replies_retire_apres_commit : rollback conserve mémoire, COMMIT retire mémoire, conservation des motifs et états SQL. Relire les branches de retour : un seul retain après la boucle, même si la closure rend Err. Aucun nouveau test, scénario ou banc requis par cet audit.",
+      "metric_impacted": "nombre de visites des suivis RAM et durée de section critique State ; durée non mesurée",
+      "qualitative_gain": "H parcours complets deviennent un seul parcours ; mémoire auxiliaire O(S)",
+      "rollback": "Si un invariant SQL/mémoire des tests existants régresse, ROOT retire le seul hunk PERF-001 ; aucune migration ni donnée à restaurer, défaut held_queue=false conservé.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "status": "fixed",
+      "references": [
+        "Constitution Article XVIII",
+        "audit v14 modules01/04/10/11",
+        "specs/159-edition-file/research.md:180"
+      ],
+      "source_sha256_at_detection": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "fingerprint": "abbdc6308f20",
+      "fixed_at": "2026-10-12T17:14:05.722297+00:00",
+      "resolution": {
+        "source_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+        "source_range": [
+          9357,
+          9431
+        ],
+        "fresh_read_at_utc": "2026-10-12T17:10:56.454105Z",
+        "evidence": "    })();\n    // Une erreur tardive ne doit pas conserver les suivis des COMMIT déjà réussis.\n    if !settled_ids.is_empty() {\n        st.pending_replies\n            .retain(|pending| !settled_ids.contains(&pending.msg_id));\n    }\n    result\n}",
+        "verification_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.json",
+        "verification_receipt_sha256": "f32874930674a433fc97a16e3ca75631116633f277978f4c3fd43b5ce2f1724d",
+        "test_results": [
+          [
+            "ok",
+            "54",
+            "0",
+            "0"
+          ]
+        ],
+        "rc": 0,
+        "seconds": 14.56,
+        "log_sha256": "75f33ca46a9f1979ee371f84f7cd6b024315c83d36067d86131c30d826c84b62",
+        "tested_daemon_sha256": "48b07b2070564a644173f4081295b0ce1737c08ec26d9146cb94a0a737828b7d",
+        "post_green_change": "ROOT : commentaire déplacé et rustfmt du seul daemon ; lecture finale sur f5ff16, aucune nouvelle logique ni performance mesurée."
+      }
+    }
+  ]
+}

@@ -1,0 +1,1095 @@
+{
+  "scope": "Reçu de progression159A T007/T008 uniquement, preuves déjà exécutées par ROOT",
+  "generated_at": "2026-10-12T15:01:30.011348+00:00",
+  "runs": [
+    {
+      "label": "T007-release-ACK-GREEN",
+      "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T007-release-ACK-GREEN.json",
+      "receipt_sha256": "68be92da4692d5b22db9d91f4ddbf65ad5badbcce7b4c0270f014f4d6d1d0865",
+      "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T007-release-ACK-GREEN.log",
+      "log_sha256": "5ac2954bd16a0b9a0186711ed0d4886024c05aa612e22cfdc6f19872c0f9d539",
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "held159_release_",
+        "held159_acked_at_",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T14:57:49.812536+00:00",
+      "seconds": 31.93,
+      "rc": 0,
+      "counts": {
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0
+      },
+      "tests": [
+        {
+          "name": "daemon::presence_tests::held159_release_balayage_libere_si_repos_reattesté",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_ack_puis_faux_signal_terminal_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_declencheurs_concurrents_une_seule_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_demande_close_juste_avant_ne_libere_pas_et_retire",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_echeance_de_tour_posee_a_la_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_echeance_juste_avant_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_fin_d_execution_libere",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_levee_de_pause_reprise_d_abord_puis_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_pas_de_liberation_si_busy",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_pause_interruption_fin_de_tour_aucune_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_pause_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reconnexion_libere",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_refus_de_guidage_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_repos_atteste_libere_le_plus_ancien",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_levee_par_remise_indeterminee",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_levee_apres_ack_et_30s_sans_busy",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_levee_par_true",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_survit_au_redemarrage_du_daemon",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_un_seul_par_cycle_de_tour",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "idempotency::send_delivery::held159_acked_at_premier_ack_et_rejeu",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_wrapper_muet_attend_la_sortie_forcee",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        }
+      ],
+      "source_guard": {
+        "sources_stable_attested": true,
+        "before_after_maps_verified_identical": true,
+        "source_files_count": 222,
+        "maps_canonical_sha256": "d748b733dd28381a71a0927a2bb31e30949de634c52662dc66674c605e91361f",
+        "relevant_source_sha256": {
+          "crates/bridget-daemon/src/daemon.rs": "f898e7071a0adb68d4b0b441c1cd22f0d603f0d0c73ecc5c8ea56a2ef4019c95",
+          "crates/bridget-daemon/src/idempotency/send_delivery.rs": "6e185e9f2a4673caf703b611d72247d955e91954f5bc7dc8bd4a339cab41f512",
+          "crates/bridget-daemon/src/idempotency.rs": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+          "crates/bridget-daemon/src/registry.rs": "493383fa5fc6686654939287a5839439a988acde83f2cafb40c76c3b8e9db5bc"
+        }
+      },
+      "private_namespace": "/private/tmp/b.t0eb419e",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      },
+      "actual_failures": []
+    },
+    {
+      "label": "T008-sweep-RED",
+      "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-RED.json",
+      "receipt_sha256": "acf08bc5ee4be91f25fdab80162217d9c60c052386505cc9f78efef6ee4afe94",
+      "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-RED.log",
+      "log_sha256": "5eab48b79959e0c46760275dc3dfbdd1b19b75cf060b51c1150a445af34ece86",
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "held159_sweep_",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T14:58:42.439308+00:00",
+      "seconds": 20.96,
+      "rc": 101,
+      "counts": {
+        "passed": 1,
+        "failed": 10,
+        "ignored": 0
+      },
+      "tests": [
+        {
+          "name": "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_close_retire",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_auteur_prevenu",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retenu_non_expire_conserve",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        }
+      ],
+      "source_guard": {
+        "sources_stable_attested": true,
+        "before_after_maps_verified_identical": true,
+        "source_files_count": 222,
+        "maps_canonical_sha256": "d2f1fb9c426633c14b235dc0ce77cb9f717a05f25fd762bbe2b6060af142ee99",
+        "relevant_source_sha256": {
+          "crates/bridget-daemon/src/daemon.rs": "b5a2986d8e854d78c9b6a2973dd17603c1dde29a5606964859029117494ebf7d",
+          "crates/bridget-daemon/src/idempotency/send_delivery.rs": "6e185e9f2a4673caf703b611d72247d955e91954f5bc7dc8bd4a339cab41f512",
+          "crates/bridget-daemon/src/idempotency.rs": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+          "crates/bridget-daemon/src/registry.rs": "493383fa5fc6686654939287a5839439a988acde83f2cafb40c76c3b8e9db5bc"
+        }
+      },
+      "private_namespace": "/private/tmp/b.n7navzyp",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      },
+      "actual_failures": [
+        {
+          "name": "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+          "location": "crates/bridget-daemon/src/daemon.rs:24145:13",
+          "actual_failure": "aucun Gentle/Firm/Deferred pendant held"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_close_retire",
+          "location": "crates/bridget-daemon/src/daemon.rs:23898:9",
+          "actual_failure": "assertion `left == right` failed\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+          "location": "crates/bridget-daemon/src/daemon.rs:23916:9",
+          "actual_failure": "assertion `left == right` failed\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+          "location": "crates/bridget-daemon/src/daemon.rs:23881:9",
+          "actual_failure": "assertion `left == right` failed\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_auteur_prevenu",
+          "location": "crates/bridget-daemon/src/daemon.rs:23951:14",
+          "actual_failure": "avis réel attendu sur la socket primaire auteur: Os { code: 35, kind: WouldBlock, message: \"Resource temporarily unavailable\" }"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+          "location": "crates/bridget-daemon/src/daemon.rs:24170:9",
+          "actual_failure": "assertion failed: held159_sweep_cycle(&f, 20).is_empty()"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+          "location": "crates/bridget-daemon/src/daemon.rs:24287:9",
+          "actual_failure": "assertion failed: collect_reminder_actions(&mut st,\n        started + Duration::from_secs(20)).is_empty()"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont",
+          "location": "crates/bridget-daemon/src/daemon.rs:24027:13",
+          "actual_failure": "assertion `left == right` failed: cause=answered\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+          "location": "crates/bridget-daemon/src/daemon.rs:24108:13",
+          "actual_failure": "pas de retrait mémoire après rollback, même au-delà du délai+grâce"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+          "location": "crates/bridget-daemon/src/daemon.rs:23984:9",
+          "actual_failure": "assertion failed: matches!(f.shared.lock().unwrap().idempotency.lookup(&key,\n    unix_now_secs()).unwrap(), crate::idempotency::LookupResult::Rejected\n    { reason, .. } if reason == \"request_closed_in_queue\")"
+        }
+      ]
+    },
+    {
+      "label": "T008-real-handler-RED-registry-GREEN",
+      "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-real-handler-RED-registry-GREEN.json",
+      "receipt_sha256": "647d8a4e71a44a1c4e4ae8d6927b058ca397d297778d8333ffd4b6697f658c49",
+      "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-real-handler-RED-registry-GREEN.log",
+      "log_sha256": "363c527e0e4d784f4e1bc05d1bf77b9da64c0ed24ed752b3a52380fce6f8b55d",
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "held159_sweep_",
+        "held159_hold_ferme_identique",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T15:07:32.396504+00:00",
+      "seconds": 23.55,
+      "rc": 101,
+      "execution_kind": "runtime_assertion_RED",
+      "counts": {
+        "passed": 3,
+        "failed": 10,
+        "ignored": 0
+      },
+      "tests": [
+        {
+          "name": "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_hold_ferme_identique",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_close_retire",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_auteur_prevenu",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retenu_non_expire_conserve",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "registry::held159_hold_ferme_identique",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+          "result": "FAILED",
+          "package": "bridget-daemon",
+          "target": "lib"
+        }
+      ],
+      "compile_errors": [],
+      "actual_failures": [
+        {
+          "name": "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+          "location": "crates/bridget-daemon/src/daemon.rs:24123:13",
+          "actual_failure": "aucun Gentle/Firm/Deferred pendant held"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_close_retire",
+          "location": "crates/bridget-daemon/src/daemon.rs:23874:9",
+          "actual_failure": "assertion `left == right` failed\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+          "location": "crates/bridget-daemon/src/daemon.rs:23892:9",
+          "actual_failure": "assertion `left == right` failed\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+          "location": "crates/bridget-daemon/src/daemon.rs:23855:9",
+          "actual_failure": "assertion `left == right` failed\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_auteur_prevenu",
+          "location": "crates/bridget-daemon/src/daemon.rs:23927:14",
+          "actual_failure": "avis réel attendu sur la socket primaire auteur: Os { code: 35, kind: WouldBlock, message: \"Resource temporarily unavailable\" }"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+          "location": "crates/bridget-daemon/src/daemon.rs:24148:9",
+          "actual_failure": "assertion failed: held159_sweep_cycle(&f, 20).is_empty()"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+          "location": "crates/bridget-daemon/src/daemon.rs:24266:9",
+          "actual_failure": "assertion failed: collect_reminder_actions(&mut st,\n        started + Duration::from_secs(20)).is_empty()"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont",
+          "location": "crates/bridget-daemon/src/daemon.rs:24003:13",
+          "actual_failure": "assertion `left == right` failed: cause=answered\n  left: \"held\"\n right: \"cancelled\""
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+          "location": "crates/bridget-daemon/src/daemon.rs:24086:13",
+          "actual_failure": "pas de retrait mémoire après rollback, même au-delà du délai+grâce"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+          "location": "crates/bridget-daemon/src/daemon.rs:23960:9",
+          "actual_failure": "assertion failed: matches!(f.shared.lock().unwrap().idempotency.lookup(&key,\n    unix_now_secs()).unwrap(), crate::idempotency::LookupResult::Rejected\n    { category, reason, .. } if category == \"request_closed_in_queue\" &&\n    reason.contains(\"request_closed_in_queue\"))"
+        }
+      ],
+      "source_guard": {
+        "sources_stable_attested": true,
+        "before_after_maps_verified_identical": true,
+        "source_files_count": 222,
+        "maps_canonical_sha256": "60fa6f4991178a4aa6152f9e6dd8e5c0c8d6d7d68180563530e47fcb96ef5f9e",
+        "relevant_source_sha256": {
+          "crates/bridget-daemon/src/daemon.rs": "ae48e3280f7e308cc95f293b35e53cbc53fae2633a965c432deefbc219652a54",
+          "crates/bridget-daemon/src/idempotency/send_delivery.rs": "6e185e9f2a4673caf703b611d72247d955e91954f5bc7dc8bd4a339cab41f512",
+          "crates/bridget-daemon/src/registry.rs": "bb9d17122e1e3c727b0e9c89951731891b47dc70b54cd4c0560ac33d384362d7"
+        }
+      },
+      "private_namespace": "/private/tmp/b.zsdqvjdx",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      },
+      "T008_cohort": {
+        "passed": 1,
+        "failed": 10,
+        "test_count": 11
+      },
+      "closed_config_support": [
+        {
+          "name": "daemon::presence_tests::held159_hold_ferme_identique",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "registry::held159_hold_ferme_identique",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        }
+      ]
+    },
+    {
+      "label": "T008-sweep-GREEN-T007-regression",
+      "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-GREEN-T007-regression.json",
+      "receipt_sha256": "0e6cab26e46ea6557808794b78b7f3160f9a74583a607e5236ee663b5e4d8b2a",
+      "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-GREEN-T007-regression.log",
+      "log_sha256": "2c0622658433d6d5c0c0f263652d55605e03f1a1c9892da343916e5242076dbc",
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "held159_sweep_",
+        "held159_release_",
+        "held159_acked_at_",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T15:09:17.482140+00:00",
+      "seconds": 6.29,
+      "rc": 101,
+      "execution_kind": "compile_failure_no_tests",
+      "counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "tests": [],
+      "compile_errors": [
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 8242,
+          "column": 43
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 8808,
+          "column": 39
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 8810,
+          "column": 39
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 11952,
+          "column": 39
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 13196,
+          "column": 39
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 13211,
+          "column": 39
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 13353,
+          "column": 43
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 13403,
+          "column": 39
+        },
+        {
+          "code": "E0308",
+          "message": "mismatched types",
+          "file": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+          "line": 948,
+          "column": 39
+        }
+      ],
+      "actual_failures": [],
+      "source_guard": {
+        "sources_stable_attested": true,
+        "before_after_maps_verified_identical": true,
+        "source_files_count": 222,
+        "maps_canonical_sha256": "71a905616c5d0e71aa6949580a259c8d8ff149b98c524a28a431d1b56411477f",
+        "relevant_source_sha256": {
+          "crates/bridget-daemon/src/daemon.rs": "a3ba97f2c1d1897beef098b20edddb0c128c8e582dd8dbeef503eb8c2fca85f2",
+          "crates/bridget-daemon/src/idempotency/send_delivery.rs": "1d887990129db50ca5cb5db56b8ac8e4071fb0fbd77c13865a0696266357a5f0",
+          "crates/bridget-daemon/src/registry.rs": "bb9d17122e1e3c727b0e9c89951731891b47dc70b54cd4c0560ac33d384362d7"
+        }
+      },
+      "private_namespace": "/private/tmp/b.b3lt73lz",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      }
+    },
+    {
+      "label": "T008-sweep-GREEN-T007-regression-mutable-calls",
+      "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-GREEN-T007-regression-mutable-calls.json",
+      "receipt_sha256": "e1119dbcb1bf4aa1f86b1f11cda2f15c232f66dca8a83c167669c38c80630898",
+      "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-GREEN-T007-regression-mutable-calls.log",
+      "log_sha256": "a362141551794139c9109f87ed5391735f84517c9f68a1ec7f3a728d6bebedde",
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "held159_sweep_",
+        "held159_release_",
+        "held159_acked_at_",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T15:13:20.794789+00:00",
+      "seconds": 30.88,
+      "rc": 0,
+      "execution_kind": "targeted_GREEN",
+      "counts": {
+        "passed": 32,
+        "failed": 0,
+        "ignored": 0
+      },
+      "tests": [
+        {
+          "name": "daemon::presence_tests::held159_release_ack_puis_faux_signal_terminal_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_balayage_libere_si_repos_reattesté",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_declencheurs_concurrents_une_seule_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_demande_close_juste_avant_ne_libere_pas_et_retire",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_echeance_de_tour_posee_a_la_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_echeance_juste_avant_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_fin_d_execution_libere",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_levee_de_pause_reprise_d_abord_puis_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_pas_de_liberation_si_busy",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_pause_interruption_fin_de_tour_aucune_liberation",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_pause_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reconnexion_libere",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_refus_de_guidage_ne_libere_pas",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_repos_atteste_libere_le_plus_ancien",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_levee_par_remise_indeterminee",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_levee_apres_ack_et_30s_sans_busy",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_levee_par_true",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_reservation_survit_au_redemarrage_du_daemon",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_un_seul_par_cycle_de_tour",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_release_wrapper_muet_attend_la_sortie_forcee",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_auteur_prevenu",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_close_retire",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retenu_non_expire_conserve",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "idempotency::send_delivery::held159_acked_at_premier_ack_et_rejeu",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        },
+        {
+          "name": "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont",
+          "result": "ok",
+          "package": "bridget-daemon",
+          "target": "lib"
+        }
+      ],
+      "cohorts_exact": {
+        "T007_release": [
+          "daemon::presence_tests::held159_release_ack_puis_faux_signal_terminal_ne_libere_pas",
+          "daemon::presence_tests::held159_release_balayage_libere_si_repos_reattesté",
+          "daemon::presence_tests::held159_release_declencheurs_concurrents_une_seule_liberation",
+          "daemon::presence_tests::held159_release_demande_close_juste_avant_ne_libere_pas_et_retire",
+          "daemon::presence_tests::held159_release_echeance_de_tour_posee_a_la_liberation",
+          "daemon::presence_tests::held159_release_echeance_juste_avant_ne_libere_pas",
+          "daemon::presence_tests::held159_release_fin_d_execution_libere",
+          "daemon::presence_tests::held159_release_levee_de_pause_reprise_d_abord_puis_liberation",
+          "daemon::presence_tests::held159_release_pas_de_liberation_si_busy",
+          "daemon::presence_tests::held159_release_pause_interruption_fin_de_tour_aucune_liberation",
+          "daemon::presence_tests::held159_release_pause_ne_libere_pas",
+          "daemon::presence_tests::held159_release_reconnexion_libere",
+          "daemon::presence_tests::held159_release_refus_de_guidage_ne_libere_pas",
+          "daemon::presence_tests::held159_release_repos_atteste_libere_le_plus_ancien",
+          "daemon::presence_tests::held159_release_reservation_levee_par_remise_indeterminee",
+          "daemon::presence_tests::held159_release_reservation_levee_apres_ack_et_30s_sans_busy",
+          "daemon::presence_tests::held159_release_reservation_levee_par_true",
+          "daemon::presence_tests::held159_release_reservation_survit_au_redemarrage_du_daemon",
+          "daemon::presence_tests::held159_release_un_seul_par_cycle_de_tour",
+          "daemon::presence_tests::held159_release_wrapper_muet_attend_la_sortie_forcee"
+        ],
+        "T007_ACK": [
+          "idempotency::send_delivery::held159_acked_at_premier_ack_et_rejeu"
+        ],
+        "T008_sweep": [
+          "daemon::presence_tests::held159_sweep_aucun_rappel_palier_1_2_pour_une_demande_retenue",
+          "daemon::presence_tests::held159_sweep_auteur_prevenu",
+          "daemon::presence_tests::held159_sweep_demande_close_retire",
+          "daemon::presence_tests::held159_sweep_demande_expiree_retire",
+          "daemon::presence_tests::held159_sweep_enregistrement_expire_retire",
+          "daemon::presence_tests::held159_sweep_palier_3_ferme_la_demande_et_le_balayage_retire_le_message",
+          "daemon::presence_tests::held159_sweep_held_ids_reconstruit_au_demarrage",
+          "daemon::presence_tests::held159_sweep_pending_replies_retire_apres_commit",
+          "daemon::presence_tests::held159_sweep_retenu_non_expire_conserve",
+          "daemon::presence_tests::held159_sweep_retrait_resultat_envoi_rejected_avec_raison",
+          "daemon::presence_tests::held159_sweep_parite_avec_les_causes_du_pont"
+        ]
+      },
+      "same_names_as_previous_cohorts_verified": true,
+      "source_guard": {
+        "sources_stable_attested": true,
+        "before_after_maps_verified_identical": true,
+        "source_files_count": 222,
+        "maps_canonical_sha256": "1f2c9b43a4d12b0322ef3ed4e12816ab23d46c300f0ac78a89aca5e2d030562f",
+        "relevant_source_sha256": {
+          "crates/bridget-daemon/src/daemon.rs": "a3ba97f2c1d1897beef098b20edddb0c128c8e582dd8dbeef503eb8c2fca85f2",
+          "crates/bridget-daemon/src/idempotency/send_delivery.rs": "a274400a10eb1e1ca242556dd6733983570be99317cec6b69b96cdd6c5dc6893",
+          "crates/bridget-daemon/src/registry.rs": "bb9d17122e1e3c727b0e9c89951731891b47dc70b54cd4c0560ac33d384362d7"
+        }
+      },
+      "private_namespace": "/private/tmp/b.cwqo4le9",
+      "limits": {
+        "cargo_jobs": 2,
+        "test_threads": 2,
+        "nice": 10
+      },
+      "actual_failures": []
+    }
+  ],
+  "status": {
+    "T007": "GREEN ciblé et régression acquis : mêmes20 oracles release + ACK1 PASS dans le dernier run32P0F",
+    "T008": "GREEN ciblé acquis : mêmes11 oracles sweep PASS; RC0/30,88s sur le run32P0F",
+    "T010": "Dernier run4 cas encore en cours selon ROOT; aucun reçu clos lu; GREEN pending",
+    "global_workspace": "non évalué par ces deux exécutions",
+    "task_checkboxes": "aucune modification"
+  },
+  "interpretation_limits": [
+    "T008 RED compile et exécute11 tests; ce n’est pas un échec de compilation.",
+    "Les dix échecs restent consignés exactement. Ils ne sont pas tous attribués à une panne métier.",
+    "ROOT aligne également category (code) et reason (texte) sur le contrat; aucun résultat corrigé encore exécuté dans ce reçu.",
+    "Source stable signifie égalité des222 empreintes AV/AP pour chacun des deux runs, pas identité de source entre runs ni preuve du prochain code.",
+    "Aucune suite globale GREEN, aucune latence SC004 ou preuve T010 nouvelle.",
+    "La fixture T008 corrigée passe désormais par le vrai SendIdempotent et conserve held_ids/delivery_id ; code de catégorie et texte raison alignés selon ROOT. Le RED 13 inclut11 T008 et2 supports fermés, sans cumul de PASS entre runs.",
+    "Le label contenant GREEN de la tentative T008/T007 ne constitue pas une preuveGREEN : neuf erreursE0308 de mutabilité, aucune exécution.",
+    "T010 diagnostic vérifié dans le vrai log privé : held_queue=true et turn_attest=true mais Presence connected à l’admission. Une preuve fournisseur turn ne remplace pas AgentList busy.",
+    "La stabilité de 222 sources AV/AP est attestée séparément dans chacun des nouveaux runs.",
+    "Le GREEN32 est vérifié par32 noms distincts exacts :20release+ACK1 identiques au GREEN T007 antérieur,11sweep identiques au RED T008 handler corrigé. Les runs historiques et le compileFAIL0test restent conservés.",
+    "T010 quatre cas annoncés en cours par ROOT : aucune lecture de log en cours, aucun résultat inféré du temps écoulé ou du GREEN32.",
+    "Le complémentTX T008 et les oracles handler sont intégrés selon ROOT ; aucun cochage ici, Convergefinal relève du principal."
+  ],
+  "updated_at": "2026-10-12T15:15:03.959581+00:00",
+  "T010_bounded_diagnostic": {
+    "file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-busy-precondition-diagnostic.json",
+    "sha256": "b1c93633e6a6d5d3448d3e5fb367bb338b0c780c841c88f3b6f81950a7edc6a4",
+    "source_log": "/private/tmp/b.nhyjmphi/tmp/h159-4b4bcd07/daemon.log",
+    "source_sha256": "faec68ecd025634f5338fbea6a48fb23107482c07624457d6369d87176ba6e40",
+    "source_hash_and_quoted_lines_verified": true,
+    "actual_presence_at_admission": "connected",
+    "held_queue_enabled": true,
+    "turn_attest_enabled": true,
+    "cause": "provider turn evidence precedes daemon busy attestation; fixture must wait actual AgentList busy before send",
+    "temporary_diagnostic_removed_attested": true,
+    "initial_and_followup_runs": [
+      {
+        "label": "T010-first-crash-SC004",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-first-crash-SC004.json",
+        "receipt_sha256": "c9cf8325f6f09221efa5c498b982466f607de966f51752091c4c0aac3cc32c55",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-first-crash-SC004.log",
+        "log_sha256": "6a342806568341d3bc395281fd44b44fc18ac8efe363a5461806147931706c1c",
+        "rc": 101,
+        "seconds": 72.25,
+        "test_results": [
+          [
+            "FAILED",
+            "0",
+            "2",
+            "0"
+          ]
+        ],
+        "failed_names_from_actual_panic": [
+          "held159_daemon_arrete_apres_retention_conserve_la_remise",
+          "held159_latency_retenue_codex_simule"
+        ],
+        "receipt_failed_tests_empty_due_nocapture_interleaving": true,
+        "sources_stable": true,
+        "source_files_count": 222
+      },
+      {
+        "label": "T010-actual-presence-diagnostic",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-actual-presence-diagnostic.json",
+        "receipt_sha256": "3f510e088d60ce1d61378bbc7ec37ddb044ee0766b80baaa9c31e13a5a73177a",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-actual-presence-diagnostic.log",
+        "log_sha256": "204284b02145ccbc9ce0286263ea5250c71beb9951fdf4e98499742289f8b5bc",
+        "rc": 101,
+        "seconds": 27.58,
+        "test_results": [
+          [
+            "FAILED",
+            "0",
+            "1",
+            "0"
+          ]
+        ],
+        "failed_names_from_actual_panic": [
+          "held159_daemon_arrete_apres_retention_conserve_la_remise"
+        ],
+        "receipt_failed_tests_empty_due_nocapture_interleaving": true,
+        "sources_stable": true,
+        "source_files_count": 222
+      },
+      {
+        "label": "T010-actual-presence-SC004-diagnostic",
+        "receipt_file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-actual-presence-SC004-diagnostic.json",
+        "receipt_sha256": "4012b8debad5eaff2ee328ef8c26dd9af3d692d3301cf5d657b3bae7291d721a",
+        "log_file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-actual-presence-SC004-diagnostic.log",
+        "log_sha256": "60d60071f7569a97ab04b824cedafa0a55789c2c9bf1da663e55349ff12301a1",
+        "rc": 101,
+        "seconds": 37.22,
+        "test_results": [
+          [
+            "ok",
+            "0",
+            "0",
+            "0"
+          ],
+          [
+            "FAILED",
+            "0",
+            "1",
+            "0"
+          ]
+        ],
+        "failed_names_from_actual_panic": [
+          "held159_latency_retenue_codex_simule"
+        ],
+        "receipt_failed_tests_empty_due_nocapture_interleaving": true,
+        "sources_stable": true,
+        "source_files_count": 222
+      }
+    ],
+    "claim": "Diagnostic de fixture borné, pas FULL ni GREEN ni mesureSC004 réussie"
+  },
+  "latest_verified_run": "T008-sweep-GREEN-T007-regression-mutable-calls"
+}

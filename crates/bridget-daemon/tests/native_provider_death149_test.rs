@@ -33,14 +33,21 @@ const FENETRE_SANS_RELANCE: Duration = Duration::from_secs(5);
 static SERIE: Mutex<()> = Mutex::new(());
 
 fn maintenant() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn agent_id_for(label: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     label.hash(&mut hasher);
     let value = hasher.finish();
-    format!("{:08x}-0000-4000-8000-{:012x}", value as u32, value & 0x0000_0fff_ffff_ffff)
+    format!(
+        "{:08x}-0000-4000-8000-{:012x}",
+        value as u32,
+        value & 0x0000_0fff_ffff_ffff
+    )
 }
 
 struct Racine(PathBuf);
@@ -57,10 +64,14 @@ fn racine(label: &str) -> Racine {
         std::process::id(),
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     ));
-    bridget_daemon::environment::Namespace::resolve(Some(chemin.join("state")), None, Some(chemin.clone()))
-        .unwrap()
-        .prepare()
-        .unwrap();
+    bridget_daemon::environment::Namespace::resolve(
+        Some(chemin.join("state")),
+        None,
+        Some(chemin.clone()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
     Racine(chemin)
 }
 
@@ -137,7 +148,10 @@ struct Daemon {
 
 impl Daemon {
     fn demarrer(racine: &Path, natif: bool) -> Self {
-        let mut daemon = Self { enfant: None, socket: racine.join("state/bridget.sock") };
+        let mut daemon = Self {
+            enfant: None,
+            socket: racine.join("state/bridget.sock"),
+        };
         let mut commande = Command::new(env!("CARGO_BIN_EXE_bridget"));
         commande
             .arg("daemon")
@@ -164,14 +178,19 @@ impl Daemon {
         while Instant::now() < limite && UnixStream::connect(&daemon.socket).is_err() {
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(UnixStream::connect(&daemon.socket).is_ok(), "le daemon n'accepte pas les connexions");
+        assert!(
+            UnixStream::connect(&daemon.socket).is_ok(),
+            "le daemon n'accepte pas les connexions"
+        );
         daemon
     }
 }
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let Some(enfant) = self.enfant.as_mut() else { return };
+        let Some(enfant) = self.enfant.as_mut() else {
+            return;
+        };
         let _ = unsafe { libc::kill(enfant.id() as i32, libc::SIGTERM) };
         let limite = Instant::now() + Duration::from_secs(5);
         while Instant::now() < limite {
@@ -212,8 +231,12 @@ impl Pair {
             domain: None,
             turn_in_progress: false,
             journal_available: None,
+            turn_attest: false,
         });
-        assert!(matches!(pair.recevoir(), DaemonToWrapper::Registered { .. }));
+        assert!(matches!(
+            pair.recevoir(),
+            DaemonToWrapper::Registered { .. }
+        ));
         pair
     }
 
@@ -235,9 +258,10 @@ fn agent_connecte(socket: &Path, nom: &str) -> bool {
     let mut observateur = Pair::enregistrer(socket, "pd149-observateur");
     observateur.envoyer(&WrapperToDaemon::ListAgents);
     match observateur.recevoir() {
-        DaemonToWrapper::AgentList { agents } => agents
-            .iter()
-            .any(|agent| agent.agent_id == agent_id_for(nom) && matches!(agent.state.as_str(), "connected" | "busy")),
+        DaemonToWrapper::AgentList { agents } => agents.iter().any(|agent| {
+            agent.agent_id == agent_id_for(nom)
+                && matches!(agent.state.as_str(), "connected" | "busy")
+        }),
         autre => panic!("annuaire inattendu: {autre:?}"),
     }
 }
@@ -279,29 +303,58 @@ fn tuer_le_fournisseur(label: &str, natif: bool) -> (Vec<u32>, bool, u32) {
         project: None,
         ownership: None,
     });
-    assert!(matches!(controle.recevoir(), DaemonToWrapper::SpawnAccepted { .. }));
-    attendre("agent connecté avant la mort du fournisseur", Duration::from_secs(15), || {
-        agent_connecte(&daemon.socket, &nom)
-    });
-    attendre("premier démarrage du fournisseur", Duration::from_secs(5), || demarrages(&compteur).len() == 1);
+    assert!(matches!(
+        controle.recevoir(),
+        DaemonToWrapper::SpawnAccepted { .. }
+    ));
+    attendre(
+        "agent connecté avant la mort du fournisseur",
+        Duration::from_secs(15),
+        || agent_connecte(&daemon.socket, &nom),
+    );
+    attendre(
+        "premier démarrage du fournisseur",
+        Duration::from_secs(5),
+        || demarrages(&compteur).len() == 1,
+    );
     let premier = demarrages(&compteur)[0];
     let pgid = ManagedMarkerStore::at_directory(racine.0.join("state/managed"))
         .load(&agent_id_for(&nom))
         .unwrap()
         .pgid;
-    assert_eq!(unsafe { libc::kill(premier as i32, libc::SIGTERM) }, 0, "SIGTERM fournisseur {premier}");
+    assert_eq!(
+        unsafe { libc::kill(premier as i32, libc::SIGTERM) },
+        0,
+        "SIGTERM fournisseur {premier}"
+    );
 
     if natif {
         // Aucune relance pendant toute la fenêtre, puis le wrapper se termine.
         let fin = Instant::now() + FENETRE_SANS_RELANCE;
         while Instant::now() < fin {
-            assert_eq!(demarrages(&compteur).len(), 1, "un fournisseur natif ne doit pas être relancé");
+            assert_eq!(
+                demarrages(&compteur).len(),
+                1,
+                "un fournisseur natif ne doit pas être relancé"
+            );
             thread::sleep(Duration::from_millis(100));
         }
-        attendre("wrapper natif terminé après la mort du fournisseur", TIMEOUT, || !group_exists(pgid).unwrap_or(false));
+        attendre(
+            "wrapper natif terminé après la mort du fournisseur",
+            TIMEOUT,
+            || !group_exists(pgid).unwrap_or(false),
+        );
     } else {
-        attendre("relance du fournisseur ordinaire", Duration::from_secs(20), || demarrages(&compteur).len() >= 2);
-        attendre("agent ordinaire de nouveau connecté", Duration::from_secs(15), || agent_connecte(&daemon.socket, &nom));
+        attendre(
+            "relance du fournisseur ordinaire",
+            Duration::from_secs(20),
+            || demarrages(&compteur).len() >= 2,
+        );
+        attendre(
+            "agent ordinaire de nouveau connecté",
+            Duration::from_secs(15),
+            || agent_connecte(&daemon.socket, &nom),
+        );
     }
     let relances = demarrages(&compteur);
     let connecte = agent_connecte(&daemon.socket, &nom);
@@ -312,7 +365,10 @@ fn tuer_le_fournisseur(label: &str, natif: bool) -> (Vec<u32>, bool, u32) {
         });
         assert!(matches!(
             controle.recevoir(),
-            DaemonToWrapper::StopResult { outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. }, .. }
+            DaemonToWrapper::StopResult {
+                outcome: StopOutcome::Stopped | StopOutcome::StoppedForced { .. },
+                ..
+            }
         ));
     }
     (relances, connecte, premier)
@@ -323,7 +379,10 @@ fn tuer_le_fournisseur(label: &str, natif: bool) -> (Vec<u32>, bool, u32) {
 fn native149_temoin_fournisseur_ordinaire_tue_est_relance() {
     let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
     let (demarrages, connecte, premier) = tuer_le_fournisseur("ordinaire", false);
-    assert!(demarrages.len() >= 2, "le témoin doit relancer : {demarrages:?}");
+    assert!(
+        demarrages.len() >= 2,
+        "le témoin doit relancer : {demarrages:?}"
+    );
     assert_ne!(demarrages[1], premier, "nouveau processus fournisseur");
     assert!(connecte, "l'agent ordinaire est de nouveau joignable");
 }
@@ -334,6 +393,13 @@ fn native149_temoin_fournisseur_ordinaire_tue_est_relance() {
 fn native149_fournisseur_natif_tue_n_est_jamais_relance() {
     let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
     let (demarrages, connecte, premier) = tuer_le_fournisseur("natif", true);
-    assert_eq!(demarrages, vec![premier], "un seul démarrage de fournisseur pour la mission");
-    assert!(!connecte, "l'enfant natif n'est plus joignable : échec explicite côté saga");
+    assert_eq!(
+        demarrages,
+        vec![premier],
+        "un seul démarrage de fournisseur pour la mission"
+    );
+    assert!(
+        !connecte,
+        "l'enfant natif n'est plus joignable : échec explicite côté saga"
+    );
 }

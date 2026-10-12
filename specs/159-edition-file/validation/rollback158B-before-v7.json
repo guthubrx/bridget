@@ -1,0 +1,29 @@
+{
+  "created_at": "2026-10-12T17:14:26.574306+00:00",
+  "source": "/Users/moi/.cache/bridget-core/bridget.db",
+  "snapshot": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-prod-v6.db",
+  "snapshot_sha256": "ef4c01667fb9102efbffca25234eb81bbdb8d57c0dda6533ab02d5a147b9bf4d",
+  "schema_v": 6,
+  "quick_check": "ok",
+  "foreign_key_violations": 0,
+  "native_nonterminal_states": [],
+  "counts": {
+    "idempotency_records": 11384,
+    "send_deliveries": 10892,
+    "send_delivery_execution_links": 0,
+    "native_delegations": 0
+  },
+  "delivery_phases": [
+    [
+      "acked",
+      9285
+    ],
+    [
+      "indeterminate",
+      1607
+    ]
+  ],
+  "rollback_binary": "/Users/moi/.cache/bridget-delivery159A-preparation-20261012/rollback158B-bridget",
+  "rollback_binary_sha256": "cfb77a6552e97b28fd092ecbd73e82fbfcaa59694264b354fe593cb63e64018c",
+  "limits": "Production may write after snapshot; preserve newer facts before actual restoration. No production writes, restart or restoration performed."
+}

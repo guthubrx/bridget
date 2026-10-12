@@ -1,0 +1,339 @@
+{
+  "version": 1,
+  "task": "SPEC159A T002 preparation readonly",
+  "captured_at_utc": "2026-10-12T13:10:03.988849+00:00",
+  "source_root": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle",
+  "base_declared_by_root": "158B daemon2124b1d0 (candidate, not delivery attestation)",
+  "mutations": "cache report and manifest only",
+  "executions": "none: no Cargo/tests/Git/service/DB/provider",
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "ranges": [
+        [
+          45,
+          45
+        ],
+        [
+          749,
+          813
+        ],
+        [
+          891,
+          986
+        ],
+        [
+          4019,
+          4024
+        ],
+        [
+          4437,
+          4459
+        ],
+        [
+          4711,
+          4713
+        ],
+        [
+          5550,
+          5630
+        ],
+        [
+          6492,
+          6666
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "ranges": [
+        [
+          5229,
+          5277
+        ],
+        [
+          6555,
+          6584
+        ],
+        [
+          7952,
+          7971
+        ],
+        [
+          8225,
+          8259
+        ],
+        [
+          9710,
+          9717
+        ],
+        [
+          10749,
+          10886
+        ],
+        [
+          11324,
+          11361
+        ],
+        [
+          12632,
+          12659
+        ],
+        [
+          12718,
+          12750
+        ],
+        [
+          19581,
+          19621
+        ],
+        [
+          21181,
+          21208
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/t3code.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/t3code.rs",
+      "sha256": "e0040b2b8e049a75b7f940d86d70417c6355e5cc02f79f5e1c8f7f91581b42ec",
+      "ranges": [
+        [
+          38,
+          50
+        ],
+        [
+          1850,
+          1926
+        ],
+        [
+          1940,
+          1970
+        ],
+        [
+          3261,
+          3280
+        ]
+      ],
+      "read_mode": "semantic_excerpt_and_symbol_search",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-transport/src/managed_session.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/managed_session.rs",
+      "sha256": "ac156ac383097314ed0ae13b444f4e87b11be39a774ea797c8faa12aaf5088a6",
+      "ranges": [
+        [
+          383,
+          383
+        ]
+      ],
+      "read_mode": "symbol_and_trait_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-transport/src/acp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/acp.rs",
+      "sha256": "fc78deef60ebf9b6302667f7fb487dc7774c184d650e9c231b2a3bc373300b8c",
+      "ranges": [
+        [
+          775,
+          778
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-transport/src/claude_stream_json.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "ranges": [
+        [
+          514,
+          516
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-transport/src/codex_app_server.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "2e19ecc41685cf43db8a762ddb9df74cac8e9fd39c5c26fbd931aa5359ecff6c",
+      "ranges": [
+        [
+          1326,
+          1336
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/guidance.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "ranges": [
+        [
+          1,
+          142
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "ranges": [
+        [
+          170,
+          187
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "0db6541e31d7809b5caee44bf9a8e933b5aa1bb3f2734cf518294a570e16c8e6",
+      "ranges": [
+        [
+          54,
+          175
+        ],
+        [
+          403,
+          425
+        ],
+        [
+          532,
+          540
+        ],
+        [
+          597,
+          618
+        ],
+        [
+          768,
+          832
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/ledger_requests.rs",
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "ranges": [
+        [
+          330,
+          358
+        ],
+        [
+          699,
+          714
+        ]
+      ],
+      "read_mode": "semantic_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/execution_store.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+      "ranges": [
+        [
+          1521,
+          1552
+        ],
+        [
+          1655,
+          1655
+        ]
+      ],
+      "read_mode": "semantic_excerpt_and_schema_search",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store_schema.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "38fce1d1857f86347635f80757fb58cc6f3b9203e2228c9241baa6318e10726b",
+      "ranges": [
+        [
+          1,
+          8
+        ]
+      ],
+      "read_mode": "header_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "specs/159-edition-file/tasks.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/159-edition-file/tasks.md",
+      "sha256": "02f903507c822153126242ab7295936ea40fe473f5772d3a1d8451f54284771e",
+      "ranges": [
+        [
+          1,
+          35
+        ]
+      ],
+      "read_mode": "T002_excerpt",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    },
+    {
+      "file": "specs/159-edition-file/research.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/specs/159-edition-file/research.md",
+      "sha256": "2d6ae93c01a67e6c99904d475d83e4f8a8b8318a9e10d5bf7868f686a9956e05",
+      "ranges": [
+        [
+          1,
+          239
+        ]
+      ],
+      "read_mode": "whole_file_read",
+      "read_at_utc": "2026-10-12T13:10:03.988849+00:00",
+      "coverage": "ranges_only_unless_whole_file_read"
+    }
+  ],
+  "rg_only_without_semantic_coverage": [
+    "turn_attest absence in protocol/registry/wrapper/t3code",
+    "deliver_batch_to_interactive callers",
+    "busy implementation symbols",
+    "daemon collect_reminder_actions symbol"
+  ],
+  "unknowns": [
+    "external T3 current source",
+    "runtime timing and sessions",
+    "complete CLI/MCP guard surface",
+    "all pending_replies memory removal paths",
+    "full schedule_execution_recovery policy"
+  ],
+  "report_sha256": "edd1cabb7f597c282cabbff775697338b63333d8b159279a8bb62fa8c0434a5b"
+}

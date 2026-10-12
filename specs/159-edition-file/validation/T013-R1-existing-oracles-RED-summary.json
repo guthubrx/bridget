@@ -1,0 +1,56 @@
+{
+  "label": "T013-R1-existing-oracles-RED",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_hold_intention_presente",
+    "held159_turnstate_sortie_forcee_depuis_busy_period_start",
+    "held159_release_wrapper_muet_attend_la_sortie_forcee",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:03:32.757945+00:00",
+  "seconds": 18.26,
+  "rc": 101,
+  "test_results": [
+    [
+      "FAILED",
+      "0",
+      "3",
+      "0"
+    ]
+  ],
+  "failed_tests": [
+    "daemon::presence_tests::held159_release_wrapper_muet_attend_la_sortie_forcee",
+    "daemon::presence_tests::held159_hold_intention_presente",
+    "daemon::presence_tests::held159_turnstate_sortie_forcee_depuis_busy_period_start"
+  ],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-existing-oracles-RED.log",
+  "log_sha256": "8553f2fb7e3aad9f4641a6bc9beefc409591a4b899798e688874355424d0da6d",
+  "private_ns": "/private/tmp/b.020za2r4",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-existing-oracles-RED.json",
+  "original_receipt_sha256": "4b1428587c0b0940784dfc1e96ded8a43863615288c04e397afcdad704afb7f9",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_before_after_verified_equal": true,
+  "daemon_sha256_during_run": "033a661b151c72949f77ba35d737f175062ce71968bb2253308c4c507df46c7e"
+}

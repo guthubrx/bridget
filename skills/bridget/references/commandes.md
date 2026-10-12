@@ -56,7 +56,7 @@ de couverture.
 | `send` | MCP exposé | `bridget_send` | Envoi ou réponse corrélée ; viser l'UUID attesté et conserver exactement la clé de rejeu et l'enveloppe. |
 | `reply` | Équivalence MCP | `bridget_send` avec `in_reply_to` | Commodité CLI vers le dernier expéditeur ; l'outil structuré évite l'ambiguïté quand plusieurs demandes coexistent. |
 | `cancel` | MCP exposé | `bridget_cancel` | Annule sa demande suivie et retire sa remise en attente ; interruption active seulement sous garde156, aucune preuve de fin de mission. |
-| `queue` | MCP exposé (156) | `bridget_queue` | Lit les remises idempotentes dispatching visibles de target ; aucune édition, capacité QueueListV1 requise. |
+| `queue` | MCP exposé (156) | `bridget_queue` | Lit les remises idempotentes held/released visibles de target (159A) ; aucune édition en A, capacité QueueListV1 requise. |
 | `requests` | Équivalence MCP | `bridget_ledger` avec `view=requests` | Consulte les demandes de l'appelant, ou la projection globale autorisée ; aucun outil synonyme n'est créé. |
 | `rename` | MCP exposé | `bridget_rename` | Change seulement le nom d'affichage de l'identité propre ; UUID, instance, historique et rejeux restent liés à la même identité. |
 | `control` | Équivalence MCP pour control status ; CLI humain pour la vue globale et les mutations | `bridget_control_status` remplace `control status`; `pause`, `resume`, `budget`, `posture` et le contrôle global158A restent sans MCP | Le statut est observable ; les mutations appartiennent au référent humain et ne sont pas déléguées par 094. |
@@ -139,14 +139,14 @@ None ordinaire reste stable. Le paquet installé149 utilise V2.
 
 `bridget_queue` prend seulement `target`. La réponse a `entries` et `queue_bound`.
 Chaque entrée porte message_id/from/intent/reply/age_secs/preview/position/state.
-Preview :120 caractères ; au plus200 entrées ; state=pending_or_injecting.
-Queue_bound :64 pour T3, null sinon. Cible/parent/Attach/UI Client attestée voient la projection
+Preview :120 caractères ; au plus200 entrées ; state=held/released selon 159A.
+Queue_bound : queue_capacity du type quand held_queue est ouvert, null sinon. Cible/parent/Attach/UI Client attestée voient la projection
 entière ; les autres seulement leurs messages ; preuve enfant refusée.
 Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1].
 Son rôle reste Attach, sans identité agent/conn_names ni autres capacités.
 L’UI Client attestée peut lire toute la projection ; elle reste Client et
 n’acquiert aucun droit de contrôle explicite par cette lecture.
-Périmètre : send_deliveries idempotent dispatching, aucune file transport interne
+Périmètre 159A : send_deliveries idempotent held/dispatching, aucune file transport interne
 ni Send historique. Aucun tour, audit de guidage, quota ou écriture de pause.
 QueueListV1 doit être négociée. LIMIT200 borne la sortie, pas le scan O(log n+s)
 avec jointures indexées en plus, dont candidats expirés. Ne pas déduire une
@@ -158,6 +158,31 @@ le tour continue. L’ancien comportement reste chargé dans un ancien wrapper
 jusqu’à sa relance. Aucun cancel/reorder/promote de file n’est ajouté en156.
 Le cadre ADR011/027 ne couvre pas un processus hostile du même compte qui forge
 Attach ou lit les preuves privées. La provenance UI/système doit être attestée.
+
+
+### File retenue — lot 159A
+
+`held_queue` reste fermé après SC004. Ouvert, il retient les envois clients
+idempotents ordinaires vers une instance `turn_attest` occupée ou déjà pourvue
+de retenus. Human/System, steer/interrupt, alertes, observations, incidents
+délégués, missions natives et fils T3 sont exclus ; sans attestation, chemin actuel.
+`bridget_queue` liste held/released par rang, au plus 200 entrées ; queue_full
+est un refus mémorisé. Les droits156 restent appliqués ; aucune édition en A.
+
+La réattestation périodique reste vraie sous trafic continu. La réservation
+empêche une seconde libération dans le même cycle. Register attesté avec
+held_queue ouvert rattache d'abord la remise ordinaire non ACKée de l'ancienne
+instance ; aucun ACK ni terminal 149/152 artificiel. HeldRelease attend pendant la pause,
+puis la reprise interrompue passe avant. FR025 distingue la sortie forcée
+notify_timeout_secs+30 s (2730 s par défaut) du repos prouvé ; true répété
+conserve busy_period_start. Après libération, garanties099 : Seen puis panne
+avant injection peut rendre indeterminate ; ACK ne prouve pas la fin de mission.
+
+Migration v7, mesure SC004, procédure et preuve T011 sont détaillées dans :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md
+Décision et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md
+Cancel/reorder/promote de file restent le lot B ; aucune installation déduite.
 
 ## Catalogue et remplacement157
 

@@ -1,0 +1,55 @@
+{
+  "label": "T013-three-identity-fixtures-replay2",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "core_089_identity_test",
+    "--features",
+    "test-support",
+    "--",
+    "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+    "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+    "spec094_mcp_modifie_uniquement_sa_propre_presence",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:09:44.693536+00:00",
+  "seconds": 6.89,
+  "rc": 101,
+  "test_results": [
+    [
+      "FAILED",
+      "2",
+      "1",
+      "0"
+    ]
+  ],
+  "failed_tests": [
+    "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance"
+  ],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.log",
+  "log_sha256": "57e5abc268d340f9467c6e14b008d101ce25df753f5a4d4f735b4d46311f9315",
+  "private_ns": "/private/tmp/b.8hfxnrlo",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-three-identity-fixtures-replay2.json",
+  "original_receipt_sha256": "4b1a4f8e14b1e121c4ba03d1499671eb93815048b545e6645a7c684505053259",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa"
+}

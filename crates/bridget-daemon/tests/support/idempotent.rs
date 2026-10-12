@@ -211,11 +211,13 @@ pub fn isolated_command(root: &Path) -> Command {
 pub fn run_isolated(root: &Path, args: &[&str], linked: bool) -> std::process::Output {
     let mut command = isolated_command(root);
     command.args(args);
-    if linked {
-        let instance = private_fixture_instance(&socket(root), ACTOR)
-            .unwrap_or_else(|| "shared-cli-mcp-instance".into());
+    if linked && let Some(instance) = private_fixture_instance(&socket(root), ACTOR) {
+        // Le propriétaire existe déjà dans le scénario. Son vrai Registered
+        // a produit le credential ; le nom privé permet seulement sa résolution.
+        let name_file = root.join("state/cli-agent-name");
+        private_write(&name_file, ACTOR).expect("nom CLI du propriétaire attesté");
         command
-            .env("BRIDGET_AGENT_ID", ACTOR)
+            .env("BRIDGET_AGENT_ID_FILE", name_file)
             .env("BRIDGET_AGENT_INSTANCE_ID", instance);
     }
     run_command(command)
@@ -762,6 +764,7 @@ pub fn register_agent_as(socket: &Path, agent_id: &str, instance_id: &str) -> Cl
         domain: None,
         journal_available: None,
         turn_in_progress: false,
+        turn_attest: false,
     });
     let DaemonToWrapper::Registered {
         agent_id: registered,

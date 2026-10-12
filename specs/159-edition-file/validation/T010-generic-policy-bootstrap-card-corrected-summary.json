@@ -1,0 +1,56 @@
+{
+  "label": "T010-generic-policy-bootstrap-card-corrected",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas",
+    "held159_porteur_arrete_sans_message_en_cours",
+    "held159_porteur_arrete_avec_message_en_cours_preserve_ordre",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T16:09:49.017251+00:00",
+  "seconds": 43.19,
+  "rc": 101,
+  "test_results": [
+    [
+      "FAILED",
+      "1",
+      "2",
+      "0"
+    ]
+  ],
+  "failed_tests": [
+    "held159_porteur_arrete_avec_message_en_cours_preserve_ordre",
+    "held159_daemon_arrete_apres_accuse_ne_reinjecte_pas"
+  ],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-generic-policy-bootstrap-card-corrected.log",
+  "log_sha256": "20fd78b23a31437fc503d60d6b76fee42fcf45a91adfaf359ab0f1220c2459f8",
+  "private_ns": "/private/tmp/b.r0rdq7gd",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-generic-policy-bootstrap-card-corrected.json",
+  "original_receipt_sha256": "d49f6d8923d3d929bd96c13a0ea171839c0657ce53a334e138ee6254dbee0fc4",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

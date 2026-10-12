@@ -2,7 +2,8 @@
 
 **Spec** : `specs/159-edition-file/spec.md`
 **Branche** : `session-159-edition-file`
-**Worktree** : `.worktrees/150-socle-delegation` (exécution séquentielle, après 156)
+**Worktree prévu A** : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file` (exécution séquentielle, après livraison158B)
+**Base 159A confirmée** : source 158B e52a96240b6168bf4466712e1bda8852b4ecb43f livré ; HEAD de préparation b235998638b3eadf8f8edc0a6e323b762e95cab0. GO159A acquis par ROOT, implémentation A en cours ; held_queue reste fermé. Le candidat 158B 2124 reste historique ; aucune livraison 159A déduite.
 **Date** : 2026-10-11 (conception refondue après contre-revue ronde 1 : 11 points, racine commune ; ronde 2 : 10 points intégrés)
 
 ## Résumé
@@ -22,8 +23,8 @@ Critère visé : Guidage 4 vers 5.
 
 - Rust 2024, workspace à 3 crates. Aucune nouvelle dépendance.
 - SQLite (`bridget.db`), base d'idempotence existante (migrations 2 à 6, la v7 est neuve).
-- Quatre magasins ouvrent le même fichier par des connexions distinctes (`daemon.rs:3058-3071`). Toute transaction d'édition reste dans `IdempotencyStore`.
-- Tests : recette `umask 077` de la session 150 (`quickstart.md`).
+- Quatre magasins ouvrent le même fichier par des connexions distinctes (`daemon.rs:4806-4818`). Toute transaction d'édition reste dans `IdempotencyStore`.
+- Tests : recette privée réemployée dans `quickstart.md`, actualisée vers le futur worktree159A ; aucune baseline158B exécutée par cette préparation.
 
 ## Décisions architecturales
 
@@ -41,8 +42,8 @@ Critère visé : Guidage 4 vers 5.
 | Édition | transaction unique + reçu | saga répartie | 11 défauts de la première conception |
 | Résultat d'édition | toujours final | `outcome_unknown` | aucun aller-retour avec le porteur |
 | Promotion | libération immédiate en guidage + marqueur `steer-or-queue`, garanties réduites | annuler puis renvoyer | pas de perte avant la remise ; file ordinaire pleine et erreur ambiguë de Codex restent des cas déclarés (R9, R17) |
-| Porteur ancien | valable sauf pour `promote` (déclare `queue_fallback`) | exiger partout | la rétention n'exige rien du porteur |
-| Rang | global, monotone, en base | rang par instance, rang du porteur | une seule copie, pas de collision (R6) |
+| Porteur ancien | chemin actuel sans rétention faute de `turn_attest` ; `promote` du lot B exige `queue_fallback` | exiger partout | la rétention exige le signal véridique déclaré ; les capacités anciennes restent fermées |
+| Rang | queue_rank INTEGER PRIMARY KEY AUTOINCREMENT ; delivery_id UNIQUE NOT NULL | rang recyclé après purge ou compteur métier parallèle | FR008 durable ; INSERT sans rang, anciens rowid copiés ; surcoût SQLite justifié (R6) |
 | Migration | v7 à sens unique + précontrôle relevé + sauvegarde | double écriture | `CHECK` de phase ; échec fermé voulu (R6) |
 | Reçu d'édition | `queue_edits`, même transaction que l'effet | table de réservation | effet et reçu atomiques |
 | `edit` | reporté | implémenter | enveloppe idempotente, attribution (R15) |
@@ -80,10 +81,14 @@ Critère visé : Guidage 4 vers 5.
 Aucun nouveau module Rust. Aucun changement du pont T3 (`t3code.rs`). Aucune
 trame daemon vers porteur.
 
+Précisions T006 : La minuterie Instant du heartbeat existant est vérifiée à chaque passage de la boucle, même sous trafic continu. Elle déclenche une réattestation vraie périodique (30 s au plus), sans nouveau scheduler. Pour toute instance turn_attest, la sortie forcée utilise busy_period_start, même si held_queue est fermé. Les instances anciennes non attestées gardent le calcul legacy sur busy_since. La borne par défaut de 2730 s vaut notify_timeout_secs = 2700 s + grâce de 30 s ; notify_timeout_secs reste configurable.
+
+Lecture et reprise : T009 list et dispatching_deliveries_for_instance trient tous deux par queue_rank. Le même index non unique idx_send_deliveries_recipient_phase est étendu à (recipient_instance_id, phase, queue_rank), sans second index recipient redondant.
+
 ## Étapes d'implémentation
 
 1. Lot A : référence et vérifications (T001, T002) ; fondations (T003 à T005) ; signal de tour véridique (T006) ; libération, balayage, lecture (T007 à T009) ; pannes et mesure (T010) ; répétition de la restauration (T011) ; documentation et clôture (T012, T013).
-2. Pause : le lot A se livre, réglage fermé. Ouverture pour `codex`, mesure, décision.
+2. Le lot A se livre avec `held_queue` fermé. Une éventuelle ouverture pour `codex` attend les mesuresSC004/SC005 et leur décision ; elle ne fait pas partie de la livraisonA fermée.
 3. Lot B : fondations (T014 à T016) ; retrait (T017, T018) ; déplacement (T019) ; promotion (T020, T021) ; outil, bout en bout, documentation, ADR, clôture (T022 à T027).
 
 ## Contrôle constitution
@@ -91,7 +96,7 @@ trame daemon vers porteur.
 | Article | Statut | Justification |
 |---|---|---|
 | III SpecKit | OK | spec, plan, tâches avant code |
-| VII ADR | OK | ADR 159 prévue (T025) |
+| VII ADR | Prévu | ADR159 initiale A dans T012 avant livraison ; extension B du même fichier dans T025 : /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md |
 | VIII Forensic | OK | défauts prouvés par lecture ; tests rouges d'abord |
 | XV Test-before-next | Adapté | pas de commit automatique ; tâche cochée après test vert |
 | XVI Worktree | OK | worktree partagé |
@@ -133,7 +138,7 @@ Potentiel minimalisme : environ 60 lignes si le lot B est limité à `cancel` (`
 | Risque | Parade |
 |---|---|
 | Faux repos (refus de remise) : second message libéré en plein tour | signal véridique, réservation de tour durable, tests de refus de guidage et de déclencheurs concurrents (T006, T007, SC-012) |
-| Signal de repos perdu | réattestation 30 s ; wrapper muet : sortie forcée de `busy` ≤ 2730 s depuis `busy_period_start` ; SC-005 corrigé |
+| Signal de repos perdu | réattestation périodique sous trafic continu ; sortie forcée des instances `turn_attest` depuis `busy_period_start`, délai configurable `notify_timeout_secs + 30 s` (2730 s par défaut) ; `busy_since` legacy conservé |
 | Redémarrage du daemon puis du porteur : retenus introuvables | `recipient_agent` et adoption par agent (T004, SC-015) |
 | Libération pendant une pause | `HeldRelease` différé ; reprise de pause d'abord (T007, SC-013) |
 | Demande close entre le balayage et la libération | revérification dans la transaction (T007, SC-014) ; suivi mémoire retiré (T008) |
@@ -152,7 +157,20 @@ Potentiel minimalisme : environ 60 lignes si le lot B est limité à `cancel` (`
 
 ## Livraison
 
-Code sur disque dans le worktree, sans commit automatique ni relance de service.
+Livraison par ROOT dans le pipeline152–160 déjà autorisé : commit, intégration,
+push, build signé, installation et activation conditionnelle de Bridget, puis
+nettoyage. T011/SC006 reste préalable : sauvegarde cohérente et restauration
+isolée avec le vrai ancien binaire158B installé, empreinté et conservé avant
+reconstruction159. Contrôler zéro mission native non terminale avant activation.
+T3 reste sans relance explicite. `held_queue` reste fermé.
 Diffs enregistrés par lot (`validation/diff-159a.patch`, `validation/diff-159b.patch`).
-La migration v7 s'applique à la prochaine ouverture de la base, après relance et
-sauvegarde décidées par l'utilisateur.
+La migrationv7 s'applique dès l'ouverture du nouveau binaire, même réglage fermé ;
+aucune restauration ou activation n'est réputée acquise par cette préparation.
+
+Rangs A/B : INSERT sans queue_rank ; AUTOINCREMENT conserve la monotonie après purge. Les permutations B gardent les valeurs existantes, avec des rangs provisoires négatifs uniquement dans leur transaction ; aucun CHECK positif incompatible. Coût d’écriture lié aux index et à SQLite, pas de mesure de latence supposée. Références : [SQLite AUTOINCREMENT](https://www.sqlite.org/autoinc.html), [SQLite Foreign Keys](https://www.sqlite.org/foreignkeys.html).
+
+Garde de libération (décision ROOT) : conserver le mutex State de la lecture du repos jusqu’au commit de Held vers Dispatching. La même transaction Immediate d’IdempotencyStore lit control_state et control_pause_interruptions dans config.db_path, partagé par les magasins existants. Préserver l’ordre de verrous existant ; aucun writer socket ni autre connexion SQL dans cette transaction. La libération est linéarisée au commit. Le push différé se fait hors verrou ; une pause validée après ce commit ne reprend pas une remise déjà libérée. Pas de table miroir. Les oracles concurrents de T007 déjà prévus couvrent l’ordre pause/TurnState true ; aucun résultat runtime nouveau n’est annoncé.
+
+Portée de SC001 : égalité des octets canoniques du message et de la remise, de la phase et de la poussée du chemin d’envoi avec held_queue fermé. FR023 exige séparément le flux auxiliaire nouveau de réattestation vraie ; cette exigence ne promet pas l’identité des octets de tout le flux auxiliaire. busy_since legacy reste réservé aux instances sans turn_attest. L’exigence de suites vertes et l’interdiction de nouvelle régression sont conservées, sans dérogation implicite.
+
+Les lectures control_state et control_pause_interruptions sont exécutées après BEGIN IMMEDIATE, dans cette même transaction. En cas de SQLITE_BUSY, la remise reste held : aucun refus, aucune libération ni push ; le prochain déclencheur réessaie. L’attente SQL peut durer busy_timeout (2 s) sous State ; ce risque de latence sera mesuré, sans nouvelle garantie. Les chemins TurnState et pause prennent ce même mutex ; les cas concurrents T007 prévus vérifient l’ordre.

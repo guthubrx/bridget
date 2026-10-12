@@ -1,0 +1,112 @@
+{
+  "module": "03+06",
+  "completed_at_utc": "2026-10-12T17:31:32.938436+00:00",
+  "review_kind": "R2 final targeted delta only",
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "REL-004",
+      "category": "reliability",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 5327,
+      "title": "Un true après expiration redémarrait une période sans repos attesté",
+      "description": "L’expiration marque connected sans prouver le repos et conserve le début de la période. Le true suivant réinitialisait pourtant ce début car state n’était plus busy. FR023 interdit de remettre cette date à zéro par un nouveau true. Seul false doit effacer la période ; le nouveau true conserve la date et renouvelle l’attestation.",
+      "evidence": "                if presence.state != \"busy\" || presence.busy_period_start.is_none() {\n                    presence.busy_period_start = Some(now);\n                }",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Un tour attesté démarre àt0 puis devient expiré après le silence et le délai autorisés. L’état devient connected et la période resteSome(t0). Sans false intermédiaire, un true suivant réécrit la période dans le code18ad98.",
+      "impact": "Non-conformité du début de période durable en mémoire et déplacement de la borne de sortie forcée ; pas de nouvelle autorité ou fuite démontrée.",
+      "path_type": "hot",
+      "remediation": "Tester uniquement busy_period_start.is_none() pour initialiser la période ; garder les autres mises à jour et le chemin legacy.",
+      "verification": "Oracle T006 existant held159_turnstate_sortie_forcee_depuis_busy_period_start : RED0PASS1FAIL puis GREEN8PASS0FAIL ; Some(start) conservé après true suivant expiration.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "fixed_verified_code_and_existing_GREEN",
+      "source_sha256_at_detection": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "current_source_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+      "historical_evidence_source": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/diff-159a-final.patch",
+      "fingerprint": "a118d5b5912e"
+    }
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+      "ranges": [
+        [
+          814,
+          834
+        ],
+        [
+          5318,
+          5350
+        ],
+        [
+          6110,
+          6128
+        ],
+        [
+          9357,
+          9430
+        ],
+        [
+          11176,
+          11197
+        ],
+        [
+          11385,
+          11403
+        ],
+        [
+          39099,
+          39169
+        ]
+      ],
+      "read_completed_no_later_than_utc": "2026-10-12T17:31:32.938436+00:00",
+      "whole_file_read": false
+    }
+  ],
+  "source_guard": {
+    "before": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+    "after": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+    "identical": true
+  },
+  "proofs": {
+    "RED": {
+      "file": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-busy-period-RED.json",
+      "sha256": "d7d6c2de3a559cda43d61b346865bb9abb706ff4ebb0d7aca3da59d4f9c41fd6",
+      "rc": 101,
+      "results": [
+        [
+          "FAILED",
+          "0",
+          "1",
+          "0"
+        ]
+      ],
+      "log_sha256": "a9fdf3c3af895bc5daa38af18c6a021ab032bb67bb71fed09caadc1222f7898b"
+    },
+    "GREEN": {
+      "file": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-turnstate-group-GREEN.json",
+      "sha256": "8042e275e0e1264999ded169c62b4146b04bcd1d8fa715a43c8a515e3b973ced",
+      "rc": 0,
+      "seconds": 7.08,
+      "results": [
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ]
+      ],
+      "log_sha256": "2fc7e3cdedf74aa7ab3dbb50fe0026d676da692fc825b808b45e74105128b232",
+      "sources_stable": true
+    }
+  },
+  "limitations": [
+    "Les rapports et le grade18ad98 restent historiques et byte-identiques dans history-18ad98.",
+    "Relecture ciblée des sept plages, pas re-audit global ni transfert automatique des anciennes plages daemon.",
+    "GREEN8 couvre le groupe existant ; pas GLOBALGREEN ni preuve fournisseur libre après expiration.",
+    "Le test est un oracle déjà prévu ; aucun nouveau scénario, helper ou tâche."
+  ]
+}

@@ -1,7 +1,7 @@
 //! Préflight partagé, lecture seule, avant les migrations des deux magasins.
 use rusqlite::{Connection, OptionalExtension};
 
-pub const MAX_IDEMPOTENCY_SCHEMA_VERSION: i64 = 6;
+pub const MAX_IDEMPOTENCY_SCHEMA_VERSION: i64 = 7;
 
 #[derive(Debug)]
 pub enum SchemaError {
@@ -55,4 +55,49 @@ pub(crate) fn validate(conn: &Connection) -> Result<(), SchemaError> {
         });
     }
     Ok(())
+}
+
+/// T003 : préflight en lecture seule ; l’ancien plafond6 devra refuser cette v7.
+#[cfg(test)]
+#[test]
+fn held159_migration_precontrole_accepte_7_refuse_8() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE idempotency_schema_migrations(version INTEGER PRIMARY KEY);
+        INSERT INTO idempotency_schema_migrations(version) VALUES (7);",
+    )
+    .unwrap();
+    let before = conn.total_changes();
+    assert!(
+        validate(&conn).is_ok(),
+        "v7 doit être admise avant les migrations"
+    );
+    assert_eq!(
+        conn.total_changes(),
+        before,
+        "préflight ne modifie pas la base"
+    );
+    conn.execute("UPDATE idempotency_schema_migrations SET version=8", [])
+        .unwrap();
+    let before = conn.total_changes();
+    assert!(
+        matches!(
+            validate(&conn),
+            Err(SchemaError::UnsupportedVersion {
+                found: 8,
+                supported: 7
+            })
+        ),
+        "v8 doit rester fermée ; elle ne doit être ni migrée ni réparée"
+    );
+    assert_eq!(conn.total_changes(), before);
+    assert_eq!(
+        conn.query_row(
+            "SELECT version FROM idempotency_schema_migrations",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        8
+    );
 }

@@ -18,17 +18,19 @@ Reconstruction (précédent v4, `idempotency.rs:709-806`).
 | Colonne | Avant | Après |
 |---|---|---|
 | `phase` | `CHECK IN ('dispatching','acked','indeterminate','orphaned')` | `CHECK IN ('dispatching','acked','indeterminate','orphaned','held','cancelled')` |
-| `queue_rank` | absente | `INTEGER NOT NULL` ; rang global monotone |
+| `queue_rank` | absente | `INTEGER PRIMARY KEY AUTOINCREMENT` ; rang global monotone durable après purge |
+| `delivery_id` | clé primaire historique | `UNIQUE NOT NULL` ; cible des clés étrangères existantes conservée |
 | `recipient_agent` | absente | `TEXT NOT NULL` ; identifiant d'agent résolu à l'admission ; rempli à la migration par `json_extract(message_bytes,'$.to')` |
 | `turn_gate` | absente | `INTEGER NOT NULL DEFAULT 0 CHECK (turn_gate IN (0,1))` ; réservation de tour |
+| `acked_at` | absente | `INTEGER` nullable ; date du premier ACK, écrite avec sa phase pour lever la réservation après 30 s, même après redémarrage |
 
 - Lignes existantes : `queue_rank` = ancien `rowid`.
-- Nouvelle ligne : `queue_rank = (SELECT COALESCE(MAX(queue_rank),0)+1 FROM send_deliveries)` dans la transaction `Immediate` de `begin_send_delivery_inner`. L'unicité tient au verrou d'écriture unique de SQLite.
-- `begin_send_delivery_inner` prend un mode : `Dispatching` (existant) ou `Held` (nouvelle phase d'insertion). En mode `Held` : pas de lien d'exécution, enregistrement d'idempotence en `dispatching`, ledger et suivi de réponse écrits comme aujourd'hui.
+- Nouvelle ligne : INSERT sans queue_rank dans la transaction Immediate de begin_send_delivery_with_guidance ; SQLite attribue le rang via AUTOINCREMENT. La séquence durable survit à la purge ; aucun nouveau compteur ni table métier. delivery_id reste UNIQUE NOT NULL et cible des FK.
+- `begin_send_delivery_with_guidance` prend un mode : `Dispatching` (existant) ou `Held` (nouvelle phase d'insertion). En mode `Held` : pas de lien d'exécution, enregistrement d'idempotence en `dispatching`, ledger et suivi de réponse écrits comme aujourd'hui.
 - Réaffectation et orphelinage : s'appliquent à `dispatching` et `held`. Le rang ne change pas.
 - `dispatching_deliveries_for_instance` : inchangé de contrat (ne rend que `dispatching`), trié par `queue_rank` au lieu de `delivery_id`.
 - Index complémentaire : `idx_send_deliveries_agent_phase ON (recipient_agent, phase, queue_rank)` pour le rattachement par agent et la réservation de tour.
-- Index : `idx_send_deliveries_operation` (unique), `idx_send_deliveries_kind_key`, `idx_send_deliveries_recipient_rank ON (recipient_instance_id, phase, queue_rank)`.
+- Index : `idx_send_deliveries_operation` (unique), `idx_send_deliveries_kind_key`, index existant non unique `idx_send_deliveries_recipient_phase`, étendu à `(recipient_instance_id, phase, queue_rank)` ; aucun second index recipient redondant.
 - `send_delivery_execution_links` (`ON DELETE CASCADE`) : copiée avant le `DROP`, réinsérée après le renommage. `PRAGMA foreign_key_check` à zéro.
 - Migration enregistrée : `idempotency_schema_migrations(version) = 7`. `MAX_IDEMPOTENCY_SCHEMA_VERSION` passe de 6 à 7 (`store_schema.rs:4`).
 
@@ -38,7 +40,9 @@ Phase `cancelled` : terminale, absorbante. Jamais relivrée, jamais listée comm
 ## Réservation de tour et rattachement (lot A)
 
 - `turn_gate = 1` : posé par la libération, sur la remise libérée. Levé par : `TurnState true` observé pour l'agent après la libération ; sortie de `dispatching` sans accusé ; accusé depuis plus de 30 s avec l'agent non occupé. Une libération exige qu'aucune remise de `recipient_agent` n'ait `turn_gate = 1`.
-- `adopt_held_for_agent(agent_id, instance_id)` : `UPDATE send_deliveries SET recipient_instance_id = ?2 WHERE recipient_agent = ?1 AND phase = 'held'`, appelé à chaque enregistrement d'agent. Ne dépend pas de `presences`.
+- `adopt_held_for_agent(agent_id, instance_id, recover_dispatching)` : appelé après établissement de l’identité finale de `Register`. Rattache les lignes `held` du même agent, même si l’ancienne présence a disparu.
+  Si `recover_dispatching` est vrai, rattache aussi les lignes `dispatching` non expirées d’une autre instance du même agent et pose `turn_gate = 1`. Le caller active ce mode seulement pour une instance `turn_attest`, un type `held_queue` ouvert et un transport hors T3.
+  Les trois scopes internes de réveil et les alertes de fil restent exclus de ce raccord `dispatching`. ID, génération, octets, phase et rang sont conservés ; une réinscription de la même instance ne réarme pas ses réservations courantes. Le chemin `held` reste inchangé.
 
 ### Présence (mémoire du daemon)
 
@@ -48,8 +52,9 @@ Phase `cancelled` : terminale, absorbante. Jamais relivrée, jamais listée comm
 | `last_attested_at` | date de la dernière attestation de l'état (vrai ou faux) |
 | `turn_attest` | l'instance a déclaré un signal de tour véridique et réattesté |
 
-`busy_since` (existant) est inchangé. La sortie forcée de `busy` pour les
-messages retenus se compte depuis `busy_period_start`.
+`busy_since` garde son comportement legacy. Pour toute instance turn_attest, la sortie forcée utilise busy_period_start, même si held_queue est fermé. Les instances anciennes non attestées gardent le calcul legacy sur busy_since. La borne par défaut de 2730 s vaut notify_timeout_secs = 2700 s + grâce de 30 s ; notify_timeout_secs reste configurable.
+
+La minuterie Instant du heartbeat existant est vérifiée à chaque passage de la boucle, même sous trafic continu. Elle déclenche une réattestation vraie périodique (30 s au plus), sans nouveau scheduler.
 
 ### Suivi mémoire
 
@@ -59,15 +64,17 @@ libération et tout retrait. Les paliers 1 et 2 des relances ignorent les demand
 dont le message est dans `held_ids`. Après un commit de retrait, l'entrée de
 `pending_replies` du message est retirée.
 
+Garde de libération (décision ROOT) : conserver le mutex State de la lecture du repos jusqu’au commit de Held vers Dispatching. La même transaction Immediate d’IdempotencyStore lit control_state et control_pause_interruptions dans config.db_path, partagé par les magasins existants. Préserver l’ordre de verrous existant ; aucun writer socket ni autre connexion SQL dans cette transaction. La libération est linéarisée au commit. Le push différé se fait hors verrou ; une pause validée après ce commit ne reprend pas une remise déjà libérée. Pas de table miroir. Les oracles concurrents de T007 déjà prévus couvrent l’ordre pause/TurnState true ; aucun résultat runtime nouveau n’est annoncé.
+
 ## Opérations de la phase `held`
 
 | Opération | Transaction | Effets |
 |---|---|---|
-| Rétention | `begin_send_delivery_inner` mode `Held` | ligne `held`, rang, ledger, suivi de réponse |
+| Rétention | `begin_send_delivery_with_guidance` mode `Held` | ligne `held`, rang, ledger, suivi de réponse |
 | Libération | `release_next_held(agent, now)` | vérifie réservation, saga, demande ouverte et échéance ; plus petit rang `held` passe à `dispatching` avec `turn_gate = 1` ; rend `SendDelivery` |
 | Retrait automatique | `settle_held(delivery_id, reason)` | `cancelled`, `Rejected(<raison>)`, notice d'auteur |
 | Retrait demandé (lot B) | `apply_cancel` | idem + reçu `applied` |
-| Déplacement (lot B) | `apply_reorder` | ré-affectation des rangs du groupe + reçu |
+| Déplacement (lot B) | `apply_reorder` | permutation des valeurs de rang existantes du groupe ; rangs provisoires négatifs dans la même transaction pour éviter une collision de clé primaire, jamais publiés ; reçu |
 | Promotion (lot B) | `apply_promote` | mêmes vérifications que la libération ; `held` vers `dispatching` (avec réservation) + reçu |
 
 Raisons de `settle_held` : `expired_in_queue` (enregistrement d'envoi expiré),
@@ -157,3 +164,7 @@ Capacité client : `QueueEditV1`. Aucune trame daemon vers porteur n'est ajouté
 ## États
 
 Aucun nouvel état de tâche, d'exécution ou de projection Lineage.
+
+Le réordonnancement ne fait aucun nouvel INSERT de rang. Aucun CHECK positif ne bloque ses valeurs provisoires négatives ; la transaction ne publie que la permutation des rangs existants. AUTOINCREMENT ajoute un coût SQLite/CPU/E/S, justifié par FR008 qui interdit le recyclage après purge. Références : [SQLite AUTOINCREMENT](https://www.sqlite.org/autoinc.html), [SQLite Foreign Keys](https://www.sqlite.org/foreignkeys.html).
+
+Les lectures control_state et control_pause_interruptions sont exécutées après BEGIN IMMEDIATE, dans cette même transaction. En cas de SQLITE_BUSY, la remise reste held : aucun refus, aucune libération ni push ; le prochain déclencheur réessaie. L’attente SQL peut durer busy_timeout (2 s) sous State ; ce risque de latence sera mesuré, sans nouvelle garantie. Les chemins TurnState et pause prennent ce même mutex ; les cas concurrents T007 prévus vérifient l’ordre.

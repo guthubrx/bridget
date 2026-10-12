@@ -1,0 +1,812 @@
+{
+  "kind": "Analyze159A_design_single_final_complement",
+  "created_at_utc": "2026-10-12T13:45:36.604327+00:00",
+  "verdict": "NO_CRITICAL_HIGH_MEDIUM_DESIGN_GAP_IN_TARGETED_COMPLEMENT",
+  "implementation_go": false,
+  "initial_report": "/Users/moi/.cache/bridget-analyze159A-20261012/analyze159A-initial.json",
+  "reviewed_initial_findings": [
+    {
+      "original_id": "C01",
+      "status": "resolved_design",
+      "proof": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+          "lines": [
+            3,
+            5,
+            22,
+            37,
+            64,
+            67
+          ]
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+          "lines": [
+            46,
+            82
+          ]
+        }
+      ],
+      "reason": "ADR initiale A adoptée avant code ; T012 complète les preuves et T025 étend le même fichier B."
+    },
+    {
+      "original_id": "C02",
+      "status": "resolved_design",
+      "proof": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/checklists/requirements.md",
+          "lines": [
+            1,
+            30
+          ]
+        }
+      ],
+      "reason": "Libellés en français ; les 16 cases demeurent. Aucune exigence modifiée."
+    },
+    {
+      "original_id": "I01",
+      "status": "resolved_design",
+      "proof": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+          "lines": [
+            21,
+            27,
+            165
+          ]
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+          "lines": [
+            29,
+            30,
+            68
+          ]
+        }
+      ],
+      "reason": "AUTOINCREMENT remplace MAX+1. Le watermark SQLite survit aux purges. delivery_id UNIQUE préserve les FK. B ne crée que permutations de rangs existants."
+    },
+    {
+      "original_id": "U01",
+      "status": "resolved_design",
+      "proof": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+          "lines": [
+            35
+          ]
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+          "lines": [
+            84
+          ]
+        }
+      ],
+      "reason": "Échéance Instant contrôlée à chaque boucle même sous trafic continu, ≤30s, réemploi heartbeat sans scheduler supplémentaire."
+    },
+    {
+      "original_id": "I02",
+      "status": "resolved_design",
+      "proof": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+          "lines": [
+            121,
+            179,
+            248
+          ]
+        }
+      ],
+      "reason": "Le SELECT MAX O(N) disparaît du chemin prévu. Admission indexée O(log n), balayage global O(n+h log n) déclaré ; coûts SQLite non mesurés et T001/T010 maintenus."
+    },
+    {
+      "original_id": "D01",
+      "status": "resolved_design",
+      "proof": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+          "lines": [
+            32
+          ]
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+          "lines": [
+            86
+          ]
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+          "lines": [
+            29
+          ]
+        }
+      ],
+      "reason": "Même idx_send_deliveries_recipient_phase étendu non unique à (recipient_instance_id,phase,queue_rank), sans index recipient doublon ; préfixe conservé."
+    }
+  ],
+  "findings": [
+    {
+      "id": "REF01",
+      "severity": "LOW",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+      "line": 126,
+      "description": "R6 renvoie à T023 pour ADR/doc alors que T023 est E2E B. La responsabilité A est désormais T012.",
+      "minimal_correction": "(T011, T023) → (T011, T012).",
+      "blocking": false
+    },
+    {
+      "id": "REF02",
+      "severity": "LOW",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+      "line": 160,
+      "related_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "related_line": 206,
+      "description": "Le libellé pipeline152–158 ne comprend pas la présente session159. Le périmètre utilisateur autorisé est152–160.",
+      "minimal_correction": "Remplacer seulement pipeline152–158 par pipeline152–160 dans ces deux phrases.",
+      "blocking": false
+    }
+  ],
+  "mapping": {
+    "FR": {
+      "FR-001": {
+        "tasks": [
+          "T005",
+          "T012"
+        ],
+        "lot": "A"
+      },
+      "FR-002": {
+        "tasks": [
+          "T002",
+          "T005"
+        ],
+        "lot": "A"
+      },
+      "FR-003": {
+        "tasks": [
+          "T004",
+          "T005",
+          "T007"
+        ],
+        "lot": "A"
+      },
+      "FR-004": {
+        "tasks": [
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-005": {
+        "tasks": [
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-006": {
+        "tasks": [
+          "T008",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-007": {
+        "tasks": [
+          "T003",
+          "T004",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-008": {
+        "tasks": [
+          "T004",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-009": {
+        "tasks": [
+          "T009"
+        ],
+        "lot": "A"
+      },
+      "FR-010": {
+        "tasks": [
+          "T003",
+          "T011",
+          "T012",
+          "T013"
+        ],
+        "lot": "A"
+      },
+      "FR-011": {
+        "tasks": [
+          "T001",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-012": {
+        "tasks": [
+          "T022"
+        ],
+        "lot": "B"
+      },
+      "FR-013": {
+        "tasks": [
+          "T017",
+          "T019",
+          "T021"
+        ],
+        "lot": "B"
+      },
+      "FR-014": {
+        "tasks": [
+          "T017",
+          "T018"
+        ],
+        "lot": "B"
+      },
+      "FR-015": {
+        "tasks": [
+          "T019"
+        ],
+        "lot": "B"
+      },
+      "FR-016": {
+        "tasks": [
+          "T020",
+          "T021",
+          "T023"
+        ],
+        "lot": "B"
+      },
+      "FR-017": {
+        "tasks": [
+          "T014",
+          "T017",
+          "T019",
+          "T021"
+        ],
+        "lot": "B"
+      },
+      "FR-018": {
+        "tasks": [
+          "T015",
+          "T017",
+          "T019",
+          "T021",
+          "T022"
+        ],
+        "lot": "B"
+      },
+      "FR-019": {
+        "tasks": [
+          "T016",
+          "T020"
+        ],
+        "lot": "B"
+      },
+      "FR-020": {
+        "tasks": [
+          "T016",
+          "T022"
+        ],
+        "lot": "B"
+      },
+      "FR-021": {
+        "tasks": [
+          "T012",
+          "T024",
+          "T025"
+        ],
+        "lot": "B/shared"
+      },
+      "FR-022": {
+        "tasks": [
+          "T005"
+        ],
+        "lot": "A"
+      },
+      "FR-023": {
+        "tasks": [
+          "T002",
+          "T006",
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-024": {
+        "tasks": [
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-025": {
+        "tasks": [
+          "T006",
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "FR-026": {
+        "tasks": [
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      }
+    },
+    "SC": {
+      "SC-001": {
+        "tasks": [
+          "T001",
+          "T005",
+          "T010",
+          "T013"
+        ],
+        "lot": "A"
+      },
+      "SC-002": {
+        "tasks": [
+          "T004",
+          "T007",
+          "T008",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "SC-003": {
+        "tasks": [
+          "T004",
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "SC-004": {
+        "tasks": [
+          "T001",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "SC-005": {
+        "tasks": [
+          "T006",
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "SC-006": {
+        "tasks": [
+          "T003",
+          "T011"
+        ],
+        "lot": "A"
+      },
+      "SC-007": {
+        "tasks": [
+          "T017",
+          "T018"
+        ],
+        "lot": "B"
+      },
+      "SC-008": {
+        "tasks": [
+          "T019"
+        ],
+        "lot": "B"
+      },
+      "SC-009": {
+        "tasks": [
+          "T020",
+          "T021",
+          "T023"
+        ],
+        "lot": "B"
+      },
+      "SC-010": {
+        "tasks": [
+          "T015",
+          "T017",
+          "T019",
+          "T021",
+          "T022"
+        ],
+        "lot": "B"
+      },
+      "SC-011": {
+        "tasks": [
+          "T014",
+          "T017",
+          "T019",
+          "T021",
+          "T022"
+        ],
+        "lot": "B"
+      },
+      "SC-012": {
+        "tasks": [
+          "T006",
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "SC-013": {
+        "tasks": [
+          "T007",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "SC-014": {
+        "tasks": [
+          "T007",
+          "T008",
+          "T010",
+          "T021"
+        ],
+        "lot": "A/B"
+      },
+      "SC-015": {
+        "tasks": [
+          "T004",
+          "T010"
+        ],
+        "lot": "A"
+      }
+    },
+    "US": {
+      "US1": {
+        "tasks": [
+          "T004",
+          "T005",
+          "T006",
+          "T007",
+          "T009",
+          "T010"
+        ],
+        "lot": "A"
+      },
+      "US2": {
+        "tasks": [
+          "T007",
+          "T008",
+          "T010",
+          "T011"
+        ],
+        "lot": "A"
+      },
+      "US3": {
+        "tasks": [
+          "T009"
+        ],
+        "lot": "A"
+      },
+      "US4": {
+        "tasks": [
+          "T017",
+          "T018",
+          "T022"
+        ],
+        "lot": "B"
+      },
+      "US5": {
+        "tasks": [
+          "T019"
+        ],
+        "lot": "B"
+      },
+      "US6": {
+        "tasks": [
+          "T020",
+          "T021",
+          "T023"
+        ],
+        "lot": "B"
+      },
+      "US7": {
+        "tasks": [
+          "T001",
+          "T003",
+          "T005",
+          "T011",
+          "T013",
+          "T026"
+        ],
+        "lot": "A/B"
+      }
+    }
+  },
+  "mapping_provenance": "Matrice initiale relue contre les 27 tâches et les exigences courantes ; correction de conception A/B ciblée, pas couverture code.",
+  "metrics": {
+    "FR": 26,
+    "SC": 15,
+    "US": 7,
+    "tasks": 27,
+    "A": 13,
+    "B": 14,
+    "all_tasks_open": true
+  },
+  "reuse_gate": {
+    "reported": "PASS5/5",
+    "report": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/reuse-audit.md",
+    "scope": "33itemsA; B14 hors gate",
+    "limits": "Verdict réemploi documentaire statique repris avec limites ; aucun test PASS inféré."
+  },
+  "source_correspondence": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/t3code.rs",
+      "sha256": "e0040b2b8e049a75b7f940d86d70417c6355e5cc02f79f5e1c8f7f91581b42ec",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/managed_session.rs",
+      "sha256": "ac156ac383097314ed0ae13b444f4e87b11be39a774ea797c8faa12aaf5088a6",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/acp.rs",
+      "sha256": "fc78deef60ebf9b6302667f7fb487dc7774c184d650e9c231b2a3bc373300b8c",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "2e19ecc41685cf43db8a762ddb9df74cac8e9fd39c5c26fbd931aa5359ecff6c",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "0db6541e31d7809b5caee44bf9a8e933b5aa1bb3f2734cf518294a570e16c8e6",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store/ledger_requests.rs",
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "38fce1d1857f86347635f80757fb58cc6f3b9203e2228c9241baa6318e10726b",
+      "matches_current_bytes": true,
+      "semantic_read": "héritée du reçu T002 ; aucun crédit de nouvelle lecture code"
+    }
+  ],
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "726f5ea5d2d1fcdc39aa55e35e3be926fc2dba28ac52463a97f7e50af9703810",
+      "ranges": [
+        [
+          1,
+          107
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "7bda1ca4519540e3a5c78e8766275d2ccd6f87fe43dc458cdb9a8065b7b78405",
+      "ranges": [
+        [
+          1,
+          174
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "1b0bec4a4233a72d2548ebfb90030e57f1f0a33a5f229af1a52d8aa445a956c3",
+      "ranges": [
+        [
+          1,
+          165
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/checklists/requirements.md",
+      "sha256": "64e21bbd26b6eee1b9cb758a42214e2e8392b86ab33e2dcc3314170bf8d1a920",
+      "ranges": [
+        [
+          1,
+          50
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+      "ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/atomicity-readonly.md",
+      "sha256": "88613fd06644f86ee4636d161306b84d98ec5670382e747576c3c4ddc9770e59",
+      "ranges": [
+        [
+          1,
+          34
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/plan-review159A-r1-responses.md",
+      "sha256": "4a130333668ed56a2d9be3c582da2026770415227c4ea9d1aa676af092a3e333",
+      "ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T002-source-correspondence159A.json",
+      "sha256": "99dadcbd9cc0dbc0d6317325907b744259c85167666dfde9f6f66e68c5036de5",
+      "ranges": [],
+      "read_mode": "parsed_correspondence_metadata",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "a343429b728dfdcb345313a7e494c098929e749f463db04ce80896a8f17bef81",
+      "ranges": [
+        [
+          70,
+          83
+        ],
+        [
+          91,
+          188
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+      "sha256": "03e9eea0edc2c6fa29ec7bda8ea245826b7af6bd425dc41c465f21083e469cec",
+      "ranges": [
+        [
+          110,
+          130
+        ],
+        [
+          158,
+          250
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "4a4f78e8358edc7b4925d48818f37be53a0d86047445547615a9a26faf82da91",
+      "ranges": [
+        [
+          1,
+          126
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00",
+      "limits": "La matrice initiale reste la provenance du mapping ; complément ciblé des corrections et des tâches, sans audit code global."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "b8c7f8a71de122f584eedaf8bd1ce84da21141c94f12561018af179b8aab7d98",
+      "ranges": [
+        [
+          1,
+          70
+        ]
+      ],
+      "read_mode": "fresh_documentary_semantic",
+      "read_at_utc": "2026-10-12T13:45:36.604327+00:00"
+    }
+  ],
+  "start_capture": "2026-10-12T13:43:22.629921+00:00",
+  "captured_initial_nine_files_unchanged_at_end": true,
+  "tasks_sha256": "726f5ea5d2d1fcdc39aa55e35e3be926fc2dba28ac52463a97f7e50af9703810",
+  "T001": "NON_EXECUTEE : neuf filtres + transport + mesure latence référence restent prérequis avant code.",
+  "T011": "NON_EXECUTEE : ancien binaire réel sauvegardé ne vaut pas backup/migration/refus/restore ; gate avant livraisonA maintenu.",
+  "SC001": "Suites vertes, aucune nouvelle régression, identité canon/phase/remise chemin fermé conservées. Flux auxiliaire attestation FR023 distinct. Aucun waiver legacy.",
+  "limits": [
+    "Analyse complémentaire unique de conception ; pas quatrième boucle ni GO code.",
+    "Preuves atomicité et T002 sont des reçus de lecture ciblée. Hashs13/13 vérifiés, pas nouvelle lecture sémantique de tous les fichiers.",
+    "T007 futur doit garder State→Immediate partagé, relire pause/interruption/demande/échéance et push horsverrou ; aucune réalisation ni résultat affirmé.",
+    "Aucune commande Cargo/test/build/DB/service/Git exécutée. Aucune source/artefact/tâche projet muté.",
+    "Les plages de spec/research héritent aussi de la lecture initiale. Les seuls inventaires/empreintes ne constituent pas une couverture."
+  ],
+  "late_ROOT_R2_instruction": {
+    "source": "messageROOT après clôture de la lecture complémentaire",
+    "provider_review": "APPROVE_WITH_CHANGES; aucun défaut logique bloquant, selon reçuROOT, non relu par cet agent",
+    "documentary_corrections_pending": [
+      "plan repère connexions3058→4806–4818",
+      "Lectures control_state/control_pause_interruptions après BEGIN IMMEDIATE, dans la même transaction",
+      "SQLITE_BUSY conserve held, sans refus ni push ; différé au prochain déclencheur. Attente busy_timeout2s avec State acquis déclarée. Oracles T007 concurrents existants étendus, aucun scénario ajouté."
+    ],
+    "T001": "Compilation en cours selonROOT ; aucun PASS ni GO code déduit.",
+    "new_analysis_pass": false
+  }
+}

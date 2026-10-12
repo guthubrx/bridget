@@ -1,0 +1,52 @@
+{
+  "label": "T028-existing-queue-list-RED",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_list_filtre_par_droits_de_156",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:17:32.792091+00:00",
+  "seconds": 15.79,
+  "rc": 101,
+  "test_results": [
+    [
+      "FAILED",
+      "0",
+      "1",
+      "0"
+    ]
+  ],
+  "failed_tests": [
+    "daemon::presence_tests::held159_list_filtre_par_droits_de_156"
+  ],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T028-existing-queue-list-RED.log",
+  "log_sha256": "30887cf1f158edc6901add27d3efcedfd15af5b09a38092a8be4034a071a6701",
+  "private_ns": "/private/tmp/b.xxpjl9oa",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T028-existing-queue-list-RED.json",
+  "original_receipt_sha256": "6750515921c700052a2fedf1a318ad5e0604f508890a29b9f2a3a1de11e9c09a",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "15ea89bb67bd3029ae90a5f643352dceea5f25351f7b5f0a2723f6bc3cc9a24c"
+}

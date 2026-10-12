@@ -1329,6 +1329,7 @@ impl Link {
                 .session
                 .as_ref()
                 .is_some_and(|session| session.active_turn_id.is_some()),
+            false,
         )?;
         info!(
             "fil « {} » exposé comme « {name} » ({agent_type}, {agent_id})",

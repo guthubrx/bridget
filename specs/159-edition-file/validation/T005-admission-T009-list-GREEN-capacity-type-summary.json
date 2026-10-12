@@ -1,0 +1,51 @@
+{
+  "label": "T005-admission-T009-list-GREEN-capacity-type",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_hold_",
+    "held159_list_",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T14:47:23.339473+00:00",
+  "seconds": 61.0,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "22",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.log",
+  "log_sha256": "3df5a7fa1f6179d9dcb49d7c99b762b26e1cc220a5bd2ad8405986a06f1ebd41",
+  "private_ns": "/private/tmp/b.joowjgag",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.json",
+  "original_receipt_sha256": "8a1eb7ab366b05cec8d429d1413ad7306ad26c233a51153293c402e542d99190",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

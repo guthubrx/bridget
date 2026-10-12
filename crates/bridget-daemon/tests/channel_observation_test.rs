@@ -214,6 +214,7 @@ impl LiveAgent {
             domain: None,
             turn_in_progress: false,
             journal_available: Some(false),
+            turn_attest: false,
         });
         assert!(
             matches!(agent.read(), DaemonToWrapper::Registered { agent_id, .. } if agent_id == AGENT_ID)

@@ -1,0 +1,627 @@
+{
+  "module": "06",
+  "findings": [
+    {
+      "id": "REL-001",
+      "category": "reliability",
+      "subcategory": "queue_intent_contract",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 11366,
+      "title": "QueueOnly contourne la rétention prévue par FR002",
+      "description": "should_hold ne retient que les messages dont l’intention est absente. Une intention QueueOnly explicite reste sur le chemin dispatching malgré held_queue et une cible busy attestée. FR002 prévoit les deux formes de file ; les suites déjà vertes ne prouvent pas cette équivalence.",
+      "evidence": "    definition.held_queue\n        && presence.turn_attest\n        && message.intent.is_none()\n        && !matches!(\n            message.origin,\n            Some(bridget_core::MessageOrigin::Human | bridget_core::MessageOrigin::System)\n        )",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Enregistrer une cible nonT3 avec held_queue=true et turn_attest=true, annoncer busy, puis envoyer un SendIdempotent ordinaire attesté avec MessageIntent::QueueOnly (wire queue_only), sans origine Human/System ni exclusion métier. should_hold renvoie false ; le chemin prépare dispatching et push au lieu de held. Séquence relue statiquement, non exécutée par cet auditeur.",
+      "impact": "La forme explicite queue échappe au rang et à la rétention du daemon ; comportement différent de la forme omise. Aucun gain de droit ni violation d’identité démontré.",
+      "path_type": "hot",
+      "remediation": "Admettre None ou Some(MessageIntent::QueueOnly) dans ce prédicat, sans modifier les autres exclusions ni les octets canoniques.",
+      "remediation_code": "&& matches!(message.intent, None | Some(bridget_core::MessageIntent::QueueOnly))",
+      "verification": "Raccorder la table existante held159_hold_* : mêmes faits busy/attestés, intention omise et QueueOnly donnent Held, les autres intentions restent hors rétention. ROOT prépare ce raccord ; aucun testbonus demandé.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159 FR002",
+        "SPEC159 T005",
+        "Claude contre-revue R1 signalée ROOT"
+      ],
+      "status": "open",
+      "fingerprint": "c25c9e195d90"
+    },
+    {
+      "id": "REL-002",
+      "category": "reliability",
+      "subcategory": "fresh_turn_attestation",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 818,
+      "title": "La sortie forcée ignore une réattestation busy encore fraîche",
+      "description": "busy_turn_is_stale utilise le début stable de période sans contrôler last_attested_at. Le tick peut donc convertir une présence busy en connected après le délai, même si un true vient de la session réelle. schedule_held_release accepte ensuite le repos projeté ou le motif forcé ; FR025 réserve ce dernier au silence supérieur à trois périodes. Le test temporel actuel attend cette expiration malgré un true récent.",
+      "evidence": "    let start = if presence.turn_attest {\n        presence.busy_period_start.unwrap_or(presence.capacity_seen)\n    } else {\n        presence.busy_since.unwrap_or(presence.capacity_seen)\n    };\n    let elapsed = now.saturating_duration_since(start);\n    elapsed >= Duration::from_secs(ttl_secs)\n}",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Pour une présence turn_attest, ouvrir une période busy à t0. Réattester true peu avant t0+notify_timeout+30 puis appeler release_stale_busy_turns au seuil : le helper renvoie true, la présence devient connected alors que last_attested_at reste fraîche. Avec un retenu admissible et aucune autre garde, schedule_held_release peut engager une remise. Trace de code confirmée et contre-revue R1 ROOT ; aucun runtime nouveau par cet auditeur.",
+      "impact": "Un tour réel encore occupé peut recevoir une libération anticipée et une projection de disponibilité inexacte. Aucune escalade de privilège démontrée.",
+      "path_type": "hot",
+      "remediation": "Pour les instances attestées, conserver busy tant que l’attestation est fraîche. Exiger le silence normatif avant l’expiration forcée et son raccord de libération. Garder le calcul depuis busy_period_start et le comportement legacy.",
+      "remediation_code": "if presence.turn_attest && presence.last_attested_at.is_some_and(|at| now.saturating_duration_since(at) <= Duration::from_secs(90)) {\n    return false;\n}\n// Dans le raccord forcé, n’admettre ce motif que si la dernière attestation est ancienne.",
+      "verification": "Adapter les oracles temporels existants held159_turnstate_sortie_forcee_depuis_busy_period_start et held159_turnstate_wrapper_muet_trois_periodes : true récent maintient busy ; silence de plus de90s avec période échue autorise l’expiration sans nouvelle attestation. Rejouer les cas release déjà prescrits. ROOT prépare les hunks ; aucun nouveau testgratuit.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "references": [
+        "SPEC159 FR004/FR023/FR025",
+        "SPEC159 T006/T007",
+        "crates/bridget-daemon/src/daemon.rs:6107",
+        "Claude contre-revue R1 signalée ROOT"
+      ],
+      "status": "open",
+      "fingerprint": "dd17fbdd1ae2"
+    }
+  ],
+  "positive_findings": [
+    "T010 aprèspush vérifie deuxFIFOready et zéroancienneinjection avant les deuxarrêts ; ordre1→2→3/ACK réel/idgenbytesrang vérifiés dans nouvelleincarnation.",
+    "Seen sameinstance lit le reçu seen réel et le conserve ; report indeterminate du vraiwrapper, aucunordinary injecté et suivantheld à la frontière.",
+    "held159_sweep_pending_replies_retire_apres_commit utilise triggerABORT : SQL/notice/mémoire restent inchangés au rollback puis suiviRAM retiré aprèsCOMMIT."
+  ],
+  "audit_meta": {
+    "completed_at_utc": "2026-10-12T16:57:54.725130+00:00",
+    "authority_manifest": "/Users/moi/.cache/bridget-audit159A-final-20261012/manifest.json",
+    "authority_manifest_sha256": "881f6ff0b10688f94d10a2462e7c4bc213f437cdf054556c4eeb6e2da58a8708",
+    "scope_mode": "partial targeted finalA phase1 cycle1, not finalscoring",
+    "read_manifest": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+        "relative_path": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+        "ranges": [
+          [
+            815,
+            826
+          ],
+          [
+            4868,
+            4887
+          ],
+          [
+            5293,
+            5370
+          ],
+          [
+            6088,
+            6165
+          ],
+          [
+            9351,
+            9410
+          ],
+          [
+            10491,
+            10508
+          ],
+          [
+            10776,
+            10789
+          ],
+          [
+            11359,
+            11383
+          ],
+          [
+            11660,
+            11715
+          ],
+          [
+            11840,
+            11912
+          ],
+          [
+            17976,
+            17999
+          ],
+          [
+            21649,
+            21675
+          ],
+          [
+            24316,
+            24345
+          ],
+          [
+            24348,
+            24366
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "relative_path": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            146
+          ],
+          [
+            980,
+            1088
+          ],
+          [
+            1093,
+            1208
+          ],
+          [
+            1217,
+            1258
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency.rs",
+        "relative_path": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            514,
+            522
+          ],
+          [
+            659,
+            666
+          ],
+          [
+            888,
+            1026
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/tests.rs",
+        "relative_path": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "78fe60ae1851e523e586d439d6b4431d0f4ce9707f5ca6d640ae3a94bf4dfdd9",
+        "ranges": [
+          [
+            3455,
+            3511
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "78fe60ae1851e523e586d439d6b4431d0f4ce9707f5ca6d640ae3a94bf4dfdd9",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store_schema.rs",
+        "relative_path": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            78
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/wrapper.rs",
+        "relative_path": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4408,
+            4431
+          ],
+          [
+            6489,
+            6507
+          ],
+          [
+            11488,
+            11539
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+        "relative_path": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1160,
+            1230
+          ],
+          [
+            1310,
+            1400
+          ],
+          [
+            1857,
+            1889
+          ],
+          [
+            2054,
+            2090
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/protocol.rs",
+        "relative_path": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3518,
+            3536
+          ],
+          [
+            5581,
+            5599
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "matches_authority": true,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-core/src/message.rs",
+        "relative_path": "crates/bridget-core/src/message.rs",
+        "sha256": "0f4a4f50076622d18774d77bb14ad9c01b8ff3b9835fa92254a110a17a9d0d55",
+        "ranges": [
+          [
+            50,
+            60
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": null,
+        "matches_authority": null,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/guidance.rs",
+        "relative_path": "crates/bridget-daemon/src/guidance.rs",
+        "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+        "ranges": [
+          [
+            60,
+            116
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": null,
+        "matches_authority": null,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/receipt_store.rs",
+        "relative_path": "crates/bridget-daemon/src/receipt_store.rs",
+        "sha256": "94bc4ac767d35e5f98154e96d9f512297fd7ce294c3e9f6a861113d986643f61",
+        "ranges": [
+          [
+            123,
+            172
+          ]
+        ],
+        "whole_file_read": false,
+        "capture_hash": null,
+        "matches_authority": null,
+        "credit": "fresh targeted reading in this audit turn",
+        "completed_no_later_than_utc": "2026-10-12T16:57:16.050595+00:00",
+        "time_limit": "completion bound, not invented per-range timestamp"
+      }
+    ],
+    "receipts": [
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T003-migration-GREEN.json",
+        "sha256": "3e82aaa9896eb562194aaad2462bc5e045a248b62d0461db5c236362690e019b",
+        "rc": 0,
+        "seconds": 33.38,
+        "test_results": [
+          [
+            "ok",
+            "10",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T003-migration-GREEN.log",
+        "log_sha256": "934df171eed259214fedff26946051fc4bcb938e8b59c5e507baf3552a623511",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.json",
+        "sha256": "8a1eb7ab366b05cec8d429d1413ad7306ad26c233a51153293c402e542d99190",
+        "rc": 0,
+        "seconds": 61.0,
+        "test_results": [
+          [
+            "ok",
+            "22",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T005-admission-T009-list-GREEN-capacity-type.log",
+        "log_sha256": "3df5a7fa1f6179d9dcb49d7c99b762b26e1cc220a5bd2ad8405986a06f1ebd41",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T007-release-ACK-GREEN.json",
+        "sha256": "68be92da4692d5b22db9d91f4ddbf65ad5badbcce7b4c0270f014f4d6d1d0865",
+        "rc": 0,
+        "seconds": 31.93,
+        "test_results": [
+          [
+            "ok",
+            "21",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T007-release-ACK-GREEN.log",
+        "log_sha256": "5ac2954bd16a0b9a0186711ed0d4886024c05aa612e22cfdc6f19872c0f9d539",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-GREEN-T007-regression-mutable-calls.json",
+        "sha256": "e1119dbcb1bf4aa1f86b1f11cda2f15c232f66dca8a83c167669c38c80630898",
+        "rc": 0,
+        "seconds": 30.88,
+        "test_results": [
+          [
+            "ok",
+            "32",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T008-sweep-GREEN-T007-regression-mutable-calls.log",
+        "log_sha256": "a362141551794139c9109f87ed5391735f84517c9f68a1ec7f3a728d6bebedde",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.json",
+        "sha256": "20d46612bc1f50aac564398c82b98bdeb08985f605924806d1897915ec4bee75",
+        "rc": 0,
+        "seconds": 32.13,
+        "test_results": [
+          [
+            "ok",
+            "0",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "1",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.log",
+        "log_sha256": "2715b78ee78669e5f04922587c90c2462c258cc8f9fd46079c30ad6aaf113fe6",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.json",
+        "sha256": "173fea24454e54402f617e9f930edcc617741e934b622c9ab45c175b21fff47f",
+        "rc": 0,
+        "seconds": 23.49,
+        "test_results": [
+          [
+            "ok",
+            "1",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-Seen-daemon-before-real-READY.log",
+        "log_sha256": "6d78f9a2ebb3368bf361cb045e90749fba05a7ae12ccf22f96d0137809b7aac6",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-T001-transport-regression.json",
+        "sha256": "9d000b9a7ae02d9f54689af0c01e57157d77c7963d2c48d2e2b8cd7fa3659382",
+        "rc": 0,
+        "seconds": 49.24,
+        "test_results": [
+          [
+            "ok",
+            "1",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "1",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "327",
+            "0",
+            "1"
+          ],
+          [
+            "ok",
+            "1",
+            "0",
+            "1"
+          ],
+          [
+            "ok",
+            "6",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "2",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "5",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "8",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "5",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "3",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "2",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "2",
+            "0",
+            "0"
+          ],
+          [
+            "ok",
+            "0",
+            "0",
+            "0"
+          ]
+        ],
+        "failed_tests": [],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-T001-transport-regression.log",
+        "log_sha256": "3c4449b4f23fa71bbe6be1403721f5c9f25b81c55b4b4654f9381f5e56f050d5",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests159A-20261012/T013-FULL159A-final.json",
+        "sha256": "1afc4a46e8dba47c6f0b407e02d4072e622335eec4cca7e7b8e85c292a7d8561",
+        "rc": 101,
+        "seconds": 779.06,
+        "test_results": null,
+        "failed_tests": [
+          "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+          "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+          "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+          "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+          "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+          "spec094_mcp_modifie_uniquement_sa_propre_presence",
+          "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+          "spec102_v34_migration_base_pre102_et_contraintes_effectives",
+          "spec098_pont_expose_remet_repond_renouvelle_et_retire"
+        ],
+        "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-FULL159A-final.log",
+        "log_sha256": "a641ae723bffce15f2868c0532cbe7b79b2faee2b2f578588a4999816d0cfde2",
+        "log_hash_verified": true,
+        "sources_stable": true,
+        "credit": "receipt read/loghash verified; execution by ROOT, no execution by auditor"
+      }
+    ],
+    "baseline": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/audits/baseline.json",
+      "present": false,
+      "read_only": true
+    },
+    "limitations": [
+      "Pas de couverture globale des62fichiers/50Rust ; les24purefmt exclus sont hors crédit.",
+      "Own contributions T006/T009/protocole/postpush = self-review, pas revue indépendante ; ClaudeR1 est une contre-revue séparée en cours de fermeture.",
+      "Sorties tronquées : aucun crédit pour les plages intermédiaires non visibles ni lecturewholemodule.",
+      "Aucun scanner, Cargo, test, DB, modèle, service ou Git exécuté ; ROOT seul exécute.",
+      "FULL RC1019échecs observés ; le classement legacy/fixtures de ces noms reste responsabilité ROOT et n’est pas transformé en PASS.",
+      "Deux findings MEDIUM encore ouverts sur le SHA actuel ; corrections et tests ROOT attendus avant cycle-scoring.",
+      "Supply-chain globale, historique de secrets, UI/Web et fournisseursréels non audités ; cadre mêmeUID ADR011 conservé."
+    ]
+  },
+  "negative_memory": [
+    {
+      "candidate": "PASSpostpush signifie exactementuneinjection pour toutespannes",
+      "disposition": "non retenu : le montagebarrièreSeen réduit explicitement le cas ; R17 et matrice gardent garantiesréduites."
+    },
+    {
+      "candidate": "Les tests métier verts suffisent à certifier QueueOnly et une périodebusy fraîche longue",
+      "disposition": "réfuté : deuxécarts normatifsconfirmés ci-dessus ; oraclesexistants à corriger aprèsROOTRED."
+    },
+    {
+      "candidate": "FULL9FAIL =9régressionsA confirmées",
+      "disposition": "non établi : noms/receipt conservés, causelegacy/fixture en diagnosticROOT ; aucune promotion arbitraire enfinding niGLOBALGREEN."
+    }
+  ]
+}

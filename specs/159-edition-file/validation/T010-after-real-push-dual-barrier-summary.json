@@ -1,0 +1,58 @@
+{
+  "label": "T010-after-real-push-dual-barrier",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_daemon_arrete_apres_push_reprise_dans_l_ordre",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T16:24:12.104133+00:00",
+  "seconds": 32.13,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.log",
+  "log_sha256": "2715b78ee78669e5f04922587c90c2462c258cc8f9fd46079c30ad6aaf113fe6",
+  "private_ns": "/private/tmp/b.foe24vlz",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-real-push-dual-barrier.json",
+  "original_receipt_sha256": "20d46612bc1f50aac564398c82b98bdeb08985f605924806d1897915ec4bee75",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

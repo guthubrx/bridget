@@ -594,6 +594,7 @@ impl Peer {
             domain: None,
             turn_in_progress: false,
             journal_available: None,
+            turn_attest: false,
         });
         match peer.recv() {
             DaemonToWrapper::Registered {

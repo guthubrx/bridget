@@ -1,0 +1,150 @@
+{
+  "at": "2026-10-12T15:39:11.618070+00:00",
+  "kind": "T011_failed_recipe_cause_readonly_no_fresh_restoration_run",
+  "failed_receipt": "/private/tmp/b159.mut8kkjv/restauration-T011159A.json",
+  "failed_receipt_sha256": "2f387ca9ba547c990e3812ae388cf24b215f5751bb621dce035690a9a95ea65e",
+  "original_snapshot": "/Users/moi/.cache/bridget-restoration159A-reference-20261012/bridget158B-real-snapshot.db",
+  "original_snapshot_sha256": "f40e18dbb32d236986bd749f56dbc161d48d6d8723b970e295b8b0f6e6579711",
+  "after_open_isolated_v7": "/private/tmp/b159.mut8kkjv/v7/bridget.db",
+  "counts": {
+    "tracked_before": 62,
+    "tracked_after": 57,
+    "deleted": 5,
+    "deleted_answered": 3,
+    "deleted_timed_out": 2,
+    "shared_profiles_changed": 0,
+    "new_tracked_rows": 0
+  },
+  "deleted_rows_profile_no_bodies_no_plain_ids": [
+    {
+      "state": "answered",
+      "created_at": 1791206878,
+      "deadline_at": 1791207058,
+      "completed_at": 1791206928,
+      "id_sha256": "2ce02a3ef42390a1e4c2840efdb32dcdaa85710776044de250548edf61028cdb",
+      "completed_utc": "2026-10-05T13:28:48+00:00",
+      "matches_entire_startup_cutoff_bound": true
+    },
+    {
+      "state": "timed_out",
+      "created_at": 1791207420,
+      "deadline_at": 1791207600,
+      "completed_at": 1791207600,
+      "id_sha256": "70085cf324ed9096a2500e9523accf3792dc557a6eff6020dc8ddbdc33445d25",
+      "completed_utc": "2026-10-05T13:40:00+00:00",
+      "matches_entire_startup_cutoff_bound": true
+    },
+    {
+      "state": "answered",
+      "created_at": 1791213187,
+      "deadline_at": 1791213367,
+      "completed_at": 1791213271,
+      "id_sha256": "9c9c3905946c1a8a724e72155f320dc1e0243717b732ec1f13e2131de8e0ba2d",
+      "completed_utc": "2026-10-05T15:14:31+00:00",
+      "matches_entire_startup_cutoff_bound": true
+    },
+    {
+      "state": "answered",
+      "created_at": 1791211625,
+      "deadline_at": 1791211925,
+      "completed_at": 1791211693,
+      "id_sha256": "694f3c72a3b6b4269f3ec7335a6fd18ae72e87eae30b5648a24c56c8a0f808ad",
+      "completed_utc": "2026-10-05T14:48:13+00:00",
+      "matches_entire_startup_cutoff_bound": true
+    },
+    {
+      "state": "timed_out",
+      "created_at": 1791212465,
+      "deadline_at": 1791212765,
+      "completed_at": 1791212765,
+      "id_sha256": "064cac35d2216afd6b7c606cdb8a9c9a7d2c783aad807597747454a6ebf33794",
+      "completed_utc": "2026-10-05T15:06:05+00:00",
+      "matches_entire_startup_cutoff_bound": true
+    }
+  ],
+  "cause": "Store::purge_older_than_days executes DELETE FROM tracked_requests WHERE state!=open AND completed_at<cutoff at daemon startup. cutoff=SystemTime seconds-retention_days*86400; default retention=7days. This is existing158B maintenance, not T003 migration.",
+  "startup_cutoff": {
+    "retention_days": 7,
+    "birth_observed_ps_local": "Mon Oct 12 17:35:39 2026",
+    "birth_zone": "Europe/Paris",
+    "birth_utc": "2026-10-12T15:35:39+00:00",
+    "term_utc": "2026-10-12T15:35:40+00:00",
+    "cutoff_seconds_bound": [
+      1791214539,
+      1791214540
+    ],
+    "cutoff_exact_formula": "floor(SystemTime::now seconds since UNIX_EPOCH)-7*86400",
+    "no_fabricated_exact_sample": "Call time is not logged: bound from birth→TERM, all five match evenearliestcutoff. Actual sampledinteger not claimed."
+  },
+  "source_proofs": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store.rs",
+      "sha256": "15274ace00ec7503a32431accc8e55eb097bf2f797d8d3a5fa1fb0d89e4b0584",
+      "ranges": [
+        [
+          454,
+          488
+        ]
+      ],
+      "purge_excerpt_sha256": "1049039a88cbea7bdba35d8a2cf1676a6bb4eccf9dc7c98ae2721937afb90722",
+      "byte_identical_main_158B_excerpt": true
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "purge_excerpt_sha256": "1049039a88cbea7bdba35d8a2cf1676a6bb4eccf9dc7c98ae2721937afb90722"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "fcad174b2581d82eafc30ab896e8486c09522318a45f2790c0c4f8759db4676f",
+      "ranges": [
+        [
+          928,
+          954
+        ],
+        [
+          6625,
+          6638
+        ]
+      ]
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/cli.rs",
+      "sha256": "e5e7c6d0c0143c99a4f250e4971e9c0ead35e175cc0121527d6c2c53747d2365",
+      "ranges": [
+        [
+          3619,
+          3625
+        ]
+      ],
+      "fact": "cmd_daemon zero arguments thenDaemonConfigdefault; no existing retention overrideCLI."
+    }
+  ],
+  "root_fresh_read_provenance": {
+    "authority": "ROOT message, not owner productionDBquery",
+    "tracked_count": 57,
+    "states": {
+      "answered": 40,
+      "cancelled": 1,
+      "timed_out": 16
+    },
+    "min_completed_at": 1791215324,
+    "schema_versions": "2..6",
+    "native_nonterminal_count": 0,
+    "observed_now": 1791819445
+  },
+  "minimal_recipe_proposal": [
+    "Keep original snapshot and failedreceipt immutable. ROOT takes a NEW readonly.backup v6reference in separate path andrecordsSHA/time/provenance.",
+    "Parametrize existingrecipe referencepath+SHA only, not SQLdata/counters/timestamps. Re-run exactbefore/after comparisons, actualnewbinaryopenv7, trueold158Bbinaryrefusalv7, trueoldbinaryopen restoredv6.",
+    "Before opening, read snapshot earliestclosed completed_at+7days. Reject stale reference if maintenance cutoff could cross this boundary during boundedrun; take anotherfreshsnapshot ratherthan normalize.",
+    "ROOT freshmin1791215324 implies nexteligibility1791820125 for strictless-than cutoff, ≈680s afterROOTnow1791819445. Start freshrun promptly andrecord wallclock/cutoffs.",
+    "No new daemonoption/migrationframework/helper/newtest; no timestampnormalization/deletion/restorationprod.",
+    "This observes real migration through normalstartup. If anotherretention deletion crossesduringrun, it remainsfailure requiringrefresh, not tolerateddifference."
+  ],
+  "limits": [
+    "Owner did not query productionDB; only two frozen isolatedcopies read-only.",
+    "No newbinary invoked/test/Cargo/service/signal/WT/Git/DBwrite.",
+    "No claimT011PASS: original run isFAIL, freshrecipe stillROOTpending.",
+    "11384records/10892deliveries/0links identical suppliedROOT; owner compares trackedprofilecolumns only, noprivatebody extracted."
+  ]
+}

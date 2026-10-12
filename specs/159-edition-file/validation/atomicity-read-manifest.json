@@ -1,0 +1,229 @@
+{
+  "captured_at_utc": "2026-10-12T13:32:49.459982+00:00",
+  "source_root": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file",
+  "mode": "targeted_readonly",
+  "read_ranges_note": "Lectures par extraits ; sorties longues parfois tronquées. Les bornes consignent les zones ciblées, pas une couverture intégrale garantie de chaque ligne affichée. Les preuves citées ont été relues dans les extraits courts ou recherches exactes.",
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "ranges": [
+        [
+          773,
+          827
+        ],
+        [
+          3613,
+          3634
+        ],
+        [
+          4800,
+          4820
+        ],
+        [
+          5229,
+          5277
+        ],
+        [
+          5918,
+          6052
+        ],
+        [
+          6170,
+          6339
+        ],
+        [
+          6860,
+          6895
+        ],
+        [
+          7045,
+          7077
+        ],
+        [
+          12597,
+          12750
+        ],
+        [
+          21192,
+          21208
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "010552ea194d4950d4f4d701d15d761ad61a82dbda11de1ff16714569fc48186",
+      "ranges": [
+        [
+          107,
+          146
+        ],
+        [
+          163,
+          209
+        ],
+        [
+          397,
+          416
+        ],
+        [
+          531,
+          551
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "ranges": [
+        [
+          477,
+          483
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "0db6541e31d7809b5caee44bf9a8e933b5aa1bb3f2734cf518294a570e16c8e6",
+      "ranges": [
+        [
+          89,
+          177
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/execution_store.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+      "ranges": [
+        [
+          215,
+          223
+        ],
+        [
+          1425,
+          1462
+        ],
+        [
+          1521,
+          1558
+        ],
+        [
+          1655,
+          1655
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "ranges": [
+        [
+          79,
+          99
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/registry.rs",
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "ranges": [
+        [
+          10,
+          22
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "specs/159-edition-file/spec.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "322c1b6158bcbe3c29ecc7b5d974923522ec1b50762969ab259ca5dac633b192",
+      "ranges": [
+        [
+          138,
+          180
+        ],
+        [
+          190,
+          206
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "specs/159-edition-file/research.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+      "sha256": "2518db3c674e689b9ebc274bf4b2814442733aeb8227aaafaacf91c4f73185ae",
+      "ranges": [
+        [
+          82,
+          119
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "specs/159-edition-file/tasks.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "51f1cef3f12c7c6e14b49da6ea32585bc3cdb7a8e816e48f4554ad73d9b66a3c",
+      "ranges": [
+        [
+          35,
+          44
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    },
+    {
+      "file": "specs/159-edition-file/plan.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "0d410cdec7168c26b7bab5910e2a1a93ff0ab38a29a15c7c762af8b6060b302b",
+      "ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "read_mode": "targeted_semantic_and_rg",
+      "read_completed_before_utc": "2026-10-12T13:32:49.459982+00:00"
+    }
+  ],
+  "review_source": {
+    "file": "/Users/moi/.cache/bridget-docs159A-plan-r1-20261012/plan-review159A-r1.json",
+    "sha256": "d2288ae5feb9a425dd7a9fe20467884965e2b43621898dcea299819d8c218760",
+    "scope": "hypotheses1/3/4 latestTerminalSummary"
+  },
+  "executions": "none",
+  "writes": "only cache report/manifest",
+  "limitations": [
+    "no whole-file/whole-program lock order audit",
+    "no runtime SQL or concurrency validation",
+    "future HeldRelease not implemented",
+    "open_in_memory fixtures differ from production shared database"
+  ],
+  "report_sha256": "88613fd06644f86ee4636d161306b84d98ec5670382e747576c3c4ddc9770e59"
+}

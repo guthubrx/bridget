@@ -1,0 +1,380 @@
+{
+  "module": "07",
+  "module_id": "07",
+  "review_kind": "fresh_cycle1_readonly",
+  "read_at": "2026-10-12T16:59:38.346101+00:00",
+  "scope_sha256": "6850eaeced7f122fb921f93d018da6496f8a9655022604f42c1d589e5f956ee9",
+  "findings": [
+    {
+      "id": "DUP-001",
+      "category": "quality",
+      "subcategory": "duplication",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+      "line": 443,
+      "title": "Troisième copie exacte du compilateur de CLI de fixture",
+      "description": "Les corps compile_provider152 sont exactement identiques dans149/152,156 et159. Chacun fait57 lignes, SHA256 a11cc55d72bd083e8ab6d713a4841a70ece5dab8fe18d0230fe41235ccd19d26. Trois corps servent quatre appels ; les scripts fournisseur eux-mêmes divergent.",
+      "evidence": "fn compile_provider152(root: &Path, script: &str, cli_name: &str) -> PathBuf {\n    // Montage149 : CLI directe du PATH, profil privé et ancêtres bornés par .git.\n    // Le texte Python est incorporé : la SHA du CLI capturé couvre le programme.\n    let program = format!(\n        \"__file__ = {}\\n{script}\",\n        serde_json::to_string(&root.join(\"provider.py\")).unwrap()\n    );\n    let embedded = program",
+      "exploitability": "N/A",
+      "impact": "Charge de maintenance et risque de dérive documentaire ou de fixture ; aucun défaut de production démontré par ce constat.",
+      "path_type": "cold",
+      "remediation": "Lors d’une maintenance nécessaire, déplacer ce seul corps dans tests/support/idempotent.rs existant ; garder scénarios et scripts distincts.",
+      "remediation_code": "",
+      "verification": "Comparer les trois corps ; après éventuelle factorisation, rejouer les intégrations existantes sans modifier les oracles.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159A",
+        "Constitution XIX/XX"
+      ],
+      "status": "open",
+      "duplication_type": "STRICT",
+      "duplication_lines": 57,
+      "occurrences_count": 3,
+      "all_locations": [
+        "crates/bridget-daemon/tests/held159_e2e.rs:443-499",
+        "crates/bridget-daemon/tests/guidance156_e2e.rs:343-399",
+        "crates/bridget-daemon/tests/native_delegation_e2e.rs:473-529"
+      ],
+      "severity_justification": "LOW : chemin froid de tests, règle5 du module01 ; aucun impact de production prouvé.",
+      "historical_two_copies_new_third": true,
+      "fingerprint": "6e7f97dc8103"
+    }
+  ],
+  "positives": [
+    "Retrait transactionnel partagé par libération et balayage, sans copie des mutations d’issue/suivi/notice.",
+    "Scripts fournisseur159/156 near-miss : gates et observables distincts, garder séparés évite FalseDRY."
+  ],
+  "warnings": [
+    "Lecture ciblée et partielle ; inventaire/rg sans crédit de lecture ; daemon et wrapper non relus intégralement.",
+    "JSCPD, Clippy, scanners et tests non exécutés ; aucun ratio global ni top10 cyclomatique ni couverture217sources revendiqué.",
+    "24 fichiers strictement de forme exclus. Le fichier non lu spec102_threads_test.rs a changé de SHA ; aucune couverture créditée sur lui.",
+    "Cycle1 précède les correctifs R1 FR002/FR025 annoncés par ROOT et le correctif quadratique confirmé ; pas de grade final ni GREEN global.",
+    "FULL9FAIL/RC101 selonROOT ; verdict des tests réservé au principal.",
+    "Migrations, identité et LLM examinés pour qualité/minimalisme ; audit sécurité complet et doubles recherches réservés aux modules03/06."
+  ],
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "ranges": [
+        [
+          4128,
+          4190
+        ],
+        [
+          4868,
+          4895
+        ],
+        [
+          5289,
+          5375
+        ],
+        [
+          6020,
+          6168
+        ],
+        [
+          6210,
+          6238
+        ],
+        [
+          8390,
+          8480
+        ],
+        [
+          8925,
+          8962
+        ],
+        [
+          9138,
+          9164
+        ],
+        [
+          9305,
+          9410
+        ],
+        [
+          9880,
+          9925
+        ],
+        [
+          11095,
+          11162
+        ],
+        [
+          11330,
+          11390
+        ],
+        [
+          11620,
+          11718
+        ],
+        [
+          11805,
+          11912
+        ],
+        [
+          13055,
+          13108
+        ],
+        [
+          21595,
+          21685
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "ranges": [
+        [
+          1,
+          439
+        ],
+        [
+          440,
+          560
+        ],
+        [
+          609,
+          674
+        ],
+        [
+          990,
+          1085
+        ],
+        [
+          1090,
+          1228
+        ],
+        [
+          1370,
+          1563
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "ranges": [
+        [
+          895,
+          918
+        ],
+        [
+          970,
+          1028
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "ranges": [
+        [
+          4065,
+          4095
+        ],
+        [
+          4395,
+          4435
+        ],
+        [
+          4612,
+          4655
+        ],
+        [
+          6488,
+          6509
+        ],
+        [
+          11470,
+          11542
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "ranges": [
+        [
+          54,
+          77
+        ],
+        [
+          740,
+          785
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+      "ranges": [
+        [
+          3514,
+          3533
+        ],
+        [
+          5578,
+          5600
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+      "ranges": [
+        [
+          1,
+          265
+        ],
+        [
+          443,
+          664
+        ],
+        [
+          1103,
+          1210
+        ],
+        [
+          1830,
+          1968
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+      "ranges": [
+        [
+          102,
+          122
+        ],
+        [
+          343,
+          435
+        ],
+        [
+          501,
+          615
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+      "ranges": [
+        [
+          145,
+          181
+        ],
+        [
+          473,
+          535
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/support/idempotent.rs",
+      "sha256": "f0c43ed73e11c1152cddee0f5d510752f36fb40390d360cc072d19ae115acec1",
+      "ranges": [
+        [
+          1,
+          140
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "ranges": [
+        [
+          1,
+          144
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "5422ef055f7cc128d3022b88c20e4ae6861b40e9455fe563e2ff08d05008874b",
+      "ranges": [
+        [
+          34,
+          55
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+      "ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "33b8537bc450e167a4d81dae1059be6324e4a843648eaade21e8836372fdb105",
+      "ranges": [
+        [
+          29,
+          45
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "fresh_cycle1_partial"
+    }
+  ],
+  "duplicated_code": {
+    "jscpd_percentage": null,
+    "duplicated_lines": null,
+    "total_occurrences": null,
+    "verified_fragment": {
+      "length": 57,
+      "occurrences": 3,
+      "sha256": "a11cc55d72bd083e8ab6d713a4841a70ece5dab8fe18d0230fe41235ccd19d26"
+    }
+  }
+}

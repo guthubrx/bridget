@@ -1,0 +1,52 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+warning: variant `Control` is never constructed
+    --> crates/bridget-daemon/src/daemon.rs:2838:5
+     |
+2837 | enum ObservationJob {
+     |      -------------- variant in this enum
+2838 |     Control(Instant, DeferredControl),
+     |     ^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `due_child_requests` is never used
+   --> crates/bridget-daemon/src/delegation.rs:652:12
+    |
+315 | impl DelegationStore {
+    | -------------------- method in this implementation
+...
+652 |     pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: function `format_cited_paths` is never used
+   --> crates/bridget-daemon/src/native_permissions.rs:218:15
+    |
+218 | pub(crate) fn format_cited_paths(paths: &[String]) -> String {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: `bridget-daemon` (lib) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.32s
+     Running tests/held159_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/held159_e2e-90c8cae5cc3746aa)
+
+running 1 test
+[BRIDGET] PID file écrit avec verrou exclusif: /private/tmp/b.pz78nlhi/tmp/h159-64ebed93/.state/bridget.pid (PID 95052)
+arrêt enfant isolé pid=95052 expected="/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/held159_e2e-90c8cae5cc3746aa" ps_raw="95042 /Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef --exact daemon::presence_tests::recovery_daemon_child --ignored --nocapture\n" ps_stderr=""
+[BRIDGET] PID file écrit avec verrou exclusif: /private/tmp/b.pz78nlhi/tmp/h159-64ebed93/.state/bridget.pid (PID 95566)
+
+thread 'daemon::presence_tests::recovery_daemon_child' (77563415) panicked at crates/bridget-daemon/src/daemon.rs:27789:44:
+called `Result::unwrap()` on an `Err` value: Io(Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee' (77562101) panicked at crates/bridget-daemon/tests/held159_e2e.rs:1288:73:
+daemon repris absent
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee ... FAILED
+
+failures:
+
+failures:
+    held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 19.67s
+
+error: test failed, to rerun pass `-p bridget-daemon --test held159_e2e`

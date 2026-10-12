@@ -1,0 +1,51 @@
+{
+  "label": "T010-SC004-real-busy-native-result-demux",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "held159_e2e",
+    "--features",
+    "test-support",
+    "--",
+    "held159_latency_retenue_",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "started_at": "2026-10-12T15:16:14.435814+00:00",
+  "seconds": 54.72,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T010-SC004-real-busy-native-result-demux.log",
+  "log_sha256": "db13405c7215d46cd4f85217d13c3a091e24da35da488eb11675592ae55a35de",
+  "private_ns": "/private/tmp/b.i63q17t_",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 1,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T010-SC004-real-busy-native-result-demux.json",
+  "original_receipt_sha256": "6d954ec1ee14943358de96d5abdba5bb3c1c1fe911ba867ae7e5fc0650efacf2",
+  "source_hashes_omitted": true,
+  "source_hashes_before_after_verified_equal": true,
+  "source_files_count": 222,
+  "scope": "Résumé sans tableaux géants de sources ; montage synthétique privé, aucun corps de production ajouté."
+}

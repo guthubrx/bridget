@@ -1,0 +1,14 @@
+# Journal du cycle159A — créé le 2026-10-12T17:30:09.450708+00:00
+# Les dates précises des runs sont dans leurs reçus. Aucune chronologie inventée.
+[CONFIG] cycle=1 MAX_CYCLES=1 AUTO_COMMIT=false owner_sources=ROOT owner_review=CACHE-only
+[C1 HISTORIQUE] 0CRITICAL 1HIGH 2MEDIUM 3LOW ; aggregated-findings.json conservé.
+[ROOT CORRECTIONS] REL-001 REL-002 PERF-001 ; trois oracles existants RED métier, puis groupe54PASS/0FAIL/RC0/14.56s.
+[LECTURE CIBLÉE] daemon f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa ; corrections QueueOnly/silence/retain confirmées.
+[DOC LOW] QUAL-001 QUAL-002 corrigés et relus ; DUP-001 reste LOW assumé.
+[DELTA FR009] REL-003 : propriété BareClient masquait Held ; supplément historique afbbb3d551d8.
+[ROOT FR009] RED1FAIL/15.79s ; stock brut dans seul filtre ; GREEN7List/0FAIL/RC0/11.64s ; daemon18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8.
+[SCORING HISTORIQUE] A99.95/0C0H0M1LOW ; couverture4451/174029 lignes ; validation0erreur0warning ; état avant R2 conservé dans history-18ad98.
+[R2 EN COURS] FR023 : true après expiration ne doit pas reset busy_period_start ; oracle T006 existant corrigé par ROOT ; RED/GREEN final attendus.
+[LIMITES] FULL unique RC101/neuf échecs conservés ; aucun GLOBAL_GREEN. Aucun Git/test/Cargo/service par cet owner. Aucun disjoncteur ou tentative supplémentaire inventé.
+[PROCHAINE ACTION] attendreSHA/GREEN/captureROOT ; relecture delta, scoring et validation officiels.
+[R2 VÉRIFIÉ 2026-10-12T17:31:32.938436+00:00] REL-004 fingerprint=a118d5b5912e ; RED0P1F métier, GREEN8P0F RC0 7.08s ; codeabf654 courant relu avant/après identique. Les scores18ad restent historiques.

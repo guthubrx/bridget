@@ -1,0 +1,235 @@
+{
+  "created_at_utc": "2026-10-12T17:30:12.496260+00:00",
+  "kind": "bounded_post_counter_review_R2_annex_not_pass4",
+  "verdict": "CONVERGED",
+  "verdict_scope": "Clôture ciblée FR023/FR025/T006 après correctif de contre-revue, en complément du P3 historique ; pas nouvelle passe globale ni GLOBALGREEN.",
+  "historical_P3": {
+    "file": "/Users/moi/.cache/bridget-converge159A-pass3-20261012/converge159A-pass3.json",
+    "sha256": "af5e740c7eafefd0dcba880773080bfffeba67677ae36275d46a3e6c213b0d65",
+    "daemon_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+    "requirements_matrix_rows": 30,
+    "interpretation": "Matrice30 correspondances conservée datée ; seules plagesmodifiées relues dans cette annexe."
+  },
+  "resolution": {
+    "requirements": [
+      "FR-023",
+      "FR-025"
+    ],
+    "task_existing": "T006",
+    "status": "RESOLVED",
+    "code": {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "line": 5327,
+      "proof": "if presence.busy_period_start.is_none() : true tardif sans false conserve la période ; false5331 la termine ; last_attested5333 et busy5336 se réactualisent."
+    },
+    "oracle": {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "ranges": [
+        [
+          39154,
+          39171
+        ]
+      ],
+      "name": "held159_turnstate_sortie_forcee_depuis_busy_period_start",
+      "proof": "Aprèsexpiration121 ettrue122, attendSome(start). Même nom et montage ; aucune nouvelle tâche/scénario/helper."
+    }
+  },
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+      "ranges": [
+        [
+          5320,
+          5347
+        ],
+        [
+          39154,
+          39171
+        ]
+      ],
+      "read_at_utc": "2026-10-12T17:29:38.013590+00:00"
+    }
+  ],
+  "tests_receipts": {
+    "T006-R2-busy-period-RED": {
+      "file": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-busy-period-RED.json",
+      "sha256": "d7d6c2de3a559cda43d61b346865bb9abb706ff4ebb0d7aca3da59d4f9c41fd6",
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-busy-period-RED.log",
+      "log_sha256": "a9fdf3c3af895bc5daa38af18c6a021ab032bb67bb71fed09caadc1222f7898b",
+      "rc": 101,
+      "seconds": 11.14,
+      "test_results": [
+        [
+          "FAILED",
+          "0",
+          "1",
+          "0"
+        ]
+      ],
+      "tested_daemon_sha256": "041d9303a19dd1518224e38bafc39b90c57b6b2fc712fbcce7d2f5971dc4e8ee",
+      "sources_equal": true,
+      "source_count": 222,
+      "execution_owner": "ROOT"
+    },
+    "T006-R2-turnstate-group-GREEN": {
+      "file": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-turnstate-group-GREEN.json",
+      "sha256": "8042e275e0e1264999ded169c62b4146b04bcd1d8fa715a43c8a515e3b973ced",
+      "log": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-turnstate-group-GREEN.log",
+      "log_sha256": "2fc7e3cdedf74aa7ab3dbb50fe0026d676da692fc825b808b45e74105128b232",
+      "rc": 0,
+      "seconds": 7.08,
+      "test_results": [
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ]
+      ],
+      "tested_daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+      "sources_equal": true,
+      "source_count": 222,
+      "execution_owner": "ROOT"
+    }
+  },
+  "other_files_P3_guard": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "68bec8dd64bf1ac88cdae23c583fef946a6bce04954a9390a2ce6d9d26595f1f",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/reference-communication.md",
+      "sha256": "60afddfc890387e9f1a5861c6525d3ff6ae87084616b67da9acd27649cb5280d",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/skills/bridget/SKILL.md",
+      "sha256": "4d0770cdf9cc47db7ab27bc0ec6dcca82153fb097d8c89143e06b5f5f789df6c",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/skills/bridget/references/commandes.md",
+      "sha256": "0eadf03c61cc271eecca9399ea8269ca996fb9df353d1454ee4d6abcd218317a",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/156-guidage-file/research.md",
+      "sha256": "25fda04acb892c3708ff2bedf20a5425ad4ae33994802bef4808861cd176372d",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/156-guidage-file/spec.md",
+      "sha256": "4ddc8246277c80fe06f787eb812480fcc9617333dbf3c7486bb74e1aa763a7fa",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/checklists/requirements.md",
+      "sha256": "64e21bbd26b6eee1b9cb758a42214e2e8392b86ab33e2dcc3314170bf8d1a920",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "4a4f78e8358edc7b4925d48818f37be53a0d86047445547615a9a26faf82da91",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "94c03814be31504e4764992bb733833a554d77d9c557400324f48ddb6f81e216",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+      "sha256": "6f1981aa0529288b4e3963c09c40b07f756aa06e1f1b2552f2c89e123207a65c",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "2402a470fef4e1f3a1f3e4f796874315ea716d577cbaa81f88fc5fa52f2438b9",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "c7dd1edb2a5c289759ff640b9137e8e0787c9f422c01c978e45189c9b5e836fa",
+      "unchanged_vs_P3": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/latence-159a.md",
+      "sha256": "013df15fed9cd712bb0e1f5cfba5b68a97c67237f4423175dd3d22e5862b961f",
+      "unchanged_vs_P3": true
+    }
+  ],
+  "daemon_sha256_before": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "daemon_sha256_after": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "tasks_sha256_before": "c7dd1edb2a5c289759ff640b9137e8e0787c9f422c01c978e45189c9b5e836fa",
+  "tasks_sha256_after": "c7dd1edb2a5c289759ff640b9137e8e0787c9f422c01c978e45189c9b5e836fa",
+  "tasks_byte_identical": true,
+  "task_counts": {
+    "A": 14,
+    "B": 14,
+    "total": 28,
+    "B_open": true
+  },
+  "tasks_added": [],
+  "tasks_proposed": [],
+  "source_modified_by_agent": false,
+  "tests_executed_by_agent": false,
+  "limitations": [
+    "P3converged18ad est historique avant correctionR2 ; annexeabf654 attestée par GREEN8.",
+    "FULL2551P9F75I historique conservé sans nouveauFULL ni transposition surabf654.",
+    "9replaysT013 et7ListT028 conservent leursdates/SHA ; pas attribués à cette dernière exécution.",
+    "Plages autresfichiers héritées uniquement sousSHAstrict ; horslotB non audité.",
+    "Scoring/revue/livraison ROOT restent des portes distinctes."
+  ]
+}

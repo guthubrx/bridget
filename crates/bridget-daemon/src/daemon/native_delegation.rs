@@ -110,32 +110,39 @@ fn failure(code: &str) -> Value {
                             .get("resets_at")
                             .is_some_and(|value| value.is_null() || value.as_i64().is_some())
                 }
-                "fallback_exhausted" => detail.len() == 1
-                    && detail
-                        .get("tried")
-                        .and_then(Value::as_array)
-                        .is_some_and(|tried| {
-                            !tried.is_empty() && tried.len() <= 4 && tried.iter().all(|entry| {
-                                entry.as_object().is_some_and(|entry| {
-                                    entry.len() == 3
-                                        && ["agent_type", "model", "code"].into_iter().all(|key| {
-                                            entry.get(key).and_then(Value::as_str).is_some_and(
-                                                |value| {
-                                                    !value.is_empty()
+                "fallback_exhausted" => {
+                    detail.len() == 1
+                        && detail
+                            .get("tried")
+                            .and_then(Value::as_array)
+                            .is_some_and(|tried| {
+                                !tried.is_empty()
+                                    && tried.len() <= 4
+                                    && tried.iter().all(|entry| {
+                                        entry.as_object().is_some_and(|entry| {
+                                            entry.len() == 3
+                                                && ["agent_type", "model", "code"].into_iter().all(
+                                                    |key| {
+                                                        entry
+                                                            .get(key)
+                                                            .and_then(Value::as_str)
+                                                            .is_some_and(|value| {
+                                                                !value.is_empty()
                                                         && !value.chars().any(
                                                             bridget_core::is_disallowed_control,
                                                         )
-                                                },
-                                            )
+                                                            })
+                                                    },
+                                                )
+                                                && entry["code"].as_str().is_some_and(|value| {
+                                                    value.bytes().all(|byte| {
+                                                        byte.is_ascii_alphanumeric() || byte == b'_'
+                                                    })
+                                                })
                                         })
-                                        && entry["code"].as_str().is_some_and(|value| {
-                                            value.bytes().all(|byte| {
-                                                byte.is_ascii_alphanumeric() || byte == b'_'
-                                            })
-                                        })
-                                })
+                                    })
                             })
-                        }),
+                }
                 _ => false,
             };
             if valid {
@@ -4750,6 +4757,7 @@ mod tests {
                     false,
                     Some(true),
                     &mut st,
+                    false,
                 ),
                 DaemonToWrapper::Registered { .. }
             ));
@@ -5913,6 +5921,7 @@ mod tests {
                     false,
                     Some(true),
                     &mut st,
+                    false,
                 );
                 assert!(
                     matches!(registration, DaemonToWrapper::Registered { .. }),
@@ -8132,6 +8141,7 @@ mod tests {
                     false,
                     Some(true),
                     &mut st,
+                    false,
                 ),
                 DaemonToWrapper::Registered { .. }
             ));
@@ -8235,8 +8245,8 @@ mod tests {
             .is_none()
         );
         {
-            let st = shared.lock().unwrap();
-            super::super::maintain_stores(&st, unix_timestamp());
+            let mut st = shared.lock().unwrap();
+            super::super::maintain_stores(&mut st, unix_timestamp());
         }
         for _ in 0..3 {
             tick(&shared);
@@ -8642,6 +8652,7 @@ mod tests {
                 false,
                 Some(true),
                 &mut st,
+                false,
             ),
             DaemonToWrapper::Registered { .. }
         ));
@@ -8801,9 +8812,9 @@ mod tests {
             )
             .unwrap()
         };
-        super::super::maintain_stores(&st, refused_at + 30 * 24 * 3600);
+        super::super::maintain_stores(&mut st, refused_at + 30 * 24 * 3600);
         assert_eq!(count(), 1, "le reçu reste à exactement 30 jours");
-        super::super::maintain_stores(&st, refused_at + 30 * 24 * 3600 + 1);
+        super::super::maintain_stores(&mut st, refused_at + 30 * 24 * 3600 + 1);
         assert_eq!(count(), 0, "le passage serveur purge à plus de 30 jours");
         assert!(st.delegation_store.tasks().unwrap().is_empty());
         assert_eq!(
@@ -11378,7 +11389,8 @@ mod tests {
                     None,
                     false,
                     Some(true),
-                    &mut st
+                    &mut st,
+                    false
                 ),
                 DaemonToWrapper::Registered { .. }
             ));
@@ -11945,7 +11957,7 @@ mod tests {
         // Toutes les remises ont expiré : l'entretien recopie AVANT de les effacer.
         // Les tâches finissent dans le futur : l'âge les protège de la purge d'arbre.
         let loin = unix_timestamp() + 90 * JOUR_150;
-        super::super::maintain_stores(&st, loin);
+        super::super::maintain_stores(&mut st, loin);
         let cle = IdempotencyKey::new(
             &crate::communication::issuer_scope(&ids[0]),
             OperationKind::Send,
@@ -12497,6 +12509,7 @@ mod tests {
                 false,
                 Some(true),
                 &mut st,
+                false,
             ),
             DaemonToWrapper::Registered { .. }
         ));
@@ -12968,7 +12981,8 @@ mod tests {
                     None,
                     false,
                     Some(true),
-                    &mut st
+                    &mut st,
+                    false
                 ),
                 DaemonToWrapper::Registered { .. }
             ));
@@ -13188,7 +13202,7 @@ mod tests {
         let externe = rusqlite::Connection::open(&config.db_path).unwrap();
         externe.execute_batch("CREATE TRIGGER s150_bloque BEFORE UPDATE ON native_delegations BEGIN SELECT RAISE(ABORT,'bloque'); END;").unwrap();
         assert!(copy_delivery_acks(&st).is_err());
-        super::super::maintain_stores(&st, loin);
+        super::super::maintain_stores(&mut st, loin);
         assert_eq!(
             st.idempotency.send_delivery_phase(&cle).unwrap().as_deref(),
             Some("acked"),
@@ -13203,7 +13217,7 @@ mod tests {
         );
         // L'écriture revient : la preuve est recopiée, puis seulement la remise est purgée.
         externe.execute_batch("DROP TRIGGER s150_bloque;").unwrap();
-        super::super::maintain_stores(&st, loin);
+        super::super::maintain_stores(&mut st, loin);
         assert!(
             st.delegation_store
                 .get(&task.task_id)
@@ -13345,7 +13359,7 @@ mod tests {
         let mut precedent = 5000;
         let mut passes = 0;
         loop {
-            super::super::maintain_stores(&st, unix_timestamp());
+            super::super::maintain_stores(&mut st, unix_timestamp());
             let restantes = st.delegation_store.tasks().unwrap().len();
             assert!(
                 precedent - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
@@ -13395,7 +13409,7 @@ mod tests {
             recent - 6000,
         );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 4300);
-        super::super::maintain_stores(&st, unix_timestamp());
+        super::super::maintain_stores(&mut st, unix_timestamp());
         let restantes = st.delegation_store.tasks().unwrap().len();
         assert!(
             4300 - restantes <= crate::disk_hygiene::MAX_ENTRIES_PER_PASS,

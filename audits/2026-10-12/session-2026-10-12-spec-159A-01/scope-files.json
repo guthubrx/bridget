@@ -1,0 +1,655 @@
+{
+  "at": "2026-10-12T16:41:05.554865+00:00",
+  "base": "b235998638b3eadf8f8edc0a6e323b762e95cab0",
+  "files": [
+    {
+      "path": "crates/bridget-daemon/src/attach.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/attach.rs",
+      "sha256": "235fed40f0ac508982e8d9ee73b38167f562f07672736d1ff10785685d45fec1",
+      "lines": 9297,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/cli.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/cli.rs",
+      "sha256": "e5e7c6d0c0143c99a4f250e4971e9c0ead35e175cc0121527d6c2c53747d2365",
+      "lines": 10893,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "lines": 47094,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+      "sha256": "93382c2b07e474f9299d88e06b2876db461ffcc6385a6cc22d7905a297215058",
+      "lines": 1292,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "642aa27a7999ecc432f7659ab4de9b9ae445c57b2ef1e5f768cab03f2c572271",
+      "lines": 13545,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_delegation_chain155_tests.rs",
+      "sha256": "4ca08a95df7e93aa99a4cce7f9c3c37dd26d51bf526beff2afa312e91625a940",
+      "lines": 544,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "897cbdac5928985764dc4ceb42a941469ed4f95c3a4be85f585f0d8de3506a69",
+      "lines": 6166,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_delegation_respond155_tests.rs",
+      "sha256": "1d191c9cd676b895896b4f0500312bb054c2f88ef8c45f2488ac8c03a14d8f71",
+      "lines": 639,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "sha256": "1a861ddedaa1ad53e144a0432b60c8a50987390ca02a42325f3123b0fd677027",
+      "lines": 1209,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "sha256": "b377bf3d02da84746967221b320d59a774d611e5ee5db3916ffde889c7dafe3a",
+      "lines": 2445,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/idempotency.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "lines": 1677,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "lines": 1563,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/idempotency/tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/tests.rs",
+      "sha256": "78fe60ae1851e523e586d439d6b4431d0f4ce9707f5ca6d640ae3a94bf4dfdd9",
+      "lines": 3581,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/mcp.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "52d389fd09d8787e801ce689727a84c6eea901ead4b7b4929450761e52acebc2",
+      "lines": 8606,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/native_permission_observer149_tests.rs",
+      "sha256": "f7f2c1cf3cb10ff750fea067ce066d009d387c939f6a4c13acc21bf819902091",
+      "lines": 537,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permissions149_tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/native_permissions149_tests.rs",
+      "sha256": "2982fcba6ad1895270e3e6e9cab5ef8450a8e8cd78b4a473836d393267746866",
+      "lines": 976,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/referent_control.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "68bec8dd64bf1ac88cdae23c583fef946a6bce04954a9390a2ce6d9d26595f1f",
+      "lines": 1032,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/registry.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "lines": 2346,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/reprise.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/reprise.rs",
+      "sha256": "bd9aff11f62f71007dfd11243e42551128a6687126eb3a2bc983bf0699dbc4be",
+      "lines": 1319,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/store.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store.rs",
+      "sha256": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+      "lines": 627,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/store/service_events.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store/service_events.rs",
+      "sha256": "a711a4c6ff8dce5f9eb01cca91457216c74c6ced4ed7837fc9eede4690ce0a69",
+      "lines": 910,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/store/tests.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store/tests.rs",
+      "sha256": "bb9b74f3bd7f7b0597ee8f20d79c53c5b1a763b4f1ed92c68d837b005635a8ff",
+      "lines": 2293,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/store_schema.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "lines": 103,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/t3code.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/t3code.rs",
+      "sha256": "e68f2a5e49c7db2b9d26aca11c2a814aba536a6919075561fe4f152b88e0d947",
+      "lines": 6879,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/src/wrapper.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "lines": 11891,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/attach_journal_attestation_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/attach_journal_attestation_test.rs",
+      "sha256": "ce58e701019a7b3efeb25740da8c4817ba5651a2687a6ad582def4fa5bcc3313",
+      "lines": 383,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "sha256": "a45447ecf97fbff0f6db93073eaf6a67c6a30d88140b8910270f941b2fbfe411",
+      "lines": 445,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/channel_observation_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/channel_observation_test.rs",
+      "sha256": "dc191cd5e8f07f52774ae7edb2f2d79e49e99f07b54934a129d43492c94d80a7",
+      "lines": 317,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/coordination_events_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/coordination_events_test.rs",
+      "sha256": "e82a513c6fc3e83a11e6a28983154379d3242ff4bbd5dc2cd206ea8f8e9124b6",
+      "lines": 811,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_content_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/core_089_content_test.rs",
+      "sha256": "44faf9f9fe0819360f118ee9c60836bd0b524c1289f69e0b87e0da2b71a4fa56",
+      "lines": 750,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "sha256": "f69f7dc63b5ac425c3eec5fab916cc31a746d04d6e70e85c256c98215f387abe",
+      "lines": 451,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_host_session_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/core_089_host_session_test.rs",
+      "sha256": "619cbf37535daea351e3ca2cfa561285d2ee13f0a3e7e532da5a6a7808501e5e",
+      "lines": 421,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_native_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/core_089_native_test.rs",
+      "sha256": "0af9d0f9f560ee1101b9cf7c8d6add71b1855e087bb968962a480c2c86a42855",
+      "lines": 671,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_service_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/core_089_service_test.rs",
+      "sha256": "2d5683b2327aff5756ce7a85d1d2601bfe7f45bbb40abe02e94247ff2bdc0330",
+      "lines": 1332,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "sha256": "be09101d644ac698bf0965b84c14298e85fde494267a6db91e40b3f4bbdc44f3",
+      "lines": 288,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+      "lines": 1046,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/held159_e2e.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+      "lines": 2116,
+      "status": "untracked"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/integration_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/integration_test.rs",
+      "sha256": "8ccb2f0c06450cea1bbaffc7c9aebc91bbab36e28ff7a4204455ae6743de6a35",
+      "lines": 386,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "sha256": "c652e3e490459ab027527cbe65d3af79f26691fba9431ebe3cc9508cb4e0beb8",
+      "lines": 675,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/managed_parity_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/managed_parity_test.rs",
+      "sha256": "8597bb7239dcb80a9c9b705347d75659ce71dcedd951a8c0d9e8937fe46a83fc",
+      "lines": 1887,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+      "lines": 2450,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "sha256": "fa83e239df06b5f3b189ef55b87c0294d3d695c619463e6e01b7e64752f88cae",
+      "lines": 783,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "sha256": "1506c6d190ea11d98b9ca41e1e72d5203b50d53d7b92dce99129fafc2e62fbc8",
+      "lines": 405,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/sc005_attach_budget.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/sc005_attach_budget.rs",
+      "sha256": "81810680da5fbf33f2809bb70359f0be2348e1f41747d35c1af4974d6e3f26c9",
+      "lines": 1026,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/spawn_refusal_hosts_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/spawn_refusal_hosts_test.rs",
+      "sha256": "8615bc4ae837021cff3d9ffb55b2b5a73b4817924fc8a8a65fcd23417a0fd542",
+      "lines": 256,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/spec102_threads_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/spec102_threads_test.rs",
+      "sha256": "db4df20fc4795c48331c8426fdcb7b79b075e480a97a2e44989c3d0a45a8ffbd",
+      "lines": 2864,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/spec138_project_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/spec138_project_test.rs",
+      "sha256": "7e0fdbabf67e7fefd333e50e40aca502f903dd0d8934c57fc3913313e952daff",
+      "lines": 218,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/support/idempotent.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/support/idempotent.rs",
+      "sha256": "f0c43ed73e11c1152cddee0f5d510752f36fb40390d360cc072d19ae115acec1",
+      "lines": 1087,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/t3code_098_test.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/t3code_098_test.rs",
+      "sha256": "3d6b7d1b60bf062c9609c8ed07433f5cd2f2e65452525f1c7e38c73d7ca95179",
+      "lines": 555,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "crates/bridget-transport/src/protocol.rs",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+      "lines": 8799,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "docs/decisions/159-file-retenue-et-edition.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "lines": 144,
+      "status": "untracked"
+    },
+    {
+      "path": "docs/reference-communication.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/reference-communication.md",
+      "sha256": "50ac13512b933fbb688dd3d286718b0bcd29521ff6851ecc8eee84b67e716aee",
+      "lines": 1139,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "skills/bridget/SKILL.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/skills/bridget/SKILL.md",
+      "sha256": "4d0770cdf9cc47db7ab27bc0ec6dcca82153fb097d8c89143e06b5f5f789df6c",
+      "lines": 1011,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "skills/bridget/references/commandes.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/skills/bridget/references/commandes.md",
+      "sha256": "0eadf03c61cc271eecca9399ea8269ca996fb9df353d1454ee4d6abcd218317a",
+      "lines": 1502,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/checklists/requirements.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/checklists/requirements.md",
+      "sha256": "64e21bbd26b6eee1b9cb758a42214e2e8392b86ab33e2dcc3314170bf8d1a920",
+      "lines": 50,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/data-model.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "5422ef055f7cc128d3022b88c20e4ae6861b40e9455fe563e2ff08d05008874b",
+      "lines": 168,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/plan.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "94c03814be31504e4764992bb733833a554d77d9c557400324f48ddb6f81e216",
+      "lines": 176,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/quickstart.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/quickstart.md",
+      "sha256": "23f289b8dd8182a114161e7286c8cb5a986db1d9bd215f40ef5b5184bf738a11",
+      "lines": 71,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/research.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+      "sha256": "cede674e3f28e439042783d59edc94c5c4d2072dd103252098dbf1725edb303b",
+      "lines": 287,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/reuse-audit.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+      "lines": 100,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/spec.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "85ea3726f08b773dbdd3f4c7d4d1b4a780f8aa21fdcae9501875c1274e848631",
+      "lines": 212,
+      "status": "tracked_modified"
+    },
+    {
+      "path": "specs/159-edition-file/tasks.md",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "33b8537bc450e167a4d81dae1059be6324e4a843648eaade21e8836372fdb105",
+      "lines": 125,
+      "status": "tracked_modified"
+    }
+  ],
+  "excluded_paths": [
+    "crates/bridget-daemon/src/cli_lineage.rs",
+    "crates/bridget-daemon/src/daemon/native_lineage.rs",
+    "crates/bridget-daemon/src/delegation.rs",
+    "crates/bridget-daemon/src/delegation_lineage.rs",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+    "crates/bridget-daemon/src/delegation_mcp.rs",
+    "crates/bridget-daemon/src/desired_state.rs",
+    "crates/bridget-daemon/src/lifecycle.rs",
+    "crates/bridget-daemon/src/lineage_client.rs",
+    "crates/bridget-daemon/src/managed_process.rs",
+    "crates/bridget-daemon/src/native_permission_observer.rs",
+    "crates/bridget-daemon/src/native_permissions.rs",
+    "crates/bridget-daemon/src/provider_limits.rs",
+    "crates/bridget-daemon/src/t3code_mcp.rs",
+    "crates/bridget-daemon/src/workspace_git.rs",
+    "crates/bridget-daemon/src/workspace_git_tests.rs",
+    "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+    "crates/bridget-daemon/tests/core_089_security_test.rs",
+    "crates/bridget-transport/src/claude_stream_json.rs",
+    "crates/bridget-transport/src/lineage_protocol.rs",
+    "crates/bridget-transport/src/native_permissions.rs",
+    "crates/bridget-transport/tests/lineage_contract_test.rs",
+    "crates/bridget-transport/tests/native_permissions149_e2e.rs",
+    "crates/bridget-transport/tests/native_permissions149_test.rs",
+    "specs/159-edition-file/reuse-audit.md.historique",
+    "specs/159-edition-file/validation/GO159A.json",
+    "specs/159-edition-file/validation/SC004-latence-preuve.json",
+    "specs/159-edition-file/validation/T001-baseline-latence159A.json",
+    "specs/159-edition-file/validation/T001-daemon-reference.json",
+    "specs/159-edition-file/validation/T001-latency-reference-replay.json",
+    "specs/159-edition-file/validation/T001-native149-diagnostic.md",
+    "specs/159-edition-file/validation/T001-native149-o4-replay.json",
+    "specs/159-edition-file/validation/T001-transport-reference.json",
+    "specs/159-edition-file/validation/T002-read-manifest.json",
+    "specs/159-edition-file/validation/T002-readonly.md",
+    "specs/159-edition-file/validation/T002-source-correspondence159A.json",
+    "specs/159-edition-file/validation/T003-T004-progress159A.json",
+    "specs/159-edition-file/validation/T003-T006-behaviour-RED-compilable.json",
+    "specs/159-edition-file/validation/T003-T006-behaviour-RED.json",
+    "specs/159-edition-file/validation/T003-migration-GREEN.json",
+    "specs/159-edition-file/validation/T003-migration-T004-T005-RED.json",
+    "specs/159-edition-file/validation/T004-T006-progress159A.json",
+    "specs/159-edition-file/validation/T004-T006-progress159A.md",
+    "specs/159-edition-file/validation/T011-initial-FAIL.json",
+    "specs/159-edition-file/validation/T011-maintenance-diagnostic.json",
+    "specs/159-edition-file/validation/T011-maintenance-diagnostic.md",
+    "specs/159-edition-file/validation/analyze159A-complement-final.json",
+    "specs/159-edition-file/validation/analyze159A-complement-final.md",
+    "specs/159-edition-file/validation/atomicity-read-manifest.json",
+    "specs/159-edition-file/validation/atomicity-readonly.md",
+    "specs/159-edition-file/validation/baseline.md",
+    "specs/159-edition-file/validation/comparison-T013.json",
+    "specs/159-edition-file/validation/comparison-T013.md",
+    "specs/159-edition-file/validation/historique-full158B-pour159A.json",
+    "specs/159-edition-file/validation/historique-full158B-pour159A.md",
+    "specs/159-edition-file/validation/latence-159a.md",
+    "specs/159-edition-file/validation/plan-review159A-r1-responses.md",
+    "specs/159-edition-file/validation/plan-review159A-r1.json",
+    "specs/159-edition-file/validation/plan-review159A-r2-responses.md",
+    "specs/159-edition-file/validation/plan-review159A-r2.json",
+    "specs/159-edition-file/validation/preflight159A.json",
+    "specs/159-edition-file/validation/progress-T007-T008.json",
+    "specs/159-edition-file/validation/progress-T007-T008.md",
+    "specs/159-edition-file/validation/restauration-v7.json",
+    "specs/159-edition-file/validation/restauration-v7.md",
+    "specs/159-edition-file/validation/reuse159A-manifest.json",
+    "specs/159-edition-file/validation/reuse159A.json"
+  ],
+  "excluded_format_only": [
+    {
+      "path": "crates/bridget-daemon/src/cli_lineage.rs",
+      "head_sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "current_sha256": "c516c1285e6b989a60d5f727e5f1df7c23d8c85157211106d18bc4024ea73840",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "head_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "current_sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation.rs",
+      "head_sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "current_sha256": "daa72df90be400f7972eb1e550b5c516cbf502e6cefd51f0e16ce001049cc942",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_lineage.rs",
+      "head_sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "current_sha256": "5e521b54112f897f157a9a83504412187358d15084dc7be11e44026e48ebe10d",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "head_sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+      "current_sha256": "71d5d6b2e1cc9ce062282bffa3dbca743b8276a240630a1835ef9dd716dcfdd8",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "head_sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "current_sha256": "6a435e40cd8f21cbf0c55510dd2d1ceb9f383dd32def8120de5412e729ea7a96",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/desired_state.rs",
+      "head_sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "current_sha256": "4eed549fddec4b61e3d537dcba25383831b6585e202ea7568b0317a5139dc05a",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/lifecycle.rs",
+      "head_sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "current_sha256": "17d4b5027229bc977a8f562b07c00d225b7628391454232bf73d4ff2eccb9df2",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/lineage_client.rs",
+      "head_sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "current_sha256": "1cda55a80b302f735b6be5251985e9a2ebab78ae5f53f2cc0d2a77fea9f807b2",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/managed_process.rs",
+      "head_sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "current_sha256": "a71aa1ae0a858473736f6880f6a164f9b1ff45194b32d7c68d1e92a4b76361ff",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permission_observer.rs",
+      "head_sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "current_sha256": "4abdfa6e5d40cd05ffb7819bdc2dc3a7cb1641622783b1525bff2f4cce3af92f",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/native_permissions.rs",
+      "head_sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "current_sha256": "a479aa6db3a533998d9e289d1081b468f2c9af0c315c8520f72058ec170b4ffc",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/provider_limits.rs",
+      "head_sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "current_sha256": "89a463481af5d81f0de50e2598d7a06495c50f08dad4c9e799621eed45204ddd",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/t3code_mcp.rs",
+      "head_sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "current_sha256": "b127a60abe58367935e9a4534c4e06a972d063a990c7c29acb014ab75918e710",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/workspace_git.rs",
+      "head_sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "current_sha256": "4a555951358a121aee787d247631637ab6d089e5167bea177f972c8744a4a1e5",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/src/workspace_git_tests.rs",
+      "head_sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "current_sha256": "215803bd6ffeb838bbd1ed2d9259f4f6c88c4345ab9ad98916d6949a0c1c68c4",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "head_sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "current_sha256": "6f2dbb16c98e52a6f74194fa75b397a393aa083409c338b0ec7dd25bb8c83e5f",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-daemon/tests/core_089_security_test.rs",
+      "head_sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "current_sha256": "dd10a05671bd46720208d47fa770e6b5d3c55afd3b6dfcd6538f2616ca606e1d",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-transport/src/claude_stream_json.rs",
+      "head_sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "current_sha256": "a4657ebb34d7320083bef245f0a74e7cf394b5c3c9f862387c51158969185635",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-transport/src/lineage_protocol.rs",
+      "head_sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "current_sha256": "9ff600f971766d3dd35cbb16091d1aedf5dc362dec39a1685e8b62357c1c1c55",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-transport/src/native_permissions.rs",
+      "head_sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "current_sha256": "b4a1ea82fa18e01bf350d4216578b87dc15fbbf0e0e18eeeecdacff903d5cc52",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-transport/tests/lineage_contract_test.rs",
+      "head_sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "current_sha256": "1053a795c962d989df901a2695d6e0ce23ffd89d77512675f829e55df0078da8",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "head_sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "current_sha256": "ab7f9f8a457e6fb29e615207ffa9dc6db7587adcadfe140f6963fb29cf12905f",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    },
+    {
+      "path": "crates/bridget-transport/tests/native_permissions149_test.rs",
+      "head_sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "current_sha256": "dba4ebceebb6c155844519aeecefdf460acedfeab2c2c5df597942542ff5b187",
+      "proof": "pre-fmt == HEAD; rustfmt(HEAD, edition2024, skip_children=true) == current bytes"
+    }
+  ]
+}

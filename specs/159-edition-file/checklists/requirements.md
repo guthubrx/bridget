@@ -1,33 +1,33 @@
-# Specification Quality Checklist: Édition de la file de remise
+# Liste de contrôle qualité de la spécification : Édition de la file de remise
 
-**Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-10-11
-**Feature**: [spec.md](../spec.md)
+**Objet** : Vérifier la complétude et la qualité de la spécification avant la planification
+**Créée le** : 2026-10-11
+**Fonctionnalité** : [spec.md](../spec.md)
 
-## Content Quality
+## Qualité du contenu
 
-- [x] No implementation details (languages, frameworks, APIs)
-- [x] Focused on user value and business needs
-- [x] Written for non-technical stakeholders
-- [x] All mandatory sections completed
+- [x] Aucun détail d’implémentation (langages, frameworks, API)
+- [x] Centrée sur la valeur pour l’utilisateur et les besoins métier
+- [x] Rédigée pour des lecteurs non spécialistes
+- [x] Toutes les sections obligatoires sont complètes
 
-## Requirement Completeness
+## Complétude des exigences
 
-- [x] No [NEEDS CLARIFICATION] markers remain
-- [x] Requirements are testable and unambiguous
-- [x] Success criteria are measurable
-- [x] Success criteria are technology-agnostic (no implementation details)
-- [x] All acceptance scenarios are defined
-- [x] Edge cases are identified
-- [x] Scope is clearly bounded
-- [x] Dependencies and assumptions identified
+- [x] Aucun marqueur [NEEDS CLARIFICATION] ne subsiste
+- [x] Les exigences sont testables et sans ambiguïté
+- [x] Les critères de succès sont mesurables
+- [x] Les critères de succès ne dépendent pas d’une technologie (aucun détail d’implémentation)
+- [x] Tous les scénarios d’acceptation sont définis
+- [x] Les cas limites sont identifiés
+- [x] Le périmètre est clairement borné
+- [x] Les dépendances et les hypothèses sont identifiées
 
-## Feature Readiness
+## Préparation de la fonctionnalité
 
-- [x] All functional requirements have clear acceptance criteria
-- [x] User scenarios cover primary flows
-- [x] Feature meets measurable outcomes defined in Success Criteria
-- [x] No implementation details leak into specification
+- [x] Toutes les exigences fonctionnelles ont des critères d’acceptation clairs
+- [x] Les scénarios utilisateur couvrent les parcours principaux
+- [x] La fonctionnalité satisfait les résultats mesurables définis dans les critères de succès
+- [x] Aucun détail d’implémentation ne fuit dans la spécification
 
 ## Notes
 

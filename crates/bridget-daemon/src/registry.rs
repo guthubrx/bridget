@@ -66,6 +66,9 @@ pub struct AgentDefinition {
     pub permissions: String,
     #[serde(default = "default_queue_capacity")]
     pub queue_capacity: usize,
+    /// File retenue par le daemon, fermée pour tout registre antérieur.
+    #[serde(default)]
+    pub held_queue: bool,
     #[serde(default = "default_notify_timeout_secs")]
     pub notify_timeout_secs: u64,
     /// Branchement MCP éphémère, déclaré par type et jamais par une
@@ -276,6 +279,7 @@ impl AgentRegistry {
             claude_config_dir: resolved.claude_config_dir.clone(),
             permissions: resolved.permissions.clone(),
             queue_capacity: resolved.queue_capacity,
+            held_queue: false,
             notify_timeout_secs: resolved.notify_timeout_secs,
             mcp: McpDefinition {
                 interactive: resolved.mcp.interactive.clone(),
@@ -328,23 +332,48 @@ impl AgentRegistry {
             return Err("effort_unavailable".into());
         }
         let scoped = self.for_spawn_posture(agent_type, posture)?;
-        scoped.pin_delegation_model(agent_type,model,effort)
+        scoped.pin_delegation_model(agent_type, model, effort)
     }
 
     /// Les droits sont construits au puits natif depuis un fait attesté.
-    pub(crate) fn for_inherited_delegation(&self,agent_type:&str,model:&str,effort:Option<&str>,policy:&serde_json::Value)->Result<Self,String> {
-        let source=self.get(agent_type)?;
-        let capabilities=source.capabilities.models.get(model).ok_or("model_unavailable")?;
-        if effort.is_some_and(|value|!capabilities.efforts.iter().any(|item|item==value)){return Err("effort_unavailable".into())}
-        let mut definition=source.clone();
-        definition.permissions="deny".into();
-        crate::native_permissions::apply_child_arguments(&definition.protocol,policy,&mut definition.args)?;
-        Self{agents:BTreeMap::from([(agent_type.into(),definition)]),source:self.source.clone()}.pin_delegation_model(agent_type,model,effort)
+    pub(crate) fn for_inherited_delegation(
+        &self,
+        agent_type: &str,
+        model: &str,
+        effort: Option<&str>,
+        policy: &serde_json::Value,
+    ) -> Result<Self, String> {
+        let source = self.get(agent_type)?;
+        let capabilities = source
+            .capabilities
+            .models
+            .get(model)
+            .ok_or("model_unavailable")?;
+        if effort.is_some_and(|value| !capabilities.efforts.iter().any(|item| item == value)) {
+            return Err("effort_unavailable".into());
+        }
+        let mut definition = source.clone();
+        definition.permissions = "deny".into();
+        crate::native_permissions::apply_child_arguments(
+            &definition.protocol,
+            policy,
+            &mut definition.args,
+        )?;
+        Self {
+            agents: BTreeMap::from([(agent_type.into(), definition)]),
+            source: self.source.clone(),
+        }
+        .pin_delegation_model(agent_type, model, effort)
     }
 
     /// O(log n+B+C) en temps et O(B) en mémoire : n types du registre, B octets
     /// des arguments/modèle/effort, C coût de validation des capacités déclarées.
-    pub(crate) fn pin_delegation_model(mut self,agent_type:&str,model:&str,effort:Option<&str>)->Result<Self,String> {
+    pub(crate) fn pin_delegation_model(
+        mut self,
+        agent_type: &str,
+        model: &str,
+        effort: Option<&str>,
+    ) -> Result<Self, String> {
         let definition = self
             .agents
             .get_mut(agent_type)
@@ -708,6 +737,7 @@ fn registry_warnings(
         "claude_config_dir",
         "permissions",
         "queue_capacity",
+        "held_queue",
         "notify_timeout_secs",
         "mcp",
         "capabilities",
@@ -1128,6 +1158,7 @@ fn definition(
         claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        held_queue: false,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
         mcp: McpDefinition {
             interactive: mcp_interactive.to_string(),
@@ -1169,6 +1200,7 @@ fn native_claude_definition() -> Result<AgentDefinition, String> {
         claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        held_queue: false,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
         mcp: McpDefinition {
             interactive: "claude".to_string(),
@@ -1234,6 +1266,7 @@ fn native_codex_definition() -> AgentDefinition {
         claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        held_queue: false,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
         mcp: McpDefinition {
             interactive: "codex".to_string(),
@@ -1263,6 +1296,7 @@ fn native_cursor_definition() -> AgentDefinition {
         claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        held_queue: false,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
         mcp: McpDefinition {
             interactive: "none".to_string(),
@@ -2254,4 +2288,59 @@ mod tests {
             "oracle — isolat U+2066 (Trojan Source) DOIT être refusé"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn held159_hold_ferme_identique() {
+    let omitted: AgentDefinition = serde_json::from_str(
+        r#"{"command":"/bin/sh","args":["-c","printf raw159"],"queue_capacity":7}"#,
+    )
+    .unwrap();
+    let closed: AgentDefinition=serde_json::from_str(r#"{"command":"/bin/sh","args":["-c","printf raw159"],"queue_capacity":7,"held_queue":false}"#).unwrap();
+    let enabled: AgentDefinition=serde_json::from_str(r#"{"command":"/bin/sh","args":["-c","printf raw159"],"queue_capacity":7,"held_queue":true}"#).unwrap();
+    assert_eq!(omitted, closed, "omission signifie réglage fermé");
+    assert_eq!(closed.args, vec!["-c", "printf raw159"]);
+    assert_eq!(closed.queue_capacity, 7);
+    assert_ne!(
+        enabled, closed,
+        "le réglage ouvert doit être conservé par le registre"
+    );
+    // Le chargement réel lit un fichier privé ; le réglage reste propre au daemon.
+    let root = std::env::temp_dir().join(format!("h159-reg-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("agents.json");
+    let mut frozen = Vec::new();
+    for (flag, expected) in [(None, false), (Some(false), false), (Some(true), true)] {
+        let mut value = serde_json::json!({"agents":{"held159":{"command":"/bin/sh",
+            "args":["-c","printf raw159"],"queue_capacity":7}}});
+        if let Some(flag) = flag {
+            value["agents"]["held159"]["held_queue"] = serde_json::json!(flag);
+        }
+        let content = value.to_string();
+        std::fs::write(&path, &content).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let loaded = AgentRegistry::load_from_path(path.clone()).unwrap();
+        let definition = loaded.get("held159").unwrap();
+        assert_eq!(
+            definition.held_queue, expected,
+            "champ conservé par le vrai chargement"
+        );
+        assert_eq!(definition.args, closed.args);
+        assert_eq!(definition.queue_capacity, closed.queue_capacity);
+        frozen.push(loaded.resolved_definition("held159").unwrap());
+        assert!(
+            registry_warnings(&content, &path, &default_agents().unwrap()).is_empty(),
+            "held_queue est une clé connue du registre"
+        );
+    }
+    assert_eq!(
+        frozen[0], frozen[1],
+        "définition fournisseur inchangée quand fermé"
+    );
+    assert_eq!(
+        frozen[0], frozen[2],
+        "réglage daemon absent de la définition et du digest fournisseur"
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }

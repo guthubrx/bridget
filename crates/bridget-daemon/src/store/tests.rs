@@ -1120,8 +1120,9 @@ fn seed_ledger_with_deliveries(path: &Path, n: usize) {
         tx.execute(
             "INSERT INTO send_deliveries (
                     delivery_id, issuer_scope, operation_kind, idempotency_key,
-                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
-                 ) VALUES (?1, ?2, 'send', ?3, 'instance-1', 1, ?4, 9_999_999_999, X'7B7D')",
+                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes,
+                    recipient_agent
+                 ) VALUES (?1, ?2, 'send', ?3, 'instance-1', 1, ?4, 9_999_999_999, X'7B7D', 'b')",
             rusqlite::params![format!("del-{i:05}"), scope, id, phase],
         )
         .unwrap();

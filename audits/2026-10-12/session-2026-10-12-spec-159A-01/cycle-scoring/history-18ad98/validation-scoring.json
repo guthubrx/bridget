@@ -1,0 +1,20 @@
+{
+  "validated_at_utc": "2026-10-12T17:24:23.775792+00:00",
+  "command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py",
+    "/Users/moi/.cache/bridget-audit159A-final-20261012"
+  ],
+  "rc": 0,
+  "stdout": "0 erreur(s), 0 warning(s) — session conforme",
+  "errors": 0,
+  "warnings": 0,
+  "scope": "Artifact schema validation only; no Cargo/tests/scanner/runtime executed.",
+  "authority_manifest": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/manifest.json",
+  "authority_manifest_sha256": "e4827c152916caf2c95c94c054ec7183e23b492d4efe626ddde7a6eeb96d4dc4",
+  "post_validation_change": null,
+  "daemon_current_sha256": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+  "stderr": "",
+  "log": "/Users/moi/.cache/bridget-audit159A-final-20261012/validation-scoring.log",
+  "log_sha256": "59410c3e47259cb6e51ac58fafb6c3b3239a5967f9180be86bf7f97589d4d085"
+}

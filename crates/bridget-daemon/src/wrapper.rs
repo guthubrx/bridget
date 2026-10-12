@@ -1693,6 +1693,7 @@ fn connect_and_register(
         os,
         instance_id,
         turn_in_progress,
+        false,
     )
 }
 
@@ -1709,6 +1710,7 @@ pub(crate) fn connect_and_register_with_domain_at(
     os: &str,
     instance_id: &str,
     turn_in_progress: bool,
+    turn_attest: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
     let derived_domain = derive_domain();
     let Some(identity) =
@@ -1727,6 +1729,7 @@ pub(crate) fn connect_and_register_with_domain_at(
             instance_id,
             derived_domain.as_deref(),
             turn_in_progress,
+            turn_attest,
         )?;
         announce_wrapper_project(&mut connection.1, host)?;
         return Ok(connection);
@@ -1752,6 +1755,7 @@ pub(crate) fn connect_and_register_with_domain_at(
         instance_id,
         derived_domain.as_deref(),
         turn_in_progress,
+        turn_attest,
     )?;
     if connection.2 != identity {
         return Err("enregistrement sous une identité inattendue".to_string());
@@ -1813,6 +1817,7 @@ pub(crate) fn connect_and_register_at(
     instance_id: &str,
     domain: Option<&str>,
     turn_in_progress: bool,
+    turn_attest: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
     crate::environment::Namespace::from_environment()?;
     let stream = bridget_transport::jsonl::connect_nonblocking(
@@ -1852,6 +1857,7 @@ pub(crate) fn connect_and_register_at(
         domain: domain.map(str::to_owned),
         turn_in_progress,
         journal_available: Some(false),
+        turn_attest,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -4067,8 +4073,15 @@ fn launch_session_with_status(
     } else {
         None
     };
-    let native_termination = native_bootstrap
-        .as_ref()
+    let native_bootstrap_for_signal = native_bootstrap.as_ref();
+    // Fixture de crash : SIGTERM doit terminer le wrapper bloqué sur la FIFO.
+    // Comme les handlers daemon cfg(test), aucun handler coopératif n'est installé.
+    #[cfg(feature = "test-support")]
+    let native_bootstrap_for_signal = native_bootstrap_for_signal.filter(|_| {
+        !(std::env::var_os(crate::test_sync::DIRECTORY_ENV).is_some()
+            && std::env::var("BRIDGET_T010_DEFAULT_TERM").ok().as_deref() == Some("1"))
+    });
+    let native_termination = native_bootstrap_for_signal
         .map(|_| NativeTerminationSignal::new())
         .transpose()?;
     let name_state_path = instance_name_state_path(socket, &instance_id);
@@ -4234,6 +4247,7 @@ fn launch_session_with_status(
         &os,
         &instance_id,
         false,
+        true,
     ) {
         Ok(connection) => connection,
         Err(error) => {
@@ -4402,6 +4416,12 @@ fn launch_session_with_status(
     let mut consecutive_fast_failures = 0_u32;
 
     loop {
+        reattest_managed_turn_if_due(
+            &writer,
+            transport.as_ref(),
+            &mut last_heartbeat,
+            Instant::now(),
+        );
         if native_termination
             .as_ref()
             .is_some_and(NativeTerminationSignal::requested)
@@ -4448,6 +4468,7 @@ fn launch_session_with_status(
             Some(&profile_ledger_path(socket)),
             interactive.is_none(),
             Some(&child_requests),
+            Some(transport.is_busy()),
         );
         if journal_failed {
             break;
@@ -4608,6 +4629,9 @@ fn launch_session_with_status(
                             delivery_id,
                         } => {
                             let message_id = message.id.clone();
+                            // Seen est durable ; aucun PromptDispatched/ACK d’injection encore.
+                            #[cfg(feature = "test-support")]
+                            crate::test_sync::checkpoint("after_receipt_seen_before_injection");
                             if let Err(error) = deliver_provider_message(
                                 transport.as_mut(),
                                 &message,
@@ -4708,10 +4732,12 @@ fn launch_session_with_status(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-                    send_wrapper_message(&writer, WrapperToDaemon::Heartbeat);
-                    last_heartbeat = Instant::now();
-                }
+                reattest_managed_turn_if_due(
+                    &writer,
+                    transport.as_ref(),
+                    &mut last_heartbeat,
+                    Instant::now(),
+                );
             }
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
@@ -4775,6 +4801,7 @@ fn launch_session_with_status(
                 Some(&profile_ledger_path(socket)),
                 interactive.is_none(),
                 Some(&child_requests),
+                Some(transport.is_busy()),
             );
             if terminal_journal_failed {
                 break;
@@ -4956,6 +4983,7 @@ fn launch_session_with_status(
         Some(&profile_ledger_path(socket)),
         interactive.is_none(),
         Some(&child_requests),
+        Some(transport.is_busy()),
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
@@ -5589,6 +5617,7 @@ fn reconnect_managed_session(
             os,
             instance_id,
             busy,
+            true,
         ) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 if termination.is_some_and(NativeTerminationSignal::requested)
@@ -6456,6 +6485,25 @@ fn projection_fournisseur_conserve_l_identite_routable() {
     assert_eq!(projected.id, message.id);
 }
 
+// O(1), minuterie existante rendue testable ; aucune file ou scheduler ajouté.
+fn reattest_managed_turn_if_due(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    session: &dyn ManagedSession,
+    last_heartbeat: &mut Instant,
+    now: Instant,
+) {
+    if now.saturating_duration_since(*last_heartbeat) >= HEARTBEAT_INTERVAL {
+        send_wrapper_message(writer, WrapperToDaemon::Heartbeat);
+        send_wrapper_message(
+            writer,
+            WrapperToDaemon::TurnState {
+                in_progress: session.is_busy(),
+            },
+        );
+        *last_heartbeat = now;
+    }
+}
+
 #[cfg(test)]
 fn forward_managed_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
@@ -6473,6 +6521,7 @@ fn forward_managed_events(
         &mut None,
         None,
         true,
+        None,
         None,
     )
 }
@@ -6499,6 +6548,7 @@ fn forward_managed_events_with_redaction(
     profile_db_path: Option<&Path>,
     automatic_reply: bool,
     child_requests: Option<&Mutex<ManagedChildRequests>>,
+    current_turn_in_progress: Option<bool>,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -6580,7 +6630,12 @@ fn forward_managed_events_with_redaction(
                     continue;
                 }
                 if automatic_reply {
-                    send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                    send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::TurnState {
+                            in_progress: current_turn_in_progress.unwrap_or(false),
+                        },
+                    );
                 }
 
                 if message.reply && message.origin != Some(bridget_core::MessageOrigin::System) {
@@ -6663,7 +6718,12 @@ fn forward_managed_events_with_redaction(
                     warn!("refus fournisseur ignoré: message hors exécution active");
                     continue;
                 }
-                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::TurnState {
+                        in_progress: current_turn_in_progress.unwrap_or(false),
+                    },
+                );
                 let execution_reason = if reason.ends_with("pleine") {
                     publish_delegated_runtime_for_message(
                         writer,
@@ -7721,6 +7781,7 @@ mod delegated_runtime_tests {
                             None,
                             automatic,
                             None,
+                            None,
                         );
                         drop(writer);
                         let frames: Vec<WrapperToDaemon> = BufReader::new(peer)
@@ -8030,6 +8091,7 @@ mod reconnect_tests {
                 "Linux",
                 "instance138",
                 false,
+                false,
             )
             .unwrap();
             let mut line = String::new();
@@ -8067,6 +8129,7 @@ mod reconnect_tests {
             &mut redaction,
             None,
             true,
+            None,
             None,
         ));
         let mut line = String::new();
@@ -8179,6 +8242,7 @@ mod reconnect_tests {
             "Linux",
             "instance-lab",
             Some("bridget"),
+            false,
             false,
         )
         .unwrap();
@@ -9436,6 +9500,7 @@ mod reconnect_tests {
             claude_config_dir: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
+            held_queue: false,
             notify_timeout_secs: 600,
             mcp: crate::registry::McpDefinition::default(),
             capabilities: bridget_transport::AdapterCapabilities {
@@ -9465,6 +9530,7 @@ mod reconnect_tests {
             claude_config_dir: None,
             permissions: "allow".to_string(),
             queue_capacity: 1,
+            held_queue: false,
             notify_timeout_secs: 1,
             mcp: crate::registry::McpDefinition::default(),
             capabilities: bridget_transport::AdapterCapabilities::default(),
@@ -9764,6 +9830,7 @@ mod reconnect_tests {
             "Linux",
             instance_id,
             false,
+            false,
         )
         .unwrap();
         assert_eq!(registered_name, identity);
@@ -9956,6 +10023,7 @@ mod reconnect_tests {
                 None,
                 "Linux",
                 instance_id,
+                false,
                 false,
             )?;
             let mut deferred = String::new();
@@ -11258,6 +11326,7 @@ mod native_child_requests155_tests {
         writes: Arc<Mutex<Vec<ChildRequestAnswer>>>,
         entered: Option<std::sync::mpsc::SyncSender<()>>,
         release: Option<Arc<std::sync::Barrier>>,
+        busy: Option<bool>,
     }
     impl Transport for Session155 {
         fn deliver(&mut self, _: &bridget_core::BridgetMessage) -> Result<(), TransportError> {
@@ -11310,7 +11379,7 @@ mod native_child_requests155_tests {
         }
         fn stop(&self) {}
         fn is_busy(&self) -> bool {
-            true
+            self.busy.unwrap_or(true)
         }
     }
 
@@ -11416,6 +11485,170 @@ mod native_child_requests155_tests {
     }
 
     #[test]
+    fn held159_turnstate_reattestation_periodique() {
+        let (writer, mut reader, _, mut session, _) = fixture155();
+        session.busy = Some(true);
+        let start = Instant::now();
+        let mut last = start;
+        // Boucle chargée : 600 étapes de 50 ms, contrôle de la vraie minuterie à chaque passage.
+        // Seule la minuterie émet ses trames ; pas de trafic artificiel qui sature le pair.
+        for step in 0..=600 {
+            let now = start + Duration::from_millis(step * 50);
+            reattest_managed_turn_if_due(&writer, &session, &mut last, now);
+            assert!(now.saturating_duration_since(last) <= Duration::from_secs(30));
+        }
+        let states: Vec<_> = frames155(&mut reader)
+            .into_iter()
+            .filter_map(|frame| match frame {
+                WrapperToDaemon::TurnState { in_progress } => Some(in_progress),
+                _ => None,
+            })
+            .collect();
+        assert!(!states.is_empty(), "réattestation même sous trafic continu");
+        assert!(states.iter().all(|busy| *busy), "état réel de la session");
+        assert!(last > start);
+    }
+
+    #[test]
+    fn held159_turnstate_reattestation_d_un_repos_perdu() {
+        let (writer, mut reader, _, mut session, _) = fixture155();
+        session.busy = Some(false);
+        let start = Instant::now();
+        let mut last = start;
+        // La fin précédente n'a pas été remise : aucun faux événement terminal injecté.
+        reattest_managed_turn_if_due(
+            &writer,
+            &session,
+            &mut last,
+            start + Duration::from_secs(30),
+        );
+        let states: Vec<_> = frames155(&mut reader)
+            .into_iter()
+            .filter_map(|frame| match frame {
+                WrapperToDaemon::TurnState { in_progress } => Some(in_progress),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![false],
+            "le repos réel est réattesté dans les30s"
+        );
+    }
+
+    #[test]
+    fn held159_turnstate_refus_de_guidage_en_plein_tour_n_envoie_pas_false() {
+        // Réemploi fixture155/frames155 : vrais octets socket, aucun pilote nouveau.
+        let (writer, mut reader, _requests, mut session, mut bindings) = fixture155();
+        session.busy = Some(true);
+        let root = std::env::temp_dir().join(format!("turn159-{}", uuid::Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "turn159").unwrap();
+        let events = vec![
+            ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                Vec::new(),
+                ManagedEventKind::ActivityObserved { in_progress: true },
+            ),
+            ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                Vec::new(),
+                ManagedEventKind::DeliveryRejected {
+                    message_id: "message155".into(),
+                    reason: "guidage refusé".into(),
+                },
+            ),
+        ];
+        assert!(!forward_managed_events_with_redaction(
+            &writer,
+            "child155",
+            events,
+            &mut tracker,
+            &mut bindings,
+            &mut None,
+            None,
+            true,
+            None,
+            Some(session.is_busy())
+        ));
+        let states: Vec<bool> = frames155(&mut reader)
+            .into_iter()
+            .filter_map(|frame| match frame {
+                WrapperToDaemon::TurnState { in_progress } => Some(in_progress),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            states.first(),
+            Some(&true),
+            "état observé du fournisseur transmis"
+        );
+        assert_eq!(
+            states.last(),
+            Some(&true),
+            "un refus de guidage ne prouve pas la fin du tour"
+        );
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn held159_turnstate_refus_sans_tour_en_cours_envoie_false() {
+        // Réemploi fixture155/frames155 : vrais octets socket, aucun pilote nouveau.
+        let (writer, mut reader, _requests, mut session, mut bindings) = fixture155();
+        session.busy = Some(false);
+        let root = std::env::temp_dir().join(format!("turn159-{}", uuid::Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "turn159").unwrap();
+        let events = vec![
+            ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                Vec::new(),
+                ManagedEventKind::ActivityObserved { in_progress: false },
+            ),
+            ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                Vec::new(),
+                ManagedEventKind::DeliveryRejected {
+                    message_id: "message155".into(),
+                    reason: "guidage refusé".into(),
+                },
+            ),
+        ];
+        assert!(!forward_managed_events_with_redaction(
+            &writer,
+            "child155",
+            events,
+            &mut tracker,
+            &mut bindings,
+            &mut None,
+            None,
+            true,
+            None,
+            Some(session.is_busy())
+        ));
+        let states: Vec<bool> = frames155(&mut reader)
+            .into_iter()
+            .filter_map(|frame| match frame {
+                WrapperToDaemon::TurnState { in_progress } => Some(in_progress),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            states.first(),
+            Some(&false),
+            "état observé du fournisseur transmis"
+        );
+        assert_eq!(
+            states.last(),
+            Some(&false),
+            "un refus de guidage ne prouve pas la fin du tour"
+        );
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn native155_wrapper_demande_puis_reprise() {
         let (writer, mut reader, requests, mut session, mut bindings) = fixture155();
         requests.lock().unwrap().waiting.clear();
@@ -11440,6 +11673,7 @@ mod native_child_requests155_tests {
             None,
             true,
             Some(&requests),
+            None,
         );
         let frames = frames155(&mut reader);
         drop(tracker);

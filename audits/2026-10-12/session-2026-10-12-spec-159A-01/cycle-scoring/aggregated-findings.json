@@ -1,0 +1,2862 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T17:32:56.132346+00:00",
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file",
+    "audit_mode": "fix",
+    "audit_grid": "pre-release",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "score_numeric": 99.95,
+    "release_blocked": false,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "performance": "A",
+      "complexity": "A",
+      "quality": "A",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "ux": "N/A"
+    },
+    "repository": {
+      "files_count": 217,
+      "languages": [
+        "rust"
+      ],
+      "frameworks": [
+        "Rust std",
+        "rusqlite",
+        "serde"
+      ],
+      "type": "local-daemon-cli-provider-wrappers",
+      "has_ui": false,
+      "has_ui_scope_note": "Détection par inventaire de fichiers, contenuUI non audité ; exemples[]",
+      "has_llm_integration": true,
+      "db_type": "sqlite",
+      "ci_system": "not_detected_by_tracked_inventory",
+      "container": false,
+      "source_snapshot_count": 222,
+      "discovery_markers": {
+        "ui": [],
+        "ci": [],
+        "container": []
+      }
+    }
+  },
+  "authority": {
+    "base_capture": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/manifest.json",
+    "base_capture_sha256": "e4827c152916caf2c95c94c054ec7183e23b492d4efe626ddde7a6eeb96d4dc4",
+    "targeted_final_delta": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-R2-delta.json",
+    "targeted_final_delta_sha256": "682f785135f97499efd6a1f8f7d322171c50ae96169f2bd8da341d02636aeb73",
+    "daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+    "hash_guard_before_after_identical": true,
+    "scope_stage": "fixed64source entries rehashed; ROOT metadata/proofs closure distinct"
+  },
+  "execution_metrics": {
+    "files_scanned": 16,
+    "files_total": 64,
+    "lines_analyzed": 4275,
+    "lines_total": 174030,
+    "coverage_estimate_percent": 2.4565,
+    "sampling_method": "Union de plages manuelles, autorité SHA entière identique uniquement ; source modifiée relue au delta.",
+    "tools_used": [
+      "manual targeted source reading",
+      "official fingerprint.py --batch",
+      "official validate_session.py"
+    ],
+    "phases_completed": [
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "12"
+    ],
+    "warnings": [
+      "Couverture partielle par unions de plages effectivement lues ; pas une couverture de tests ni un audit intégral des64fichiers.",
+      "Le daemon f5ff n’est plus courant ; ses anciennes plages ne sont pas automatiquement créditées. Supplément frais18ad98 relu, guard avant/après identique.",
+      "Les03/06 ont contribué à des patches du lot ; leurs contrôles concernés sont auto-revue, pas une revue indépendante.",
+      "FULL unique RC101/neuf échecs reste historique ; replays et diagnostic de ROOT ne donnent aucun GREEN global dans ce rapport.",
+      "GREEN54 précède commentaire/fmt ciblés ; GREEN7List porte le SHA18ad98 courant. Aucun runtime actif, fournisseur réel ou modèle validé par cet audit.",
+      "Pas de scanner sécurité/dépendances, benchmark, EXPLAIN ou mesure cyclomatique exécuté. Les100 arithmétiques ne prouvent pas absence universelle de défauts.",
+      "Capture code/scope précédant clôture documentaire finale et cochage ROOT ; score ne clôt ni les tâches ni la livraison.",
+      "R2 final abf654 relu fraîchement, ancien18ad grade conservé danshistory-18ad98. GREEN8 ciblé confirmé, pas nouveau FULL."
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "total": 1,
+    "by_category": {
+      "quality": 1
+    }
+  },
+  "findings": [
+    {
+      "id": "DUP-001",
+      "category": "quality",
+      "subcategory": "duplication",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+      "line": 443,
+      "title": "Troisième copie exacte du compilateur de CLI de fixture",
+      "description": "Les corps compile_provider152 sont exactement identiques dans149/152,156 et159. Chacun fait57 lignes, SHA256 a11cc55d72bd083e8ab6d713a4841a70ece5dab8fe18d0230fe41235ccd19d26. Trois corps servent quatre appels ; les scripts fournisseur eux-mêmes divergent.",
+      "evidence": "fn compile_provider152(root: &Path, script: &str, cli_name: &str) -> PathBuf {\n    // Montage149 : CLI directe du PATH, profil privé et ancêtres bornés par .git.\n    // Le texte Python est incorporé : la SHA du CLI capturé couvre le programme.\n    let program = format!(\n        \"__file__ = {}\\n{script}\",\n        serde_json::to_string(&root.join(\"provider.py\")).unwrap()\n    );\n    let embedded = program",
+      "exploitability": "N/A",
+      "impact": "Charge de maintenance et risque de dérive documentaire ou de fixture ; aucun défaut de production démontré par ce constat.",
+      "path_type": "cold",
+      "remediation": "Lors d’une maintenance nécessaire, déplacer ce seul corps dans tests/support/idempotent.rs existant ; garder scénarios et scripts distincts.",
+      "remediation_code": "",
+      "verification": "Comparer les trois corps ; après éventuelle factorisation, rejouer les intégrations existantes sans modifier les oracles.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159A",
+        "Constitution XIX/XX"
+      ],
+      "status": "open",
+      "duplication_type": "STRICT",
+      "duplication_lines": 57,
+      "occurrences_count": 3,
+      "all_locations": [
+        "crates/bridget-daemon/tests/held159_e2e.rs:443-499",
+        "crates/bridget-daemon/tests/guidance156_e2e.rs:343-399",
+        "crates/bridget-daemon/tests/native_delegation_e2e.rs:473-529"
+      ],
+      "severity_justification": "LOW : chemin froid de tests, règle5 du module01 ; aucun impact de production prouvé.",
+      "historical_two_copies_new_third": true,
+      "fingerprint": "6e7f97dc8103"
+    }
+  ],
+  "suppressed": [],
+  "positive_findings": [
+    {
+      "module": "04",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_complexite.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        {
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 9357,
+          "description": "Les IDs ne sont collectés qu’après un COMMIT réussi ; un seul retain après le Result local, y compris en erreur tardive."
+        },
+        {
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 9357,
+          "description": "Les SQL, motifs et transactions existantes restent inchangés ; HashSet std réemploie l’import existant."
+        }
+      ]
+    },
+    {
+      "module": "07",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        "Retrait transactionnel partagé par libération et balayage, sans copie des mutations d’issue/suivi/notice.",
+        "Scripts fournisseur159/156 near-miss : gates et observables distincts, garder séparés évite FalseDRY."
+      ]
+    },
+    {
+      "module": "12",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        "QueueOnly passe par la décision pure existante, sans nouvelleAPI ni module.",
+        "Repos frais exige absence de périodebusy ; sortie forcée exige attestationancienne et périodeexpirée, sans attestation inventée.",
+        "HashSet local du balayage justifié par correctionO(H×P), pas de nouvelétatdurable ou framework."
+      ]
+    },
+    {
+      "module": "08",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_performance.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        {
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 9357,
+          "description": "Les IDs ne sont collectés qu’après un COMMIT réussi ; un seul retain après le Result local, y compris en erreur tardive."
+        },
+        {
+          "file": "crates/bridget-daemon/src/daemon.rs",
+          "line": 9357,
+          "description": "Les SQL, motifs et transactions existantes restent inchangés ; HashSet std réemploie l’import existant."
+        }
+      ]
+    },
+    {
+      "module": "05",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        "Commentaire de reprise déplacé au bon puits ; FR004 reste devant le helper de libération.",
+        "Modèle trois arguments aligné avec Held inchangé et Dispatching conditionnel, sans nouvelle autorité.",
+        "Balayage : IDs après chaqueCOMMIT, un seulretain horsboucle même sur erreur tardive ; relecture confirme la correction du constatmodule04."
+      ]
+    },
+    {
+      "module": "03",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_securite.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        "daemon.rs:10491 valide route/instance/presence actuelle ; normalisation10776 ne croit pas les originesHuman/System revendiquées.",
+        "release_next_held:20 relit pause/reprise/saga/demande sous Immediate avec paramètres ; aucune écriture socket dans cette transaction.",
+        "Migrationidempotency.rs:952 copie les liens avant DROP sousFKON et refuse toute foreign_key_check restante avantcommit."
+      ]
+    },
+    {
+      "module": "06",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_tests.json",
+      "authority_note": "Les positifs hérités restent historiques ; seules plages avec SHA exact sont créditées.",
+      "items": [
+        "T010 aprèspush vérifie deuxFIFOready et zéroancienneinjection avant les deuxarrêts ; ordre1→2→3/ACK réel/idgenbytesrang vérifiés dans nouvelleincarnation.",
+        "Seen sameinstance lit le reçu seen réel et le conserve ; report indeterminate du vraiwrapper, aucunordinary injecté et suivantheld à la frontière.",
+        "held159_sweep_pending_replies_retire_apres_commit utilise triggerABORT : SQL/notice/mémoire restent inchangés au rollback puis suiviRAM retiré aprèsCOMMIT."
+      ]
+    },
+    {
+      "module": "03+06",
+      "provenance": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-FR009-final-supplement.json",
+      "authority_note": "fresh18ad98 targeted",
+      "items": [
+        "Le contrôle de propriété garde issuer_scope, OperationKind::Send, message.id et delivery_id exact avant aperçu.",
+        "Le test existant négocie de vrais BareClient ; la liste contient Held et Released propres, exclut le texte du scope étranger et conserve les positions visibles."
+      ]
+    }
+  ],
+  "resolved_findings": [
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "HIGH",
+      "counter_audit": "CONFIRMED",
+      "counter_audit_evidence": "Contre-audit indépendant git154, verdict CONFIRMED transmis par ROOT ; H=P=10000 implique 50005000 visites, calcul analytique, aucun banc.",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 9404,
+      "title": "Balayage retenu : parcours répété des suivis mémoire en O(H×P)",
+      "description": "Chaque notice de retrait committée déclenche un retain complet de pending_replies dans la boucle globale des retenus. Pour H retraits et P suivis, le travail mémoire est O(H×P), et devient quadratique si les suivis sont tous retenus. Le retain précédent conserve ces suivis via held_ids ; queue_capacity borne chaque destinataire, pas P global. La documentation R13 et le commentaire du balayage omettent ce terme.",
+      "evidence": "            if let Some(notice) = st\n                .idempotency\n                .settle_held(&delivery_id, reason, now)\n                .map_err(|error| error.to_string())?\n            {\n                st.held_ids.remove(&notice.message_id);\n                st.pending_replies\n                    .retain(|pending| pending.msg_id != notice.message_id);",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Dans un namespace isolé avec held_queue=true et queue_capacity=H, un agent attesté envoie H demandes idempotentes reply=true sans intention à une cible busy/turn_attest. Les demandes restent Held et présentes dans pending_replies. À leur clôture/expiration simultanée, collect_reminder_actions appelle sweep_held ; H retraits committés filtrent P puis P−1 ... suivis. Pour H=P=10000, somme analytique10000×10001/2=50005000 visites, sans mesure de latence.",
+      "impact": "Travail RAM superlinéaire sous le mutex State au tick des relances et à l’entretien. Le coût annoncé omet P. Aucun incident ni temps de blocage production mesuré.",
+      "path_type": "hot",
+      "complexity_current": "RAM O(H×P), plus SQL/mémoire documentés O(N+B+H(log N+log R)+L)",
+      "complexity_target": "RAM O(P+S), S notices committées ; SQL et revalidations inchangés",
+      "remediation": "Collecter les message_id des notices après chaque COMMIT dans le HashSet std existant ; retirer held_ids immédiatement, puis filtrer pending_replies une fois. Exécuter ce nettoyage aussi quand une erreur SQL/JSON tardive survient après des COMMIT réussis.",
+      "remediation_code": "/// FR006 : deux puits (tick des relances et entretien), un retrait transactionnel.\n/// O(N + B + H(log N + log R) + L + P), N lignes SQL, R demandes, H retenus,\n/// P suivis mémoire ; les identifiants retirés sont regroupés pour un seul retain.\n/// B enveloppes et L dépôts liés ; le balayage global n’est pas un scan borné par LIMIT.\n/// Le caller garde State ; la mémoire ne change qu'après le COMMIT de settle_held.\nfn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {\n    let held = {\n        let mut statement = st\n            .store\n            .connection()\n            .prepare(\n                \"SELECT d.delivery_id, d.message_bytes, d.expires_at, r.expires_at\n             FROM send_deliveries d JOIN idempotency_records r\n               ON r.issuer_scope=d.issuer_scope AND r.operation_kind=d.operation_kind\n                 AND r.idempotency_key=d.idempotency_key\n             WHERE d.phase='held' ORDER BY d.queue_rank\",\n            )\n            .map_err(|error| error.to_string())?;\n        let rows = statement\n            .query_map([], |row| {\n                Ok((\n                    row.get::<_, String>(0)?,\n                    row.get::<_, Vec<u8>>(1)?,\n                    row.get::<_, i64>(2)?,\n                    row.get::<_, i64>(3)?,\n                ))\n            })\n            .map_err(|error| error.to_string())?;\n        rows.collect::<Result<Vec<_>, _>>()\n            .map_err(|error| error.to_string())?\n    };\n    let mut settled_ids = HashSet::new();\n    // Même pattern Result local que wait_request : les erreurs SQL restent inchangées.\n    let result = (|| -> Result<(), String> {\n        for (delivery_id, bytes, delivery_expires, record_expires) in held {\n            let message: bridget_core::BridgetMessage = serde_json::from_slice(&bytes)\n                .map_err(|error| format!(\"retenu {delivery_id} illisible: {error}\"))?;\n            let reason = if delivery_expires <= now || record_expires <= now {\n                Some(\"expired_in_queue\")\n            } else if message.reply {\n                let request = st\n                    .store\n                    .get_request(&message.id)\n                    .map_err(|error| error.to_string())?;\n                (!request.is_some_and(|request| {\n                    request.state == \"open\"\n                        && request.sender == message.from\n                        && request.target == message.to\n                        && request.deadline_at > now\n                }))\n                .then_some(\"request_closed_in_queue\")\n            } else {\n                None\n            };\n            if let Some(reason) = reason {\n                if let Some(notice) = st\n                    .idempotency\n                    .settle_held(&delivery_id, reason, now)\n                    .map_err(|error| error.to_string())?\n                {\n                    st.held_ids.remove(&notice.message_id);\n                    settled_ids.insert(notice.message_id);\n                }\n            }\n        }\n        Ok(())\n    })();\n    // Une erreur tardive ne doit pas conserver les suivis des COMMIT déjà réussis.\n    if !settled_ids.is_empty() {\n        st.pending_replies\n            .retain(|pending| !settled_ids.contains(&pending.msg_id));\n    }\n    result\n}\n",
+      "verification": "ROOT réemploie les tests planifiés held159_sweep_* et held159_sweep_pending_replies_retire_apres_commit : rollback conserve mémoire, COMMIT retire mémoire, conservation des motifs et états SQL. Relire les branches de retour : un seul retain après la boucle, même si la closure rend Err. Aucun nouveau test, scénario ou banc requis par cet audit.",
+      "metric_impacted": "nombre de visites des suivis RAM et durée de section critique State ; durée non mesurée",
+      "qualitative_gain": "H parcours complets deviennent un seul parcours ; mémoire auxiliaire O(S)",
+      "rollback": "Si un invariant SQL/mémoire des tests existants régresse, ROOT retire le seul hunk PERF-001 ; aucune migration ni donnée à restaurer, défaut held_queue=false conservé.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "status": "fixed",
+      "references": [
+        "Constitution Article XVIII",
+        "audit v14 modules01/04/10/11",
+        "specs/159-edition-file/research.md:180"
+      ],
+      "source_sha256_at_detection": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "fingerprint": "abbdc6308f20",
+      "fixed_at": "2026-10-12T17:14:05.722297+00:00",
+      "resolution": {
+        "source_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+        "source_range": [
+          9357,
+          9431
+        ],
+        "fresh_read_at_utc": "2026-10-12T17:10:56.454105Z",
+        "evidence": "    })();\n    // Une erreur tardive ne doit pas conserver les suivis des COMMIT déjà réussis.\n    if !settled_ids.is_empty() {\n        st.pending_replies\n            .retain(|pending| !settled_ids.contains(&pending.msg_id));\n    }\n    result\n}",
+        "verification_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.json",
+        "verification_receipt_sha256": "f32874930674a433fc97a16e3ca75631116633f277978f4c3fd43b5ce2f1724d",
+        "test_results": [
+          [
+            "ok",
+            "54",
+            "0",
+            "0"
+          ]
+        ],
+        "rc": 0,
+        "seconds": 14.56,
+        "log_sha256": "75f33ca46a9f1979ee371f84f7cd6b024315c83d36067d86131c30d826c84b62",
+        "tested_daemon_sha256": "48b07b2070564a644173f4081295b0ce1737c08ec26d9146cb94a0a737828b7d",
+        "post_green_change": "ROOT : commentaire déplacé et rustfmt du seul daemon ; lecture finale sur f5ff16, aucune nouvelle logique ni performance mesurée."
+      }
+    },
+    {
+      "original_id": "QUAL-001",
+      "fingerprint": "c5b17e879a19",
+      "status": "fixed",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+        "line": 6091,
+        "sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+        "evidence": "/// FR004 : cinq déclencheurs partagent State, route attestée et transaction.\n/// O(log N+G+B), G réservations, B enveloppe. Aucun verrou writer ici.\nfn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> bool {"
+      },
+      "inherited_original_report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "original_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9"
+    },
+    {
+      "original_id": "QUAL-002",
+      "fingerprint": "32a38ccf2a8d",
+      "status": "fixed",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+        "line": 43,
+        "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+        "evidence": "- `adopt_held_for_agent(agent_id, instance_id, recover_dispatching)` : appelé après établissement de l’identité finale de `Register`. Rattache les lignes `held` du même agent, même si l’ancienne présence a disparu.\n  Si `recover_dispatching` est vrai, rattache aussi les lignes `dispatching` non expirées d’une autre instance du même agent et pose `turn_gate = 1`. Le caller active ce mode seulement pour une instance `turn_attest`, un type `held_queue` ouvert et un transport hors T3.\n  Les trois scopes internes de réveil et les alertes de fil restent exclus de ce raccord `dispatching`. ID, génération, octets, phase et rang sont conservés ; une réinscription de la même instance ne réarme pas ses réservations courantes. Le chemin `held` reste inchangé."
+      },
+      "inherited_original_report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "original_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9"
+    },
+    {
+      "id": "REL-001",
+      "fingerprint": "c25c9e195d90",
+      "historical_file": "crates/bridget-daemon/src/daemon.rs",
+      "historical_line": 11366,
+      "historical_severity": "MEDIUM",
+      "resolution": "QueueOnly now matches alongsideNone; exclusions retained.",
+      "status": "fixed_verified_code_and_existing_GREEN",
+      "proof": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.json",
+      "current_source_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa"
+    },
+    {
+      "id": "REL-002",
+      "fingerprint": "dd17fbdd1ae2",
+      "historical_file": "crates/bridget-daemon/src/daemon.rs",
+      "historical_line": 818,
+      "historical_severity": "MEDIUM",
+      "resolution": "Freshtrue staysbusy; silence>90s AND elapsedperiod required; freshidle excludesretainedexpiredperiod; legacyunchanged.",
+      "status": "fixed_verified_code_and_existing_GREEN",
+      "proof": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.json",
+      "current_source_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa"
+    },
+    {
+      "id": "REL-003",
+      "fingerprint": "afbbb3d551d8",
+      "historical_severity": "MEDIUM",
+      "status": "fixed_verified_code_and_existing_GREEN",
+      "resolution": "stored_send_delivery dans le seul contrôle de propriété ; clé et comparaison delivery_id inchangées.",
+      "proof": "/Users/moi/.cache/bridget-tests159A-20261012/T028-queue-list-existing-group-GREEN.json",
+      "proof_sha256": "bc229376cbb7f4667f7fbc971962d01cfe03db23efd33ff871fccdae3ab8e678",
+      "log_sha256": "f33b212c53b4c1cdb55a52aa6b9da5e3d0c25be2fa250526996b5d6d0dc2ece9"
+    },
+    {
+      "id": "REL-004",
+      "category": "reliability",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 5327,
+      "title": "Un true après expiration redémarrait une période sans repos attesté",
+      "description": "L’expiration marque connected sans prouver le repos et conserve le début de la période. Le true suivant réinitialisait pourtant ce début car state n’était plus busy. FR023 interdit de remettre cette date à zéro par un nouveau true. Seul false doit effacer la période ; le nouveau true conserve la date et renouvelle l’attestation.",
+      "evidence": "                if presence.state != \"busy\" || presence.busy_period_start.is_none() {\n                    presence.busy_period_start = Some(now);\n                }",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Un tour attesté démarre àt0 puis devient expiré après le silence et le délai autorisés. L’état devient connected et la période resteSome(t0). Sans false intermédiaire, un true suivant réécrit la période dans le code18ad98.",
+      "impact": "Non-conformité du début de période durable en mémoire et déplacement de la borne de sortie forcée ; pas de nouvelle autorité ou fuite démontrée.",
+      "path_type": "hot",
+      "remediation": "Tester uniquement busy_period_start.is_none() pour initialiser la période ; garder les autres mises à jour et le chemin legacy.",
+      "verification": "Oracle T006 existant held159_turnstate_sortie_forcee_depuis_busy_period_start : RED0PASS1FAIL puis GREEN8PASS0FAIL ; Some(start) conservé après true suivant expiration.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "fixed_verified_code_and_existing_GREEN",
+      "source_sha256_at_detection": "18ad98db7460bade8c5d06d31c1c65b978aef07f491ef95e255a0cfcd523f5f8",
+      "current_source_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+      "historical_evidence_source": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/diff-159a-final.patch",
+      "fingerprint": "a118d5b5912e"
+    }
+  ],
+  "report_provenance": [
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_complexite.json",
+      "sha256": "9b74b51b30ef48c8ba7a52d4df070fcd256d67eaf8ee8a251dc9894f035d3e1d"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+      "sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+      "sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_performance.json",
+      "sha256": "1d5fdbbed2c1df7656cfb5b7224a581a80a3ccfb61d43b29b9da9e3c3db1ff65"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+      "sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_securite.json",
+      "sha256": "e862990dffc2ab445d4d1148cd405226fc20c63c77a6aed84c9027eb930aaa69"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_tests.json",
+      "sha256": "43de785c1ab54405e67fff13711123c1a47bc849b5d92a4d744480fefca73440"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-FR009-final-supplement.json",
+      "sha256": "096ec3580e9c418d40889b07c73ce907642871f24e5926c15c421fd9130eefd9"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-R2-FR023-final-supplement.json",
+      "sha256": "cf9e4887194512717e2051dad732dc5914b6ce5ecb79f6f0c37ee03cabcd93cb"
+    }
+  ],
+  "coverage": {
+    "ranges_union": {
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          814,
+          834
+        ],
+        [
+          5318,
+          5350
+        ],
+        [
+          6110,
+          6128
+        ],
+        [
+          9357,
+          9430
+        ],
+        [
+          11176,
+          11197
+        ],
+        [
+          11385,
+          11403
+        ],
+        [
+          39099,
+          39169
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          514,
+          522
+        ],
+        [
+          659,
+          666
+        ],
+        [
+          883,
+          1038
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency/send_delivery.rs": [
+        [
+          1,
+          1258
+        ],
+        [
+          1370,
+          1563
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency/tests.rs": [
+        [
+          3455,
+          3511
+        ]
+      ],
+      "crates/bridget-daemon/src/registry.rs": [
+        [
+          1,
+          106
+        ],
+        [
+          332,
+          386
+        ],
+        [
+          740,
+          785
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          1,
+          168
+        ]
+      ],
+      "crates/bridget-daemon/src/store_schema.rs": [
+        [
+          1,
+          103
+        ]
+      ],
+      "crates/bridget-daemon/src/wrapper.rs": [
+        [
+          4065,
+          4095
+        ],
+        [
+          4395,
+          4451
+        ],
+        [
+          4612,
+          4655
+        ],
+        [
+          4723,
+          4760
+        ],
+        [
+          6488,
+          6509
+        ],
+        [
+          6620,
+          6650
+        ],
+        [
+          6710,
+          6741
+        ],
+        [
+          11470,
+          11542
+        ]
+      ],
+      "crates/bridget-daemon/tests/fixtures/t3code_server_098.py": [
+        [
+          294,
+          307
+        ]
+      ],
+      "crates/bridget-daemon/tests/guidance156_e2e.rs": [
+        [
+          102,
+          122
+        ],
+        [
+          343,
+          435
+        ],
+        [
+          501,
+          615
+        ]
+      ],
+      "crates/bridget-daemon/tests/held159_e2e.rs": [
+        [
+          1,
+          265
+        ],
+        [
+          443,
+          664
+        ],
+        [
+          1103,
+          1230
+        ],
+        [
+          1310,
+          1400
+        ],
+        [
+          1830,
+          1968
+        ],
+        [
+          2054,
+          2090
+        ]
+      ],
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+        [
+          145,
+          181
+        ],
+        [
+          473,
+          535
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          3514,
+          3536
+        ],
+        [
+          5578,
+          5600
+        ]
+      ],
+      "docs/decisions/159-file-retenue-et-edition.md": [
+        [
+          1,
+          144
+        ]
+      ],
+      "specs/159-edition-file/data-model.md": [
+        [
+          36,
+          48
+        ]
+      ],
+      "specs/159-edition-file/reuse-audit.md": [
+        [
+          1,
+          100
+        ]
+      ]
+    },
+    "credited": [
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            439
+          ],
+          [
+            440,
+            560
+          ],
+          [
+            609,
+            674
+          ],
+          [
+            990,
+            1085
+          ],
+          [
+            1090,
+            1228
+          ],
+          [
+            1370,
+            1563
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            895,
+            918
+          ],
+          [
+            970,
+            1028
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4065,
+            4095
+          ],
+          [
+            4395,
+            4435
+          ],
+          [
+            4612,
+            4655
+          ],
+          [
+            6488,
+            6509
+          ],
+          [
+            11470,
+            11542
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            54,
+            77
+          ],
+          [
+            740,
+            785
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3514,
+            3533
+          ],
+          [
+            5578,
+            5600
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1,
+            265
+          ],
+          [
+            443,
+            664
+          ],
+          [
+            1103,
+            1210
+          ],
+          [
+            1830,
+            1968
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+        "ranges": [
+          [
+            102,
+            122
+          ],
+          [
+            343,
+            435
+          ],
+          [
+            501,
+            615
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+        "ranges": [
+          [
+            145,
+            181
+          ],
+          [
+            473,
+            535
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            1,
+            144
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+        "ranges": [
+          [
+            1,
+            100
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "specs/159-edition-file/data-model.md",
+        "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+        "ranges": [
+          [
+            36,
+            48
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T17:10:14.521627+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "report_sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+        "file": "crates/bridget-daemon/tests/fixtures/t3code_server_098.py",
+        "sha256": "c69412b0bb801d86fa0a3c9024e5972dd349340a54bd8a0ff3ce44c51326bd21",
+        "ranges": [
+          [
+            294,
+            307
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T17:10:14.521627+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            439
+          ],
+          [
+            440,
+            560
+          ],
+          [
+            609,
+            674
+          ],
+          [
+            990,
+            1085
+          ],
+          [
+            1090,
+            1228
+          ],
+          [
+            1370,
+            1563
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            895,
+            918
+          ],
+          [
+            970,
+            1028
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4065,
+            4095
+          ],
+          [
+            4395,
+            4435
+          ],
+          [
+            4612,
+            4655
+          ],
+          [
+            6488,
+            6509
+          ],
+          [
+            11470,
+            11542
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            54,
+            77
+          ],
+          [
+            740,
+            785
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3514,
+            3533
+          ],
+          [
+            5578,
+            5600
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1,
+            265
+          ],
+          [
+            443,
+            664
+          ],
+          [
+            1103,
+            1210
+          ],
+          [
+            1830,
+            1968
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+        "ranges": [
+          [
+            102,
+            122
+          ],
+          [
+            343,
+            435
+          ],
+          [
+            501,
+            615
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+        "ranges": [
+          [
+            145,
+            181
+          ],
+          [
+            473,
+            535
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            1,
+            144
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+        "ranges": [
+          [
+            1,
+            100
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "specs/159-edition-file/data-model.md",
+        "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+        "ranges": [
+          [
+            36,
+            48
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T17:10:14.521627+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "report_sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+        "file": "crates/bridget-daemon/tests/fixtures/t3code_server_098.py",
+        "sha256": "c69412b0bb801d86fa0a3c9024e5972dd349340a54bd8a0ff3ce44c51326bd21",
+        "ranges": [
+          [
+            294,
+            307
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T17:10:14.521627+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            439
+          ],
+          [
+            440,
+            560
+          ],
+          [
+            609,
+            674
+          ],
+          [
+            990,
+            1085
+          ],
+          [
+            1090,
+            1228
+          ],
+          [
+            1370,
+            1563
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            895,
+            918
+          ],
+          [
+            970,
+            1028
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4065,
+            4095
+          ],
+          [
+            4395,
+            4435
+          ],
+          [
+            4612,
+            4655
+          ],
+          [
+            6488,
+            6509
+          ],
+          [
+            11470,
+            11542
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            54,
+            77
+          ],
+          [
+            740,
+            785
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3514,
+            3533
+          ],
+          [
+            5578,
+            5600
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1,
+            265
+          ],
+          [
+            443,
+            664
+          ],
+          [
+            1103,
+            1210
+          ],
+          [
+            1830,
+            1968
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+        "ranges": [
+          [
+            102,
+            122
+          ],
+          [
+            343,
+            435
+          ],
+          [
+            501,
+            615
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+        "ranges": [
+          [
+            145,
+            181
+          ],
+          [
+            473,
+            535
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            1,
+            144
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+        "ranges": [
+          [
+            1,
+            100
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "specs/159-edition-file/data-model.md",
+        "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+        "ranges": [
+          [
+            36,
+            48
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T17:10:14.521627+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "report_sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+        "file": "crates/bridget-daemon/tests/fixtures/t3code_server_098.py",
+        "sha256": "c69412b0bb801d86fa0a3c9024e5972dd349340a54bd8a0ff3ce44c51326bd21",
+        "ranges": [
+          [
+            294,
+            307
+          ]
+        ],
+        "credit": "report_current_exact_SHA",
+        "original_read_date": "2026-10-12T17:10:14.521627+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            1215
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:52:37.904623Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            883,
+            1038
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:52:37.905282Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "crates/bridget-daemon/src/store.rs",
+        "sha256": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+        "ranges": [
+          [
+            1,
+            168
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:41.183880Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            1,
+            106
+          ],
+          [
+            332,
+            386
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:41.184445Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4396,
+            4451
+          ],
+          [
+            4723,
+            4760
+          ],
+          [
+            6620,
+            6650
+          ],
+          [
+            6710,
+            6741
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:41.185841Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": null
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "report_sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            32,
+            47
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": null
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            439
+          ],
+          [
+            440,
+            560
+          ],
+          [
+            609,
+            674
+          ],
+          [
+            990,
+            1085
+          ],
+          [
+            1090,
+            1228
+          ],
+          [
+            1370,
+            1563
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            895,
+            918
+          ],
+          [
+            970,
+            1028
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4065,
+            4095
+          ],
+          [
+            4395,
+            4435
+          ],
+          [
+            4612,
+            4655
+          ],
+          [
+            6488,
+            6509
+          ],
+          [
+            11470,
+            11542
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            54,
+            77
+          ],
+          [
+            740,
+            785
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3514,
+            3533
+          ],
+          [
+            5578,
+            5600
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1,
+            265
+          ],
+          [
+            443,
+            664
+          ],
+          [
+            1103,
+            1210
+          ],
+          [
+            1830,
+            1968
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+        "ranges": [
+          [
+            102,
+            122
+          ],
+          [
+            343,
+            435
+          ],
+          [
+            501,
+            615
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+        "ranges": [
+          [
+            145,
+            181
+          ],
+          [
+            473,
+            535
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            1,
+            144
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "report_sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+        "ranges": [
+          [
+            1,
+            100
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            439
+          ],
+          [
+            440,
+            560
+          ],
+          [
+            609,
+            674
+          ],
+          [
+            990,
+            1085
+          ],
+          [
+            1090,
+            1228
+          ],
+          [
+            1370,
+            1563
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            895,
+            918
+          ],
+          [
+            970,
+            1028
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4065,
+            4095
+          ],
+          [
+            4395,
+            4435
+          ],
+          [
+            4612,
+            4655
+          ],
+          [
+            6488,
+            6509
+          ],
+          [
+            11470,
+            11542
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            54,
+            77
+          ],
+          [
+            740,
+            785
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3514,
+            3533
+          ],
+          [
+            5578,
+            5600
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1,
+            265
+          ],
+          [
+            443,
+            664
+          ],
+          [
+            1103,
+            1210
+          ],
+          [
+            1830,
+            1968
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+        "ranges": [
+          [
+            102,
+            122
+          ],
+          [
+            343,
+            435
+          ],
+          [
+            501,
+            615
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+        "ranges": [
+          [
+            145,
+            181
+          ],
+          [
+            473,
+            535
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            1,
+            144
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "report_sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+        "ranges": [
+          [
+            1,
+            100
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            1215
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:52:37.904623Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            883,
+            1038
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:52:37.905282Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "crates/bridget-daemon/src/store.rs",
+        "sha256": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+        "ranges": [
+          [
+            1,
+            168
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:41.183880Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            1,
+            106
+          ],
+          [
+            332,
+            386
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:41.184445Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4396,
+            4451
+          ],
+          [
+            4723,
+            4760
+          ],
+          [
+            6620,
+            6650
+          ],
+          [
+            6710,
+            6741
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:41.185841Z"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": null
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "report_sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            32,
+            47
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": null
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            439
+          ],
+          [
+            440,
+            560
+          ],
+          [
+            609,
+            674
+          ],
+          [
+            990,
+            1085
+          ],
+          [
+            1090,
+            1228
+          ],
+          [
+            1370,
+            1563
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            895,
+            918
+          ],
+          [
+            970,
+            1028
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            103
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4065,
+            4095
+          ],
+          [
+            4395,
+            4435
+          ],
+          [
+            4612,
+            4655
+          ],
+          [
+            6488,
+            6509
+          ],
+          [
+            11470,
+            11542
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+        "ranges": [
+          [
+            54,
+            77
+          ],
+          [
+            740,
+            785
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3514,
+            3533
+          ],
+          [
+            5578,
+            5600
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1,
+            265
+          ],
+          [
+            443,
+            664
+          ],
+          [
+            1103,
+            1210
+          ],
+          [
+            1830,
+            1968
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+        "ranges": [
+          [
+            102,
+            122
+          ],
+          [
+            343,
+            435
+          ],
+          [
+            501,
+            615
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+        "ranges": [
+          [
+            145,
+            181
+          ],
+          [
+            473,
+            535
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+        "ranges": [
+          [
+            1,
+            144
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+        "ranges": [
+          [
+            1,
+            100
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:59:38.346101+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            146
+          ],
+          [
+            980,
+            1088
+          ],
+          [
+            1093,
+            1208
+          ],
+          [
+            1217,
+            1258
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            514,
+            522
+          ],
+          [
+            659,
+            666
+          ],
+          [
+            888,
+            1026
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "78fe60ae1851e523e586d439d6b4431d0f4ce9707f5ca6d640ae3a94bf4dfdd9",
+        "ranges": [
+          [
+            3455,
+            3511
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            78
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4408,
+            4431
+          ],
+          [
+            6489,
+            6507
+          ],
+          [
+            11488,
+            11539
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1160,
+            1230
+          ],
+          [
+            1310,
+            1400
+          ],
+          [
+            1857,
+            1889
+          ],
+          [
+            2054,
+            2090
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "report_sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3518,
+            3536
+          ],
+          [
+            5581,
+            5599
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+        "ranges": [
+          [
+            1,
+            146
+          ],
+          [
+            980,
+            1088
+          ],
+          [
+            1093,
+            1208
+          ],
+          [
+            1217,
+            1258
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+        "ranges": [
+          [
+            514,
+            522
+          ],
+          [
+            659,
+            666
+          ],
+          [
+            888,
+            1026
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "78fe60ae1851e523e586d439d6b4431d0f4ce9707f5ca6d640ae3a94bf4dfdd9",
+        "ranges": [
+          [
+            3455,
+            3511
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-daemon/src/store_schema.rs",
+        "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+        "ranges": [
+          [
+            1,
+            78
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+        "ranges": [
+          [
+            4408,
+            4431
+          ],
+          [
+            6489,
+            6507
+          ],
+          [
+            11488,
+            11539
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+        "ranges": [
+          [
+            1160,
+            1230
+          ],
+          [
+            1310,
+            1400
+          ],
+          [
+            1857,
+            1889
+          ],
+          [
+            2054,
+            2090
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "report_sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+        "ranges": [
+          [
+            3518,
+            3536
+          ],
+          [
+            5581,
+            5599
+          ]
+        ],
+        "credit": "C1_historical_exact_unchanged_SHA",
+        "original_read_date": "2026-10-12T16:57:16.050595+00:00"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-R2-FR023-final-supplement.json",
+        "report_sha256": "cf9e4887194512717e2051dad732dc5914b6ce5ecb79f6f0c37ee03cabcd93cb",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+        "ranges": [
+          [
+            814,
+            834
+          ],
+          [
+            5318,
+            5350
+          ],
+          [
+            6110,
+            6128
+          ],
+          [
+            9357,
+            9430
+          ],
+          [
+            11176,
+            11197
+          ],
+          [
+            11385,
+            11403
+          ],
+          [
+            39099,
+            39169
+          ]
+        ],
+        "credit": "fresh_R2_current",
+        "original_read_date": "2026-10-12T17:31:32.938436+00:00"
+      }
+    ],
+    "excluded": [
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_complexite.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_performance.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_securite.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_tests.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+        "file": "specs/159-edition-file/research.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "file": "crates/bridget-daemon/tests/support/idempotent.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "file": "specs/159-edition-file/data-model.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+        "file": "specs/159-edition-file/tasks.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "file": "crates/bridget-daemon/tests/support/idempotent.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "file": "specs/159-edition-file/data-model.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+        "file": "specs/159-edition-file/tasks.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+        "file": "specs/159-edition-file/research.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "file": "crates/bridget-daemon/tests/support/idempotent.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "file": "specs/159-edition-file/data-model.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+        "file": "specs/159-edition-file/tasks.md",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "file": "crates/bridget-core/src/message.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "file": "crates/bridget-core/src/message.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "outside scope or changed whole-file SHA; old ranges not inherited"
+      }
+    ],
+    "definition": "Lignes sources manuellement lues / lignes sources entières des fichiers du diff. Aucun pourcentage de hunks ou ajouts inventé.",
+    "fragment_proof_context_not_added_to_coverage": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/unchanged-reviewed-fragments.json"
+  },
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "present": false,
+    "suppressed_count": 0
+  },
+  "historical_followup": {
+    "REL-003": {
+      "pre_fix_report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-FR009-pre-fix-supplement.json",
+      "fingerprint": "afbbb3d551d8",
+      "added_after_C1": true,
+      "resolved": true
+    },
+    "REL-004": {
+      "fingerprint": "a118d5b5912e",
+      "added_after_C1": true,
+      "resolved": true,
+      "proof": {
+        "RED": {
+          "file": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-busy-period-RED.json",
+          "sha256": "d7d6c2de3a559cda43d61b346865bb9abb706ff4ebb0d7aca3da59d4f9c41fd6",
+          "rc": 101,
+          "results": [
+            [
+              "FAILED",
+              "0",
+              "1",
+              "0"
+            ]
+          ],
+          "log_sha256": "a9fdf3c3af895bc5daa38af18c6a021ab032bb67bb71fed09caadc1222f7898b"
+        },
+        "GREEN": {
+          "file": "/Users/moi/.cache/bridget-tests159A-20261012/T006-R2-turnstate-group-GREEN.json",
+          "sha256": "8042e275e0e1264999ded169c62b4146b04bcd1d8fa715a43c8a515e3b973ced",
+          "rc": 0,
+          "seconds": 7.08,
+          "results": [
+            [
+              "ok",
+              "8",
+              "0",
+              "0"
+            ]
+          ],
+          "log_sha256": "2fc7e3cdedf74aa7ab3dbb50fe0026d676da692fc825b808b45e74105128b232",
+          "sources_stable": true
+        }
+      }
+    }
+  },
+  "pipeline_closure": "Final targeted audit/scoring closed; ROOT retains Git, metadata, installation and cleanup gates."
+}

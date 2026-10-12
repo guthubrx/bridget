@@ -4650,6 +4650,7 @@ fn cli_register(_usage: &str) -> WrapperToDaemon {
         domain: None,
         turn_in_progress: false,
         journal_available: None,
+        turn_attest: false,
     }
 }
 
@@ -9041,6 +9042,7 @@ mod hook_tests {
             domain: None,
             turn_in_progress: false,
             journal_available: None,
+            turn_attest: false,
         };
         writeln!(referent_writer, "{}", encode(&register).unwrap()).unwrap();
         referent_writer.flush().unwrap();

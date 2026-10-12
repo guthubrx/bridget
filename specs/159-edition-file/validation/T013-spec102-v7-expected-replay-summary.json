@@ -1,0 +1,52 @@
+{
+  "label": "T013-spec102-v7-expected-replay",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "spec102_threads_test",
+    "--features",
+    "test-support",
+    "--",
+    "spec102_v34_migration_base_pre102_et_contraintes_effectives",
+    "--exact",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T16:55:20.621325+00:00",
+  "seconds": 13.19,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.log",
+  "log_sha256": "b516dbf4365bce8a11bf16143b86c97cb39db06d1cd595e6b880aa702c24d8e8",
+  "private_ns": "/private/tmp/b.qa3g2s8l",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-spec102-v7-expected-replay.json",
+  "original_receipt_sha256": "3638d86829aa53eb58dd7f1775cd5af00b5081d523ea3e56dda981fb5a4fb4f1",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa"
+}

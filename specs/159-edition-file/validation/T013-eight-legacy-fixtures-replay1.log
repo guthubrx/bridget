@@ -1,0 +1,70 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+warning: variant `Control` is never constructed
+    --> crates/bridget-daemon/src/daemon.rs:2847:5
+     |
+2846 | enum ObservationJob {
+     |      -------------- variant in this enum
+2847 |     Control(Instant, DeferredControl),
+     |     ^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `due_child_requests` is never used
+   --> crates/bridget-daemon/src/delegation.rs:652:12
+    |
+315 | impl DelegationStore {
+    | -------------------- method in this implementation
+...
+652 |     pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: function `format_cited_paths` is never used
+   --> crates/bridget-daemon/src/native_permissions.rs:218:15
+    |
+218 | pub(crate) fn format_cited_paths(paths: &[String]) -> String {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: `bridget-daemon` (lib) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.27s
+     Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)
+
+running 2 tests
+test cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere ... ok
+test client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.74s
+
+     Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)
+
+running 1 test
+test binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.58s
+
+     Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)
+
+running 3 tests
+
+thread 'deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance' (77894258) panicked at crates/bridget-daemon/tests/core_089_identity_test.rs:32:5:
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"{\"agents\":[],\"project\":null,\"project_warnings\":[{\"code\":\"project_unknown\",\"reason\":null,\"recipient\":\"\",\"recipient_project\":null,\"sender_project\":null}],\"scope\":\"same_project\"}","type":"text"}],"structuredContent":{"agents":[],"project":null,"project_warnings":[{"code":"project_unknown","reason":null,"recipient":"","recipient_project":null,"sender_project":null}],"scope":"same_project"}}}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper' (77894259) panicked at crates/bridget-daemon/tests/core_089_identity_test.rs:32:5:
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"{\"agents\":[],\"project\":null,\"project_warnings\":[{\"code\":\"project_unknown\",\"reason\":null,\"recipient\":\"\",\"recipient_project\":null,\"sender_project\":null}],\"scope\":\"same_project\"}","type":"text"}],"structuredContent":{"agents":[],"project":null,"project_warnings":[{"code":"project_unknown","reason":null,"recipient":"","recipient_project":null,"sender_project":null}],"scope":"same_project"}}}
+test noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper ... FAILED
+test deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance ... FAILED
+
+thread 'spec094_mcp_modifie_uniquement_sa_propre_presence' (77894378) panicked at crates/bridget-daemon/tests/core_089_identity_test.rs:32:5:
+{"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"{\"agents\":[],\"project\":null,\"project_warnings\":[{\"code\":\"project_unknown\",\"reason\":null,\"recipient\":\"\",\"recipient_project\":null,\"sender_project\":null}],\"scope\":\"same_project\"}","type":"text"}],"structuredContent":{"agents":[],"project":null,"project_warnings":[{"code":"project_unknown","reason":null,"recipient":"","recipient_project":null,"sender_project":null}],"scope":"same_project"}}}
+test spec094_mcp_modifie_uniquement_sa_propre_presence ... FAILED
+
+failures:
+
+failures:
+    deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance
+    noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper
+    spec094_mcp_modifie_uniquement_sa_propre_presence
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.63s
+
+error: test failed, to rerun pass `-p bridget-daemon --test core_089_identity_test`

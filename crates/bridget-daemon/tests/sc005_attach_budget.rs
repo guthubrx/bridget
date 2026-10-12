@@ -256,6 +256,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
             domain: None,
             turn_in_progress: false,
             journal_available: None,
+            turn_attest: false,
         },
     );
     match read_message(&mut reader) {

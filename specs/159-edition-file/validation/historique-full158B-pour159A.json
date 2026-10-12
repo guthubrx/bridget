@@ -1,0 +1,294 @@
+{
+  "at": "2026-10-12T13:43:42.497619+00:00",
+  "kind": "historique_livre_158B_pas_baseline159A_fraiche",
+  "delivered_source_commit": "e52a96240b6168bf4466712e1bda8852b4ecb43f",
+  "archive": {
+    "path": "/Users/moi/.cache/bridget-delivery158B-preparation-20261012/proofs158B-preinstallation-closed.tgz",
+    "sha256": "e2b355e9d70ac774e4edf3cd56619bcf20e00023aac79ca71cfe4db2c3bbe935",
+    "member_manifest": "/Users/moi/.cache/bridget-delivery158B-preparation-20261012/proofs158B-preinstallation-closed-members.json",
+    "member_manifest_sha256": "9ddf07e5cf349fe5212a8f2c416d3ac26dd6397660d5fc4a819df281c6a2a56e"
+  },
+  "full": {
+    "label": "T121-FULL158B-compiled-final",
+    "started_at": "2026-10-12T12:08:33.065929+00:00",
+    "seconds": 1356.44,
+    "rc": 101,
+    "counts": {
+      "pass": 2456,
+      "fail": 12,
+      "ignored": 74
+    },
+    "targets_completed": 95,
+    "child_summaries_excluded": 7,
+    "baseline30_same": 30,
+    "sources_stable": true,
+    "source_count": 221,
+    "daemon_sha256": "cbd072a2d3f407ae609021c070dde2a7c54023b6ff33dd31d816263f525efdb1",
+    "failed_tests": [
+      {
+        "name": "daemon::spec099_classic_delivery_tests::spec100_owner_source_collision_and_nonblocking_notifications",
+        "cargo_target": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+        "full_status": "FAIL",
+        "full_log_line": 1079,
+        "classification": "regression_DND_corrigee",
+        "later_status": "PASS_replay_DND"
+      },
+      {
+        "name": "daemon::spec099_classic_delivery_tests::spec101_upstream_gap_requires_primary_and_dnd_preserves_loss_counters",
+        "cargo_target": "Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)",
+        "full_status": "FAIL",
+        "full_log_line": 1084,
+        "classification": "regression_DND_corrigee",
+        "later_status": "PASS_replay_DND"
+      },
+      {
+        "name": "cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere",
+        "cargo_target": "Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)",
+        "full_status": "FAIL",
+        "full_log_line": 2307,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation",
+        "cargo_target": "Running tests/core_089_contract_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_contract_test-4537e8e4ec9c1c7d)",
+        "full_status": "FAIL",
+        "full_log_line": 2310,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee",
+        "cargo_target": "Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)",
+        "full_status": "FAIL",
+        "full_log_line": 2338,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "recovery_acked_wrapper_finalise_accepted_apres_crash_daemon",
+        "cargo_target": "Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)",
+        "full_status": "FAIL",
+        "full_log_line": 2345,
+        "classification": "defaut_historique_deadline099_revele_dans_FULL158B",
+        "later_status": "PASS_replay_sans_correctif_defaut_historique_conserve"
+      },
+      {
+        "name": "reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance",
+        "cargo_target": "Running tests/core_089_crash_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_crash_test-495a288016eb318e)",
+        "full_status": "FAIL",
+        "full_log_line": 2349,
+        "classification": "defaut_historique_deadline099_revele_dans_FULL158B",
+        "later_status": "FAIL_replay_deadline099"
+      },
+      {
+        "name": "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+        "cargo_target": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+        "full_status": "FAIL",
+        "full_log_line": 2416,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper",
+        "cargo_target": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+        "full_status": "FAIL",
+        "full_log_line": 2417,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "spec094_mcp_modifie_uniquement_sa_propre_presence",
+        "cargo_target": "Running tests/core_089_identity_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_identity_test-9169359f8b8fa810)",
+        "full_status": "FAIL",
+        "full_log_line": 2418,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+        "cargo_target": "Running tests/core_089_reply_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/core_089_reply_test-0f9d08e31efe6482)",
+        "full_status": "FAIL",
+        "full_log_line": 2503,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      },
+      {
+        "name": "spec098_pont_expose_remet_repond_renouvelle_et_retire",
+        "cargo_target": "Running tests/t3code_098_test.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/t3code_098_test-291f5efdcba34642)",
+        "full_status": "FAIL",
+        "full_log_line": 3033,
+        "classification": "herite_158A_deja_FAIL",
+        "later_status": "FAIL_historique_sans_replay_correctif_credité"
+      }
+    ]
+  },
+  "classification_counts": {
+    "regressions_DND_corrigees_et_rejouees": 2,
+    "noms_de_defauts_herites": 10,
+    "dont_deja_FAIL_158A": 8,
+    "dont_deadline_historique_revele_158B": 2
+  },
+  "DND_replay": {
+    "receipt": "/Users/moi/.cache/bridget-tests158B-20261012/T111-T113-G6-G7-attested-T116-diagnostic-GREEN.json",
+    "seconds": 44.08,
+    "rc": 101,
+    "counts": {
+      "pass": 4,
+      "fail": 1,
+      "ignored": 0
+    },
+    "DND_tests_both_PASS": [
+      "daemon::spec099_classic_delivery_tests::spec100_owner_source_collision_and_nonblocking_notifications",
+      "daemon::spec099_classic_delivery_tests::spec101_upstream_gap_requires_primary_and_dnd_preserves_loss_counters"
+    ],
+    "other_failure": "daemon::presence_tests::wake158b_daemon_g6_fil_commit_uuid_et_revalidation",
+    "other_failure_reason": "Clé de fixture accentuée refusée InvalidIdempotencyKey; corrigée ensuite en ASCII, preuve distincte.",
+    "daemon_sha256": "67c51d36dba7d48c4e844a3547e2d8303b8f594a87578a6b9fe8285129537f60",
+    "sources_stable": true
+  },
+  "deadline099_replay": {
+    "receipt": "/Users/moi/.cache/bridget-tests158B-20261012/T121-099-recovery-timing-replay.json",
+    "seconds": 15.85,
+    "rc": 101,
+    "counts": {
+      "pass": 1,
+      "fail": 1,
+      "ignored": 0
+    },
+    "PASS": "recovery_acked_wrapper_finalise_accepted_apres_crash_daemon",
+    "FAIL": "reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance",
+    "deadline_first": 1791811178,
+    "deadline_replayed": 1791811179,
+    "delta_seconds": 1,
+    "threshold_or_assertion_weakened": false,
+    "assertion": "égalité exacte des deux trames JSON, conservée",
+    "test_file": "crates/bridget-daemon/tests/core_089_crash_test.rs",
+    "test_sha256_full_and_replay": "a2fabf4e2bb58b82502357ab43b716b8558139950b9a64f2e16fee38a10ce321",
+    "test_byte_identical_158A": true,
+    "daemon_sha256": "67c51d36dba7d48c4e844a3547e2d8303b8f594a87578a6b9fe8285129537f60",
+    "sources_stable": true,
+    "diagnosis": "message_bytes durable sérialisé avant ajout de deadline; reprise estampille une nouvelle seconde civile. Défaut de projection historique, pas simple assertion faible.",
+    "unchanged_function_proofs": [
+      {
+        "function": "defer_idempotent_delivery",
+        "byte_identical": true,
+        "proofs": [
+          {
+            "authority": "158A",
+            "file": "crates/bridget-daemon/src/daemon.rs",
+            "line": 4532,
+            "function_excerpt_sha256": "188d2031f00e082bf91abc46f21b548701c38530e819b7283291743d9fd345d7"
+          },
+          {
+            "authority": "158B",
+            "file": "crates/bridget-daemon/src/daemon.rs",
+            "line": 5857,
+            "function_excerpt_sha256": "188d2031f00e082bf91abc46f21b548701c38530e819b7283291743d9fd345d7"
+          }
+        ]
+      },
+      {
+        "function": "stamp_turn_deadline_for_delivery",
+        "byte_identical": true,
+        "proofs": [
+          {
+            "authority": "158A",
+            "file": "crates/bridget-daemon/src/daemon.rs",
+            "line": 7860,
+            "function_excerpt_sha256": "2fa15528ec243e0e9793f7d99d5d8f1d143f79af6585cc8ab3efca54875ee114"
+          },
+          {
+            "authority": "158B",
+            "file": "crates/bridget-daemon/src/daemon.rs",
+            "line": 9199,
+            "function_excerpt_sha256": "2fa15528ec243e0e9793f7d99d5d8f1d143f79af6585cc8ab3efca54875ee114"
+          }
+        ]
+      }
+    ]
+  },
+  "sources": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/livraison158B.md",
+      "sha256": "1a2006d82c991d487e420a8e2c269152930bf93ff24be3582cd49c4be2993664",
+      "archive_member": null,
+      "matches_verified_closed_archive": false
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/tests-158B.md",
+      "sha256": "18b11fcb6ff17d3b675d63684b7da5624f713e883aab16ced0b08da44f8e9e26",
+      "archive_member": "validation158B/tests-158B.md",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/T021-full-comparison158.json",
+      "sha256": "50ad3e3462987ef9c8f83e57523eadc2a1afdb30243421ae1ebb61fadabb230d",
+      "archive_member": "validation158B/T021-full-comparison158.json",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/099-recovery-deadline-diagnostic.json",
+      "sha256": "29ba539fb0f87331a6a2c72805c49323266099871a65eaf32a56649525986400",
+      "archive_member": "validation158B/099-recovery-deadline-diagnostic.json",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/099-recovery-deadline-diagnostic.md",
+      "sha256": "2ad4f616d05918264556911385300a839eae3d2e0164d5689fb4e8c6242b18dd",
+      "archive_member": "validation158B/099-recovery-deadline-diagnostic.md",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T121-FULL158B-compiled-final.json",
+      "sha256": "ccac449dadc9ee930a863a0e8877bc3a2ae86146960def230c827d569178f491",
+      "archive_member": "bridget-tests158B-20261012/T121-FULL158B-compiled-final.json",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T121-FULL158B-summary.json",
+      "sha256": "21a2d955cdf9c14f1d3ea2bc52df7ce379d5722b52ddd7c9f3f71844043ad50d",
+      "archive_member": "bridget-tests158B-20261012/T121-FULL158B-summary.json",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T121-FULL158B-compiled-final.log",
+      "sha256": "fd5ba6c30e89954db7d40725589d0b368d4ded5569cffd1ef66dcc1be2b7a274",
+      "archive_member": "bridget-tests158B-20261012/T121-FULL158B-compiled-final.log",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T111-T113-G6-G7-attested-T116-diagnostic-GREEN.json",
+      "sha256": "dd53b24bb8c27b2bc4a094c543ac1e40d0b89f215419221c96d929b603c2d057",
+      "archive_member": "bridget-tests158B-20261012/T111-T113-G6-G7-attested-T116-diagnostic-GREEN.json",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T111-T113-G6-G7-attested-T116-diagnostic-GREEN.log",
+      "sha256": "61a1ca494c6dc9e2f8eec6237edd21e898ed734252ebd331d73961deb9b57b0e",
+      "archive_member": "bridget-tests158B-20261012/T111-T113-G6-G7-attested-T116-diagnostic-GREEN.log",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T121-099-recovery-timing-replay.json",
+      "sha256": "ddccaa56cded02ca8d958daea96cf8e55b712ef99e1eb2d9324ac7208df1142c",
+      "archive_member": "bridget-tests158B-20261012/T121-099-recovery-timing-replay.json",
+      "matches_verified_closed_archive": true
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests158B-20261012/T121-099-recovery-timing-replay.log",
+      "sha256": "f23d4365907c20d18f71fa56ed906cfa84d304f91cc5009412295a03c89a6ef3",
+      "archive_member": "bridget-tests158B-20261012/T121-099-recovery-timing-replay.log",
+      "matches_verified_closed_archive": true
+    }
+  ],
+  "limits": [
+    "Aucune commande Cargo/test/Git/DB/service exécutée pour ce relevé.",
+    "Aucune baseline159A fraîche ni seconde FULL158B.",
+    "Les dix noms hérités ne sont pas dix échecs observés dans une même suite finale : un oracle099 passe au replay sans correctif.",
+    "Le lot DND comporte un autre FAIL de fixture : deux PASS ciblés ne rendent pas le lot globalement GREEN.",
+    "Les résultats FULL restent 2456/12/74, même après les corrections ciblées.",
+    "Les empreintes de sources FULL et replays diffèrent; ne pas attribuer le FULL au code livré final.",
+    "Les sources par fichier complètes (221) restent dans chaque reçu référencé; les empreintes pertinentes sont reprises ici."
+  ]
+}

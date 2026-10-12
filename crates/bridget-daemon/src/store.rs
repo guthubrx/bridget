@@ -22,10 +22,12 @@ pub use project_compat::{
     ProjectAuditEvent, ProjectAuditOperation, ProjectAuditOutcome, ProjectBinding,
     ProjectBindingState, ProjectRuntimeBinding,
 };
-pub(crate) use service_events::MAX_GUICHET_FRAME_BYTES;
 pub use service_events::{
     GuichetClaim, GuichetCoordinationEvent, GuichetCoordinationReplay, GuichetDeposit,
     GuichetLifecycleEvent, GuichetNext, GuichetReplyInput, GuichetResult,
+};
+pub(crate) use service_events::{
+    MAX_GUICHET_FRAME_BYTES, record_lifecycle_for_linked_request_in_transaction,
 };
 
 use bridget_transport::protocol::{ProjectRegistryRefusal, ProjectRoundRefusal};

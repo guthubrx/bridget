@@ -1,0 +1,53 @@
+{
+  "label": "T013-R1-PERF-existing-groups-GREEN",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "held159_hold_",
+    "held159_turnstate_",
+    "held159_release_",
+    "held159_sweep_",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:04:21.949575+00:00",
+  "seconds": 14.56,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "54",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.log",
+  "log_sha256": "75f33ca46a9f1979ee371f84f7cd6b024315c83d36067d86131c30d826c84b62",
+  "private_ns": "/private/tmp/b._0kc_smy",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-R1-PERF-existing-groups-GREEN.json",
+  "original_receipt_sha256": "f32874930674a433fc97a16e3ca75631116633f277978f4c3fd43b5ce2f1724d",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_before_after_verified_equal": true,
+  "daemon_sha256_during_run": "48b07b2070564a644173f4081295b0ce1737c08ec26d9146cb94a0a737828b7d"
+}

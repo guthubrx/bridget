@@ -1,0 +1,79 @@
+   Compiling bridget-daemon v0.1.3 (/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon)
+warning: variant `Control` is never constructed
+    --> crates/bridget-daemon/src/daemon.rs:2838:5
+     |
+2837 | enum ObservationJob {
+     |      -------------- variant in this enum
+2838 |     Control(Instant, DeferredControl),
+     |     ^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `due_child_requests` is never used
+   --> crates/bridget-daemon/src/delegation.rs:652:12
+    |
+315 | impl DelegationStore {
+    | -------------------- method in this implementation
+...
+652 |     pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: function `format_cited_paths` is never used
+   --> crates/bridget-daemon/src/native_permissions.rs:218:15
+    |
+218 | pub(crate) fn format_cited_paths(paths: &[String]) -> String {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: `bridget-daemon` (lib) generated 3 warnings
+warning: function `wake158B_groupe7_cli_quota_rejeu_collision_et_reprise` should have a snake case name
+    --> crates/bridget-daemon/src/idempotency.rs:1563:8
+     |
+1563 |     fn wake158B_groupe7_cli_quota_rejeu_collision_et_reprise() {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe7_cli_quota_rejeu_collision_et_reprise`
+     |
+     = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: function `wake158B_groupe1_sql_limites_physiques_et_annulees` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:305:8
+    |
+305 |     fn wake158B_groupe1_sql_limites_physiques_et_annulees() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_sql_limites_physiques_et_annulees`
+
+warning: function `wake158B_groupe3_intervalle_gel_restart_et_frontieres` should have a snake case name
+   --> crates/bridget-daemon/src/store/wake_schedules.rs:416:8
+    |
+416 |     fn wake158B_groupe3_intervalle_gel_restart_et_frontieres() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe3_intervalle_gel_restart_et_frontieres`
+
+warning: function `wake158B_groupe1_domaine_ferme_et_bornes` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:356:8
+    |
+356 |     fn wake158B_groupe1_domaine_ferme_et_bornes() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe1_domaine_ferme_et_bornes`
+
+warning: function `wake158B_groupe2_calendrier_trou_fold_tz_et_date` should have a snake case name
+   --> crates/bridget-daemon/src/wake_schedules.rs:424:8
+    |
+424 |     fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `wake158_b_groupe2_calendrier_trou_fold_tz_et_date`
+
+warning: `bridget-daemon` (lib test) generated 5 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.77s
+     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1827 filtered out; finished in 0.00s
+
+     Running tests/held159_e2e.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/held159_e2e-90c8cae5cc3746aa)
+
+running 1 test
+[BRIDGET] PID file écrit avec verrou exclusif: /private/tmp/b.foe24vlz/tmp/h159-57d27dbd/.state/bridget.pid (PID 86562)
+arrêt enfant isolé pid=86562 expected="/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/held159_e2e-90c8cae5cc3746aa" ps_raw="86551 /Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef --exact daemon::presence_tests::recovery_daemon_child --ignored --nocapture\n" ps_stderr=""
+[BRIDGET] PID file écrit avec verrou exclusif: /private/tmp/b.foe24vlz/tmp/h159-57d27dbd/.state/bridget.pid (PID 86979)
+arrêt enfant isolé pid=86979 expected="/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/held159_e2e-90c8cae5cc3746aa" ps_raw="86551 /Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef --exact daemon::presence_tests::recovery_daemon_child --ignored --nocapture\n" ps_stderr=""
+test held159_daemon_arrete_apres_push_reprise_dans_l_ordre ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 20.83s
+
+[build Bridget] Nettoyage : 0.00 Gio de caches ; 14.96 Gio restants (tailles logiques, clones APFS compris)

@@ -1,0 +1,51 @@
+{
+  "label": "T013-two-incarnations-identity-replay3",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "core_089_identity_test",
+    "--features",
+    "test-support",
+    "--",
+    "deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:13:01.301517+00:00",
+  "seconds": 8.72,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.log",
+  "log_sha256": "51d3968a5ac1e52bf3892cc974355276f426399f3d04df2faa9bf27b292075ea",
+  "private_ns": "/private/tmp/b.nw6yv723",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-two-incarnations-identity-replay3.json",
+  "original_receipt_sha256": "96cf0c6c788914abe27dc9ccc7b2d1f5b299e4fe92243b7ce292abe555e3a5f5",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa"
+}

@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "task": "T010159A",
+  "measured_by": "ROOT existing20sampler",
+  "measurement": "provider_before_emit_turn_completed_to_next_turn_start_received",
+  "daemon_idle_attestation_measured": false,
+  "before": {
+    "path": "/Users/moi/.cache/bridget-tests159A-20261012/T001-baseline-latence159A.json",
+    "sha256": "64719880c8ebaaa095c812f2f3b8a648160569273a49338811edb032df002244",
+    "p95_ns": 27763792,
+    "samples_count": 20,
+    "p95_nearest_rank": 19,
+    "conditions": {
+      "circuit_breaker_limit": 10000,
+      "circuit_breaker_window_secs": 180,
+      "intent": "absent",
+      "managed_executable": "CARGO_BIN_EXE_bridget",
+      "native_keep_alive_secs": 300,
+      "poll_ms": 1,
+      "private_daemon_worker": "support::performance_daemon_worker",
+      "provider": "simulated_codex_no_network",
+      "queue_capacity": 4,
+      "reply": false,
+      "sender": "attested_native_parent"
+    }
+  },
+  "after": {
+    "path": "/Users/moi/.cache/bridget-tests159A-20261012/T010-after-latence159A.json",
+    "sha256": "e0b03c6074e51a02a75a331eaea8a0f44c632e9b03163c7ce20663be675f966d",
+    "p95_ns": 1028132375,
+    "samples_count": 20,
+    "p95_nearest_rank": 19,
+    "conditions": {
+      "circuit_breaker_limit": 10000,
+      "circuit_breaker_window_secs": 180,
+      "intent": "absent",
+      "managed_executable": "CARGO_BIN_EXE_bridget",
+      "native_keep_alive_secs": 300,
+      "poll_ms": 1,
+      "private_daemon_worker": "support::performance_daemon_worker",
+      "provider": "simulated_codex_no_network",
+      "queue_capacity": 4,
+      "reply": false,
+      "sender": "attested_native_parent"
+    }
+  },
+  "delta_ns": 1000368583,
+  "threshold_ns": 250000000,
+  "threshold_exceeded": true,
+  "default_decision": "held_queue remains false",
+  "conditions_change": "After seulement : barrière ListAgents target busy avant chaque admission ; attente hors intervalle mesuré. Sampler20/rang19/proxy Python/workerperformance conservés. Aucun claim fixture byte-identique complet.",
+  "scope": "Private simulatedCodex noNetwork; notproductionSLA; no exactdaemonclock measured",
+  "optimization": "None authorized or proposed",
+  "log_sha256_supplied_by_root": "db13405c7215d46cd4f85217d13c3a091e24da35da488eb11675592ae55a35de54",
+  "run_seconds_supplied_by_root": 72,
+  "run_rc_supplied_by_root": 0
+}

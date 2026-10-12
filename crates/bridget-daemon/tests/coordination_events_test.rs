@@ -236,6 +236,7 @@ fn register(
                 domain: None,
                 journal_available: None,
                 turn_in_progress: false,
+                turn_attest: false,
             },
         ),
         DaemonToWrapper::Registered { .. }

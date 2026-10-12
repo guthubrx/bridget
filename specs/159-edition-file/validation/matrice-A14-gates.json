@@ -1,0 +1,119 @@
+{
+  "status": "A14_PROOFS_READY_FOR_ROOT_CHECKBOX_ONLY",
+  "A_count": 14,
+  "B_count": 14,
+  "B_open": true,
+  "no_checkbox_written": true,
+  "current_daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "Converge": "P3 + annexe R2 CONVERGED",
+  "R2": "APPROVE_WITH_CHANGES, FR023 corrigé/GREEN8",
+  "audit": {
+    "grade": "A99.95",
+    "findings": "0C/0H/0M/1LOW accepted",
+    "coverage_files": "16/64",
+    "coverage_lines": "4275/174030",
+    "coverage_percent": 2.4565,
+    "validator": "RC0/0E/0W"
+  },
+  "rows": [
+    {
+      "task": "T001",
+      "observed_gate": "Référence close :903PASS/6ignored cumulés, deux FAIL initiaux et replays conservés. Latence simulée distincte.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/baseline.md",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T002",
+      "observed_gate": "Dix axes relus, source/autorité cadrées ; aucune preuve runtime déduite de la prélecture.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T002-read-manifest.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T003",
+      "observed_gate": "Migration10PASS, acked_at complément ; T011 réel ferme la restauration. Synthétiques liens non vides distincts.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T003-T004-progress159A.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T004",
+      "observed_gate": "Dix rang/rattachement PASS ; adoption ordinaire corrigée et ordre E2E strict conservé.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T004-T006-progress159A.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T005",
+      "observed_gate": "15hold/registry PASS ; QueueOnly corrigé et repris dans GREEN54.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T013-R1-PERF-existing-groups-GREEN-summary.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T006",
+      "observed_gate": "Signal/horloges ; R2 RED1 puis GREEN8 courantabf654 ; pas de false fabriqué.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T006-R2-turnstate-group-GREEN-summary.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T007",
+      "observed_gate": "20release+ACK1 PASS ; réservation/pause/reprise/commit avant push, GREEN54 distinct.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/progress-T007-T008.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T008",
+      "observed_gate": "11sweep PASS ; retain postCOMMIT/erreur tardive lu, pas de framework.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T013-R1-PERF-existing-groups-GREEN-summary.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T009",
+      "observed_gate": "Sept List PASS ; ownBareClient fermeture T028 ci-dessous.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T028-queue-list-existing-group-GREEN-summary.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T010",
+      "observed_gate": "Onze cas de matrice partagés, tout prescrit ciblé ; SC004proxy seuil dépassé, défaut fermé.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T010-matrice.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T011",
+      "observed_gate": "PASS réel6→7→6 debug, ancienrefuse, restore ; privé/summarysanscorps, pas rollbackprod.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/restauration-v7.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T012",
+      "observed_gate": "Référence/skill/commandes/ADR appliquésROOT ; sauvegardePROD datée acquise.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T013",
+      "observed_gate": "920P ciblés, FULLhistorique9FAIL tousrejouésPASS ; relecture/P3/audit bornés et courantabf654 viaannexe.",
+      "proof": "/Users/moi/.cache/bridget-converge159A-pass3-20261012/converge159A-P3-R2-annexe.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    },
+    {
+      "task": "T028",
+      "observed_gate": "RED1F15,79s attendu2/reçu1 ; GREEN7P11,64s ; getterSELECT/droits156conservés.",
+      "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/validation/T028-queue-list-existing-group-GREEN-summary.json",
+      "execution_or_read_owner": "ROOT/lecteurs attribués, aucun test exécuté par cet owner",
+      "checkbox_decision": "ROOT seulement"
+    }
+  ],
+  "production_delivery_pending": true
+}

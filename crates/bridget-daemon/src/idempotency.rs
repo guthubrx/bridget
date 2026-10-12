@@ -160,7 +160,7 @@ pub(crate) struct StoredSendDelivery {
     pub(crate) recipient_instance_id: String,
     pub(crate) delivery_generation: u64,
     expires_at: i64,
-    phase: String,
+    pub(crate) phase: String,
     message_bytes: Option<Vec<u8>>,
 }
 
@@ -409,6 +409,7 @@ pub enum IdempotencyError {
     InvalidHorizon,
     InvalidTransition { from: RecordState, to: RecordState },
     InvalidDelivery,
+    HeldQueueFull,
     InvalidSpawnCommand,
     InvalidDelegatedRuntimeEvent,
     InvalidAgentLink,
@@ -436,6 +437,7 @@ impl std::fmt::Display for IdempotencyError {
                 write!(formatter, "transition interdite: {from:?} vers {to:?}")
             }
             Self::InvalidDelivery => write!(formatter, "remise idempotente invalide"),
+            Self::HeldQueueFull => write!(formatter, "file retenue pleine"),
             Self::InvalidSpawnCommand => write!(formatter, "commande spawn invalide"),
             Self::InvalidAgentLink => write!(formatter, "lien agent invalide"),
             Self::InvalidDelegatedRuntimeEvent => {
@@ -807,10 +809,10 @@ impl IdempotencyStore {
                         ON DELETE CASCADE
                 );
                 INSERT INTO send_deliveries_v4 (
-                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    rowid, delivery_id, issuer_scope, operation_kind, idempotency_key,
                     recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
                 ) SELECT
-                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    rowid, delivery_id, issuer_scope, operation_kind, idempotency_key,
                     recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
                 FROM send_deliveries;
                 DROP TABLE send_deliveries;
@@ -885,6 +887,140 @@ impl IdempotencyStore {
             CREATE INDEX IF NOT EXISTS idx_send_deliveries_recipient_phase
                 ON send_deliveries(recipient_instance_id, phase);",
         )?;
+        // v7, dans l’Immediate existante : même saga, même FK, aucun compteur métier.
+        // Coût froid O(d log r + (d+l) log(d+l) + B), d remises, l liens, r reçus,
+        // B octets JSON. Copie SQLite temporaire O(l), détruite avant commit/rollback :
+        // INSERT SELECT évite une requête d’écriture par lien et aucun registre ne demeure.
+        let held_migration_applied = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 7)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !held_migration_applied {
+            // Comme v4 : une modification externe FK OFF peut avoir créé un fantôme.
+            // Sa suppression cascade aussi ses liens ; aucun enfant valide n’est retiré.
+            let schema_orphans: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT d.delivery_id FROM send_deliveries d
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM idempotency_records r
+                     WHERE r.issuer_scope = d.issuer_scope
+                       AND r.operation_kind = d.operation_kind
+                       AND r.idempotency_key = d.idempotency_key
+                 )",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| row.get(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows
+            };
+            if !schema_orphans.is_empty() {
+                log::warn!(
+                    "migration v7: {} remise(s) sans parent écartées dans la transaction ; \
+                 origine externe, FK OFF ; delivery_id={:?}",
+                    schema_orphans.len(),
+                    schema_orphans,
+                );
+                tx.execute(
+                    "DELETE FROM send_deliveries
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM idempotency_records r
+                     WHERE r.issuer_scope = send_deliveries.issuer_scope
+                       AND r.operation_kind = send_deliveries.operation_kind
+                       AND r.idempotency_key = send_deliveries.idempotency_key
+                 )",
+                    [],
+                )?;
+            }
+            // CASE protège json_type/json_extract des BLOB NULL/JSON invalides.
+            // Sans destinataire textuel, garder bytes et phase ; pas d’identité inventée.
+            let unreadable: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT delivery_id FROM send_deliveries
+                 WHERE CASE WHEN json_valid(message_bytes)
+                            THEN COALESCE(json_type(message_bytes,'$.to'),'') != 'text'
+                                 OR json_extract(message_bytes,'$.to') = ''
+                            ELSE 1 END",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| row.get(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows
+            };
+            if !unreadable.is_empty() {
+                log::warn!(
+                    "migration v7: destinataire illisible ; enveloppes et phases conservées, \
+                 recipient_agent vide, aucun reroutage ; delivery_id={:?}",
+                    unreadable,
+                );
+            }
+            // DROP du parent déclenche ON DELETE CASCADE même avec une TX ouverte.
+            // Copier les liens avant DROP, puis les restaurer sous FK ON ; aucun PRAGMA OFF.
+            tx.execute_batch(
+            "CREATE TEMP TABLE send_delivery_execution_links_v7_copy AS
+                 SELECT delivery_id,submission_id,execution_id FROM send_delivery_execution_links;
+             CREATE TABLE send_deliveries_v7 (
+                 queue_rank INTEGER PRIMARY KEY AUTOINCREMENT,
+                 delivery_id TEXT NOT NULL UNIQUE,
+                 issuer_scope TEXT NOT NULL,
+                 operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                 idempotency_key TEXT NOT NULL,
+                 recipient_instance_id TEXT NOT NULL,
+                 delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                 phase TEXT NOT NULL CHECK (phase IN (
+                     'dispatching','acked','indeterminate','orphaned','held','cancelled'
+                 )),
+                 expires_at INTEGER NOT NULL,
+                 message_bytes BLOB,
+                 recipient_agent TEXT NOT NULL,
+                 turn_gate INTEGER NOT NULL DEFAULT 0 CHECK (turn_gate IN (0,1)),
+                 acked_at INTEGER,
+                 FOREIGN KEY (issuer_scope,operation_kind,idempotency_key)
+                     REFERENCES idempotency_records(issuer_scope,operation_kind,idempotency_key)
+                     ON DELETE CASCADE
+             );
+             INSERT INTO send_deliveries_v7 (
+                 queue_rank,delivery_id,issuer_scope,operation_kind,idempotency_key,
+                 recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,
+                 recipient_agent,turn_gate
+             ) SELECT rowid,delivery_id,issuer_scope,operation_kind,idempotency_key,
+                 recipient_instance_id,delivery_generation,phase,expires_at,message_bytes,
+                 CASE WHEN json_valid(message_bytes)
+                      THEN CASE WHEN json_type(message_bytes,'$.to') = 'text'
+                                THEN json_extract(message_bytes,'$.to') ELSE '' END
+                      ELSE '' END,
+                 0
+             FROM send_deliveries;
+             DROP TABLE send_deliveries;
+             ALTER TABLE send_deliveries_v7 RENAME TO send_deliveries;
+             CREATE UNIQUE INDEX idx_send_deliveries_operation
+                 ON send_deliveries(issuer_scope,operation_kind,idempotency_key);
+             CREATE INDEX idx_send_deliveries_kind_key
+                 ON send_deliveries(operation_kind,idempotency_key);
+             CREATE INDEX idx_send_deliveries_recipient_phase
+                 ON send_deliveries(recipient_instance_id,phase,queue_rank);
+             CREATE INDEX idx_send_deliveries_agent_phase
+                 ON send_deliveries(recipient_agent,phase,queue_rank);
+             INSERT INTO send_delivery_execution_links (delivery_id,submission_id,execution_id)
+                 SELECT delivery_id,submission_id,execution_id FROM temp.send_delivery_execution_links_v7_copy;
+             DROP TABLE temp.send_delivery_execution_links_v7_copy;",
+        )?;
+            // Toute violation restante refuse l’ouverture ; le DROP et les copies seront annulés.
+            let foreign_key_violation: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+                [],
+                |row| row.get(0),
+            )?;
+            if foreign_key_violation {
+                return Err(IdempotencyError::CorruptRecord(
+                    "migration v7: violation de clé étrangère",
+                ));
+            }
+            tx.execute(
+                "INSERT INTO idempotency_schema_migrations(version) VALUES (7)",
+                [],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }

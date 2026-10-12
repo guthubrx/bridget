@@ -1,0 +1,723 @@
+{
+  "feature": "159A",
+  "capture_at_utc": "2026-10-12T13:33:41+00:00",
+  "source_base_commit": "e52a96240b6168bf4466712e1bda8852b4ecb43f",
+  "source_base_authority": "ROOT",
+  "files": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/registry.rs",
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "read_ranges": [
+        [
+          13,
+          88
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          13,
+          88
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "38fce1d1857f86347635f80757fb58cc6f3b9203e2228c9241baa6318e10726b",
+      "read_ranges": [
+        [
+          1,
+          58
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          58
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "0db6541e31d7809b5caee44bf9a8e933b5aa1bb3f2734cf518294a570e16c8e6",
+      "read_ranges": [
+        [
+          54,
+          175
+        ],
+        [
+          227,
+          277
+        ],
+        [
+          403,
+          477
+        ],
+        [
+          597,
+          620
+        ],
+        [
+          653,
+          723
+        ],
+        [
+          112,
+          153
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          54,
+          175
+        ],
+        [
+          227,
+          277
+        ],
+        [
+          403,
+          477
+        ],
+        [
+          597,
+          620
+        ],
+        [
+          653,
+          723
+        ],
+        [
+          112,
+          153
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "read_ranges": [
+        [
+          5229,
+          5275
+        ],
+        [
+          5994,
+          6030
+        ],
+        [
+          10749,
+          10843
+        ],
+        [
+          12718,
+          12750
+        ],
+        [
+          11324,
+          11370
+        ],
+        [
+          11025,
+          11066
+        ],
+        [
+          11282,
+          11333
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          5229,
+          5275
+        ],
+        [
+          5994,
+          6030
+        ],
+        [
+          10749,
+          10843
+        ],
+        [
+          12718,
+          12750
+        ],
+        [
+          11324,
+          11370
+        ],
+        [
+          11025,
+          11066
+        ],
+        [
+          11282,
+          11333
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "read_ranges": [
+        [
+          170,
+          190
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          170,
+          190
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "read_ranges": [
+        [
+          4019,
+          4024
+        ],
+        [
+          4698,
+          4718
+        ],
+        [
+          5575,
+          5587
+        ],
+        [
+          5620,
+          5630
+        ],
+        [
+          6521,
+          6543
+        ],
+        [
+          6576,
+          6590
+        ],
+        [
+          6658,
+          6669
+        ],
+        [
+          895,
+          921
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          4019,
+          4024
+        ],
+        [
+          4698,
+          4718
+        ],
+        [
+          5575,
+          5587
+        ],
+        [
+          5620,
+          5630
+        ],
+        [
+          6521,
+          6543
+        ],
+        [
+          6576,
+          6590
+        ],
+        [
+          6658,
+          6669
+        ],
+        [
+          895,
+          921
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "read_ranges": [
+        [
+          515,
+          570
+        ],
+        [
+          695,
+          843
+        ],
+        [
+          829,
+          891
+        ],
+        [
+          1253,
+          1267
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          515,
+          570
+        ],
+        [
+          695,
+          843
+        ],
+        [
+          829,
+          891
+        ],
+        [
+          1253,
+          1267
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+      "read_ranges": [
+        [
+          1521,
+          1552
+        ],
+        [
+          1650,
+          1667
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1521,
+          1552
+        ],
+        [
+          1650,
+          1667
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "read_ranges": [
+        [
+          1,
+          72
+        ],
+        [
+          97,
+          144
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          72
+        ],
+        [
+          97,
+          144
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store/ledger_requests.rs",
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "read_ranges": [
+        [
+          699,
+          715
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          699,
+          715
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/acp.rs",
+      "sha256": "fc78deef60ebf9b6302667f7fb487dc7774c184d650e9c231b2a3bc373300b8c",
+      "read_ranges": [
+        [
+          770,
+          780
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          770,
+          780
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "read_ranges": [
+        [
+          510,
+          521
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          510,
+          521
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "2e19ecc41685cf43db8a762ddb9df74cac8e9fd39c5c26fbd931aa5359ecff6c",
+      "read_ranges": [
+        [
+          1326,
+          1339
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1326,
+          1339
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/t3code.rs",
+      "sha256": "e0040b2b8e049a75b7f940d86d70417c6355e5cc02f79f5e1c8f7f91581b42ec",
+      "read_ranges": [
+        [
+          1850,
+          1926
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1850,
+          1926
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/tests/core_089_migration_test.rs",
+      "sha256": "99b885a664deb780f6cecd15b4fdf1234b38138b4d92b73a3747b9072dbda1b9",
+      "read_ranges": [
+        [
+          1,
+          60
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          60
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md",
+      "sha256": "b414983920aedd800122e96a2318ac45e4516567cce92b52c4aec860a1a03cff",
+      "read_ranges": [
+        [
+          1,
+          158
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          158
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md",
+      "sha256": "02f903507c822153126242ab7295936ea40fe473f5772d3a1d8451f54284771e",
+      "read_ranges": [
+        [
+          1,
+          124
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          124
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/data-model.md",
+      "sha256": "9aedb6edd5e5e9ca0312afe84b1692a048c7dc26843635432429b518ec9dce76",
+      "read_ranges": [
+        [
+          1,
+          159
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          159
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/research.md",
+      "sha256": "2d6ae93c01a67e6c99904d475d83e4f8a8b8318a9e10d5bf7868f686a9956e05",
+      "read_ranges": [
+        [
+          1,
+          239
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          239
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/quickstart.md",
+      "sha256": "eed95e804b3b86a0833fb25b16f3f39d3d72a7923d4f5189ba60b69443a0331a",
+      "read_ranges": [
+        [
+          1,
+          63
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          63
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/spec.md",
+      "sha256": "9eb6d448ea13261cf0026dbb4b199f4cca18f8bcb645766d768326624067cc84",
+      "read_ranges": [
+        [
+          1,
+          59
+        ],
+        [
+          72,
+          211
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          59
+        ],
+        [
+          72,
+          211
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "4a4f78e8358edc7b4925d48818f37be53a0d86047445547615a9a26faf82da91",
+      "read_ranges": [
+        [
+          1,
+          126
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          126
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/reuse-audit.md",
+      "sha256": "a079fdf73c06b5c38c86f4a0ac784e0b782628a9ed24aec8f8a1dfff6b99f843",
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          45
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.specify/memory/constitution.md",
+      "sha256": "5488b1f49f4ee846371969a4d5ada35c79b2f657402415487a3ae81ff4466c76",
+      "read_ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          20
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.specify/memory/standards.md",
+      "sha256": "08c79deb5ae7162408eec4ea98336fcb8819692f2e2d59e0372decb19d6020a7",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          38
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    }
+  ],
+  "contexts": [
+    {
+      "file": "/Users/moi/.cache/bridget-prelecture159-20261012/readiness159A-after158B-candidate.md",
+      "sha256": "82e06abfdae51069fe0dd487fefe463532c478e5cca753ea835524ff4a1bf91f",
+      "read_ranges": [
+        [
+          1,
+          56
+        ]
+      ],
+      "full_file_read": true,
+      "role": "preuve_preparatoire"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan159-native-evidence-20261012/T002-readonly.md",
+      "sha256": "edd1cabb7f597c282cabbff775697338b63333d8b159279a8bb62fa8c0434a5b",
+      "read_ranges": [
+        [
+          1,
+          29
+        ]
+      ],
+      "full_file_read": true,
+      "role": "preuve_preparatoire"
+    },
+    {
+      "file": "/Users/moi/.agents/skills/speckit-audit-existing/SKILL.md",
+      "sha256": "e1c8ba33820e2f9927e197fa25a22e23306ae3c49a16306d172b404eca55f9fe",
+      "read_ranges": [
+        [
+          1,
+          225
+        ]
+      ],
+      "full_file_read": true,
+      "role": "contrat_skill"
+    }
+  ],
+  "limits": [
+    "Lecture ciblée uniquement, pas audit global ni Analyze159A frais. Ancienne décision PASS2026-10-11 non reprise comme preuve.",
+    "Aucune commande Cargo/test/DB/service/Git ni mesure/performance. Documentation SQLite officielle consultée pour la faisabilité uniquement.",
+    "Basesource e52a96240b6168bf4466712e1bda8852b4ecb43f attestée par ROOT ; HEAD non vérifié par cet agent. Installation158B encore en cours selon dernier message reçu.",
+    "Spec159 plage60–71 non recréditée ; reuse-audit historique seulement1–45 ; protocol/Register/MCP et garde autonome non relus intégralement. Corps géants N/daemon/wrapper non lus intégralement.",
+    "Recherches absence bornées crates/scripts/docs/Cargo.toml puis couplages ciblés. B14 hors gate et hors code.",
+    "La vérification supplémentaire AUTOINCREMENT est statique et documentaire ; migration/FK/rollback et coûts réels restent à prouver par tests déjà prescrits.",
+    "Borne initiale7min dépassée ; collecte générale arrêtée sur demande ROOT. Seule vérification supplémentaire autorisée2min sur AUTOINCREMENT/FK/INSERT/rowid réalisée."
+  ],
+  "report_sha256": "fbea775f91335be4f4f168a4442f5cf1b8a715b209b0ccfcb21af22e687b315b"
+}

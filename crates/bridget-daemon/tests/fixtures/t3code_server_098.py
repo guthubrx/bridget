@@ -294,6 +294,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             return self.reply(401, {"error": "unauthorized"})
         with self.state.lock:
+            if url.path == "/.well-known/t3/environment":
+                return self.reply(200, {
+                    "environmentId": "fixture098", "serverVersion": "0.0.40-fixture",
+                    "orchestrationProtocolVersion": 1,
+                })
             if url.path == "/api/orchestration/snapshot":
                 return self.reply(200, self.state.snapshot())
             if url.path.startswith("/api/orchestration/threads/"):

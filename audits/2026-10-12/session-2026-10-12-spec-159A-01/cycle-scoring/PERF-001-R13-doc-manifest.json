@@ -1,0 +1,9 @@
+{
+  "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/research.md",
+  "source_sha256": "e4529d168d00e1e5290376dd614887632873d0bf4cdd82d827b714a3a5ccccfd",
+  "patch": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/PERF-001-R13-doc.patch",
+  "patch_sha256": "4e649b8b670bae6f4297200841bdf23fe3bbff9b4157db36af9eed0dc78b3bef",
+  "candidate_sha256": "6f1981aa0529288b4e3963c09c40b07f756aa06e1f1b2552f2c89e123207a65c",
+  "scope": "R13 balayage seulement ; aucun code, scénario, test ou mesure ajouté",
+  "WT_modified": false
+}

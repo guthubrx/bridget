@@ -177,6 +177,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
         domain: None,
         turn_in_progress: false,
         journal_available: None,
+        turn_attest: false,
     };
     writeln!(writer, "{}", encode(&register).expect("encodage")).expect("écriture");
     writer.flush().expect("flush");

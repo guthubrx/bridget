@@ -1,0 +1,410 @@
+{
+  "scope_sha256": "6850eaeced7f122fb921f93d018da6496f8a9655022604f42c1d589e5f956ee9",
+  "manifest_sha256": "881f6ff0b10688f94d10a2462e7c4bc213f437cdf054556c4eeb6e2da58a8708",
+  "patch_sha256": "4491cc7ef8b69f04118341e8df9ab729fa430e7a40c846642185ba2308c3d789",
+  "read_started_at_utc": "2026-10-12T16:51:18.543476Z",
+  "read_ended_at_utc": "2026-10-12T17:07:59.332150+00:00",
+  "source_snapshot": "cycle1_pre_fix",
+  "warnings": [
+    "Couverture partielle : les plages lues sont listées ; tests volumineux et changements de forme ne sont pas revendiqués lus.",
+    "Pas de tests, Cargo, scanner, DB, EXPLAIN, profiling, benchmark, Git ou service exécutés par cet owner.",
+    "Les index sont croisés avec les CREATE INDEX visibles ; utilisation effective des plans SQL non mesurée.",
+    "SC004 est un proxy Python privé20 échantillons/rang19 ; aucun intervalle exact daemon ni SLO p95/p99 production.",
+    "Coût global sweep et list admis : LIMIT200 borne les résultats, pas tous les candidats examinés ; aucune borne globale Held/suivis inventée.",
+    "busy_timeout2s sous State documenté ; aucune saturation inventée à partir des connexions.",
+    "Cycle1 est historique avant les corrections ROOT ; daemon a changé après cette lecture. La résolution et le scoring doivent relire le delta final.",
+    "Revue métier ROOT distincte : QueueOnly et sortie forcée nécessitent leurs corrections ; cet audit ne les duplique pas.",
+    "FULL n’est pas une preuve de performance ; ROOT a signalé RC101 et neuf échecs, aucun GLOBAL_GREEN."
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "ranges": [
+        [
+          240,
+          291
+        ],
+        [
+          5315,
+          5388
+        ],
+        [
+          6085,
+          6270
+        ],
+        [
+          6760,
+          6807
+        ],
+        [
+          9145,
+          9202
+        ],
+        [
+          9335,
+          9480
+        ],
+        [
+          11105,
+          11232
+        ],
+        [
+          11290,
+          11398
+        ],
+        [
+          11640,
+          11770
+        ],
+        [
+          12970,
+          13069
+        ],
+        [
+          24310,
+          24366
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:53:20.800083Z",
+      "scope_member": true,
+      "hash_after": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+      "hash_unchanged_at_close": false,
+      "note": "sources du gel cycle1 ; changement ROOT postlecture distinct",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "ranges": [
+        [
+          1,
+          1215
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:52:37.904623Z",
+      "scope_member": true,
+      "hash_after": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "ranges": [
+        [
+          883,
+          1038
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:52:37.905282Z",
+      "scope_member": true,
+      "hash_after": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store.rs",
+      "sha256": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+      "ranges": [
+        [
+          1,
+          168
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.183880Z",
+      "scope_member": true,
+      "hash_after": "84d6643fd339ec6c68a1c46513fa4e8327e3098cbdc682b6df6de1f572d71cc2",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "ranges": [
+        [
+          1,
+          106
+        ],
+        [
+          332,
+          386
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.184445Z",
+      "scope_member": true,
+      "hash_after": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "ranges": [
+        [
+          4396,
+          4451
+        ],
+        [
+          4723,
+          4760
+        ],
+        [
+          6620,
+          6650
+        ],
+        [
+          6710,
+          6741
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.185841Z",
+      "scope_member": true,
+      "hash_after": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": true,
+      "hash_after": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    },
+    {
+      "file": "crates/bridget-daemon/src/receipt_store.rs",
+      "sha256": "94bc4ac767d35e5f98154e96d9f512297fd7ce294c3e9f6a861113d986643f61",
+      "ranges": [
+        [
+          76,
+          187
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": "2026-10-12T16:57:41.186067Z",
+      "scope_member": false,
+      "hash_after": "94bc4ac767d35e5f98154e96d9f512297fd7ce294c3e9f6a861113d986643f61",
+      "hash_unchanged_at_close": true,
+      "note": "lecture contextuelle hors delta, non créditée au périmètre",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "first_recorded_read_of_file"
+    },
+    {
+      "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "ranges": [
+        [
+          250,
+          284
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": false,
+      "hash_after": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "hash_unchanged_at_close": true,
+      "note": "lecture contextuelle hors delta, non créditée au périmètre",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    },
+    {
+      "file": "specs/159-edition-file/research.md",
+      "sha256": "cede674e3f28e439042783d59edc94c5c4d2072dd103252098dbf1725edb303b",
+      "ranges": [
+        [
+          178,
+          185
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": true,
+      "hash_after": "e4529d168d00e1e5290376dd614887632873d0bf4cdd82d827b714a3a5ccccfd",
+      "hash_unchanged_at_close": false,
+      "note": "sources du gel cycle1 ; changement ROOT postlecture distinct",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    },
+    {
+      "file": "docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "ranges": [
+        [
+          32,
+          47
+        ]
+      ],
+      "read_mode": "fresh_cycle1_pre_fix",
+      "read_at_utc": null,
+      "scope_member": true,
+      "hash_after": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "hash_unchanged_at_close": true,
+      "note": "gel cycle1",
+      "read_time_window": [
+        "2026-10-12T16:51:18.543476Z",
+        "2026-10-12T17:07:59.332150+00:00"
+      ],
+      "timestamp_precision": "session_window_only"
+    }
+  ],
+  "coverage": {
+    "scope_files": 62,
+    "scope_hunks": 443,
+    "source_files_with_ranges": 11,
+    "scope_files_with_ranges": 9,
+    "fully_read_source_current_sides_hunks": [
+      15,
+      16,
+      17,
+      18,
+      20,
+      28,
+      29,
+      30,
+      31,
+      35,
+      36,
+      37,
+      38,
+      40,
+      219,
+      220,
+      221,
+      222,
+      223,
+      224,
+      225,
+      226,
+      227,
+      228,
+      229,
+      230,
+      231,
+      232,
+      233,
+      234,
+      235,
+      236,
+      237,
+      238,
+      239,
+      240,
+      292,
+      294,
+      302,
+      305,
+      306,
+      316,
+      319,
+      326,
+      327
+    ],
+    "partially_read_source_current_sides_hunks": [
+      14,
+      44,
+      55,
+      241,
+      427,
+      443
+    ],
+    "coverage_kind": "plages de sources courantes du gel initial ; ne signifie pas lecture des côtés supprimés du patch ni audit complet des fichiers",
+    "scope_lines_read": 3073,
+    "scope_lines_total": 172871,
+    "full_scope_coverage_percent": null
+  },
+  "module": "08",
+  "findings": [],
+  "positives": [
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "line": 268,
+      "description": "COUNT de capacité et INSERT Held dans la même transaction Immediate : pas de quota anticipé non atomique."
+    },
+    {
+      "file": "crates/bridget-daemon/src/store.rs",
+      "line": 70,
+      "description": "WAL confirmé, durabilité SQLite non relâchée ; timeout écrivain2s borné et coût assumé."
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "line": 624,
+      "description": "Liste limitée à200 résultats et annotation explicite du coût de tous les candidats ; preview120 caractères en façade."
+    }
+  ],
+  "metrics": {
+    "SC004": {
+      "proof_path": "/Users/moi/.cache/bridget-code159A-T010-20261012/SC004-latence-preuve.json",
+      "proof_sha256": "5fa8698019f921244926dbd68ba306cd4dd055341f5096cd8d37ddb7c9cd0acb",
+      "before_p95_ns": 27763792,
+      "after_p95_ns": 1028132375,
+      "delta_ns": 1000368583,
+      "threshold_ns": 250000000,
+      "samples_each": 20,
+      "nearest_rank": 19,
+      "measurement": "provider_before_emit_turn_completed_to_next_turn_start_received",
+      "daemon_idle_attestation_measured": false,
+      "default": "held_queue=false",
+      "production_latency_p95_ms": null,
+      "production_latency_p99_ms": null
+    },
+    "new_measures": null
+  }
+}

@@ -135,6 +135,7 @@ fn register_t3_wrapper(socket: &std::path::Path) -> support::Client {
         domain: None,
         journal_available: Some(false),
         turn_in_progress: false,
+        turn_attest: false,
     });
     let DaemonToWrapper::Registered { agent_id, .. } = t3.receive() else {
         panic!("wrapper T3 attendu");
@@ -147,7 +148,13 @@ fn register_t3_wrapper(socket: &std::path::Path) -> support::Client {
         worktree_root: None,
     };
     t3.send(annonce());
-    assert!(matches!(t3.receive(), DaemonToWrapper::ProjectContextResult { project: Some(_), .. }));
+    assert!(matches!(
+        t3.receive(),
+        DaemonToWrapper::ProjectContextResult {
+            project: Some(_),
+            ..
+        }
+    ));
     t3.send(
         serde_json::from_value(serde_json::json!({
             "type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3
@@ -157,7 +164,13 @@ fn register_t3_wrapper(socket: &std::path::Path) -> support::Client {
     // Le fait de liaison n'a pas de réponse : un aller-retour sur la même
     // connexion garantit qu'il est traité avant la première CLI.
     t3.send(annonce());
-    assert!(matches!(t3.receive(), DaemonToWrapper::ProjectContextResult { project: Some(_), .. }));
+    assert!(matches!(
+        t3.receive(),
+        DaemonToWrapper::ProjectContextResult {
+            project: Some(_),
+            ..
+        }
+    ));
     t3
 }
 
@@ -197,23 +210,184 @@ fn lineage_cli_149_grammaire_fermee_sans_daemon() {
     let casses: Vec<Vec<&str>> = vec![
         vec![],
         vec!["inspect"],
-        vec!["inspect", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list"],
-        vec!["inspect", "--json", "--project-root", "/tmp", "--action", "list"],
+        vec![
+            "inspect",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+        ],
         vec!["inspect", "--json", "--t3-thread", T3, "--action", "list"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "relative", "--action", "list"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list", "--inconnu", "x"],
-        vec!["inspect", "--json", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list"],
-        vec!["inspect", "--json", "--t3-thread", "--project-root", "/tmp", "--action", "list"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "inconnue"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list", "--limit", "0"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list", "--limit", "101"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list", "--cursor", "curseur\ncontrole"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "show", "--task", "pas-un-uuid"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "show", "--task", TASK, "--offset", "262145"],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "journal", "--task", TASK, "--after-seq", "9007199254740992"],
-        vec!["cancel", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--task", "pas-un-uuid", "--request-id", REQUEST],
-        vec!["inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list", "--task", TASK],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "relative",
+            "--action",
+            "list",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+            "--inconnu",
+            "x",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "inconnue",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+            "--limit",
+            "0",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+            "--limit",
+            "101",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+            "--cursor",
+            "curseur\ncontrole",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "show",
+            "--task",
+            "pas-un-uuid",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "show",
+            "--task",
+            TASK,
+            "--offset",
+            "262145",
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "journal",
+            "--task",
+            TASK,
+            "--after-seq",
+            "9007199254740992",
+        ],
+        vec![
+            "cancel",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--task",
+            "pas-un-uuid",
+            "--request-id",
+            REQUEST,
+        ],
+        vec![
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+            "--task",
+            TASK,
+        ],
     ];
     for cas in &casses {
         let mut args: Vec<&str> = vec!["lineage"];
@@ -226,7 +400,17 @@ fn lineage_cli_149_grammaire_fermee_sans_daemon() {
     // Socket absente : refus de liaison en exit 3, jamais un silence.
     let (code, value) = run_cli(
         &root,
-        &["lineage", "inspect", "--json", "--t3-thread", T3, "--project-root", "/tmp", "--action", "list"],
+        &[
+            "lineage",
+            "inspect",
+            "--json",
+            "--t3-thread",
+            T3,
+            "--project-root",
+            "/tmp",
+            "--action",
+            "list",
+        ],
     );
     assert_eq!(code, Some(3), "{value}");
     assert_eq!(value["code"], "binding_unavailable", "{value}");
@@ -246,7 +430,13 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     let db = rusqlite::Connection::open(root.join("state/bridget.db")).unwrap();
     let agent = stable_uuid(T3);
     seed_task(&db, TASK, &agent, "queued", None);
-    seed_task(&db, TASK_TERMINALE, &agent, "result_available", Some("Sortie CLI 149 éè"));
+    seed_task(
+        &db,
+        TASK_TERMINALE,
+        &agent,
+        "result_available",
+        Some("Sortie CLI 149 éè"),
+    );
     seed_task(&db, TASK_AUTRE_RACINE, "autre-racine-149", "queued", None);
     drop(db);
 
@@ -263,23 +453,53 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     assert_eq!(value["seq"], 0, "{value}");
     let tasks = value["tasks"].as_array().unwrap();
     assert_eq!(tasks.len(), 2, "{value}");
-    assert!(tasks.iter().all(|task| task["task_id"] != TASK_AUTRE_RACINE), "{value}");
-    let entree = tasks.iter().find(|task| task["task_id"] == TASK).expect("TASK listée");
+    assert!(
+        tasks
+            .iter()
+            .all(|task| task["task_id"] != TASK_AUTRE_RACINE),
+        "{value}"
+    );
+    let entree = tasks
+        .iter()
+        .find(|task| task["task_id"] == TASK)
+        .expect("TASK listée");
     assert_eq!(entree["journal_available"], false);
 
     // Show : le résultat textuel n'est servi qu'à la tâche terminale.
     let mut args: Vec<&str> = vec!["lineage", "inspect", "--json"];
     args.extend_from_slice(&fil);
-    args.extend_from_slice(&["--action", "show", "--task", TASK_TERMINALE, "--offset", "0", "--limit", "100"]);
+    args.extend_from_slice(&[
+        "--action",
+        "show",
+        "--task",
+        TASK_TERMINALE,
+        "--offset",
+        "0",
+        "--limit",
+        "100",
+    ]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(0), "{value}");
     assert_eq!(value["result"], "Sortie CLI 149 éè", "{value}");
-    assert_eq!(value["result_total_bytes"], "Sortie CLI 149 éè".len(), "{value}");
+    assert_eq!(
+        value["result_total_bytes"],
+        "Sortie CLI 149 éè".len(),
+        "{value}"
+    );
 
     // Mauvais fil : liaison indisponible, jamais les données.
     let mut args: Vec<&str> = vec!["lineage", "inspect", "--json"];
     args.extend_from_slice(&["--t3-thread", T3_AUTRE, "--project-root", racine.as_str()]);
-    args.extend_from_slice(&["--action", "show", "--task", TASK_TERMINALE, "--offset", "0", "--limit", "100"]);
+    args.extend_from_slice(&[
+        "--action",
+        "show",
+        "--task",
+        TASK_TERMINALE,
+        "--offset",
+        "0",
+        "--limit",
+        "100",
+    ]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(2), "{value}");
     assert_eq!(value["code"], "binding_unavailable", "{value}");
@@ -287,7 +507,16 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     // Mauvaise racine : mismatch de projet.
     let mut args: Vec<&str> = vec!["lineage", "inspect", "--json"];
     args.extend_from_slice(&["--t3-thread", T3, "--project-root", "/tmp"]);
-    args.extend_from_slice(&["--action", "show", "--task", TASK_TERMINALE, "--offset", "0", "--limit", "100"]);
+    args.extend_from_slice(&[
+        "--action",
+        "show",
+        "--task",
+        TASK_TERMINALE,
+        "--offset",
+        "0",
+        "--limit",
+        "100",
+    ]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(2), "{value}");
     assert_eq!(value["code"], "project_mismatch", "{value}");
@@ -295,7 +524,16 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     // Offset au milieu d'un point de code : refus explicite.
     let mut args: Vec<&str> = vec!["lineage", "inspect", "--json"];
     args.extend_from_slice(&fil);
-    args.extend_from_slice(&["--action", "show", "--task", TASK_TERMINALE, "--offset", "16", "--limit", "100"]);
+    args.extend_from_slice(&[
+        "--action",
+        "show",
+        "--task",
+        TASK_TERMINALE,
+        "--offset",
+        "16",
+        "--limit",
+        "100",
+    ]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(2), "{value}");
     assert_eq!(value["code"], "result_offset_invalid", "{value}");
@@ -303,7 +541,16 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     // Journal d'une tâche inconnue : refus fermé.
     let mut args: Vec<&str> = vec!["lineage", "inspect", "--json"];
     args.extend_from_slice(&fil);
-    args.extend_from_slice(&["--action", "journal", "--task", "00000000-0000-4000-8000-000000000000", "--after-seq", "0", "--limit", "50"]);
+    args.extend_from_slice(&[
+        "--action",
+        "journal",
+        "--task",
+        "00000000-0000-4000-8000-000000000000",
+        "--after-seq",
+        "0",
+        "--limit",
+        "50",
+    ]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(2), "{value}");
     assert_eq!(value["code"], "task_unavailable", "{value}");
@@ -316,7 +563,16 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     );
     let mut args: Vec<&str> = vec!["lineage", "inspect", "--json"];
     args.extend_from_slice(&fil);
-    args.extend_from_slice(&["--action", "journal", "--task", TASK, "--after-seq", "0", "--limit", "50"]);
+    args.extend_from_slice(&[
+        "--action",
+        "journal",
+        "--task",
+        TASK,
+        "--after-seq",
+        "0",
+        "--limit",
+        "50",
+    ]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(0), "{value}");
     assert_eq!(value["status"], "ok", "{value}");
@@ -329,7 +585,11 @@ fn lineage_cli_149_bout_en_bout_liste_show_journal_et_cancel() {
     args.extend_from_slice(&["--task", TASK, "--request-id", REQUEST]);
     let (code, value) = run_cli(&root, &args);
     assert_eq!(code, Some(0), "{value}");
-    assert_eq!(value, serde_json::json!({"version":1,"task_id":TASK,"status":"cancelling"}), "{value}");
+    assert_eq!(
+        value,
+        serde_json::json!({"version":1,"task_id":TASK,"status":"cancelling"}),
+        "{value}"
+    );
     let (code, rejoue) = run_cli(&root, &args);
     assert_eq!(code, Some(0), "{rejoue}");
     assert_eq!(rejoue, value, "le reçu est rejoué à l'identique");
@@ -385,18 +645,31 @@ fn lineage_cli_149_watch_ready_puis_fermeture_propre() {
         events: libc::POLLIN,
         revents: 0,
     };
-    assert!(unsafe { libc::poll(&mut poll_fd, 1, 15_000) } > 0, "ready watch absent");
+    assert!(
+        unsafe { libc::poll(&mut poll_fd, 1, 15_000) } > 0,
+        "ready watch absent"
+    );
     let mut ligne = String::new();
-    assert!(reader.read_line(&mut ligne).unwrap() > 0, "ligne ready vide");
+    assert!(
+        reader.read_line(&mut ligne).unwrap() > 0,
+        "ligne ready vide"
+    );
     let value: Value = serde_json::from_str(ligne.trim()).expect(&ligne);
     assert_eq!(value["status"], "ready", "{ligne}");
     assert_eq!(value["version"], 1, "{ligne}");
-    assert_eq!(value["seq"], 0, "le marqueur Ready est distinct de la seq du magasin : {ligne}");
+    assert_eq!(
+        value["seq"], 0,
+        "le marqueur Ready est distinct de la seq du magasin : {ligne}"
+    );
 
     // Fermeture du stdout : POLLHUP côté CLI → sortie 0, jamais une erreur.
     drop(reader);
     support::wait_child(&mut child, Duration::from_secs(15));
     let status = child.try_wait().unwrap();
-    assert_eq!(status.and_then(|s| s.code()), Some(0), "watch CLI non terminé proprement");
+    assert_eq!(
+        status.and_then(|s| s.code()),
+        Some(0),
+        "watch CLI non terminé proprement"
+    );
     daemon.stop();
 }

@@ -1,0 +1,9 @@
+{
+  "tasks_before_sha256": "c7dd1edb2a5c289759ff640b9137e8e0787c9f422c01c978e45189c9b5e836fa",
+  "tasks_after_sha256": "44ee6ced8325fa65e3501f24be7d5ff92d27da5fc9065176fc053e07aca462d6",
+  "A_checked": 14,
+  "B_open": 14,
+  "Converge": "P3+annexe CONVERGED",
+  "current_daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "production_pending": true
+}

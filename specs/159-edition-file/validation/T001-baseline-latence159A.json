@@ -1,0 +1,589 @@
+{
+  "conditions": {
+    "circuit_breaker_limit": 10000,
+    "circuit_breaker_window_secs": 180,
+    "intent": "absent",
+    "managed_executable": "CARGO_BIN_EXE_bridget",
+    "native_keep_alive_secs": 300,
+    "poll_ms": 1,
+    "private_daemon_worker": "support::performance_daemon_worker",
+    "provider": "simulated_codex_no_network",
+    "queue_capacity": 4,
+    "reply": false,
+    "sender": "attested_native_parent"
+  },
+  "daemon_idle_attestation_measured": false,
+  "fixture_source": "guidance156_e2e",
+  "held_queue": "absent",
+  "measure": "provider_before_emit_turn_completed_to_next_turn_start_received",
+  "p95_nearest_rank": 19,
+  "p95_ns": 27763792,
+  "phase": "before159A",
+  "provider_evidence": "{\"event\": \"started\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"provider\": \"closed_codex_fixture\", \"pid\": 54147, \"state_root\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87/state\", \"agent_id\": \"6c0ede65-405e-4f0c-929f-b57aa75c0860\", \"native_bootstrap\": {\"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"mission_id\": \"b7395462-3d6f-48a5-81e6-bf9bef2b4795\"}, \"forward\": true}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"b7395462-3d6f-48a5-81e6-bf9bef2b4795\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"b7395462-3d6f-48a5-81e6-bf9bef2b4795\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":true,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nCarte de reprise Bridget (faits durables, aucune m\\u00e9moire reconstruite).\\nP\\u00e9rim\\u00e8tre : identit\\u00e9 fig\\u00e9e + Git uniquement \\u2014 cette carte n'atteste PAS la capacit\\u00e9 d'ex\\u00e9cution (shell / mains). Sans shell : s'arr\\u00eater et le dire, jamais improviser.\\nIdentit\\u00e9 fig\\u00e9e : nom=6c0ede65-405e-4f0c-929f-b57aa75c0860; type=fake-codex; protocole=codex_app_server; definition_digest=f7f6797a720159f116a31b493df849bcc667e46df2d4d1ae4d996b721b9a6a70.\\nWorktree : indisponible (fatal: not a git repository (or any of the parent directories): .git).\\nCette carte ne cr\\u00e9e ni ne relance de mission : les messages et demandes Bridget restent l\\u2019autorit\\u00e9 de communication.\\n\\nMission Bridget :\\nHELD159_INITIAL\\n\\n[R\\u00e9ponse Bridget]\\nSi reply=true, le wrapper relaie automatiquement ta r\\u00e9ponse finale \\u00e0 from avec in_reply_to=id ci-dessus. Utilise cette r\\u00e9ponse finale pour terminer la demande ; pour un avancement distinct, utilise bridget_send avec to=from et reply=false, sans in_reply_to.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-1\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"b7395462-3d6f-48a5-81e6-bf9bef2b4795\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":true,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nCarte de reprise Bridget (faits durables, aucune m\\\\u00e9moire reconstruite).\\\\nP\\\\u00e9rim\\\\u00e8tre : identit\\\\u00e9 fig\\\\u00e9e + Git uniquement \\\\u2014 cette carte n'atteste PAS la capacit\\\\u00e9 d'ex\\\\u00e9cution (shell / mains). Sans shell : s'arr\\\\u00eater et le dire, jamais improviser.\\\\nIdentit\\\\u00e9 fig\\\\u00e9e : nom=6c0ede65-405e-4f0c-929f-b57aa75c0860; type=fake-codex; protocole=codex_app_server; definition_digest=f7f6797a720159f116a31b493df849bcc667e46df2d4d1ae4d996b721b9a6a70.\\\\nWorktree : indisponible (fatal: not a git repository (or any of the parent directories): .git).\\\\nCette carte ne cr\\\\u00e9e ni ne relance de mission : les messages et demandes Bridget restent l\\\\u2019autorit\\\\u00e9 de communication.\\\\n\\\\nMission Bridget :\\\\nHELD159_INITIAL\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nSi reply=true, le wrapper relaie automatiquement ta r\\\\u00e9ponse finale \\\\u00e0 from avec in_reply_to=id ci-dessus. Utilise cette r\\\\u00e9ponse finale pour terminer la demande ; pour un avancement distinct, utilise bridget_send avec to=from et reply=false, sans in_reply_to.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 1, \"monotonic_ns\": 764317125}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 1, \"monotonic_ns\": 813512416}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-01\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-01\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_01\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-2\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-01\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_01\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 2, \"monotonic_ns\": 823813916}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 2, \"monotonic_ns\": 842040333}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-02\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-02\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_02\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-3\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-02\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_02\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 3, \"monotonic_ns\": 854675833}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 3, \"monotonic_ns\": 884393250}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-03\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-03\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_03\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-4\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-03\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_03\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 4, \"monotonic_ns\": 893717083}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 4, \"monotonic_ns\": 907467416}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-04\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-04\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_04\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-5\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-04\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_04\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 5, \"monotonic_ns\": 917594708}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 5, \"monotonic_ns\": 933389875}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-05\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-05\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_05\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-6\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-05\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_05\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 6, \"monotonic_ns\": 947629125}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 6, \"monotonic_ns\": 967560875}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-06\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-06\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_06\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-7\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-06\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_06\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 7, \"monotonic_ns\": 977726791}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 7, \"monotonic_ns\": 997468458}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-07\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-07\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_07\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-8\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-07\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_07\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 8, \"monotonic_ns\": 1025232250}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 8, \"monotonic_ns\": 1038417916}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-08\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-08\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_08\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-9\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-08\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_08\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 9, \"monotonic_ns\": 1046645375}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 9, \"monotonic_ns\": 1067451125}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-09\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-09\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_09\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-10\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-09\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_09\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 10, \"monotonic_ns\": 1077669000}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 10, \"monotonic_ns\": 1098334041}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-10\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-10\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_10\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-11\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-10\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_10\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 11, \"monotonic_ns\": 1108429791}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 11, \"monotonic_ns\": 1127274833}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-11\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-11\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_11\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-12\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-11\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_11\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 12, \"monotonic_ns\": 1155281958}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 12, \"monotonic_ns\": 1168344125}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-12\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-12\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_12\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-13\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-12\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_12\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 13, \"monotonic_ns\": 1178313125}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 13, \"monotonic_ns\": 1197450916}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-13\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-13\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_13\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-14\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-13\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_13\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 14, \"monotonic_ns\": 1207603125}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 14, \"monotonic_ns\": 1228244625}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-14\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-14\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_14\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-15\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-14\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_14\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 15, \"monotonic_ns\": 1237565041}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 15, \"monotonic_ns\": 1257260541}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-15\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-15\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_15\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-16\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-15\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_15\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 16, \"monotonic_ns\": 1266513875}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 16, \"monotonic_ns\": 1287376250}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-16\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-16\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_16\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-17\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-16\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_16\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 17, \"monotonic_ns\": 1297504208}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 17, \"monotonic_ns\": 1316302958}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-17\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-17\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_17\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-18\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-17\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_17\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 18, \"monotonic_ns\": 1326467291}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 18, \"monotonic_ns\": 1344455291}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-18\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-18\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_18\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-19\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-18\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_18\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 19, \"monotonic_ns\": 1354601208}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 19, \"monotonic_ns\": 1376243500}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-19\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-19\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_19\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-20\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-19\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_19\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 20, \"monotonic_ns\": 1385403208}\n{\"event\": \"completed159\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"turn_number\": 20, \"monotonic_ns\": 1405424416}\n{\"event\": \"turn156\", \"instance_id\": \"1192874a-984d-4bcc-8e20-0550724183d0\", \"params\": {\"approvalPolicy\": \"on-request\", \"approvalsReviewer\": \"user\", \"clientUserMessageId\": \"held159-sample-20\", \"cwd\": \"/private/tmp/b.taenu8cq/tmp/h159-a8255a87\", \"input\": [{\"text\": \"[Message Bridget : {\\\"from\\\":\\\"15900000-0000-4000-8000-000000000001\\\",\\\"id\\\":\\\"held159-sample-20\\\",\\\"in_reply_to\\\":null,\\\"reply\\\":false,\\\"to\\\":\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\"}]\\nHELD159_SAMPLE_20\\n\\n[R\\u00e9ponse Bridget]\\nPas d'accus\\u00e9 de r\\u00e9ception : n'envoie aucun \\u00ab bien re\\u00e7u \\u00bb, m\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\u00e2che : si ce message demande une action, fais-la. Ta r\\u00e9ponse finale ne sera pas relay\\u00e9e ; pour transmettre un r\\u00e9sultat \\u00e0 l'exp\\u00e9diteur, fais un nouvel envoi Bridget.\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\u00e8s \\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\", \"type\": \"text\"}], \"sandboxPolicy\": {\"type\": \"dangerFullAccess\"}, \"threadId\": \"thread155-1192874a-984d-4bcc-8e20-0550724183d0\"}, \"turn_id\": \"turn156-1192874a-984d-4bcc-8e20-0550724183d0-21\", \"prompt\": \"[{\\\"text\\\": \\\"[Message Bridget : {\\\\\\\"from\\\\\\\":\\\\\\\"15900000-0000-4000-8000-000000000001\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"held159-sample-20\\\\\\\",\\\\\\\"in_reply_to\\\\\\\":null,\\\\\\\"reply\\\\\\\":false,\\\\\\\"to\\\\\\\":\\\\\\\"6c0ede65-405e-4f0c-929f-b57aa75c0860\\\\\\\"}]\\\\nHELD159_SAMPLE_20\\\\n\\\\n[R\\\\u00e9ponse Bridget]\\\\nPas d'accus\\\\u00e9 de r\\\\u00e9ception : n'envoie aucun \\\\u00ab bien re\\\\u00e7u \\\\u00bb, m\\\\u00eame pour annoncer ton silence. Ce n'est pas une absence de t\\\\u00e2che : si ce message demande une action, fais-la. Ta r\\\\u00e9ponse finale ne sera pas relay\\\\u00e9e ; pour transmettre un r\\\\u00e9sultat \\\\u00e0 l'exp\\\\u00e9diteur, fais un nouvel envoi Bridget.\\\\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affich\\\\u00e9s, cherche-les dans le catalogue d'outils disponible. L'acc\\\\u00e8s \\\\u00e0 la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.\\\", \\\"type\\\": \\\"text\\\"}]\", \"turn_number\": 21, \"monotonic_ns\": 1415569791}\n",
+  "provider_processes": 1,
+  "root": "/private/tmp/b.taenu8cq/tmp/h159-a8255a87",
+  "samples": [
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-01",
+        "issue": {
+          "delivery_id": "b805cdb6-7cec-4e9b-a0d6-b54c400b40a3",
+          "expires_at": 1792418306,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 813512416,
+      "delivery_id": "b805cdb6-7cec-4e9b-a0d6-b54c400b40a3",
+      "delta_ns": 10301500,
+      "message_id": "held159-sample-01",
+      "next_start_ns": 823813916,
+      "number": 1,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-02",
+        "issue": {
+          "delivery_id": "c9a0e526-0e10-48f6-8bb3-273078e1e5b1",
+          "expires_at": 1792418306,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 842040333,
+      "delivery_id": "c9a0e526-0e10-48f6-8bb3-273078e1e5b1",
+      "delta_ns": 12635500,
+      "message_id": "held159-sample-02",
+      "next_start_ns": 854675833,
+      "number": 2,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-03",
+        "issue": {
+          "delivery_id": "b7c517d5-9595-4418-8695-3f81d289b824",
+          "expires_at": 1792418306,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 884393250,
+      "delivery_id": "b7c517d5-9595-4418-8695-3f81d289b824",
+      "delta_ns": 9323833,
+      "message_id": "held159-sample-03",
+      "next_start_ns": 893717083,
+      "number": 3,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-04",
+        "issue": {
+          "delivery_id": "1fd89411-f151-40c9-99c4-89fab9f5c2f5",
+          "expires_at": 1792418306,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 907467416,
+      "delivery_id": "1fd89411-f151-40c9-99c4-89fab9f5c2f5",
+      "delta_ns": 10127292,
+      "message_id": "held159-sample-04",
+      "next_start_ns": 917594708,
+      "number": 4,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-05",
+        "issue": {
+          "delivery_id": "431918eb-1ca9-4575-9048-768441ecfd7c",
+          "expires_at": 1792418306,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 933389875,
+      "delivery_id": "431918eb-1ca9-4575-9048-768441ecfd7c",
+      "delta_ns": 14239250,
+      "message_id": "held159-sample-05",
+      "next_start_ns": 947629125,
+      "number": 5,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-06",
+        "issue": {
+          "delivery_id": "1cef941d-b83b-4aae-b687-037000042c56",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 967560875,
+      "delivery_id": "1cef941d-b83b-4aae-b687-037000042c56",
+      "delta_ns": 10165916,
+      "message_id": "held159-sample-06",
+      "next_start_ns": 977726791,
+      "number": 6,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-07",
+        "issue": {
+          "delivery_id": "44a743e6-ad9b-499f-ac2b-007fcd14d881",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 997468458,
+      "delivery_id": "44a743e6-ad9b-499f-ac2b-007fcd14d881",
+      "delta_ns": 27763792,
+      "message_id": "held159-sample-07",
+      "next_start_ns": 1025232250,
+      "number": 7,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-08",
+        "issue": {
+          "delivery_id": "9cb33aed-1d63-45ba-bd31-7fd46737df2c",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1038417916,
+      "delivery_id": "9cb33aed-1d63-45ba-bd31-7fd46737df2c",
+      "delta_ns": 8227459,
+      "message_id": "held159-sample-08",
+      "next_start_ns": 1046645375,
+      "number": 8,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-09",
+        "issue": {
+          "delivery_id": "e870a891-31c9-4864-a2ca-0fab5854d508",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1067451125,
+      "delivery_id": "e870a891-31c9-4864-a2ca-0fab5854d508",
+      "delta_ns": 10217875,
+      "message_id": "held159-sample-09",
+      "next_start_ns": 1077669000,
+      "number": 9,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-10",
+        "issue": {
+          "delivery_id": "7532197e-c17c-4871-97ad-913b3f36b641",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1098334041,
+      "delivery_id": "7532197e-c17c-4871-97ad-913b3f36b641",
+      "delta_ns": 10095750,
+      "message_id": "held159-sample-10",
+      "next_start_ns": 1108429791,
+      "number": 10,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-11",
+        "issue": {
+          "delivery_id": "0b4feb7b-88f5-481f-88ac-98a7ddd457eb",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1127274833,
+      "delivery_id": "0b4feb7b-88f5-481f-88ac-98a7ddd457eb",
+      "delta_ns": 28007125,
+      "message_id": "held159-sample-11",
+      "next_start_ns": 1155281958,
+      "number": 11,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-12",
+        "issue": {
+          "delivery_id": "18d00292-f0ea-4147-a0b3-f1093dde8be9",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1168344125,
+      "delivery_id": "18d00292-f0ea-4147-a0b3-f1093dde8be9",
+      "delta_ns": 9969000,
+      "message_id": "held159-sample-12",
+      "next_start_ns": 1178313125,
+      "number": 12,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-13",
+        "issue": {
+          "delivery_id": "2a42e330-3aea-43ce-9711-61608a58324c",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1197450916,
+      "delivery_id": "2a42e330-3aea-43ce-9711-61608a58324c",
+      "delta_ns": 10152209,
+      "message_id": "held159-sample-13",
+      "next_start_ns": 1207603125,
+      "number": 13,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-14",
+        "issue": {
+          "delivery_id": "506185f2-07bf-409e-a15d-b76abe71da8f",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1228244625,
+      "delivery_id": "506185f2-07bf-409e-a15d-b76abe71da8f",
+      "delta_ns": 9320416,
+      "message_id": "held159-sample-14",
+      "next_start_ns": 1237565041,
+      "number": 14,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-15",
+        "issue": {
+          "delivery_id": "7fe57a6b-d298-4160-8420-42ae572fb013",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1257260541,
+      "delivery_id": "7fe57a6b-d298-4160-8420-42ae572fb013",
+      "delta_ns": 9253334,
+      "message_id": "held159-sample-15",
+      "next_start_ns": 1266513875,
+      "number": 15,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-16",
+        "issue": {
+          "delivery_id": "987bb488-09ab-42af-9677-b884d7fd9517",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1287376250,
+      "delivery_id": "987bb488-09ab-42af-9677-b884d7fd9517",
+      "delta_ns": 10127958,
+      "message_id": "held159-sample-16",
+      "next_start_ns": 1297504208,
+      "number": 16,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-17",
+        "issue": {
+          "delivery_id": "a3d1a150-485d-4a17-9399-f95f175d03f5",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1316302958,
+      "delivery_id": "a3d1a150-485d-4a17-9399-f95f175d03f5",
+      "delta_ns": 10164333,
+      "message_id": "held159-sample-17",
+      "next_start_ns": 1326467291,
+      "number": 17,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-18",
+        "issue": {
+          "delivery_id": "3c11070c-f3e4-4d63-8d5a-d53d4a3f082a",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1344455291,
+      "delivery_id": "3c11070c-f3e4-4d63-8d5a-d53d4a3f082a",
+      "delta_ns": 10145917,
+      "message_id": "held159-sample-18",
+      "next_start_ns": 1354601208,
+      "number": 18,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-19",
+        "issue": {
+          "delivery_id": "58802b7c-93d9-4f79-a248-9f78c9d0f163",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1376243500,
+      "delivery_id": "58802b7c-93d9-4f79-a248-9f78c9d0f163",
+      "delta_ns": 9159708,
+      "message_id": "held159-sample-19",
+      "next_start_ns": 1385403208,
+      "number": 19,
+      "provider_pid": 54147
+    },
+    {
+      "admission": {
+        "idempotency_key": "held159-sample-20",
+        "issue": {
+          "delivery_id": "8a5a9bbc-38e4-4cd4-9e5a-dc86d7a1b7e2",
+          "expires_at": 1792418307,
+          "kind": "outcome_unknown"
+        },
+        "operation_kind": "send",
+        "project_warnings": [
+          {
+            "code": "project_unknown",
+            "reason": null,
+            "recipient": "6c0ede65-405e-4f0c-929f-b57aa75c0860",
+            "recipient_project": null,
+            "sender_project": null
+          }
+        ],
+        "type": "IdempotencyResult"
+      },
+      "completed_ns": 1405424416,
+      "delivery_id": "8a5a9bbc-38e4-4cd4-9e5a-dc86d7a1b7e2",
+      "delta_ns": 10145375,
+      "message_id": "held159-sample-20",
+      "next_start_ns": 1415569791,
+      "number": 20,
+      "provider_pid": 54147
+    }
+  ],
+  "samples_count": 20,
+  "version": 1
+}

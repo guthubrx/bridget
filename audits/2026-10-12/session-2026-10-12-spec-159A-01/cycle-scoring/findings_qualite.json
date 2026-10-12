@@ -1,0 +1,361 @@
+{
+  "module": "05",
+  "module_id": "05",
+  "review_kind": "post_fix_readonly",
+  "read_at": "2026-10-12T17:10:14.521627+00:00",
+  "scope_sha256": "3de57a711056f97862db79783fc7dc927372f8896aa5a41a4f8632d9c7720398",
+  "findings": [],
+  "positives": [
+    "Commentaire de reprise déplacé au bon puits ; FR004 reste devant le helper de libération.",
+    "Modèle trois arguments aligné avec Held inchangé et Dispatching conditionnel, sans nouvelle autorité.",
+    "Balayage : IDs après chaqueCOMMIT, un seulretain horsboucle même sur erreur tardive ; relecture confirme la correction du constatmodule04."
+  ],
+  "warnings": [
+    "Conservative partial review only; old daemon ranges excluded because whole-fileSHA changed.",
+    "62 historical scope entries were preparatory; final capture now includes current diff andPythonfixture. No globalcoverage claimed.",
+    "54P/0F logSHA75f33ca46a9f1979ee371f84f7cd6b024315c83d36067d86131c30d826c84b62 verified; run precedes comment/fmt-only changes.",
+    "Nine additional replaysROOT pending at capture; no assumed result or globalGREEN.",
+    "No scanner/Clippy/test execution by this owner; duplication ratios and cyclomatic measures absent.",
+    "Inherited reports and dates remain exact originals; only whole-fileunchanged SHA inherits credit."
+  ],
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f95221bca10172591b721a6c95ea56d6a7e2f49e74d3fcbced3e5320b79dcf21",
+      "ranges": [
+        [
+          1,
+          439
+        ],
+        [
+          440,
+          560
+        ],
+        [
+          609,
+          674
+        ],
+        [
+          990,
+          1085
+        ],
+        [
+          1090,
+          1228
+        ],
+        [
+          1370,
+          1563
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "1b58e76dd05f49dd1361c94fbf14d669ce9de333b545c4a774bb07ad4b80688a",
+      "ranges": [
+        [
+          895,
+          918
+        ],
+        [
+          970,
+          1028
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "e92e4a38a27103e4d91bce723bea10dc298f2732a193ea80b8dd3eb38addb6fa",
+      "ranges": [
+        [
+          1,
+          103
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "495b706b57f528d97ced7f9c67357007bced9bac12495a90d61ed764de0d6c01",
+      "ranges": [
+        [
+          4065,
+          4095
+        ],
+        [
+          4395,
+          4435
+        ],
+        [
+          4612,
+          4655
+        ],
+        [
+          6488,
+          6509
+        ],
+        [
+          11470,
+          11542
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "ranges": [
+        [
+          54,
+          77
+        ],
+        [
+          740,
+          785
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "14dea7d9f004ff5b1bf7c62bdf4cc56d2ce31e4f8d639360b154fa77ca030d17",
+      "ranges": [
+        [
+          3514,
+          3533
+        ],
+        [
+          5578,
+          5600
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "6377dd14442267af3aa04eb1c3b17595241c8fa47f53eba2d29d48b8f8403894",
+      "ranges": [
+        [
+          1,
+          265
+        ],
+        [
+          443,
+          664
+        ],
+        [
+          1103,
+          1210
+        ],
+        [
+          1830,
+          1968
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "5f7e3cd78056926a4e0aa2125b3a8afaf90503ffbdd989c64707286ba0dd5f80",
+      "ranges": [
+        [
+          102,
+          122
+        ],
+        [
+          343,
+          435
+        ],
+        [
+          501,
+          615
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "5a9d7619344fd4a0a56f7b3d593f1a126aaf5752aac4d2294cff9bc684904fd1",
+      "ranges": [
+        [
+          145,
+          181
+        ],
+        [
+          473,
+          535
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "05fca82fb4eebcc0ab8055af702a6cbcd7ce4a249c94df01a13cb397fcffa5d2",
+      "ranges": [
+        [
+          1,
+          144
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "b9529eb520e747d21c8a4514f605c413d7e7311222c7aab490c891678cd2e0a9",
+      "ranges": [
+        [
+          1,
+          100
+        ]
+      ],
+      "read_at": "2026-10-12T16:59:38.346101+00:00",
+      "read_kind": "inherited_initial_unchanged_sha",
+      "inherited_from": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "inherited_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "inherited_read_at": "2026-10-12T16:59:38.346101+00:00",
+      "verified_unchanged_at": "2026-10-12T17:10:14.521627+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+      "ranges": [
+        [
+          6084,
+          6186
+        ],
+        [
+          9353,
+          9437
+        ],
+        [
+          11368,
+          11402
+        ]
+      ],
+      "read_at": "2026-10-12T17:10:14.521627+00:00",
+      "read_kind": "fresh_post_fix",
+      "note": "Fresh final-delta review; no credit to other old daemon ranges"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+      "ranges": [
+        [
+          36,
+          48
+        ]
+      ],
+      "read_at": "2026-10-12T17:10:14.521627+00:00",
+      "read_kind": "fresh_post_fix",
+      "note": "Fresh final-delta review; no credit to other old daemon ranges"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/tests/fixtures/t3code_server_098.py",
+      "sha256": "c69412b0bb801d86fa0a3c9024e5972dd349340a54bd8a0ff3ce44c51326bd21",
+      "ranges": [
+        [
+          294,
+          307
+        ]
+      ],
+      "read_at": "2026-10-12T17:10:14.521627+00:00",
+      "read_kind": "fresh_post_fix",
+      "note": "Fresh final-delta review; no credit to other old daemon ranges"
+    }
+  ],
+  "reviewed_at": "2026-10-12T17:10:14.521627+00:00",
+  "source_snapshot": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/manifest.json",
+  "resolved_findings": [
+    {
+      "original_id": "QUAL-001",
+      "fingerprint": "c5b17e879a19",
+      "status": "fixed",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/crates/bridget-daemon/src/daemon.rs",
+        "line": 6091,
+        "sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+        "evidence": "/// FR004 : cinq déclencheurs partagent State, route attestée et transaction.\n/// O(log N+G+B), G réservations, B enveloppe. Aucun verrou writer ici.\nfn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> bool {"
+      },
+      "inherited_original_report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "original_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9"
+    },
+    {
+      "original_id": "QUAL-002",
+      "fingerprint": "32a38ccf2a8d",
+      "status": "fixed",
+      "proof": {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/specs/159-edition-file/data-model.md",
+        "line": 43,
+        "sha256": "a0bbdc4bee2a65c928874157b47f2c8b67cfe760a066f4eb316454d3190a247b",
+        "evidence": "- `adopt_held_for_agent(agent_id, instance_id, recover_dispatching)` : appelé après établissement de l’identité finale de `Register`. Rattache les lignes `held` du même agent, même si l’ancienne présence a disparu.\n  Si `recover_dispatching` est vrai, rattache aussi les lignes `dispatching` non expirées d’une autre instance du même agent et pose `turn_gate = 1`. Le caller active ce mode seulement pour une instance `turn_attest`, un type `held_queue` ouvert et un transport hors T3.\n  Les trois scopes internes de réveil et les alertes de fil restent exclus de ce raccord `dispatching`. ID, génération, octets, phase et rang sont conservés ; une réinscription de la même instance ne réarme pas ses réservations courantes. Le chemin `held` reste inchangé."
+      },
+      "inherited_original_report": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "original_report_sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9"
+    }
+  ],
+  "counter_audit_contribution": {
+    "module": "04",
+    "initial_verdict": "CONFIRMED",
+    "final_delta": "grouped_settled_ids_after_commits_single_retain_even_on_error",
+    "source_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa",
+    "fresh_ranges": [
+      [
+        9353,
+        9437
+      ]
+    ],
+    "no_duplicate_finding": true
+  }
+}

@@ -1,0 +1,723 @@
+{
+  "at_utc": "2026-10-12T17:33:37.647478+00:00",
+  "source_directory": "/Users/moi/.cache/bridget-audit159A-final-20261012",
+  "purpose": "ROOT copy integrity of cache audit artifacts; destination chosen by ROOT",
+  "final_daemon_sha256": "abf654cd44116dc277c80b3f9ff9e188e6ba5dae47d5c03df75ddbcdbbdaaddc",
+  "self_excluded": true,
+  "files": [
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/00_Configuration_Chargee.md",
+      "relative_in_cache": "00_Configuration_Chargee.md",
+      "sha256": "07d4b08a292af526d1a0bf75eebfe0c87ce56e0ec0ff239247abca2b6f18d5f9",
+      "bytes": 2790
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/00_Configuration_Chargee.md.initial86",
+      "relative_in_cache": "00_Configuration_Chargee.md.initial86",
+      "sha256": "c0d976df3e2c5d7e9cc64b77cf1909dcbee0439bad5376c6429ff357a539564d",
+      "bytes": 2558
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/01_Decouverte.md",
+      "relative_in_cache": "01_Decouverte.md",
+      "sha256": "ac78b66b0dd4654046c3e78869a52b74138f6c5d0adec0535c68e86c9117de82",
+      "bytes": 1120
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/config-effective.json",
+      "relative_in_cache": "config-effective.json",
+      "sha256": "ee243168ab2e21bab60b78551ee407826ed6db4d2692beeb424e3c00ce70f638",
+      "bytes": 3898
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/config-effective.json.initial86",
+      "relative_in_cache": "config-effective.json.initial86",
+      "sha256": "1800c9570d47f5e04ec528ccfdfd50c238c0a2f35dd883f8782ddef6a4882358",
+      "bytes": 2561
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/03-06.md",
+      "relative_in_cache": "cycle-1/03-06.md",
+      "sha256": "1d944488477afe04b9fcd79b869f9d81975b54257c30bd563a9b0f4842c986b6",
+      "bytes": 2733
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/04-08.md",
+      "relative_in_cache": "cycle-1/04-08.md",
+      "sha256": "67a8b0e2f5bd3a3dd721075c4cd0b2bbd640913cc56f10fbfe8924dad34816b4",
+      "bytes": 2509
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/05-07-12.md",
+      "relative_in_cache": "cycle-1/05-07-12.md",
+      "sha256": "2e32d9292aebb5230728dd9b3094e90d8b5349f7d4cd8dd8488f064d5c684a9d",
+      "bytes": 2947
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/PERF-001-patch-manifest.json",
+      "relative_in_cache": "cycle-1/PERF-001-patch-manifest.json",
+      "sha256": "2be1102c833ca8ddf75414b7580c4a7ff1e6be68eb3a07fdd8e9df516d9a1820",
+      "bytes": 1275
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/PERF-001-sweep.patch",
+      "relative_in_cache": "cycle-1/PERF-001-sweep.patch",
+      "sha256": "05b26265f2efbd0321ceb71880eb93b9b724f5c7eddbc93d5fc8dfe598c0fbce",
+      "bytes": 4204
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/aggregated-findings.json",
+      "relative_in_cache": "cycle-1/aggregated-findings.json",
+      "sha256": "acf2fc7fe3a8f6b8d5f2ae028d42a6f388ef10be8b2d5370a47c2c094821ba24",
+      "bytes": 32351
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+      "relative_in_cache": "cycle-1/findings_complexite.json",
+      "sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3",
+      "bytes": 19574
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+      "relative_in_cache": "cycle-1/findings_duplication.json",
+      "sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23",
+      "bytes": 11538
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+      "relative_in_cache": "cycle-1/findings_minimalisme.json",
+      "sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338",
+      "bytes": 9398
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+      "relative_in_cache": "cycle-1/findings_performance.json",
+      "sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343",
+      "bytes": 12453
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "relative_in_cache": "cycle-1/findings_qualite.json",
+      "sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9",
+      "bytes": 12265
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+      "relative_in_cache": "cycle-1/findings_securite.json",
+      "sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9",
+      "bytes": 20126
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+      "relative_in_cache": "cycle-1/findings_tests.json",
+      "sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24",
+      "bytes": 25740
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-FR009-final-supplement.json",
+      "relative_in_cache": "cycle-scoring/03-06-FR009-final-supplement.json",
+      "sha256": "096ec3580e9c418d40889b07c73ce907642871f24e5926c15c421fd9130eefd9",
+      "bytes": 2368
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-FR009-pre-fix-supplement.json",
+      "relative_in_cache": "cycle-scoring/03-06-FR009-pre-fix-supplement.json",
+      "sha256": "1807d6640442e32763f1bf12dca2866cb921079931e0cd28cb89db0a47b7c212",
+      "bytes": 2905
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-R2-FR023-final-supplement.json",
+      "relative_in_cache": "cycle-scoring/03-06-R2-FR023-final-supplement.json",
+      "sha256": "cf9e4887194512717e2051dad732dc5914b6ce5ecb79f6f0c37ee03cabcd93cb",
+      "bytes": 4564
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/03-06-final-delta.md",
+      "relative_in_cache": "cycle-scoring/03-06-final-delta.md",
+      "sha256": "8037de1e99795de8a97c7ca8be2fe932f695a4a773828688259801a019e1e19a",
+      "bytes": 1334
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/04-08.md",
+      "relative_in_cache": "cycle-scoring/04-08.md",
+      "sha256": "1b694e77e9d6324a4ca8c7fdd7eb616f0a9df53950a4ff20d4fae428dd23f7eb",
+      "bytes": 1384
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/05-07-12.md",
+      "relative_in_cache": "cycle-scoring/05-07-12.md",
+      "sha256": "3f132ce4aac5b569344e019c3a06a9c4b764b7100775f408f89ae98a34a2a5f7",
+      "bytes": 1850
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/PERF-001-R13-doc-manifest.json",
+      "relative_in_cache": "cycle-scoring/PERF-001-R13-doc-manifest.json",
+      "sha256": "5c513f3228390184f37fb688c8938b6d82fbe5518c28b4540026721cf07a13d9",
+      "bytes": 599
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/PERF-001-R13-doc.patch",
+      "relative_in_cache": "cycle-scoring/PERF-001-R13-doc.patch",
+      "sha256": "4e649b8b670bae6f4297200841bdf23fe3bbff9b4157db36af9eed0dc78b3bef",
+      "bytes": 1623
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/aggregated-findings.json",
+      "relative_in_cache": "cycle-scoring/aggregated-findings.json",
+      "sha256": "7b5e2f1744159437f4fca519b28c90ef210bf14b7ec79c9af85943653b59587c",
+      "bytes": 108947
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/diff-159a-final.patch",
+      "relative_in_cache": "cycle-scoring/capture-final/diff-159a-final.patch",
+      "sha256": "a239da798de007b10e6b58d690cb040508ecfd8498e8fcd1aec294d895a12ac6",
+      "bytes": 965860
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/manifest.json",
+      "relative_in_cache": "cycle-scoring/capture-final/manifest.json",
+      "sha256": "dcd107cbf67cb7f96839ddfb9ba5fc2a17f47f31ea798bdbd62d9f287a5b60fe",
+      "bytes": 35718
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/scope-files.json",
+      "relative_in_cache": "cycle-scoring/capture-final/scope-files.json",
+      "sha256": "3de57a711056f97862db79783fc7dc927372f8896aa5a41a4f8632d9c7720398",
+      "bytes": 25834
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final/source-hashes.json",
+      "relative_in_cache": "cycle-scoring/capture-final/source-hashes.json",
+      "sha256": "36a5593907821fd70c540fb65aa293fd15ccabbc7293deeca99d358861174063",
+      "bytes": 64455
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/diff-159a-final.patch",
+      "relative_in_cache": "cycle-scoring/capture-final-FR009/diff-159a-final.patch",
+      "sha256": "09b218a154a52243475351fbf25f1209f1beaa60b8f4b453ece427b7e5eeaa80",
+      "bytes": 930259
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/manifest.json",
+      "relative_in_cache": "cycle-scoring/capture-final-FR009/manifest.json",
+      "sha256": "e4827c152916caf2c95c94c054ec7183e23b492d4efe626ddde7a6eeb96d4dc4",
+      "bytes": 35913
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/scope-files.json",
+      "relative_in_cache": "cycle-scoring/capture-final-FR009/scope-files.json",
+      "sha256": "da9e1a24e9ce12b04b56da850bffa44d30c7bbc0a213b9dbfdad91eeda47b436",
+      "bytes": 25908
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/source-hashes.json",
+      "relative_in_cache": "cycle-scoring/capture-final-FR009/source-hashes.json",
+      "sha256": "50d18de1fc904781076798e3ce8061b181a8733d965ff0215cd9c19c37fd0749",
+      "bytes": 64455
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-FR009/unchanged-reviewed-fragments.json",
+      "relative_in_cache": "cycle-scoring/capture-final-FR009/unchanged-reviewed-fragments.json",
+      "sha256": "b720f72f3e581c53db022e95fc3ddd0ef57aaba4cac6470ab67b62b93079786c",
+      "bytes": 2327
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/capture-final-R2-delta.json",
+      "relative_in_cache": "cycle-scoring/capture-final-R2-delta.json",
+      "sha256": "682f785135f97499efd6a1f8f7d322171c50ae96169f2bd8da341d02636aeb73",
+      "bytes": 24736
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_complexite.json",
+      "relative_in_cache": "cycle-scoring/findings_complexite.json",
+      "sha256": "9b74b51b30ef48c8ba7a52d4df070fcd256d67eaf8ee8a251dc9894f035d3e1d",
+      "bytes": 21374
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_duplication.json",
+      "relative_in_cache": "cycle-scoring/findings_duplication.json",
+      "sha256": "686031b67c3c5b25fa2a8f7927d47575aa9799f38d59a6153dcd7d39269f624e",
+      "bytes": 15156
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_minimalisme.json",
+      "relative_in_cache": "cycle-scoring/findings_minimalisme.json",
+      "sha256": "4b58e005fb1970d5df45490239122fcc9b2c1dfe2505a5f8183b7d096e7bc470",
+      "bytes": 12647
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_performance.json",
+      "relative_in_cache": "cycle-scoring/findings_performance.json",
+      "sha256": "1d5fdbbed2c1df7656cfb5b7224a581a80a3ccfb61d43b29b9da9e3c3db1ff65",
+      "bytes": 12877
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_qualite.json",
+      "relative_in_cache": "cycle-scoring/findings_qualite.json",
+      "sha256": "32fb6a53c7345e62678c884efaa48955a634033434a3cbab0ed0ede5bafc8be7",
+      "bytes": 14845
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_securite.json",
+      "relative_in_cache": "cycle-scoring/findings_securite.json",
+      "sha256": "e862990dffc2ab445d4d1148cd405226fc20c63c77a6aed84c9027eb930aaa69",
+      "bytes": 4113
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/findings_tests.json",
+      "relative_in_cache": "cycle-scoring/findings_tests.json",
+      "sha256": "43de785c1ab54405e67fff13711123c1a47bc849b5d92a4d744480fefca73440",
+      "bytes": 5746
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/aggregated-findings.json",
+      "relative_in_cache": "cycle-scoring/history-18ad98/aggregated-findings.json",
+      "sha256": "17cd4a8b4e8b93210f3b6adcc20780c6496bbbe57711e1de7063bab2191db870",
+      "bytes": 104808
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/grade.json",
+      "relative_in_cache": "cycle-scoring/history-18ad98/grade.json",
+      "sha256": "6b853f72df91ef69c19051d16bcd71bad0c4716a5b65d5d16bc6b4771748e2d7",
+      "bytes": 5241
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/preserved-artifacts.json",
+      "relative_in_cache": "cycle-scoring/history-18ad98/preserved-artifacts.json",
+      "sha256": "e4bbdbf913e807532a5004d0ddffc89629101dc2f9209983d8bc8ab9a3b9b430",
+      "bytes": 1779
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/scoring.md",
+      "relative_in_cache": "cycle-scoring/history-18ad98/scoring.md",
+      "sha256": "e6e70a959f93dbcf83c0027407124c5d61c0b137eb398840462cab455060ce69",
+      "bytes": 4099
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/validation-scoring.json",
+      "relative_in_cache": "cycle-scoring/history-18ad98/validation-scoring.json",
+      "sha256": "2f074a0f7aff718399ab79bc51772dbd6c8fa557712afc513e0b281918c88038",
+      "bytes": 979
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-scoring/history-18ad98/validation-scoring.log",
+      "relative_in_cache": "cycle-scoring/history-18ad98/validation-scoring.log",
+      "sha256": "59410c3e47259cb6e51ac58fafb6c3b3239a5967f9180be86bf7f97589d4d085",
+      "bytes": 48
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycles.log",
+      "relative_in_cache": "cycles.log",
+      "sha256": "53fe46bfbbb3eff84a045095a52c26869b57aa19bf0bdaeddab5e59aef579ba4",
+      "bytes": 1707
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/diff-159a-scope.patch",
+      "relative_in_cache": "diff-159a-scope.patch",
+      "sha256": "4491cc7ef8b69f04118341e8df9ab729fa430e7a40c846642185ba2308c3d789",
+      "bytes": 948116
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/diff-159a-scope.patch.initial86",
+      "relative_in_cache": "diff-159a-scope.patch.initial86",
+      "sha256": "f58ab5c238852ca4acfa4e14fd0c98c56504ad1aebe4720404a76c5e97899f5a",
+      "bytes": 1430665
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/diff-159a-tracked.patch",
+      "relative_in_cache": "diff-159a-tracked.patch",
+      "sha256": "86796bea9bf30236de3eca34a4c3d3c2f10cc4983883ce49051c3512d68e7c22",
+      "bytes": 1331633
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/fix-report.md",
+      "relative_in_cache": "fix-report.md",
+      "sha256": "0af258dcdd8c5e5718881d1e7059098cfd20d515ce6498a6489bd958afd0b910",
+      "bytes": 3961
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/cli_lineage.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/cli_lineage.rs",
+      "sha256": "c516c1285e6b989a60d5f727e5f1df7c23d8c85157211106d18bc4024ea73840",
+      "bytes": 5537
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/cli_lineage.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/cli_lineage.rs.HEAD",
+      "sha256": "775a509ae5a110484a81f785135580d29948387b0038baee2b68f1f0982a4b7a",
+      "bytes": 4074
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "bytes": 21180
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/daemon/native_lineage.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/daemon/native_lineage.rs.HEAD",
+      "sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "bytes": 16253
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "daa72df90be400f7972eb1e550b5c516cbf502e6cefd51f0e16ce001049cc942",
+      "bytes": 93122
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation.rs.HEAD",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "bytes": 91427
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation_lineage.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation_lineage.rs",
+      "sha256": "5e521b54112f897f157a9a83504412187358d15084dc7be11e44026e48ebe10d",
+      "bytes": 33828
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation_lineage.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation_lineage.rs.HEAD",
+      "sha256": "de49575af4fdbd68d104579c5b824210c92b747f72a357526cf5b062f910dda3",
+      "bytes": 29558
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "sha256": "71d5d6b2e1cc9ce062282bffa3dbca743b8276a240630a1835ef9dd716dcfdd8",
+      "bytes": 86079
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation_lineage_tests.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation_lineage_tests.rs.HEAD",
+      "sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+      "bytes": 76195
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation_mcp.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "6a435e40cd8f21cbf0c55510dd2d1ceb9f383dd32def8120de5412e729ea7a96",
+      "bytes": 39025
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/delegation_mcp.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/delegation_mcp.rs.HEAD",
+      "sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "bytes": 37139
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/desired_state.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/desired_state.rs",
+      "sha256": "4eed549fddec4b61e3d537dcba25383831b6585e202ea7568b0317a5139dc05a",
+      "bytes": 39484
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/desired_state.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/desired_state.rs.HEAD",
+      "sha256": "079136eb9a46aeebe18f30e58568b3b3b398038572bd3256ea6d456d23a9f14f",
+      "bytes": 39471
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/lifecycle.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/lifecycle.rs",
+      "sha256": "17d4b5027229bc977a8f562b07c00d225b7628391454232bf73d4ff2eccb9df2",
+      "bytes": 63476
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/lifecycle.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/lifecycle.rs.HEAD",
+      "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "bytes": 61810
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/lineage_client.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/lineage_client.rs",
+      "sha256": "1cda55a80b302f735b6be5251985e9a2ebab78ae5f53f2cc0d2a77fea9f807b2",
+      "bytes": 6207
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/lineage_client.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/lineage_client.rs.HEAD",
+      "sha256": "5fe62806873ab486c519bf0882e9e68804dc9f31a98fab18b0d8e63d6563aad7",
+      "bytes": 4534
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/managed_process.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/managed_process.rs",
+      "sha256": "a71aa1ae0a858473736f6880f6a164f9b1ff45194b32d7c68d1e92a4b76361ff",
+      "bytes": 70808
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/managed_process.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/managed_process.rs.HEAD",
+      "sha256": "dde9324a45e6c5e223a23b4d245319a9cf40e9cd0d50b0220ffeeb522f93d197",
+      "bytes": 70400
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/native_permission_observer.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/native_permission_observer.rs",
+      "sha256": "4abdfa6e5d40cd05ffb7819bdc2dc3a7cb1641622783b1525bff2f4cce3af92f",
+      "bytes": 17840
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/native_permission_observer.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/native_permission_observer.rs.HEAD",
+      "sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33",
+      "bytes": 13285
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/native_permissions.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "a479aa6db3a533998d9e289d1081b468f2c9af0c315c8520f72058ec170b4ffc",
+      "bytes": 44513
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/native_permissions.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/native_permissions.rs.HEAD",
+      "sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "bytes": 35337
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/provider_limits.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/provider_limits.rs",
+      "sha256": "89a463481af5d81f0de50e2598d7a06495c50f08dad4c9e799621eed45204ddd",
+      "bytes": 18074
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/provider_limits.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/provider_limits.rs.HEAD",
+      "sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "bytes": 14432
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/t3code_mcp.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/t3code_mcp.rs",
+      "sha256": "b127a60abe58367935e9a4534c4e06a972d063a990c7c29acb014ab75918e710",
+      "bytes": 22227
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/t3code_mcp.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/t3code_mcp.rs.HEAD",
+      "sha256": "0763f6d170248deac084509f0e2594280b900648b756230bd2c31842bff41ff2",
+      "bytes": 22171
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/workspace_git.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/workspace_git.rs",
+      "sha256": "4a555951358a121aee787d247631637ab6d089e5167bea177f972c8744a4a1e5",
+      "bytes": 27261
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/workspace_git.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/workspace_git.rs.HEAD",
+      "sha256": "e0e4f6dcf385d8644b777572dcf23aae4f8d54743fb95ee31d82165770f79ca4",
+      "bytes": 23972
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/workspace_git_tests.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/workspace_git_tests.rs",
+      "sha256": "215803bd6ffeb838bbd1ed2d9259f4f6c88c4345ab9ad98916d6949a0c1c68c4",
+      "bytes": 24691
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/src/workspace_git_tests.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/src/workspace_git_tests.rs.HEAD",
+      "sha256": "2208dc67f2d6fb6aa6dfb9bfc28c50be8b945ce1566d75f7a0e7c3b509bd8472",
+      "bytes": 20077
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/tests/core_089_concurrency_test.rs",
+      "sha256": "6f2dbb16c98e52a6f74194fa75b397a393aa083409c338b0ec7dd25bb8c83e5f",
+      "bytes": 15733
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/tests/core_089_concurrency_test.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/tests/core_089_concurrency_test.rs.HEAD",
+      "sha256": "5ffe933c312da3dde0d9f31016a1053eb18ae812bc40308bbf83c801ae5440a0",
+      "bytes": 15555
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/tests/core_089_security_test.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/tests/core_089_security_test.rs",
+      "sha256": "dd10a05671bd46720208d47fa770e6b5d3c55afd3b6dfcd6538f2616ca606e1d",
+      "bytes": 15764
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-daemon/tests/core_089_security_test.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-daemon/tests/core_089_security_test.rs.HEAD",
+      "sha256": "6e68c0dfef6c7d77ef4226b33b7010646d5b2d6dec112255deb16c4d49be8080",
+      "bytes": 15333
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/src/claude_stream_json.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "a4657ebb34d7320083bef245f0a74e7cf394b5c3c9f862387c51158969185635",
+      "bytes": 112540
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/src/claude_stream_json.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/src/claude_stream_json.rs.HEAD",
+      "sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "bytes": 110034
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/src/lineage_protocol.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/src/lineage_protocol.rs",
+      "sha256": "9ff600f971766d3dd35cbb16091d1aedf5dc362dec39a1685e8b62357c1c1c55",
+      "bytes": 2382
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/src/lineage_protocol.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/src/lineage_protocol.rs.HEAD",
+      "sha256": "6a9fcfd21e96262f32885a6bb57cb9e775d45faa6522d3cf2776137a08971e66",
+      "bytes": 2166
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/src/native_permissions.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/src/native_permissions.rs",
+      "sha256": "b4a1ea82fa18e01bf350d4216578b87dc15fbbf0e0e18eeeecdacff903d5cc52",
+      "bytes": 22378
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/src/native_permissions.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/src/native_permissions.rs.HEAD",
+      "sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3",
+      "bytes": 14851
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/tests/lineage_contract_test.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/tests/lineage_contract_test.rs",
+      "sha256": "1053a795c962d989df901a2695d6e0ce23ffd89d77512675f829e55df0078da8",
+      "bytes": 10312
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/tests/lineage_contract_test.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/tests/lineage_contract_test.rs.HEAD",
+      "sha256": "f324e4702c6659193b7af69dea5ad868370e084ef97bbed988e52fdbc16939f4",
+      "bytes": 10036
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/tests/native_permissions149_e2e.rs",
+      "sha256": "ab7f9f8a457e6fb29e615207ffa9dc6db7587adcadfe140f6963fb29cf12905f",
+      "bytes": 10747
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/tests/native_permissions149_e2e.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/tests/native_permissions149_e2e.rs.HEAD",
+      "sha256": "1b6fa0757406b299092ae873436827bedd19e21dc1e976865ee57603b1cf30cc",
+      "bytes": 10739
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/tests/native_permissions149_test.rs",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/tests/native_permissions149_test.rs",
+      "sha256": "dba4ebceebb6c155844519aeecefdf460acedfeab2c2c5df597942542ff5b187",
+      "bytes": 26022
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-candidates/crates/bridget-transport/tests/native_permissions149_test.rs.HEAD",
+      "relative_in_cache": "format-only-candidates/crates/bridget-transport/tests/native_permissions149_test.rs.HEAD",
+      "sha256": "d7ce7739a3fb509e5f725c7ab9ecbc6ea48f9fefa082c150fa1e9b70c3ee6c3e",
+      "bytes": 24726
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-restore-manifest.json",
+      "relative_in_cache": "format-only-restore-manifest.json",
+      "sha256": "a1255a9f8417577c1ef07cb8ed0beadffb91f83412e1beeac7c5660b41269fa2",
+      "bytes": 13730
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/format-only-restore.patch",
+      "relative_in_cache": "format-only-restore.patch",
+      "sha256": "1ad0c530af7fd1d1795bb25fb92e5066988b53372cfe92d55cc23aaf47a35223",
+      "bytes": 482431
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/grade.json",
+      "relative_in_cache": "grade.json",
+      "sha256": "f8ec1987d3220af098901a214a8de9ece22ee010e12442809e185e8bc0cff9a2",
+      "bytes": 5268
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/low-documentary-corrections/01-comment-only.patch",
+      "relative_in_cache": "low-documentary-corrections/01-comment-only.patch",
+      "sha256": "f5a88a4fc676ff593108b0b2d068ab87534f831253d3ab47f2e611f181753619",
+      "bytes": 1051
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/low-documentary-corrections/02-data-model-only.patch",
+      "relative_in_cache": "low-documentary-corrections/02-data-model-only.patch",
+      "sha256": "5186304a99c45d2c12a46d39c17cb1553cc68fe28ff60b237867a975cdf3cd09",
+      "bytes": 1530
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/low-documentary-corrections/DUP001-accepted.md",
+      "relative_in_cache": "low-documentary-corrections/DUP001-accepted.md",
+      "sha256": "4c0b63894c9cb39ab09065e8f9e81ed62ca81c2f3e5e38d4d429454b206fd2d9",
+      "bytes": 947
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/low-documentary-corrections/manifest.json",
+      "relative_in_cache": "low-documentary-corrections/manifest.json",
+      "sha256": "4e94706103493eea09fc1f8d29ebe2ae614a80fc2aa38ba367fa5ff5f3ed6f64",
+      "bytes": 2899
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/manifest.json",
+      "relative_in_cache": "manifest.json",
+      "sha256": "881f6ff0b10688f94d10a2462e7c4bc213f437cdf054556c4eeb6e2da58a8708",
+      "bytes": 35060
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/manifest.json.initial86",
+      "relative_in_cache": "manifest.json.initial86",
+      "sha256": "24a4bf168724290a9d8eb28e98193848d94a9420e902931abf14102c01275659",
+      "bytes": 34637
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/read_manifest.json",
+      "relative_in_cache": "read_manifest.json",
+      "sha256": "2e31471742a03f2d673f3c83fa1470154ec79a430e8f0c19122f781a31037369",
+      "bytes": 3458
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/scope-files.json",
+      "relative_in_cache": "scope-files.json",
+      "sha256": "6850eaeced7f122fb921f93d018da6496f8a9655022604f42c1d589e5f956ee9",
+      "bytes": 34926
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/scope-files.json.initial86",
+      "relative_in_cache": "scope-files.json.initial86",
+      "sha256": "8f57f9d29d31f7feb0c561390d42b9ebe83753c7c45a0aabe280233a647671eb",
+      "bytes": 33508
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/scoring.md",
+      "relative_in_cache": "scoring.md",
+      "sha256": "554f0a5424e9e49530e98c92645c2033bdef710049ed7aea69685eea63a36dea",
+      "bytes": 5092
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/source-hashes.json",
+      "relative_in_cache": "source-hashes.json",
+      "sha256": "2ae66b9954478f48e2d27c3d528bb42c6340ba8f3a9b7a6b28e5b42d7cf0b56e",
+      "bytes": 27694
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/validation-scoring.json",
+      "relative_in_cache": "validation-scoring.json",
+      "sha256": "51447e114fbf4a95d053c80ee5f04b4549e6094e51165b37537f153fa2811598",
+      "bytes": 933
+    },
+    {
+      "source_absolute": "/Users/moi/.cache/bridget-audit159A-final-20261012/validation-scoring.log",
+      "relative_in_cache": "validation-scoring.log",
+      "sha256": "59410c3e47259cb6e51ac58fafb6c3b3239a5967f9180be86bf7f97589d4d085",
+      "bytes": 48
+    }
+  ]
+}

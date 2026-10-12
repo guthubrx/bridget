@@ -89,6 +89,7 @@ fn registered_target(socket: &Path) -> Client {
         domain: None,
         journal_available: None,
         turn_in_progress: false,
+        turn_attest: false,
     });
     assert!(matches!(
         client.receive(),

@@ -119,6 +119,8 @@ pub enum AutonomousEffect {
     AgentGuidance,
     /// Occurrence programmée ou résumé au retour ; aucun effet pendant la pause.
     ScheduledWake,
+    /// Libération d’un message encore jamais remis.
+    HeldRelease,
 }
 
 /// Verdict de la garde unique.
@@ -141,7 +143,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
         | AutonomousEffect::NativeDelegation
         | AutonomousEffect::NativeMissionDispatch
         | AutonomousEffect::AgentGuidance
-        | AutonomousEffect::ScheduledWake => Admission::Admitted,
+        | AutonomousEffect::ScheduledWake
+        | AutonomousEffect::HeldRelease => Admission::Admitted,
     }
 }
 

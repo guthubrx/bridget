@@ -228,6 +228,7 @@ impl Sender {
             domain: None,
             turn_in_progress: false,
             journal_available: None,
+            turn_attest: false,
         });
         assert!(matches!(
             sender.receive(),

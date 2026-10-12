@@ -676,7 +676,7 @@ fn record_lifecycle_event_in_transaction(
     Ok(event)
 }
 
-pub(super) fn record_lifecycle_for_linked_request_in_transaction(
+pub(crate) fn record_lifecycle_for_linked_request_in_transaction(
     transaction: &Transaction<'_>,
     linked_request_id: &str,
     state: GuichetLifecycleState,

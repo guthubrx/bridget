@@ -1,7 +1,9 @@
 # Vérification rapide - Session159
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file`.
+
+**Base prévue pour159A** : livraison158B préalable, commit e52a96240b6168bf4466712e1bda8852b4ecb43f. Le candidat daemon2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5 ne prouve pas une livraison. Aucun GO159A dans cette préparation.
 
 ## Environnement de test (obligatoire)
 
@@ -53,11 +55,17 @@ bridget queue --target <enfant>
 bridget queue cancel --target <enfant> --message <id> --request <clé>
 ```
 
-Pour l'ouverture du réglage (après le lot A) : mettre `held_queue = true` pour le
-type `codex` dans le registre des agents, relancer le daemon, puis comparer la
-latence fin de tour vers début du message suivant à la référence de T001.
+Pour une ouverture ultérieure du réglage, obtenir d'abord les mesuresSC004/SC005
+comparées à T001 et la décision associée. L'ouverture éventuelle pour `codex`
+reste distincte de la livraisonA fermée ; ne pas activer `held_queue` ici.
 
 ```sh
 # sauvegarde obligatoire avant la première ouverture par le binaire neuf
 sqlite3 ~/.cache/bridget/bridget.db ".backup ~/.cache/bridget/bridget.db.avant-v7"
 ```
+
+T011 doit préserver et empreinter le vrai binaire158B installé avant reconstruction159.
+La sauvegarde `.backup` précède toute ouverture migrante. La répétition emploie
+uniquement des copies privées : migrationv7, refus de l'ancien binaire sur v7,
+restauration pré-v7 dans un autre espace privé, ouverture avec le binaire158B
+sauvegardé et comparaison des données. Ce gate reste non levé à ce checkpoint.

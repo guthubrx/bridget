@@ -85,6 +85,7 @@ fn test_reply_from_ephemeral_cli_is_rejected() {
         domain: None,
         turn_in_progress: false,
         journal_available: None,
+        turn_attest: false,
     });
     assert!(matches!(cli.receive(), DaemonToWrapper::Registered { .. }));
     let mut request = BridgetMessage::new(ACTOR, RECIPIENT, "réponds-user");
@@ -129,7 +130,7 @@ fn test_only_sender_can_cancel_request() {
         assert_eq!(states[0].state, "open");
     }
     // Couture réelle de la CLI : même principal auxiliaire que rename/MCP.
-    let without_marker = run_linked_cli(&root, &["cancel", &request.id]);
+    let without_marker = run_isolated(&root, &["cancel", &request.id], false);
     assert!(!without_marker.status.success());
     assert!(output_text(&without_marker).contains("identity_not_found"));
     assert_eq!(request_states(&root)[0].state, "open");

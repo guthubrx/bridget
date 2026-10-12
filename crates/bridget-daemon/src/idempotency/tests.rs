@@ -2685,6 +2685,8 @@ fn guidance156_store_rejeu_sans_lecture_des_evenements() {
             Some(&reply),
             Some(&link),
             Some(guidance),
+            None,
+            None,
         )
         .unwrap_err();
     assert!(
@@ -2731,6 +2733,8 @@ fn guidance156_store_rejeu_sans_lecture_des_evenements() {
             Some(&reply),
             Some(&link),
             Some(guidance),
+            None,
+            None,
         )
         .unwrap();
     assert_eq!(
@@ -2860,12 +2864,12 @@ fn guidance156_store_file_rowid_apres_reaffectation() {
         "réaffectation en place, sans nouvelle insertion"
     );
     let queued = store
-        .queued_deliveries_for_recipient("new156", NOW + 5, 500)
+        .queued_deliveries_for_recipient("new156", NOW + 5, 500, false)
         .unwrap();
     assert_eq!(
         queued
             .iter()
-            .map(|(delivery, issued)| (delivery.delivery_id.as_str(), *issued))
+            .map(|(delivery, issued, _)| (delivery.delivery_id.as_str(), *issued))
             .collect::<Vec<_>>(),
         vec![("z-first156", NOW), ("a-second156", NOW + 1)]
     );
@@ -2876,19 +2880,19 @@ fn guidance156_store_file_rowid_apres_reaffectation() {
     assert_eq!(queued[0].0.recipient_instance_id, "new156");
     assert_eq!(
         store
-            .queued_deliveries_for_recipient("new156", NOW + 5, 1)
+            .queued_deliveries_for_recipient("new156", NOW + 5, 1, false)
             .unwrap(),
         queued[..1]
     );
     assert!(
         store
-            .queued_deliveries_for_recipient("new156", NOW + 5, 0)
+            .queued_deliveries_for_recipient("new156", NOW + 5, 0, false)
             .unwrap()
             .is_empty()
     );
     assert!(
         store
-            .queued_deliveries_for_recipient("old156", NOW + 5, 200)
+            .queued_deliveries_for_recipient("old156", NOW + 5, 200, false)
             .unwrap()
             .is_empty()
     );
@@ -2976,9 +2980,602 @@ fn guidance156_store_migration150_sans_perte_et_retention24h() {
     assert_eq!(store.send_delivery(&key()).unwrap(), Some(delivery));
     assert_eq!(
         store
-            .queued_deliveries_for_recipient("legacy-instance150", NOW, 200)
+            .queued_deliveries_for_recipient("legacy-instance150", NOW, 200, false)
             .unwrap()
             .len(),
         1
+    );
+}
+
+// T003 : copies privées d’une sauvegarde158B cohérente fournie par ROOT.
+// Aucun accès à la DB de production. L’absence d’entrée est un échec, jamais un skip.
+fn held159_migration_fixture() -> (TempDbGuard, Connection) {
+    use sha2::Digest;
+    use std::os::unix::fs::PermissionsExt;
+    let source = std::env::var_os("BRIDGET_MIGRATION159_SNAPSHOT").expect(
+        "T003 exige BRIDGET_MIGRATION159_SNAPSHOT : sauvegarde réelle158B fournie par ROOT",
+    );
+    let db = TempDbGuard::new("bridget-held159-migration");
+    std::fs::copy(&source, db.path()).expect("copier uniquement le snapshot privé fourni");
+    std::fs::set_permissions(db.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(std::fs::read(db.path()).unwrap())
+    );
+    assert_eq!(
+        digest, "f40e18dbb32d236986bd749f56dbc161d48d6d8723b970e295b8b0f6e6579711",
+        "l’entrée doit être la sauvegarde158B attestée, jamais une base reconstruite pour le test"
+    );
+    let conn = Connection::open(db.path()).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT MAX(version) FROM idempotency_schema_migrations",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        6
+    );
+    assert_eq!(
+        conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    assert!(held159_migration_rows(&conn, "PRAGMA foreign_key_check").is_empty());
+    // Les phases manquantes et les liens sont ajoutés dans CETTE COPIE seulement.
+    for phase in ["dispatching", "acked", "indeterminate", "orphaned"] {
+        let id = format!("held159-{phase}");
+        conn.execute(
+            "INSERT INTO idempotency_records
+            (issuer_scope,operation_kind,idempotency_key,canonical_bytes,state,issued_at,expires_at)
+            VALUES ('159_scope_migration_aaaa','send',?1,?2,'dispatching',?3,?4)",
+            params![id, id.as_bytes(), NOW, NOW + HORIZON],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO send_deliveries
+            (delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,
+             delivery_generation,phase,expires_at,message_bytes)
+            VALUES (?1,'159_scope_migration_aaaa','send',?1,'held159-instance',1,?2,?3,?4)",
+            params![
+                id,
+                phase,
+                NOW + HORIZON,
+                sample_message_bytes(&id, "held159-agent")
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO send_delivery_execution_links
+            (delivery_id,submission_id,execution_id) VALUES (?1,?2,?3)",
+            params![
+                id,
+                format!("submission-{phase}"),
+                format!("execution-{phase}")
+            ],
+        )
+        .unwrap();
+    }
+    (db, conn)
+}
+
+// Lecture d’oracle commune : cellules SQLite exactes, sans conversion des BLOB en texte.
+// Coût froid O(lignes × colonnes) ; seuls les dix cas T003 utilisent ces copies privées.
+fn held159_migration_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
+    let mut stmt = conn.prepare(sql).unwrap();
+    let count = stmt.column_count();
+    let rows = stmt
+        .query_map([], |row| {
+            (0..count)
+                .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    rows
+}
+
+#[test]
+fn held159_migration_sans_perte() {
+    let (db, conn) = held159_migration_fixture();
+    let counts = held159_migration_rows(
+        &conn,
+        "SELECT phase,COUNT(*) FROM send_deliveries GROUP BY phase ORDER BY phase",
+    );
+    assert_eq!(
+        counts.len(),
+        4,
+        "les quatre phases158B doivent être représentées avant migration"
+    );
+    let deliveries = held159_migration_rows(
+        &conn,
+        "SELECT delivery_id,issuer_scope,operation_kind,
+        idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes
+        FROM send_deliveries ORDER BY delivery_id",
+    );
+    let records = held159_migration_rows(
+        &conn,
+        "SELECT * FROM idempotency_records
+        ORDER BY issuer_scope,operation_kind,idempotency_key",
+    );
+    let tracking = held159_migration_rows(&conn, "SELECT * FROM tracked_requests ORDER BY id");
+    drop(conn);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT phase,COUNT(*) FROM send_deliveries GROUP BY phase ORDER BY phase"
+        ),
+        counts
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,issuer_scope,operation_kind,
+        idempotency_key,recipient_instance_id,delivery_generation,phase,expires_at,message_bytes
+        FROM send_deliveries ORDER BY delivery_id"
+        ),
+        deliveries
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT * FROM idempotency_records
+        ORDER BY issuer_scope,operation_kind,idempotency_key"
+        ),
+        records
+    );
+    assert_eq!(
+        held159_migration_rows(&store.conn, "SELECT * FROM tracked_requests ORDER BY id"),
+        tracking
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT MAX(version) FROM idempotency_schema_migrations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        7,
+        "la conservation seule en v6 ne prouve pas la migration"
+    );
+}
+
+#[test]
+fn held159_migration_ordre_preserve() {
+    let (db, conn) = held159_migration_fixture();
+    let before = held159_migration_rows(
+        &conn,
+        "SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid",
+    );
+    drop(conn);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,queue_rank FROM send_deliveries ORDER BY queue_rank"
+        ),
+        before
+    );
+    let schema: String = store
+        .conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='send_deliveries'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        schema.to_ascii_uppercase().contains("AUTOINCREMENT"),
+        "le rang doit rester monotone après une purge, pas seulement valoir MAX+1"
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT name FROM pragma_index_info('idx_send_deliveries_recipient_phase') ORDER BY seqno"
+        ),
+        vec![
+            vec![rusqlite::types::Value::Text(
+                "recipient_instance_id".to_string()
+            )],
+            vec![rusqlite::types::Value::Text("phase".to_string())],
+            vec![rusqlite::types::Value::Text("queue_rank".to_string())]
+        ]
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT name FROM pragma_index_info('idx_send_deliveries_agent_phase') ORDER BY seqno"
+        ),
+        vec![
+            vec![rusqlite::types::Value::Text("recipient_agent".to_string())],
+            vec![rusqlite::types::Value::Text("phase".to_string())],
+            vec![rusqlite::types::Value::Text("queue_rank".to_string())]
+        ]
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT pk FROM pragma_table_info('send_deliveries') WHERE name='queue_rank'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(store.conn.query_row(
+        "SELECT \"notnull\" FROM pragma_table_info('send_deliveries') WHERE name='delivery_id'", [],
+        |row| row.get::<_, i64>(0)).unwrap(), 1);
+}
+
+#[test]
+fn held159_migration_recipient_agent_rempli() {
+    let (db, conn) = held159_migration_fixture();
+    conn.execute(
+        "UPDATE send_deliveries SET message_bytes=?1 WHERE delivery_id='held159-indeterminate'",
+        params![b"illisible-held159".as_slice()],
+    )
+    .unwrap();
+    let before = held159_migration_rows(
+        &conn,
+        "SELECT delivery_id,message_bytes,phase
+        FROM send_deliveries WHERE delivery_id='held159-indeterminate'",
+    );
+    drop(conn);
+    init_test_warn_logger();
+    let guard = TEST_LOG_LOCK.lock().unwrap();
+    TEST_WARN_LOGS.lock().unwrap().clear();
+    let result = IdempotencyStore::open(db.path());
+    let logs = TEST_WARN_LOGS.lock().unwrap().clone();
+    drop(guard);
+    let store = result.expect("un ancien corps illisible doit être conservé et signalé");
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,message_bytes,phase
+        FROM send_deliveries WHERE delivery_id='held159-indeterminate'"
+        ),
+        before
+    );
+    assert_eq!(held159_migration_rows(&store.conn, "SELECT delivery_id FROM send_deliveries
+        WHERE json_valid(message_bytes) AND recipient_agent IS NOT json_extract(message_bytes,'$.to')"),
+        Vec::<Vec<rusqlite::types::Value>>::new());
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT recipient_agent FROM send_deliveries
+        WHERE delivery_id='held159-dispatching'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "held159-agent"
+    );
+    assert!(
+        logs.iter()
+            .any(|line| line.contains("held159-indeterminate")),
+        "warn doit identifier la ligne illisible ; logs={logs:?}"
+    );
+}
+
+#[test]
+fn held159_migration_liens_execution_conserves() {
+    let (db, conn) = held159_migration_fixture();
+    let before = held159_migration_rows(
+        &conn,
+        "SELECT delivery_id,submission_id,execution_id FROM send_delivery_execution_links ORDER BY delivery_id",
+    );
+    assert!(
+        before.len() >= 4,
+        "une fixture sans lien ne voit pas la cascade de DROP TABLE"
+    );
+    drop(conn);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,submission_id,execution_id FROM send_delivery_execution_links ORDER BY delivery_id"
+        ),
+        before
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(held159_migration_rows(&store.conn, "PRAGMA foreign_key_check").is_empty());
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT MAX(version) FROM idempotency_schema_migrations",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        7
+    );
+}
+
+#[test]
+fn held159_migration_phases_held_et_cancelled_admises() {
+    let (db, conn) = held159_migration_fixture();
+    drop(conn);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        store
+            .conn
+            .execute(
+                "UPDATE send_deliveries SET phase='held'
+        WHERE delivery_id='held159-dispatching'",
+                []
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .conn
+            .execute(
+                "UPDATE send_deliveries SET phase='cancelled'
+        WHERE delivery_id='held159-dispatching'",
+                []
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        store
+            .conn
+            .execute(
+                "UPDATE send_deliveries SET phase='phase-inconnue159'
+        WHERE delivery_id='held159-dispatching'",
+                []
+            )
+            .is_err(),
+        "le vocabulaire reste fermé"
+    );
+}
+
+#[test]
+fn held159_migration_turn_gate_defaut_zero() {
+    let (db, conn) = held159_migration_fixture();
+    drop(conn);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries
+        WHERE turn_gate IS NOT 0",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT dflt_value FROM pragma_table_info('send_deliveries')
+        WHERE name='turn_gate'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "0"
+    );
+    assert!(
+        store
+            .conn
+            .execute(
+                "UPDATE send_deliveries SET turn_gate=2
+        WHERE delivery_id='held159-dispatching'",
+                []
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn held159_migration_rejeu_sans_effet() {
+    let (db, conn) = held159_migration_fixture();
+    drop(conn);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    let deliveries = held159_migration_rows(
+        &store.conn,
+        "SELECT * FROM send_deliveries ORDER BY queue_rank",
+    );
+    let links = held159_migration_rows(
+        &store.conn,
+        "SELECT * FROM send_delivery_execution_links ORDER BY delivery_id",
+    );
+    let migrations = held159_migration_rows(
+        &store.conn,
+        "SELECT version FROM idempotency_schema_migrations ORDER BY version",
+    );
+    let sequence = held159_migration_rows(
+        &store.conn,
+        "SELECT name,seq FROM sqlite_sequence WHERE name='send_deliveries'",
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM idempotency_schema_migrations
+        WHERE version=7",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    drop(store);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT * FROM send_deliveries ORDER BY queue_rank"
+        ),
+        deliveries
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT * FROM send_delivery_execution_links ORDER BY delivery_id"
+        ),
+        links
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT version FROM idempotency_schema_migrations ORDER BY version"
+        ),
+        migrations
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT name,seq FROM sqlite_sequence WHERE name='send_deliveries'"
+        ),
+        sequence
+    );
+}
+
+#[test]
+fn held159_migration_rollback_si_echec() {
+    let (db, mut conn) = held159_migration_fixture();
+    conn.execute_batch(
+        "CREATE TRIGGER held159_abort_migration
+        BEFORE INSERT ON idempotency_schema_migrations WHEN NEW.version=7
+        BEGIN SELECT RAISE(ABORT,'held159-migration-forced'); END;",
+    )
+    .unwrap();
+    let schema = held159_migration_rows(
+        &conn,
+        "SELECT type,name,tbl_name,sql FROM sqlite_master
+        WHERE sql IS NOT NULL ORDER BY type,name",
+    );
+    let deliveries =
+        held159_migration_rows(&conn, "SELECT rowid,* FROM send_deliveries ORDER BY rowid");
+    let links = held159_migration_rows(
+        &conn,
+        "SELECT * FROM send_delivery_execution_links ORDER BY delivery_id",
+    );
+    let error = IdempotencyStore::init_schema(&mut conn)
+        .expect_err("l’échec du reçuv7 doit annuler TOUTE la migration");
+    assert!(
+        error.to_string().contains("held159-migration-forced"),
+        "échec SQL injecté réel : {error}"
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &conn,
+            "SELECT type,name,tbl_name,sql FROM sqlite_master
+        WHERE sql IS NOT NULL ORDER BY type,name"
+        ),
+        schema
+    );
+    assert_eq!(
+        held159_migration_rows(&conn, "SELECT rowid,* FROM send_deliveries ORDER BY rowid"),
+        deliveries
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &conn,
+            "SELECT * FROM send_delivery_execution_links ORDER BY delivery_id"
+        ),
+        links
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT MAX(version) FROM idempotency_schema_migrations",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        6
+    );
+    assert_eq!(
+        conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(held159_migration_rows(&conn, "PRAGMA foreign_key_check").is_empty());
+    drop(conn);
+    drop(db);
+}
+
+#[test]
+fn held159_migration_fantomes_ecartes_avec_warn() {
+    let (db, conn) = held159_migration_fixture();
+    // Simulation EXTERNE comme le témoinv4 existant : FK OFF sur cette seule copie,
+    // avant ouverture. La migration doit ensuite travailler avec FK ON.
+    conn.pragma_update(None, "foreign_keys", false).unwrap();
+    conn.execute(
+        "INSERT INTO send_deliveries
+        (delivery_id,issuer_scope,operation_kind,idempotency_key,recipient_instance_id,
+         delivery_generation,phase,expires_at,message_bytes)
+        VALUES ('held159-ghost','159_scope_absent_aaaa','send','ghost','held159-instance',1,
+         'dispatching',?1,?2)",
+        params![
+            NOW + HORIZON,
+            sample_message_bytes("ghost", "held159-agent")
+        ],
+    )
+    .unwrap();
+    let valid = held159_migration_rows(
+        &conn,
+        "SELECT delivery_id FROM send_deliveries WHERE delivery_id!='held159-ghost' ORDER BY delivery_id",
+    );
+    drop(conn);
+    init_test_warn_logger();
+    let guard = TEST_LOG_LOCK.lock().unwrap();
+    TEST_WARN_LOGS.lock().unwrap().clear();
+    let result = IdempotencyStore::open(db.path());
+    let logs = TEST_WARN_LOGS.lock().unwrap().clone();
+    drop(guard);
+    let store = result.expect(
+        "un fantôme externe ne doit pas bloquer la migration ni supprimer les enfants valides",
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries
+        WHERE delivery_id='held159-ghost'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id FROM send_deliveries ORDER BY delivery_id"
+        ),
+        valid
+    );
+    assert!(held159_migration_rows(&store.conn, "PRAGMA foreign_key_check").is_empty());
+    assert_eq!(
+        store
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        logs.iter().any(|line| line.contains("held159-ghost")),
+        "le nettoyage doit être dit et identifier le fantôme ; logs={logs:?}"
     );
 }

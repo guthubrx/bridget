@@ -122,6 +122,7 @@ fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
             domain: None,
             journal_available: None,
             turn_in_progress: false,
+            turn_attest: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,
@@ -166,7 +167,9 @@ fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
         .0;
     assert_eq!(
         examples(requests_155),
-        vec![json!({"name":"bridget_task_respond","arguments":{"task_id":"<task_id>","request_id":"<request_id>","decision":"accept","answer":{"<question_id>":["<réponse>"]}}})],
+        vec![
+            json!({"name":"bridget_task_respond","arguments":{"task_id":"<task_id>","request_id":"<request_id>","decision":"accept","answer":{"<question_id>":["<réponse>"]}}})
+        ],
         "le seul exemple155 garde son outil, ses arguments et ses identifiants de question"
     );
     // Ce banc exécute les six communications138 et RequestWait151. Respond

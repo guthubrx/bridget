@@ -1,0 +1,741 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T17:16:14.621219+00:00",
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file",
+    "audit_mode": "fix",
+    "audit_grid": "pre-release",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "score_numeric": 98.15,
+    "release_blocked": true,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "performance": "A",
+      "complexity": "A",
+      "quality": "A",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "ux": "N/A"
+    },
+    "repository": {
+      "files_count": 217,
+      "languages": [
+        "rust"
+      ],
+      "frameworks": [
+        "Rust std",
+        "rusqlite",
+        "serde"
+      ],
+      "type": "local-daemon-cli-provider-wrappers",
+      "has_ui": false,
+      "has_ui_scope_note": "Détection par inventaire de fichiers, contenuUI non audité ; exemples[]",
+      "has_llm_integration": true,
+      "db_type": "sqlite",
+      "ci_system": "not_detected_by_tracked_inventory",
+      "container": false,
+      "source_snapshot_count": 222,
+      "discovery_markers": {
+        "ui": [],
+        "ci": [],
+        "container": []
+      }
+    },
+    "source_snapshot": "historical C1 before ROOT corrections"
+  },
+  "execution_metrics": {
+    "files_scanned": 18,
+    "files_total": 62,
+    "lines_analyzed": 5995,
+    "lines_total": 172871,
+    "coverage_estimate_percent": 3.4679,
+    "sampling_method": "targeted manual reading ranges; whole source SHA exact to historical capture",
+    "tools_used": [
+      "manual source reading",
+      "official fingerprint.py --batch"
+    ],
+    "phases_completed": [
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "12"
+    ],
+    "warnings": [
+      "Historical state only; corrections and later supplement are separate.",
+      "No global test GREEN, no scanner, no runtime/model proof, no whole-daemon reading claimed.",
+      "C1 findings remain historically active; release_blocked does not represent the current corrected state."
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+    "total": 6,
+    "by_category": {
+      "performance": 1,
+      "quality": 3,
+      "reliability": 2
+    }
+  },
+  "findings": [
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "HIGH",
+      "counter_audit": "CONFIRMED",
+      "counter_audit_evidence": "Contre-audit indépendant git154, verdict CONFIRMED transmis par ROOT ; H=P=10000 implique 50005000 visites, calcul analytique, aucun banc.",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 9404,
+      "title": "Balayage retenu : parcours répété des suivis mémoire en O(H×P)",
+      "description": "Chaque notice de retrait committée déclenche un retain complet de pending_replies dans la boucle globale des retenus. Pour H retraits et P suivis, le travail mémoire est O(H×P), et devient quadratique si les suivis sont tous retenus. Le retain précédent conserve ces suivis via held_ids ; queue_capacity borne chaque destinataire, pas P global. La documentation R13 et le commentaire du balayage omettent ce terme.",
+      "evidence": "            if let Some(notice) = st\n                .idempotency\n                .settle_held(&delivery_id, reason, now)\n                .map_err(|error| error.to_string())?\n            {\n                st.held_ids.remove(&notice.message_id);\n                st.pending_replies\n                    .retain(|pending| pending.msg_id != notice.message_id);",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Dans un namespace isolé avec held_queue=true et queue_capacity=H, un agent attesté envoie H demandes idempotentes reply=true sans intention à une cible busy/turn_attest. Les demandes restent Held et présentes dans pending_replies. À leur clôture/expiration simultanée, collect_reminder_actions appelle sweep_held ; H retraits committés filtrent P puis P−1 ... suivis. Pour H=P=10000, somme analytique10000×10001/2=50005000 visites, sans mesure de latence.",
+      "impact": "Travail RAM superlinéaire sous le mutex State au tick des relances et à l’entretien. Le coût annoncé omet P. Aucun incident ni temps de blocage production mesuré.",
+      "path_type": "hot",
+      "complexity_current": "RAM O(H×P), plus SQL/mémoire documentés O(N+B+H(log N+log R)+L)",
+      "complexity_target": "RAM O(P+S), S notices committées ; SQL et revalidations inchangés",
+      "remediation": "Collecter les message_id des notices après chaque COMMIT dans le HashSet std existant ; retirer held_ids immédiatement, puis filtrer pending_replies une fois. Exécuter ce nettoyage aussi quand une erreur SQL/JSON tardive survient après des COMMIT réussis.",
+      "remediation_code": "/// FR006 : deux puits (tick des relances et entretien), un retrait transactionnel.\n/// O(N + B + H(log N + log R) + L + P), N lignes SQL, R demandes, H retenus,\n/// P suivis mémoire ; les identifiants retirés sont regroupés pour un seul retain.\n/// B enveloppes et L dépôts liés ; le balayage global n’est pas un scan borné par LIMIT.\n/// Le caller garde State ; la mémoire ne change qu'après le COMMIT de settle_held.\nfn sweep_held(st: &mut DaemonState, now: i64) -> Result<(), String> {\n    let held = {\n        let mut statement = st\n            .store\n            .connection()\n            .prepare(\n                \"SELECT d.delivery_id, d.message_bytes, d.expires_at, r.expires_at\n             FROM send_deliveries d JOIN idempotency_records r\n               ON r.issuer_scope=d.issuer_scope AND r.operation_kind=d.operation_kind\n                 AND r.idempotency_key=d.idempotency_key\n             WHERE d.phase='held' ORDER BY d.queue_rank\",\n            )\n            .map_err(|error| error.to_string())?;\n        let rows = statement\n            .query_map([], |row| {\n                Ok((\n                    row.get::<_, String>(0)?,\n                    row.get::<_, Vec<u8>>(1)?,\n                    row.get::<_, i64>(2)?,\n                    row.get::<_, i64>(3)?,\n                ))\n            })\n            .map_err(|error| error.to_string())?;\n        rows.collect::<Result<Vec<_>, _>>()\n            .map_err(|error| error.to_string())?\n    };\n    let mut settled_ids = HashSet::new();\n    // Même pattern Result local que wait_request : les erreurs SQL restent inchangées.\n    let result = (|| -> Result<(), String> {\n        for (delivery_id, bytes, delivery_expires, record_expires) in held {\n            let message: bridget_core::BridgetMessage = serde_json::from_slice(&bytes)\n                .map_err(|error| format!(\"retenu {delivery_id} illisible: {error}\"))?;\n            let reason = if delivery_expires <= now || record_expires <= now {\n                Some(\"expired_in_queue\")\n            } else if message.reply {\n                let request = st\n                    .store\n                    .get_request(&message.id)\n                    .map_err(|error| error.to_string())?;\n                (!request.is_some_and(|request| {\n                    request.state == \"open\"\n                        && request.sender == message.from\n                        && request.target == message.to\n                        && request.deadline_at > now\n                }))\n                .then_some(\"request_closed_in_queue\")\n            } else {\n                None\n            };\n            if let Some(reason) = reason {\n                if let Some(notice) = st\n                    .idempotency\n                    .settle_held(&delivery_id, reason, now)\n                    .map_err(|error| error.to_string())?\n                {\n                    st.held_ids.remove(&notice.message_id);\n                    settled_ids.insert(notice.message_id);\n                }\n            }\n        }\n        Ok(())\n    })();\n    // Une erreur tardive ne doit pas conserver les suivis des COMMIT déjà réussis.\n    if !settled_ids.is_empty() {\n        st.pending_replies\n            .retain(|pending| !settled_ids.contains(&pending.msg_id));\n    }\n    result\n}\n",
+      "verification": "ROOT réemploie les tests planifiés held159_sweep_* et held159_sweep_pending_replies_retire_apres_commit : rollback conserve mémoire, COMMIT retire mémoire, conservation des motifs et états SQL. Relire les branches de retour : un seul retain après la boucle, même si la closure rend Err. Aucun nouveau test, scénario ou banc requis par cet audit.",
+      "metric_impacted": "nombre de visites des suivis RAM et durée de section critique State ; durée non mesurée",
+      "qualitative_gain": "H parcours complets deviennent un seul parcours ; mémoire auxiliaire O(S)",
+      "rollback": "Si un invariant SQL/mémoire des tests existants régresse, ROOT retire le seul hunk PERF-001 ; aucune migration ni donnée à restaurer, défaut held_queue=false conservé.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "status": "open",
+      "references": [
+        "Constitution Article XVIII",
+        "audit v14 modules01/04/10/11",
+        "specs/159-edition-file/research.md:180"
+      ],
+      "source_sha256_at_detection": "58e93cd1a0b6023bdebc675467d390c8d84870fba081b3631c028710d579faaa",
+      "fingerprint": "abbdc6308f20"
+    },
+    {
+      "id": "DUP-001",
+      "category": "quality",
+      "subcategory": "duplication",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+      "line": 443,
+      "title": "Troisième copie exacte du compilateur de CLI de fixture",
+      "description": "Les corps compile_provider152 sont exactement identiques dans149/152,156 et159. Chacun fait57 lignes, SHA256 a11cc55d72bd083e8ab6d713a4841a70ece5dab8fe18d0230fe41235ccd19d26. Trois corps servent quatre appels ; les scripts fournisseur eux-mêmes divergent.",
+      "evidence": "fn compile_provider152(root: &Path, script: &str, cli_name: &str) -> PathBuf {\n    // Montage149 : CLI directe du PATH, profil privé et ancêtres bornés par .git.\n    // Le texte Python est incorporé : la SHA du CLI capturé couvre le programme.\n    let program = format!(\n        \"__file__ = {}\\n{script}\",\n        serde_json::to_string(&root.join(\"provider.py\")).unwrap()\n    );\n    let embedded = program",
+      "exploitability": "N/A",
+      "impact": "Charge de maintenance et risque de dérive documentaire ou de fixture ; aucun défaut de production démontré par ce constat.",
+      "path_type": "cold",
+      "remediation": "Lors d’une maintenance nécessaire, déplacer ce seul corps dans tests/support/idempotent.rs existant ; garder scénarios et scripts distincts.",
+      "remediation_code": "",
+      "verification": "Comparer les trois corps ; après éventuelle factorisation, rejouer les intégrations existantes sans modifier les oracles.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159A",
+        "Constitution XIX/XX"
+      ],
+      "status": "open",
+      "duplication_type": "STRICT",
+      "duplication_lines": 57,
+      "occurrences_count": 3,
+      "all_locations": [
+        "crates/bridget-daemon/tests/held159_e2e.rs:443-499",
+        "crates/bridget-daemon/tests/guidance156_e2e.rs:343-399",
+        "crates/bridget-daemon/tests/native_delegation_e2e.rs:473-529"
+      ],
+      "severity_justification": "LOW : chemin froid de tests, règle5 du module01 ; aucun impact de production prouvé.",
+      "historical_two_copies_new_third": true,
+      "fingerprint": "6e7f97dc8103"
+    },
+    {
+      "id": "QUAL-001",
+      "category": "quality",
+      "subcategory": "misleading_comment",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 6084,
+      "title": "Commentaire Register attaché à la libération à cinq déclencheurs",
+      "description": "Le commentaire annonce une reprise uniquement au réenregistrement. Il précède maintenant schedule_held_release, utilisée par cinq déclencheurs.",
+      "evidence": "/// La reprise n'est déclenchée qu'au réenregistrement de l'instance ciblée :\n/// au démarrage, aucun socket wrapper n'existe encore. Les bytes persistés et\n/// le couple instance/génération sont les seules autorités ; aucun nom n'est\n/// résolu une seconde fois.",
+      "exploitability": "N/A",
+      "impact": "Charge de maintenance et risque de dérive documentaire ou de fixture ; aucun défaut de production démontré par ce constat.",
+      "path_type": "cold",
+      "remediation": "Déplacer le commentaire historique devant schedule_idempotent_delivery_recovery ; garder FR004 devant la libération.",
+      "remediation_code": "",
+      "verification": "Relire les commentaires et cinq appels, sans changer les gardes.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159A",
+        "Constitution XIX/XX"
+      ],
+      "status": "open",
+      "fingerprint": "c5b17e879a19"
+    },
+    {
+      "id": "QUAL-002",
+      "category": "quality",
+      "subcategory": "stale_internal_contract",
+      "severity": "LOW",
+      "file": "specs/159-edition-file/data-model.md",
+      "line": 41,
+      "title": "Le modèle limite encore le rattachement à Held",
+      "description": "La puce décrit deux arguments et Held seulement. L’API actuelle a recover_dispatching et couvre aussi des remises ordinaires non ACKées de l’ancienne instance sous capacité attestée et réglage ouvert. L’ADR décrit déjà ce raccord.",
+      "evidence": "\n- `turn_gate = 1` : posé par la libération, sur la remise libérée. Levé par : `TurnState true` observé pour l'agent après la libération ; sortie de `dispatching` sans accusé ; accusé depuis plus de 30 s avec l'agent non occupé. Une libération exige qu'aucune remise de `recipient_agent` n'ait `turn_gate = 1`.\n- `adopt_held_for_agent(agent_id, instance_id)` : `UPDATE send_deliveries SET recipient_instance_id = ?2 WHERE recipient_agent = ?1 AND phase = 'held'`, appelé à chaque enregistrement d'agent. Ne dépend pas de `presences`.\n",
+      "exploitability": "N/A",
+      "impact": "Charge de maintenance et risque de dérive documentaire ou de fixture ; aucun défaut de production démontré par ce constat.",
+      "path_type": "cold",
+      "remediation": "Aligner la puce sur les trois arguments et les exclusions de l’ADR.",
+      "remediation_code": "",
+      "verification": "Comparer send_delivery.rs450–480 et daemon8451–8468.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159A",
+        "Constitution XIX/XX"
+      ],
+      "status": "open",
+      "fingerprint": "32a38ccf2a8d"
+    },
+    {
+      "id": "REL-001",
+      "category": "reliability",
+      "subcategory": "queue_intent_contract",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 11366,
+      "title": "QueueOnly contourne la rétention prévue par FR002",
+      "description": "should_hold ne retient que les messages dont l’intention est absente. Une intention QueueOnly explicite reste sur le chemin dispatching malgré held_queue et une cible busy attestée. FR002 prévoit les deux formes de file ; les suites déjà vertes ne prouvent pas cette équivalence.",
+      "evidence": "    definition.held_queue\n        && presence.turn_attest\n        && message.intent.is_none()\n        && !matches!(\n            message.origin,\n            Some(bridget_core::MessageOrigin::Human | bridget_core::MessageOrigin::System)\n        )",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Enregistrer une cible nonT3 avec held_queue=true et turn_attest=true, annoncer busy, puis envoyer un SendIdempotent ordinaire attesté avec MessageIntent::QueueOnly (wire queue_only), sans origine Human/System ni exclusion métier. should_hold renvoie false ; le chemin prépare dispatching et push au lieu de held. Séquence relue statiquement, non exécutée par cet auditeur.",
+      "impact": "La forme explicite queue échappe au rang et à la rétention du daemon ; comportement différent de la forme omise. Aucun gain de droit ni violation d’identité démontré.",
+      "path_type": "hot",
+      "remediation": "Admettre None ou Some(MessageIntent::QueueOnly) dans ce prédicat, sans modifier les autres exclusions ni les octets canoniques.",
+      "remediation_code": "&& matches!(message.intent, None | Some(bridget_core::MessageIntent::QueueOnly))",
+      "verification": "Raccorder la table existante held159_hold_* : mêmes faits busy/attestés, intention omise et QueueOnly donnent Held, les autres intentions restent hors rétention. ROOT prépare ce raccord ; aucun testbonus demandé.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159 FR002",
+        "SPEC159 T005",
+        "Claude contre-revue R1 signalée ROOT"
+      ],
+      "status": "open",
+      "fingerprint": "c25c9e195d90"
+    },
+    {
+      "id": "REL-002",
+      "category": "reliability",
+      "subcategory": "fresh_turn_attestation",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 818,
+      "title": "La sortie forcée ignore une réattestation busy encore fraîche",
+      "description": "busy_turn_is_stale utilise le début stable de période sans contrôler last_attested_at. Le tick peut donc convertir une présence busy en connected après le délai, même si un true vient de la session réelle. schedule_held_release accepte ensuite le repos projeté ou le motif forcé ; FR025 réserve ce dernier au silence supérieur à trois périodes. Le test temporel actuel attend cette expiration malgré un true récent.",
+      "evidence": "    let start = if presence.turn_attest {\n        presence.busy_period_start.unwrap_or(presence.capacity_seen)\n    } else {\n        presence.busy_since.unwrap_or(presence.capacity_seen)\n    };\n    let elapsed = now.saturating_duration_since(start);\n    elapsed >= Duration::from_secs(ttl_secs)\n}",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Pour une présence turn_attest, ouvrir une période busy à t0. Réattester true peu avant t0+notify_timeout+30 puis appeler release_stale_busy_turns au seuil : le helper renvoie true, la présence devient connected alors que last_attested_at reste fraîche. Avec un retenu admissible et aucune autre garde, schedule_held_release peut engager une remise. Trace de code confirmée et contre-revue R1 ROOT ; aucun runtime nouveau par cet auditeur.",
+      "impact": "Un tour réel encore occupé peut recevoir une libération anticipée et une projection de disponibilité inexacte. Aucune escalade de privilège démontrée.",
+      "path_type": "hot",
+      "remediation": "Pour les instances attestées, conserver busy tant que l’attestation est fraîche. Exiger le silence normatif avant l’expiration forcée et son raccord de libération. Garder le calcul depuis busy_period_start et le comportement legacy.",
+      "remediation_code": "if presence.turn_attest && presence.last_attested_at.is_some_and(|at| now.saturating_duration_since(at) <= Duration::from_secs(90)) {\n    return false;\n}\n// Dans le raccord forcé, n’admettre ce motif que si la dernière attestation est ancienne.",
+      "verification": "Adapter les oracles temporels existants held159_turnstate_sortie_forcee_depuis_busy_period_start et held159_turnstate_wrapper_muet_trois_periodes : true récent maintient busy ; silence de plus de90s avec période échue autorise l’expiration sans nouvelle attestation. Rejouer les cas release déjà prescrits. ROOT prépare les hunks ; aucun nouveau testgratuit.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "references": [
+        "SPEC159 FR004/FR023/FR025",
+        "SPEC159 T006/T007",
+        "crates/bridget-daemon/src/daemon.rs:6107",
+        "Claude contre-revue R1 signalée ROOT"
+      ],
+      "status": "open",
+      "fingerprint": "dd17fbdd1ae2"
+    }
+  ],
+  "suppressed": [],
+  "positive_findings": [
+    {
+      "module": "04",
+      "authority": "historical C1 report",
+      "items": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+          "line": 58,
+          "description": "Libération d’un seul candidat par rang durable LIMIT1 ; contrôles et COMMIT dans la transaction existante."
+        },
+        {
+          "file": "crates/bridget-daemon/src/idempotency.rs",
+          "line": 959,
+          "description": "Migration v7 copie/restaure les liens avec INSERT SELECT, sans une écriture SQL par lien."
+        },
+        {
+          "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+          "line": 464,
+          "description": "Adoption par agent via un seul UPDATE SQL ; pas de relecture Rust ligne par ligne."
+        }
+      ]
+    },
+    {
+      "module": "07",
+      "authority": "historical C1 report",
+      "items": [
+        "Retrait transactionnel partagé par libération et balayage, sans copie des mutations d’issue/suivi/notice.",
+        "Scripts fournisseur159/156 near-miss : gates et observables distincts, garder séparés évite FalseDRY."
+      ]
+    },
+    {
+      "module": "12",
+      "authority": "historical C1 report",
+      "items": [
+        "Même saga, allocateurAUTOINCREMENT et garde de pause ; aucun nouveau crate ou module métier.",
+        "Cinq usages du helper de libération ; deux usages retrait justifiés par atomicité FR006/FR024.",
+        "Minuterieheartbeat existante réemployée ; Seen/TERM sous feature de fixture, sans nouveau scheduler."
+      ]
+    },
+    {
+      "module": "08",
+      "authority": "historical C1 report",
+      "items": [
+        {
+          "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+          "line": 268,
+          "description": "COUNT de capacité et INSERT Held dans la même transaction Immediate : pas de quota anticipé non atomique."
+        },
+        {
+          "file": "crates/bridget-daemon/src/store.rs",
+          "line": 70,
+          "description": "WAL confirmé, durabilité SQLite non relâchée ; timeout écrivain2s borné et coût assumé."
+        },
+        {
+          "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+          "line": 624,
+          "description": "Liste limitée à200 résultats et annotation explicite du coût de tous les candidats ; preview120 caractères en façade."
+        }
+      ]
+    },
+    {
+      "module": "05",
+      "authority": "historical C1 report",
+      "items": [
+        "Transactions Immediate de libération/retrait et mutations RAM après commit (send_delivery15–124/1093–1211).",
+        "Register.turn_attest absent/faux omis et oracle d’égalité des octets legacy (protocol3527/5581–5598).",
+        "Terminal d’exécution ne fabrique pas le repos du porteur attesté (daemon9897–9904)."
+      ]
+    },
+    {
+      "module": "03",
+      "authority": "historical C1 report",
+      "items": [
+        "daemon.rs:10491 valide route/instance/presence actuelle ; normalisation10776 ne croit pas les originesHuman/System revendiquées.",
+        "release_next_held:20 relit pause/reprise/saga/demande sous Immediate avec paramètres ; aucune écriture socket dans cette transaction.",
+        "Migrationidempotency.rs:952 copie les liens avant DROP sousFKON et refuse toute foreign_key_check restante avantcommit."
+      ]
+    },
+    {
+      "module": "06",
+      "authority": "historical C1 report",
+      "items": [
+        "T010 aprèspush vérifie deuxFIFOready et zéroancienneinjection avant les deuxarrêts ; ordre1→2→3/ACK réel/idgenbytesrang vérifiés dans nouvelleincarnation.",
+        "Seen sameinstance lit le reçu seen réel et le conserve ; report indeterminate du vraiwrapper, aucunordinary injecté et suivantheld à la frontière.",
+        "held159_sweep_pending_replies_retire_apres_commit utilise triggerABORT : SQL/notice/mémoire restent inchangés au rollback puis suiviRAM retiré aprèsCOMMIT."
+      ]
+    }
+  ],
+  "report_provenance": [
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_complexite.json",
+      "sha256": "d80122b1a3c7d8e3535c53cf756832090e78db2eff064a0f0c02986f7c32c5e3"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_duplication.json",
+      "sha256": "b7182e5f68012a1465cecfb93912a6f48abbb45c373770b4d98a37bd465a0f23"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_minimalisme.json",
+      "sha256": "5e7257f6307ef6cd8954f57b901ddf2f564d60636de458b14c4eb25e24548338"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_performance.json",
+      "sha256": "0d66e775ffd14a1f14fa9f9784aa00a6a7f299ec379a9e0cb1577ee89deb0343"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_qualite.json",
+      "sha256": "5681ea127938b760a17568bcf22d87dc5ead060383520ea12161fc23beb7ced9"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_securite.json",
+      "sha256": "a9e002793f2ceedb52895066623546cc573d9003777950d4add5f37a2841f5a9"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159A-final-20261012/cycle-1/findings_tests.json",
+      "sha256": "97cc435b854ecfe674a2824f59367901729b4619a455d12a33613761c80c0a24"
+    }
+  ],
+  "coverage": {
+    "ranges_union": {
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          240,
+          291
+        ],
+        [
+          815,
+          826
+        ],
+        [
+          4128,
+          4190
+        ],
+        [
+          4868,
+          4895
+        ],
+        [
+          5289,
+          5388
+        ],
+        [
+          6020,
+          6270
+        ],
+        [
+          6760,
+          6807
+        ],
+        [
+          8390,
+          8480
+        ],
+        [
+          8925,
+          8962
+        ],
+        [
+          9138,
+          9202
+        ],
+        [
+          9305,
+          9480
+        ],
+        [
+          9880,
+          9925
+        ],
+        [
+          10491,
+          10508
+        ],
+        [
+          10776,
+          10789
+        ],
+        [
+          11095,
+          11232
+        ],
+        [
+          11290,
+          11398
+        ],
+        [
+          11620,
+          11770
+        ],
+        [
+          11805,
+          11912
+        ],
+        [
+          12970,
+          13108
+        ],
+        [
+          17976,
+          17999
+        ],
+        [
+          21595,
+          21685
+        ],
+        [
+          24310,
+          24366
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency/send_delivery.rs": [
+        [
+          1,
+          1258
+        ],
+        [
+          1370,
+          1563
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          514,
+          522
+        ],
+        [
+          659,
+          666
+        ],
+        [
+          883,
+          1038
+        ]
+      ],
+      "crates/bridget-daemon/src/store.rs": [
+        [
+          1,
+          168
+        ]
+      ],
+      "crates/bridget-daemon/src/registry.rs": [
+        [
+          1,
+          106
+        ],
+        [
+          332,
+          386
+        ],
+        [
+          740,
+          785
+        ]
+      ],
+      "crates/bridget-daemon/src/wrapper.rs": [
+        [
+          4065,
+          4095
+        ],
+        [
+          4395,
+          4451
+        ],
+        [
+          4612,
+          4655
+        ],
+        [
+          4723,
+          4760
+        ],
+        [
+          6488,
+          6509
+        ],
+        [
+          6620,
+          6650
+        ],
+        [
+          6710,
+          6741
+        ],
+        [
+          11470,
+          11542
+        ]
+      ],
+      "crates/bridget-daemon/src/store_schema.rs": [
+        [
+          1,
+          103
+        ]
+      ],
+      "specs/159-edition-file/research.md": [
+        [
+          178,
+          185
+        ]
+      ],
+      "docs/decisions/159-file-retenue-et-edition.md": [
+        [
+          1,
+          144
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          3514,
+          3536
+        ],
+        [
+          5578,
+          5600
+        ]
+      ],
+      "crates/bridget-daemon/tests/held159_e2e.rs": [
+        [
+          1,
+          265
+        ],
+        [
+          443,
+          664
+        ],
+        [
+          1103,
+          1230
+        ],
+        [
+          1310,
+          1400
+        ],
+        [
+          1830,
+          1968
+        ],
+        [
+          2054,
+          2090
+        ]
+      ],
+      "crates/bridget-daemon/tests/guidance156_e2e.rs": [
+        [
+          102,
+          122
+        ],
+        [
+          343,
+          435
+        ],
+        [
+          501,
+          615
+        ]
+      ],
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+        [
+          145,
+          181
+        ],
+        [
+          473,
+          535
+        ]
+      ],
+      "crates/bridget-daemon/tests/support/idempotent.rs": [
+        [
+          1,
+          140
+        ]
+      ],
+      "specs/159-edition-file/data-model.md": [
+        [
+          34,
+          55
+        ]
+      ],
+      "specs/159-edition-file/reuse-audit.md": [
+        [
+          1,
+          100
+        ]
+      ],
+      "specs/159-edition-file/tasks.md": [
+        [
+          29,
+          45
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency/tests.rs": [
+        [
+          3455,
+          3511
+        ]
+      ]
+    },
+    "excluded": [
+      {
+        "module": "04",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-daemon/src/store/ledger_requests.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-core/src/message.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-core/src/message.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/receipt_store.rs",
+        "reason": "context outside scope or source SHA differs from C1 authority"
+      }
+    ],
+    "definition": "Percentage of manually read source lines, not tests or diff coverage"
+  },
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "present": false,
+    "suppressed_count": 0
+  }
+}

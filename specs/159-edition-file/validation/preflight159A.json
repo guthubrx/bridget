@@ -1,0 +1,17 @@
+{
+  "base_metadata": "b235998638b3eadf8f8edc0a6e323b762e95cab0",
+  "source158B": "e52a96240b6168bf4466712e1bda8852b4ecb43f",
+  "sync_rc": 0,
+  "primitives": {
+    "check-prerequisites.sh": {
+      "rc": 127,
+      "missing": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/.specify/scripts/bash/check-prerequisites.sh"
+    },
+    "setup-plan.sh": {
+      "rc": 127,
+      "missing": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file/.specify/scripts/bash/setup-plan.sh"
+    }
+  },
+  "fallback": "Manual existing159 artifacts refresh, reuse and analyze required before code",
+  "implementation_GO": false
+}

@@ -443,6 +443,7 @@ impl Client {
             domain: None,
             turn_in_progress: false,
             journal_available: Some(false),
+            turn_attest: false,
         });
         if let DaemonToWrapper::Registered {
             credential: Some(credential),

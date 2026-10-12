@@ -62,7 +62,8 @@ fn native155_chain_trois_niveaux_snapshot_saut_unique_et_silence() {
                     None,
                     false,
                     Some(true),
-                    &mut st
+                    &mut st,
+                    false
                 ),
                 DaemonToWrapper::Registered { .. }
             ));

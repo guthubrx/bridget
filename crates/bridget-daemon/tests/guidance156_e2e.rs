@@ -651,6 +651,7 @@ fn setup_child156(
             domain: None,
             journal_available: None,
             turn_in_progress: false,
+            turn_attest: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,

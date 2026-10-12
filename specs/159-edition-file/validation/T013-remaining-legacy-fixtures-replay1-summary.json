@@ -1,0 +1,70 @@
+{
+  "label": "T013-remaining-legacy-fixtures-replay1",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "core_089_reply_test",
+    "--test",
+    "t3code_098_test",
+    "--test",
+    "integration_test",
+    "--no-fail-fast",
+    "--features",
+    "test-support",
+    "--",
+    "cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent",
+    "spec098_pont_expose_remet_repond_renouvelle_et_retire",
+    "test_only_sender_can_cancel_request",
+    "--nocapture",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T17:08:00.659390+00:00",
+  "seconds": 21.74,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ],
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.log",
+  "log_sha256": "7971fe0272454cf070a0f2ee1b31558a3acec414e61d7eeeb2269836d5d748f7",
+  "private_ns": "/private/tmp/b.725kf7vk",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  },
+  "sources_stable": true,
+  "original_receipt": "/Users/moi/.cache/bridget-tests159A-20261012/T013-remaining-legacy-fixtures-replay1.json",
+  "original_receipt_sha256": "957f8fd7efc0ce420d90bb83b48bfba005770387ca5ccf6dcae62d05e1285983",
+  "source_maps_omitted": true,
+  "source_files_count": 222,
+  "source_hashes_verified_equal": true,
+  "daemon_sha256": "f5ff16d485f4028aa101473b96125680f4ba25dcbab1eb74b084680e5227dffa"
+}

@@ -1,0 +1,1048 @@
+{
+  "feature": "159A-edition-file",
+  "decision": "PASS",
+  "gate": "5/5",
+  "status_scope": "Candidat réemploi CACHE ; pas GO implémentation, pas Analyze et pas livraison",
+  "created_at_utc": "2026-10-12T13:33:41+00:00",
+  "source_base_authority": "ROOT",
+  "source_base_commit": "e52a96240b6168bf4466712e1bda8852b4ecb43f",
+  "items_count": 33,
+  "items_audited": 33,
+  "decisions": {
+    "CREER": 10,
+    "REUTILISER": 23
+  },
+  "items": [
+    {
+      "id": "R01",
+      "item": "AgentDefinition.held_queue",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/registry.rs:49",
+      "rationale": "Champ prévu absent ; étendre la définition existante, faux par défaut. Aucun registre neuf."
+    },
+    {
+      "id": "R02",
+      "item": "Phases held et cancelled",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs:539",
+      "rationale": "Élargir le CHECK et les lecteurs de la saga existante ; pas deuxième file."
+    },
+    {
+      "id": "R03",
+      "item": "queue_rank",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs:532",
+      "rationale": "Colonne prévue INTEGER PRIMARY KEY AUTOINCREMENT dans send_deliveries ; réemploi allocateur SQLite. MAX+1 écarté car purge fait reculer."
+    },
+    {
+      "id": "R04",
+      "item": "recipient_agent et turn_gate",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:129",
+      "rationale": "Deux colonnes prévues dans la même table ; aucune équivalente repérée par nom/responsabilité."
+    },
+    {
+      "id": "R05",
+      "item": "Migration SQLite v7",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store_schema.rs:4 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs:795",
+      "rationale": "Étendre la migration et le préflight existants. Préserver delivery_id UNIQUE NOT NULL et liens d’exécution lors de reconstruction."
+    },
+    {
+      "id": "R06",
+      "item": "Index destinataire/phase/rang",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs:885",
+      "rationale": "Même nom idx_send_deliveries_recipient_phase, extension (recipient_instance_id,phase,queue_rank) conserve les deux préfixes existants ; pas index doublon."
+    },
+    {
+      "id": "R07",
+      "item": "Register.turn_attest",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md:37 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs:5622",
+      "rationale": "Champ booléen fermé faux/omis pour compatibilité. Register exact non relu intégralement ; noms recherchés et raccord wrapper attesté."
+    },
+    {
+      "id": "R08",
+      "item": "TurnState et signal is_busy",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:5237 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/acp.rs:775 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/claude_stream_json.rs:514 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/codex_app_server.rs:1329",
+      "rationale": "Sources de vérité transport existantes ; aucun nouveau modèle de présence."
+    },
+    {
+      "id": "R09",
+      "item": "busy_period_start/last_attested_at/turn_attest de présence",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:5240",
+      "rationale": "Données nécessaires à l’attestation ; préserver busy_since legacy, que chaque vrai TurnState busy remet actuellement à zéro."
+    },
+    {
+      "id": "R10",
+      "item": "Réattestation ≤30s",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs:4698",
+      "rationale": "Minuterie heartbeat existante ; contrôler échéance aussi lors de trafic continu. Le seul bras timeout ne suffit pas : décision ROOT retenue."
+    },
+    {
+      "id": "R11",
+      "item": "should_hold(facts)",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md:1",
+      "rationale": "Décision pure métier FR002 prévue. Aucune primitive identique trouvée ; utiliser faits existants et garde autonome, sans nouvelle autorité."
+    },
+    {
+      "id": "R12",
+      "item": "begin_send_delivery_inner annoncé",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:89",
+      "rationale": "Nom absent aujourd’hui ; véritable primitive à greffer : begin_send_delivery_with_guidance. Préserver transaction Immediate et réservations."
+    },
+    {
+      "id": "R13",
+      "item": "Émission ledger et tracked_requests atomique",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:151 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store.rs:170",
+      "rationale": "Même transaction ; table réelle tracked_requests, pas requests. held ne doit pas publier une émission avant remise."
+    },
+    {
+      "id": "R14",
+      "item": "release_next_held(agent,now)",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:403",
+      "rationale": "Méthode de la saga existante nécessaire à libération ordonnée ; aucune méthode held déjà présente, pas worker/file autonome."
+    },
+    {
+      "id": "R15",
+      "item": "adopt_held_for_agent",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:227 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:5994",
+      "rationale": "Étendre réaffectation/recovery existants avec identité/génération. Conserver exclusions réveils158B et missions natives."
+    },
+    {
+      "id": "R16",
+      "item": "settle_held",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:597 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:653",
+      "rationale": "Clôture bornée de la même saga ; indeterminate seul ne clôture pas le suivi métier. Pas nouveau journal d’issue."
+    },
+    {
+      "id": "R17",
+      "item": "held_ids dérivé SQL",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md:63",
+      "rationale": "Petit ensemble d’IDs demandé pour filtres de rappels ; ni corps copiés ni deuxième file. Reconstitution depuis saga."
+    },
+    {
+      "id": "R18",
+      "item": "Rappels trois paliers et balayage",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:5252 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs:4698",
+      "rationale": "Étendre boucle/temporisation existantes ; pas scheduler ni thread neuf. Palier3 clôture avant balayage suivant contrat."
+    },
+    {
+      "id": "R19",
+      "item": "AutonomousEffect::HeldRelease",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md:39",
+      "rationale": "Extension de garde autonome existante ; nom nouveau sans nouveau moteur ni autorité. Corps complet de la garde hors plages fraîches."
+    },
+    {
+      "id": "R20",
+      "item": "Pause durable et reprise",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/execution_store.rs:1655 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:12718",
+      "rationale": "Réemploi control_pause_interruptions et reprise après pause ; lecture SQL dans même TX nécessaire si décision atomique, pas appel Store à connexion distincte."
+    },
+    {
+      "id": "R21",
+      "item": "Register/recovery/transition de tour",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs:5622 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs:6534 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:5994",
+      "rationale": "Raccords existants de connexion et d’activité ; aucune boucle de reprise propre à held."
+    },
+    {
+      "id": "R22",
+      "item": "QueueList daemon",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:10749",
+      "rationale": "Étendre vue existante, filtrage d’autorité avant aperçu, limite200. Ne pas rendre file étrangère visible."
+    },
+    {
+      "id": "R23",
+      "item": "bridget_queue MCP",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md:16",
+      "rationale": "Outil public existant à enrichir ; schéma MCP complet non relu cette passe. Pas nouvel outil A."
+    },
+    {
+      "id": "R24",
+      "item": "Ordre dispatching existant",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:417 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:466",
+      "rationale": "Remplacer ordre rowid/delivery_id par rang là où prescrit ; queue_rank alias rowid préserve identité des anciens rangs copiés."
+    },
+    {
+      "id": "R25",
+      "item": "Délais métier et acquittements",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:11324 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store/ledger_requests.rs:699",
+      "rationale": "Primitives de suivi/réponse existantes ; ne pas démarrer délai d’une émission tenue. ACK/ledger gardent leurs preuves, aucun ACK neuf."
+    },
+    {
+      "id": "R26",
+      "item": "DeliveryRejected/indeterminate fournisseurs",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs:6658 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/t3code.rs:1850",
+      "rationale": "Retours existants réels, y compris request_closed. Transport T3 complet non relu, aucun modèle exécuté."
+    },
+    {
+      "id": "R27",
+      "item": "Liens send_delivery_execution_links",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs:862",
+      "rationale": "FK vers delivery_id conservée. DROP parent exécute cascade : sauvegarde et restauration dans migration transactionnelle obligatoires, pas table métier ajoutée."
+    },
+    {
+      "id": "R28",
+      "item": "ON CONFLICT et clés de remise",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs:129 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs:546",
+      "rationale": "INSERT courant simple à colonnes nommées, sans upsert send_deliveries ; unicité métier composite et delivery_id inchangées. Aucun last_insert_rowid trouvé dans recherche ciblée."
+    },
+    {
+      "id": "R29",
+      "item": "Tests migration/reprise T004/T009",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:29 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:42",
+      "rationale": "Étendre cas déjà prescrits pour purge/rang/FK/réattestation ; aucun scénario de confort proposé, exécution ROOT ultérieure."
+    },
+    {
+      "id": "R30",
+      "item": "held159_e2e.rs",
+      "decision": "CREER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:43",
+      "rationale": "Fichier de tests explicitement prévu, composition fixtures existantes ; pas exécution ni montage fournisseur dans cette passe."
+    },
+    {
+      "id": "R31",
+      "item": "Backup/rollback T011",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/tests/core_089_migration_test.rs:12 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:44",
+      "rationale": "Réemploi backup SQLite cohérente et recette isolée ; ancien binaire réel158B après reçu, pas preuve runtime inventée."
+    },
+    {
+      "id": "R32",
+      "item": "Baseline et latence T001/T010",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:14 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:43",
+      "rationale": "Tests/mesures prescrits uniquement. Pas baseline relancée ni p95/SC004 mesuré ici."
+    },
+    {
+      "id": "R33",
+      "item": "Séparation A13/B14",
+      "decision": "REUTILISER",
+      "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md:15",
+      "rationale": "A T001–T013 seulement. QueueEditV1/queue_edits/édition/priorité/repli B exclus. B permutation négative transactionnelle future seulement, aucun code B."
+    }
+  ],
+  "arbitrages": [
+    {
+      "id": "A1",
+      "status": "RETENU_ROOT",
+      "decision": "T006 vérifie échéance même sous trafic continu en réutilisant la minuterie heartbeat ; pas greffe seulement timeout."
+    },
+    {
+      "id": "A2",
+      "status": "RETENU_ROOT",
+      "decision": "Ancienne formule MAX+1 était O(N), pas O(log N) ; aucune indexation supplémentaire pour maquiller le coût."
+    },
+    {
+      "id": "A3",
+      "status": "VERIFIE_STATIQUE",
+      "decision": "Étendre index nonunique existant (recipient_instance_id,phase) avec queue_rank, même nom ; deux préfixes inchangés, aucune dépendance INDEXED BY trouvée."
+    },
+    {
+      "id": "A4",
+      "status": "RETENU_ROOT_FAISABLE_STATIQUE",
+      "decision": "FR008 monotone à vie : queue_rank INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id UNIQUE NOT NULL. Copie explicite anciens rowid. SQLite conserve watermark malgré DELETE/cascade ; plus de SELECT MAX au chemin chaud."
+    },
+    {
+      "id": "A5",
+      "status": "CONTRAINTE_MIGRATION",
+      "decision": "Le lien FK déjà présent impose conserver/reconstruire ses lignes avant DROP du parent ; FK ON, même migration transactionnelle, restaurer indices et liens, pas nouveau registre métier."
+    },
+    {
+      "id": "A6",
+      "status": "B_HORS_GO",
+      "decision": "B pourra permuter les rangs existants via négatifs temporaires dans TX puis restaurer valeurs ; ne pas poser CHECK positif incompatible. UPDATE ne relève pas sqlite_sequence : ne jamais fabriquer des rangs positifs au-delà des valeurs existantes. Aucun code B."
+    }
+  ],
+  "gates": [
+    {
+      "id": "G1",
+      "satisfied": true,
+      "description": "Chaque item A extrait et confronté aux recherches de noms/responsabilités et surfaces ciblées ; limites explicites."
+    },
+    {
+      "id": "G2",
+      "satisfied": true,
+      "description": "Aucun doublon évident non arbitré ; même saga, même index, minuterie, garde et outils existants."
+    },
+    {
+      "id": "G3",
+      "satisfied": true,
+      "description": "Skill, bridges et références locales lues ; mémoire et prérequis absents déclarés."
+    },
+    {
+      "id": "G4",
+      "satisfied": true,
+      "description": "Couplages de base158B et prédécesseurs transport/queue/pause vérifiés sur code intégré ; installation non attestée ici."
+    },
+    {
+      "id": "G5",
+      "satisfied": true,
+      "description": "Divergences du plan motivées dans candidat CACHE : cadence trafic continu, index étendu, AUTOINCREMENT à vie et migration des FK. Application documentaire ROOT requise avant Analyze."
+    }
+  ],
+  "limits": [
+    "Lecture ciblée uniquement, pas audit global ni Analyze159A frais. Ancienne décision PASS2026-10-11 non reprise comme preuve.",
+    "Aucune commande Cargo/test/DB/service/Git ni mesure/performance. Documentation SQLite officielle consultée pour la faisabilité uniquement.",
+    "Basesource e52a96240b6168bf4466712e1bda8852b4ecb43f attestée par ROOT ; HEAD non vérifié par cet agent. Installation158B encore en cours selon dernier message reçu.",
+    "Spec159 plage60–71 non recréditée ; reuse-audit historique seulement1–45 ; protocol/Register/MCP et garde autonome non relus intégralement. Corps géants N/daemon/wrapper non lus intégralement.",
+    "Recherches absence bornées crates/scripts/docs/Cargo.toml puis couplages ciblés. B14 hors gate et hors code.",
+    "La vérification supplémentaire AUTOINCREMENT est statique et documentaire ; migration/FK/rollback et coûts réels restent à prouver par tests déjà prescrits.",
+    "Borne initiale7min dépassée ; collecte générale arrêtée sur demande ROOT. Seule vérification supplémentaire autorisée2min sur AUTOINCREMENT/FK/INSERT/rowid réalisée."
+  ],
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/registry.rs",
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "read_ranges": [
+        [
+          13,
+          88
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          13,
+          88
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store_schema.rs",
+      "sha256": "38fce1d1857f86347635f80757fb58cc6f3b9203e2228c9241baa6318e10726b",
+      "read_ranges": [
+        [
+          1,
+          58
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          58
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "0db6541e31d7809b5caee44bf9a8e933b5aa1bb3f2734cf518294a570e16c8e6",
+      "read_ranges": [
+        [
+          54,
+          175
+        ],
+        [
+          227,
+          277
+        ],
+        [
+          403,
+          477
+        ],
+        [
+          597,
+          620
+        ],
+        [
+          653,
+          723
+        ],
+        [
+          112,
+          153
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          54,
+          175
+        ],
+        [
+          227,
+          277
+        ],
+        [
+          403,
+          477
+        ],
+        [
+          597,
+          620
+        ],
+        [
+          653,
+          723
+        ],
+        [
+          112,
+          153
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5",
+      "read_ranges": [
+        [
+          5229,
+          5275
+        ],
+        [
+          5994,
+          6030
+        ],
+        [
+          10749,
+          10843
+        ],
+        [
+          12718,
+          12750
+        ],
+        [
+          11324,
+          11370
+        ],
+        [
+          11025,
+          11066
+        ],
+        [
+          11282,
+          11333
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          5229,
+          5275
+        ],
+        [
+          5994,
+          6030
+        ],
+        [
+          10749,
+          10843
+        ],
+        [
+          12718,
+          12750
+        ],
+        [
+          11324,
+          11370
+        ],
+        [
+          11025,
+          11066
+        ],
+        [
+          11282,
+          11333
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store.rs",
+      "sha256": "a1418f65dda676ec8fa8f77d3e12313c494d3379aec74885404d64f9946b4a02",
+      "read_ranges": [
+        [
+          170,
+          190
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          170,
+          190
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "read_ranges": [
+        [
+          4019,
+          4024
+        ],
+        [
+          4698,
+          4718
+        ],
+        [
+          5575,
+          5587
+        ],
+        [
+          5620,
+          5630
+        ],
+        [
+          6521,
+          6543
+        ],
+        [
+          6576,
+          6590
+        ],
+        [
+          6658,
+          6669
+        ],
+        [
+          895,
+          921
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          4019,
+          4024
+        ],
+        [
+          4698,
+          4718
+        ],
+        [
+          5575,
+          5587
+        ],
+        [
+          5620,
+          5630
+        ],
+        [
+          6521,
+          6543
+        ],
+        [
+          6576,
+          6590
+        ],
+        [
+          6658,
+          6669
+        ],
+        [
+          895,
+          921
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "20439651521abbdbb4d91879f658310fc7139476a294ca0d540d00639f33a64a",
+      "read_ranges": [
+        [
+          515,
+          570
+        ],
+        [
+          695,
+          843
+        ],
+        [
+          829,
+          891
+        ],
+        [
+          1253,
+          1267
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          515,
+          570
+        ],
+        [
+          695,
+          843
+        ],
+        [
+          829,
+          891
+        ],
+        [
+          1253,
+          1267
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+      "read_ranges": [
+        [
+          1521,
+          1552
+        ],
+        [
+          1650,
+          1667
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1521,
+          1552
+        ],
+        [
+          1650,
+          1667
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "read_ranges": [
+        [
+          1,
+          72
+        ],
+        [
+          97,
+          144
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          72
+        ],
+        [
+          97,
+          144
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/store/ledger_requests.rs",
+      "sha256": "a797820302393485c345eb2548de7581aebda1e514845641dd5fb6f81679f6cf",
+      "read_ranges": [
+        [
+          699,
+          715
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          699,
+          715
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/acp.rs",
+      "sha256": "fc78deef60ebf9b6302667f7fb487dc7774c184d650e9c231b2a3bc373300b8c",
+      "read_ranges": [
+        [
+          770,
+          780
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          770,
+          780
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "ec1b13b2f5f38c2b91e44f72457352c3ca3d2e1364c660dc30bf47e8bed916a5",
+      "read_ranges": [
+        [
+          510,
+          521
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          510,
+          521
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "2e19ecc41685cf43db8a762ddb9df74cac8e9fd39c5c26fbd931aa5359ecff6c",
+      "read_ranges": [
+        [
+          1326,
+          1339
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1326,
+          1339
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/t3code.rs",
+      "sha256": "e0040b2b8e049a75b7f940d86d70417c6355e5cc02f79f5e1c8f7f91581b42ec",
+      "read_ranges": [
+        [
+          1850,
+          1926
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1850,
+          1926
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/tests/core_089_migration_test.rs",
+      "sha256": "99b885a664deb780f6cecd15b4fdf1234b38138b4d92b73a3747b9072dbda1b9",
+      "read_ranges": [
+        [
+          1,
+          60
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          60
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/plan.md",
+      "sha256": "b414983920aedd800122e96a2318ac45e4516567cce92b52c4aec860a1a03cff",
+      "read_ranges": [
+        [
+          1,
+          158
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          158
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/tasks.md",
+      "sha256": "02f903507c822153126242ab7295936ea40fe473f5772d3a1d8451f54284771e",
+      "read_ranges": [
+        [
+          1,
+          124
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          124
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/data-model.md",
+      "sha256": "9aedb6edd5e5e9ca0312afe84b1692a048c7dc26843635432429b518ec9dce76",
+      "read_ranges": [
+        [
+          1,
+          159
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          159
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/research.md",
+      "sha256": "2d6ae93c01a67e6c99904d475d83e4f8a8b8318a9e10d5bf7868f686a9956e05",
+      "read_ranges": [
+        [
+          1,
+          239
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          239
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/quickstart.md",
+      "sha256": "eed95e804b3b86a0833fb25b16f3f39d3d72a7923d4f5189ba60b69443a0331a",
+      "read_ranges": [
+        [
+          1,
+          63
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          63
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/spec.md",
+      "sha256": "9eb6d448ea13261cf0026dbb4b199f4cca18f8bcb645766d768326624067cc84",
+      "read_ranges": [
+        [
+          1,
+          59
+        ],
+        [
+          72,
+          211
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          59
+        ],
+        [
+          72,
+          211
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "4a4f78e8358edc7b4925d48818f37be53a0d86047445547615a9a26faf82da91",
+      "read_ranges": [
+        [
+          1,
+          126
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          126
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/reuse-audit.md",
+      "sha256": "a079fdf73c06b5c38c86f4a0ac784e0b782628a9ed24aec8f8a1dfff6b99f843",
+      "read_ranges": [
+        [
+          1,
+          45
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          45
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.specify/memory/constitution.md",
+      "sha256": "5488b1f49f4ee846371969a4d5ada35c79b2f657402415487a3ae81ff4466c76",
+      "read_ranges": [
+        [
+          1,
+          20
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          20
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.specify/memory/standards.md",
+      "sha256": "08c79deb5ae7162408eec4ea98336fcb8819692f2e2d59e0372decb19d6020a7",
+      "read_ranges": [
+        [
+          1,
+          38
+        ]
+      ],
+      "ranges_clamped_to_file": [
+        [
+          1,
+          38
+        ]
+      ],
+      "capture_at_utc": "2026-10-12T13:33:41+00:00",
+      "read_kind": "lecture_ciblee_fraiche",
+      "full_file_read": true
+    }
+  ],
+  "context_manifest": [
+    {
+      "file": "/Users/moi/.cache/bridget-prelecture159-20261012/readiness159A-after158B-candidate.md",
+      "sha256": "82e06abfdae51069fe0dd487fefe463532c478e5cca753ea835524ff4a1bf91f",
+      "read_ranges": [
+        [
+          1,
+          56
+        ]
+      ],
+      "full_file_read": true,
+      "role": "preuve_preparatoire"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-plan159-native-evidence-20261012/T002-readonly.md",
+      "sha256": "edd1cabb7f597c282cabbff775697338b63333d8b159279a8bb62fa8c0434a5b",
+      "read_ranges": [
+        [
+          1,
+          29
+        ]
+      ],
+      "full_file_read": true,
+      "role": "preuve_preparatoire"
+    },
+    {
+      "file": "/Users/moi/.agents/skills/speckit-audit-existing/SKILL.md",
+      "sha256": "e1c8ba33820e2f9927e197fa25a22e23306ae3c49a16306d172b404eca55f9fe",
+      "read_ranges": [
+        [
+          1,
+          225
+        ]
+      ],
+      "full_file_read": true,
+      "role": "contrat_skill"
+    }
+  ],
+  "sqlite_primary_sources": [
+    {
+      "title": "SQLite AUTOINCREMENT",
+      "url": "https://www.sqlite.org/autoinc.html",
+      "supports": "INTEGER PRIMARY KEY alias ROWID ; rang automatique jamais réutilisé après DELETE ; sqlite_sequence ; UPDATE non suivi ; saturation SQLITE_FULL."
+    },
+    {
+      "title": "SQLite DROP TABLE",
+      "url": "https://www.sqlite.org/lang_droptable.html",
+      "supports": "DROP parent avec FK actives déclenche DELETE implicite et actions cascade."
+    },
+    {
+      "title": "SQLite Foreign Keys",
+      "url": "https://www.sqlite.org/foreignkeys.html",
+      "supports": "Clé parent UNIQUE possible sans être PRIMARY KEY ; contraintes et reconstruction."
+    }
+  ],
+  "pending_doc_alignment": [
+    "MAX+1 à remplacer par allocateur SQLite AUTOINCREMENT prévu ; ajouter conservation FK/liens en migrationv7.",
+    "Index recipient_rank annoncé : étendre même idx_send_deliveries_recipient_phase, pas coexistence.",
+    "Clarifier échéance de réattestation contrôlée aussi sur trafic continu.",
+    "Remplacer requests par tracked_requests et nom fictif begin_send_delivery_inner par vraie primitive à greffer.",
+    "Actualiser références WT150/base156/ancien binaire/absence de relance avec futur cadre159A et preuve réelle158B.",
+    "SC001 compatibilité : preuve des résultats réels et limites héritées, aucun GREEN global supposé."
+  ]
+}

@@ -486,9 +486,9 @@ parent/enfant, avec le flag calculé sur les deux trames Deliver en envoi/repris
 Pairs, clients nus et flag absent attendent. REST/V1 refuse toute intention
 explicite avant émission ; sa remise ordinaire reste inchangée.
 
-`bridget_queue` lit seulement les remises idempotentes dispatching de `target` :
-200 entrées au plus, aperçu120 caractères, état pending_or_injecting,
-queue_bound64 pour T3 et null sinon. Destinataire, parent, Attach et UI Client attestée voient toute
+`bridget_queue` lit les remises idempotentes de `target` : held/released dans
+le contrat 159A, 200 entrées au plus, aperçu120 caractères. queue_bound vaut
+queue_capacity du type quand held_queue est ouvert, null sinon. Destinataire, parent, Attach et UI Client attestée voient toute
 cette projection ; les autres voient leurs messages. Preuve enfant refusée.
 La lecture ne modifie rien. Les files internes des transports sont exclues.
 Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1].
@@ -504,6 +504,31 @@ sans effet physique : choix prudent, sans promesse exactement une fois physique.
 le tour actif continue sans autorisation par la même garde. Un ancien wrapper
 garde son ancien comportement jusqu’à sa relance. Les détails et le cadre de
 menace ADR011/027 figurent dans la référence de communication156.
+
+
+### File retenue — lot 159A
+
+`held_queue` reste fermé après SC004. Ouvert, il retient les envois clients
+idempotents ordinaires vers une instance `turn_attest` occupée ou déjà pourvue
+de retenus. Human/System, steer/interrupt, alertes, observations, incidents
+délégués, missions natives et fils T3 sont exclus ; sans attestation, chemin actuel.
+`bridget_queue` liste held/released par rang, au plus 200 entrées ; queue_full
+est un refus mémorisé. Les droits156 restent appliqués ; aucune édition en A.
+
+La réattestation périodique reste vraie sous trafic continu. La réservation
+empêche une seconde libération dans le même cycle. Register attesté avec
+held_queue ouvert rattache d'abord la remise ordinaire non ACKée de l'ancienne
+instance ; aucun ACK ni terminal 149/152 artificiel. HeldRelease attend pendant la pause,
+puis la reprise interrompue passe avant. FR025 distingue la sortie forcée
+notify_timeout_secs+30 s (2730 s par défaut) du repos prouvé ; true répété
+conserve busy_period_start. Après libération, garanties099 : Seen puis panne
+avant injection peut rendre indeterminate ; ACK ne prouve pas la fin de mission.
+
+Migration v7, mesure SC004, procédure et preuve T011 sont détaillées dans :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md
+Décision et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md
+Cancel/reorder/promote de file restent le lot B ; aucune installation déduite.
 
 Tous les membres d'un fil peuvent lire un nouveau dépôt, même avec `notify:[]`.
 Une création, un ajout de membres ou un dépôt mixte exige donc le motif pour
