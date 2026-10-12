@@ -1,0 +1,26 @@
+{
+  "source": "80b43407936110526b28f2c38ea72e1b34055154",
+  "stage": "/Users/moi/.cache/bridget-build-158A.0x5vzwte",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "build",
+    "--locked",
+    "--offline",
+    "--release",
+    "-p",
+    "bridget-daemon"
+  ],
+  "started_at": "2026-10-12T10:20:53.567928+00:00",
+  "jobs": 2,
+  "nice": 10,
+  "rc": 0,
+  "seconds": 113.53,
+  "log_sha256": "145bff495ce6bc854200aba4518fbc7b8bb195e69006da42c07865912801db3c",
+  "signed_binary_sha256": "2d71f7d35a6a63b19bc064abb5ae22a699b13d3ba74849f9e220190967b96501",
+  "signature_verified": true
+}

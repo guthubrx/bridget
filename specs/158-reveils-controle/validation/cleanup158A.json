@@ -1,0 +1,24 @@
+{
+  "source": "80b43407936110526b28f2c38ea72e1b34055154",
+  "before_at": "2026-10-12T10:28:35.362368+00:00",
+  "open_worktree_paths": [],
+  "installation_archive_sha256": "8852f006186d671242bad4f1c990bdca3a2192af378d56a336a7bcbf312d2e5f",
+  "complete": true,
+  "operations": [
+    {
+      "action": "prune_stage",
+      "rc": 0,
+      "log": "[build Bridget] cache supprimé : 0.29 Gio dans /Users/moi/.cache/bridget-build-158A.0x5vzwte/release\n[build Bridget] Nettoyage : 0.29 Gio de caches ; 34.92 Gio restants (tailles logiques, clones APFS compris)\n[build Bridget] budget dépassé : caches protégés conservés, aucune suppression forcée\n"
+    },
+    {
+      "action": "remove_worktree",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle"
+    },
+    {
+      "action": "remove_branch",
+      "branch": "session-158-reveils-controle"
+    }
+  ],
+  "worktrees_after": "worktree /Users/moi/Nextcloud/10.Scripts/64.bridget\nHEAD 80b43407936110526b28f2c38ea72e1b34055154\nbranch refs/heads/main\n\n",
+  "after_at": "2026-10-12T10:28:42.741069+00:00"
+}

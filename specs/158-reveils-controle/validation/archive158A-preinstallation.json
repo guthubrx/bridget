@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-12T10:22:14.325150+00:00",
+  "archive": "/Users/moi/.cache/bridget-delivery158A-preparation-20261012/proofs158A-preinstallation.tgz",
+  "sha256": "b09cba9870e44e7c4f6776169b0f089132b94c77a8a041aa33dfe4b8b4d926dd",
+  "bytes": 3601357,
+  "files": 238,
+  "all_member_sha_verified": true,
+  "source_commit": "80b43407936110526b28f2c38ea72e1b34055154",
+  "phase": "preinstallation source proofs ; final install/cleanup receipts archived separately after actual actions",
+  "sources": {
+    "validation158A": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation",
+    "audits158A": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-10-12/session-2026-10-12-spec-158A-01",
+    "tests-cache158": "/Users/moi/.cache/bridget-plan158-20261012-r1",
+    "reviews158A-r1": "/Users/moi/.cache/bridget-review158A-20261012-r1",
+    "reviews158A-r2": "/Users/moi/.cache/bridget-review158A-20261012-r2",
+    "finalread158A": "/Users/moi/.cache/bridget-finalread158-20261012",
+    "format158A": "/Users/moi/.cache/bridget-format158-20261012",
+    "fixes-review158A": "/Users/moi/.cache/bridget-fix158-review-20261012",
+    "fixes-full158A": "/Users/moi/.cache/bridget-fix158-full-20261012",
+    "converge158A": "/Users/moi/.cache/bridget-converge158-20261012"
+  }
+}

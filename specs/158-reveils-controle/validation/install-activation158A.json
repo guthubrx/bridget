@@ -1,0 +1,88 @@
+{
+  "source_commit": "80b43407936110526b28f2c38ea72e1b34055154",
+  "stage": "/Users/moi/.cache/bridget-build-158A.0x5vzwte",
+  "operations": [
+    {
+      "at": "2026-10-12T10:27:36.109926+00:00",
+      "action": "T3_before",
+      "processes": {
+        "60116": "60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+        "60228": "60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+      }
+    },
+    {
+      "at": "2026-10-12T10:27:36.160264+00:00",
+      "action": "backup157",
+      "path": "/Users/moi/.cache/bridget-delivery158A-preparation-20261012/rollback157-bridget",
+      "sha256": "f45b261a57ebaa6c4cd53e9195ceec66709de54b4fa394fa947e1a758ee1697d"
+    },
+    {
+      "at": "2026-10-12T10:27:36.207728+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T10:27:36.233227+00:00",
+      "action": "installed158A",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+      "sha256": "2d71f7d35a6a63b19bc064abb5ae22a699b13d3ba74849f9e220190967b96501"
+    },
+    {
+      "at": "2026-10-12T10:27:36.250805+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T10:27:36.255818+00:00",
+      "action": "before_individual_SIGTERM",
+      "label": "com.bridget.daemon",
+      "pid": 5528,
+      "process": "5528 Mon Oct 12 10:33:52 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon"
+    },
+    {
+      "at": "2026-10-12T10:27:39.277443+00:00",
+      "action": "replacement",
+      "label": "com.bridget.daemon",
+      "old_pid": 5528,
+      "new_pid": 53200,
+      "new_process": "53200 Mon Oct 12 12:27:36 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon"
+    },
+    {
+      "at": "2026-10-12T10:27:39.291526+00:00",
+      "action": "nativeprod_gate",
+      "nonterminal_states": []
+    },
+    {
+      "at": "2026-10-12T10:27:39.294952+00:00",
+      "action": "before_individual_SIGTERM",
+      "label": "com.bridget.t3",
+      "pid": 5638,
+      "process": "5638 Mon Oct 12 10:33:55 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve"
+    },
+    {
+      "at": "2026-10-12T10:27:42.322664+00:00",
+      "action": "replacement",
+      "label": "com.bridget.t3",
+      "old_pid": 5638,
+      "new_pid": 53329,
+      "new_process": "53329 Mon Oct 12 12:27:39 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve"
+    },
+    {
+      "at": "2026-10-12T10:27:42.528290+00:00",
+      "action": "status",
+      "rc": 0,
+      "stdout": "Daemon: en ligne\nMachine du daemon: monordinateur\nSocket: /Users/moi/.cache/bridget-core/bridget.sock\nBase de données du daemon: /Users/moi/.cache/bridget-core/bridget.db\nAgents connectés: 23\nMessages en base: total non publié par le daemon — consulter ledger\nBuild-id daemon: 80b434079361\n",
+      "stderr": "WARN disque: 18.4 Gi libres (< 20 Gi) — saturation récurrente des copies de travail\n"
+    },
+    {
+      "at": "2026-10-12T10:27:42.542850+00:00",
+      "action": "T3_after_unchanged",
+      "processes": {
+        "60116": "60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)",
+        "60228": "60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3"
+      }
+    }
+  ],
+  "complete": true,
+  "installed_sha256": "2d71f7d35a6a63b19bc064abb5ae22a699b13d3ba74849f9e220190967b96501"
+}

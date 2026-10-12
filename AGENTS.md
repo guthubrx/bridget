@@ -1,4 +1,6 @@
 <!-- SPECKIT START -->
+158A livrée et activée le 2026-10-12 : 22/22, sources80b434079361 intégrées et poussées github/main. Binaire signé installé, daemon53200/pont53329 actifs ; T3 inchangé. WT/branche158A retirés. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/livraison158A.md. 158B puis159/160 restent à traiter ; les checkpoints ci-dessous sont historiques.
+
 Session157 livrée et nettoyée le 2026-10-12 : 26/26 tâches, CONVERGED passage2.
 Sources8f21dfd7b553e822fcabe0a0e7eabc6741a8e45b intégrées et poussées github/main.
 Binaire signé SHA256 f45b261a57ebaa6c4cd53e9195ceec66709de54b4fa394fa947e1a758ee1697d installé et actif.
