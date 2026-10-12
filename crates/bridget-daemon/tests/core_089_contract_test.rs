@@ -399,7 +399,7 @@ fn cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_eph
     let output = run_linked_cli(&root, &["send", "--to", RECIPIENT, "message hérité"]);
     assert!(output.status.success(), "{}", output_text(&output));
     match recipient.receive() {
-        DaemonToWrapper::Deliver(message) => assert_eq!(message.from, ACTOR),
+        DaemonToWrapper::Deliver { message, .. } => assert_eq!(message.from, ACTOR),
         other => panic!("remise historique attendue : {other:?}"),
     }
     for claimed in [ACTOR, MATRIX_AGENT] {

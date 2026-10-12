@@ -316,7 +316,7 @@ fn receive_until_native(parent: &mut support::Client, replies: &mut Vec<BridgetM
                 });
                 replies.push(message);
             }
-            DaemonToWrapper::Deliver(message)
+            DaemonToWrapper::Deliver { message, .. }
             | DaemonToWrapper::DeliverExecution { message, .. } => replies.push(message),
             _ => {}
         }

@@ -370,7 +370,54 @@ prouvé peut encore envoyer selon son contrat existant avec warning d'incertitud
 Cet inconnu ne neutralise pas une divergence connue entre d'autres membres.
 La consigne injectée SteerCurrent.message suit aussi cette garde. Son résultat
 accepté conserve le warning lors d'un rejeu sans réinjecter le contenu.
-Ne pas déduire de cette règle une nouvelle option CLI de contrôle.
+### Choisir une intention et lire la file (contrat156)
+
+Vérifier `bridget_capabilities.guidance` et le catalogue MCP chargé. Cette
+référence ne prouve pas que le binaire ou un ancien wrapper a été mis à jour.
+`bridget_send` accepte `intent: "queue"`, `"steer"` ou `"interrupt"`.
+Absent ou queue conserve l’envoi ordinaire. Steer corrige le tour ; interrupt
+requiert son arrêt mais conserve la FIFO, sans priorité du nouveau message.
+Le reçu steer/interrupt indique `effect: "unconfirmed"`, jamais un succès
+fournisseur. `auto`, une valeur inconnue et steer+reply=true rendent
+`invalid_intent` avant connexion. Une autre intention sous la même clé rend
+`envelope_mismatch` ; un refus idempotent mémorisé demande une clé neuve.
+
+Seuls Attach attesté et parent par lien ouvert ou tâche native peuvent demander
+ce contrôle. Un client CLI nu ne devient pas humain par `from=human`.
+Les pairs, la cible elle-même et les preuves enfants internes T3 sont refusés.
+La preuve enfant ferme contrôle et queue à la frontière CLI/MCP avant connexion.
+Un agent ne guide ni n’interrompt pendant la pause. Il n’interrompt pas une
+mission native active :152 reprend pause/panne, pas une interruption utilisateur.
+Son rythme d’interruption est de 1 par couple en 30 s et de 3 par cible en
+600 s ; `retry_after_secs` précise l’attente. L’humain Attach est exempt ;
+l’interruption interne de pause reste admise sans quota. Aucun steer agent
+ne devient automatiquement interrupt. L’UI attestée reste Client.
+
+T3 steer vise Claude seul. Cursor steer est refusé et un fil Cursor occupé
+attend, même avec mid_turn_ok=true. Pour Claude, le guidage implicite des
+messages déjà groupables reste réservé à Attach, UI attestée, système interne,
+parent/enfant, avec le flag calculé sur les deux trames Deliver en envoi/reprise.
+Pairs, clients nus et flag absent attendent. REST/V1 refuse toute intention
+explicite avant émission ; sa remise ordinaire reste inchangée.
+
+`bridget_queue` lit seulement les remises idempotentes dispatching de `target` :
+200 entrées au plus, aperçu120 caractères, état pending_or_injecting,
+queue_bound64 pour T3 et null sinon. Destinataire, parent, Attach et UI Client attestée voient toute
+cette projection ; les autres voient leurs messages. Preuve enfant refusée.
+La lecture ne modifie rien. Les files internes des transports sont exclues.
+Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1].
+Son rôle reste Attach, sans identité agent/conn_names ni autres capacités.
+L’UI Client attestée peut lire toute la projection ; elle reste Client et
+n’acquiert aucun droit de contrôle explicite par cette lecture.
+Pour SendIdempotent, l’admission guidance_events appartient à la transaction
+existante de remise/suivi/lien/journal. Sur historique/control/cancel, l’audit
+accepté est durable avant émission physique. Un INSERT échoué interdit le
+contrôle. Un crash entre admission durable et émission peut consommer le rythme
+sans effet physique : choix prudent, sans promesse exactement une fois physique.
+`bridget_cancel` annule sa demande et retire le message encore en attente ;
+le tour actif continue sans autorisation par la même garde. Un ancien wrapper
+garde son ancien comportement jusqu’à sa relance. Les détails et le cadre de
+menace ADR011/027 figurent dans la référence de communication156.
 
 Tous les membres d'un fil peuvent lire un nouveau dépôt, même avec `notify:[]`.
 Une création, un ajout de membres ou un dépôt mixte exige donc le motif pour
@@ -455,10 +502,11 @@ validation de mission ni la réponse exigée par un `reply`.
 | Besoin | Accès |
 |---|---|
 | Annuaire, envoi, réponse liée, ledger | MCP `bridget_who/send/ledger`; CLI seulement selon le repli explicite ci-dessus |
-| Annuler sa demande suivie | MCP `bridget_cancel`; CLI seulement selon le repli explicite ci-dessus |
+| Annuler sa demande suivie | MCP `bridget_cancel`; interruption active sous garde156 ; CLI selon le repli explicite ci-dessus |
 | Partager un extrait du journal | MCP `bridget_journal`, source UUID, `to` et `reply` facultatifs ; max200 entrées/64Kio, lacunes explicites |
 | Être prévenu d'un fait ou d'une collision | MCP `bridget_events`, actions types/sub/list/unsub ; fin de tour ≠ succès, aucun verrou |
 | Renommer, DND, domaine ou runtime propres | MCP `bridget_rename/dnd/domain/runtime`; CLI seulement selon le repli explicite ci-dessus |
+| Lire les remises visibles d’une cible | MCP `bridget_queue` avec `target` ; capacité QueueListV1, aucune édition |
 | Santé daemon et contrôle en lecture | MCP `bridget_status/control_status`; les inconnus restent inconnus |
 | Lire/publier un artefact | MCP `bridget_read_artifact/publish_artifact`; contenu inerte, références exactes |
 | Lancer/arrêter/relancer un équipier | CLI explicite ; aucun outil MCP de supervision annoncé |

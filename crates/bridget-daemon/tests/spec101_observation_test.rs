@@ -179,7 +179,7 @@ impl Peer {
     }
 
     fn delivered(&mut self, needle: &str) -> bridget_core::BridgetMessage {
-        let DaemonToWrapper::Deliver(message) = self.read() else {
+        let DaemonToWrapper::Deliver { message, .. } = self.read() else {
             panic!("notification attendue")
         };
         assert!(message.body.contains(needle), "{}", message.body);

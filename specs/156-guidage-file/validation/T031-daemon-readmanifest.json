@@ -1,0 +1,754 @@
+{
+  "review": "T031 assigned daemon diff completion",
+  "read_finished_at": "2026-10-12T05:23:09.977698+00:00",
+  "base": "be7957ee",
+  "frozen_patch": {
+    "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/final-docs/diff-156-review.patch",
+    "sha256": "1991ad415fa4573d6cfd6a3eea077528f322e6d95bb4d9d62e7695fd91dbfaa0",
+    "lines": 15349
+  },
+  "reviews": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs",
+      "frozen_source_sha256": "726d16d387cface2d882df55f563b40ec74ee14fb014036219a86ef154571268",
+      "current_source_sha256": "0dfd46715aa3b1440f85b046c791e05f750753cbc26ad864c334d248a1ffedbd",
+      "patch_range": [
+        418,
+        7963
+      ],
+      "direct_patch_read_ranges": [
+        [
+          418,
+          801
+        ],
+        [
+          1213,
+          7963
+        ]
+      ],
+      "hunks": [
+        {
+          "patch_range": [
+            422,
+            441
+          ],
+          "header": "@@ -283,11 +283,17 @@ fn wait_request(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            442,
+            458
+          ],
+          "header": "@@ -982,8 +988,14 @@ struct DaemonState {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            459,
+            470
+          ],
+          "header": "@@ -1695,7 +1707,10 @@ fn deliver_to_agent(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            471,
+            482
+          ],
+          "header": "@@ -1788,7 +1803,10 @@ fn queue_observation_notifications(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            483,
+            490
+          ],
+          "header": "@@ -2015,6 +2033,7 @@ mod core_089_cancel_pressure_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            491,
+            499
+          ],
+          "header": "@@ -2029,7 +2048,7 @@ mod core_089_cancel_pressure_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            500,
+            519
+          ],
+          "header": "@@ -4170,9 +4189,16 @@ impl DaemonState {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            520,
+            531
+          ],
+          "header": "@@ -4221,7 +4247,10 @@ impl DaemonState {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            532,
+            542
+          ],
+          "header": "@@ -4343,7 +4372,9 @@ fn reserve_managed_recoveries(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            543,
+            553
+          ],
+          "header": "@@ -4447,7 +4478,9 @@ fn reserve_managed_recoveries(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            554,
+            562
+          ],
+          "header": "@@ -4498,6 +4531,8 @@ fn defer_idempotent_delivery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            563,
+            576
+          ],
+          "header": "@@ -4539,6 +4574,13 @@ fn defer_idempotent_delivery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            577,
+            584
+          ],
+          "header": "@@ -4549,6 +4591,7 @@ fn defer_idempotent_delivery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            585,
+            616
+          ],
+          "header": "@@ -4578,19 +4621,25 @@ fn schedule_idempotent_delivery_recovery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            617,
+            638
+          ],
+          "header": "@@ -4634,11 +4683,16 @@ fn schedule_execution_recovery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            639,
+            653
+          ],
+          "header": "@@ -4698,10 +4752,10 @@ fn schedule_execution_recovery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            654,
+            664
+          ],
+          "header": "@@ -4867,7 +4921,9 @@ fn schedule_execution_recovery(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            665,
+            677
+          ],
+          "header": "@@ -4962,8 +5018,10 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            678,
+            685
+          ],
+          "header": "@@ -5217,6 +5275,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            686,
+            709
+          ],
+          "header": "@@ -5463,9 +5522,20 @@ fn handle_connection(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            710,
+            722
+          ],
+          "header": "@@ -5644,8 +5714,10 @@ fn handle_connection(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            723,
+            763
+          ],
+          "header": "@@ -7302,19 +7374,34 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            764,
+            775
+          ],
+          "header": "@@ -7608,7 +7695,10 @@ fn maintain_stores(st: &DaemonState, now: i64) {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            776,
+            785
+          ],
+          "header": "@@ -7621,6 +7711,9 @@ fn maintain_stores(st: &DaemonState, now: i64) {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            786,
+            801
+          ],
+          "header": "@@ -8511,7 +8604,14 @@ fn project_thread_wake(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            802,
+            1212
+          ],
+          "header": "@@ -8851,6 +8951,410 @@ fn artifact_read_response(",
+          "read_mode": "inherited_exact_source_span"
+        },
+        {
+          "patch_range": [
+            1213,
+            1224
+          ],
+          "header": "@@ -9028,8 +9532,9 @@ fn handle_idempotent_send(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1225,
+            1237
+          ],
+          "header": "@@ -9042,6 +9547,12 @@ fn handle_idempotent_send_with_result_authority(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1238,
+            1253
+          ],
+          "header": "@@ -9054,8 +9565,13 @@ fn handle_idempotent_send_with_result_authority(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1254,
+            1293
+          ],
+          "header": "@@ -9220,6 +9736,39 @@ fn handle_idempotent_send_with_result_authority(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1294,
+            1332
+          ],
+          "header": "@@ -9321,20 +9870,24 @@ fn handle_idempotent_send_with_result_authority(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1333,
+            1352
+          ],
+          "header": "@@ -9357,9 +9910,16 @@ fn handle_idempotent_send_with_result_authority(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1353,
+            1360
+          ],
+          "header": "@@ -9399,6 +9959,7 @@ fn control_result_with_project(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1361,
+            1370
+          ],
+          "header": "@@ -9496,6 +10057,9 @@ fn handle_execution_control(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1371,
+            1391
+          ],
+          "header": "@@ -9583,6 +10147,20 @@ fn handle_execution_control(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1392,
+            1430
+          ],
+          "header": "@@ -9601,6 +10179,38 @@ fn handle_execution_control(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1431,
+            1469
+          ],
+          "header": "@@ -9664,13 +10274,36 @@ fn handle_execution_control(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1470,
+            1478
+          ],
+          "header": "@@ -10634,7 +11267,7 @@ mod spec099_classic_delivery_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1479,
+            1487
+          ],
+          "header": "@@ -11380,7 +12013,7 @@ mod spec099_classic_delivery_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1488,
+            1496
+          ],
+          "header": "@@ -11435,7 +12068,7 @@ mod spec099_classic_delivery_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1497,
+            1508
+          ],
+          "header": "@@ -11743,7 +12376,10 @@ mod spec099_classic_delivery_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1509,
+            1532
+          ],
+          "header": "@@ -14262,9 +14898,20 @@ fn human_client_guard(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1533,
+            1543
+          ],
+          "header": "@@ -14631,7 +15278,9 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1544,
+            1554
+          ],
+          "header": "@@ -14640,8 +15289,8 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1555,
+            1581
+          ],
+          "header": "@@ -14748,9 +15397,23 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1582,
+            1589
+          ],
+          "header": "@@ -14946,6 +15609,7 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1590,
+            1620
+          ],
+          "header": "@@ -15014,7 +15678,30 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1621,
+            1628
+          ],
+          "header": "@@ -15245,6 +15932,7 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1629,
+            1639
+          ],
+          "header": "@@ -15266,6 +15954,10 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1640,
+            1650
+          ],
+          "header": "@@ -15357,7 +16049,9 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1651,
+            1658
+          ],
+          "header": "@@ -16700,6 +17394,7 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1659,
+            1674
+          ],
+          "header": "@@ -16746,13 +17441,14 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1675,
+            1690
+          ],
+          "header": "@@ -18149,6 +18845,15 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1691,
+            1729
+          ],
+          "header": "@@ -18184,6 +18889,38 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1730,
+            1743
+          ],
+          "header": "@@ -18295,6 +19032,13 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1744,
+            1755
+          ],
+          "header": "@@ -18303,7 +19047,10 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1756,
+            1771
+          ],
+          "header": "@@ -18327,6 +19074,15 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1772,
+            1828
+          ],
+          "header": "@@ -18745,12 +19501,56 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1829,
+            1846
+          ],
+          "header": "@@ -18765,14 +19565,15 @@ fn handle_wrapper_message_with_peer(",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1847,
+            1855
+          ],
+          "header": "@@ -20342,7 +21143,7 @@ mod spec140_title_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1856,
+            1879
+          ],
+          "header": "@@ -20418,12 +21219,22 @@ mod spec140_title_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1880,
+            1891
+          ],
+          "header": "@@ -20461,7 +21272,10 @@ mod spec140_title_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1892,
+            1902
+          ],
+          "header": "@@ -20505,7 +21319,9 @@ mod spec140_title_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1903,
+            1911
+          ],
+          "header": "@@ -21077,7 +21893,7 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1912,
+            1920
+          ],
+          "header": "@@ -21146,7 +21962,7 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            1921,
+            7453
+          ],
+          "header": "@@ -23884,404 +24700,5217 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7454,
+            7496
+          ],
+          "header": "@@ -31129,15 +36758,35 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7497,
+            7547
+          ],
+          "header": "@@ -31153,15 +36802,42 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7548,
+            7655
+          ],
+          "header": "@@ -31169,38 +36845,92 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7656,
+            7677
+          ],
+          "header": "@@ -31210,10 +36940,19 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7678,
+            7727
+          ],
+          "header": "@@ -31222,17 +36961,43 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7728,
+            7739
+          ],
+          "header": "@@ -31244,7 +37009,10 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7740,
+            7830
+          ],
+          "header": "@@ -31253,29 +37021,77 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7831,
+            7842
+          ],
+          "header": "@@ -31287,7 +37103,10 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7843,
+            7954
+          ],
+          "header": "@@ -31296,35 +37115,97 @@ mod presence_tests {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7955,
+            7963
+          ],
+          "header": "@@ -31732,7 +37613,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {",
+          "read_mode": "direct_patch"
+        }
+      ],
+      "remaining_hunks": [],
+      "complete_assigned_diff": true,
+      "inherited_source_hunks": [
+        {
+          "patch_range": [
+            802,
+            1212
+          ],
+          "previous_source_read_range": [
+            8950,
+            9375
+          ],
+          "previous_read_proof": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/final-docs/reading-proof.json",
+          "previous_read_proof_sha256": "aa6c578c6ce2b70ba385049f052db1adf083b473336b185c6eb3f6c87575bd6f",
+          "exact_hunk_source_range": [
+            8951,
+            9360
+          ],
+          "added_and_context_lines": 410,
+          "removed_lines": 0,
+          "exact_equality_current_source": true,
+          "source_span_sha256": "de3d97ca88705a56de33a5f502a136816016ab730567fdf6fd0d6a9ab593db61"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+      "frozen_source_sha256": "267f17533fbf0df0f99393f35bcdbae031347369b26f6564c91b94bc0441398f",
+      "current_source_sha256": "267f17533fbf0df0f99393f35bcdbae031347369b26f6564c91b94bc0441398f",
+      "patch_range": [
+        7964,
+        8152
+      ],
+      "direct_patch_read_ranges": [
+        [
+          7964,
+          8152
+        ]
+      ],
+      "hunks": [
+        {
+          "patch_range": [
+            7968,
+            7976
+          ],
+          "header": "@@ -471,7 +471,7 @@ fn native155_request_avis_idempotent() {",
+          "read_mode": "direct_patch"
+        },
+        {
+          "patch_range": [
+            7977,
+            8152
+          ],
+          "header": "@@ -1115,3 +1115,175 @@ mod human155;",
+          "read_mode": "direct_patch"
+        }
+      ],
+      "remaining_hunks": [],
+      "complete_assigned_diff": true
+    }
+  ],
+  "truncated_output_recovery": {
+    "initial_call_range": [
+      2621,
+      3380
+    ],
+    "fresh_recovery_ranges": [
+      [
+        2800,
+        3140
+      ],
+      [
+        3141,
+        3820
+      ]
+    ],
+    "complete_coverage": true
+  },
+  "post_full_fixture_delta": {
+    "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/daemon-guard-tests-prep/T030-two-old-fixtures-delta.patch",
+    "sha256": "718af90339990a1037c4933916fb2d7226ca92f5a1636148016e4507c836ffad",
+    "read_complete": true,
+    "current_source_read_ranges": [
+      [
+        24700,
+        24755
+      ],
+      [
+        37369,
+        37750
+      ]
+    ],
+    "reconstructed_frozen_file_sha256": "726d16d387cface2d882df55f563b40ec74ee14fb014036219a86ef154571268",
+    "comparison": "Frozen source reconstructed exactly from git show be7957ee plus sealed patch. Applying the tested delta in memory and comparing to current yielded only 5 formatting hunks in the existing cfg(test) helper and two existing fixtures; all shown and read. No production differences.",
+    "format_difference_hunks": 5,
+    "receipt": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-two-old-fixtures-green.json",
+    "receipt_sha256": "91b0121fe5bb4a2def29826b78ce86818d52f6167f26a5d5b704c5ef22f131b1",
+    "rc": 0,
+    "passed": 2,
+    "failed": 0,
+    "seconds": 8.27,
+    "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-two-old-fixtures-green.log",
+    "log_sha256": "3e848047dcac5c540d3d0a7d32767a6fc39ee912407abc7f4233d27a22b39aac",
+    "tests": [
+      "intentions_de_soumission_restent_distinctes_et_persistantes",
+      "temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible"
+    ]
+  },
+  "findings": [],
+  "limitations": [
+    "Completeness concerns the assigned diff of two files only; it does not certify all T031 project reading.",
+    "No Cargo, tests, builds, services, repository mutation or source edits executed by this owner.",
+    "Two root replays are distinct evidence; no global FULL green or Converge claimed.",
+    "Daemon fake socket cancellation assertions attest protocol flags and persisted cancellation, not physical provider queue removal."
+  ]
+}

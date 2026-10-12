@@ -1,0 +1,43 @@
+{
+  "label": "T030-two-old-fixtures-green",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--lib",
+    "--features",
+    "test-support",
+    "--",
+    "intentions_de_soumission_restent_distinctes_et_persistantes",
+    "temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T05:19:13.640731+00:00",
+  "seconds": 8.27,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "2",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log_sha256": "3e848047dcac5c540d3d0a7d32767a6fc39ee912407abc7f4233d27a22b39aac",
+  "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-two-old-fixtures-green.log",
+  "private_ns": "/private/tmp/b.vdcmbuoo",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  }
+}

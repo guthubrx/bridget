@@ -147,16 +147,23 @@ fn delegated_cli_guard(
 }
 
 pub fn run() {
-    let args: Vec<String> = std::env::args().collect();
+    run_with_args(std::env::args().collect());
+}
+
+// Le test CLI doit appeler la vraie entrée malgré argv du testlib et exit().
+fn run_with_args(args: Vec<String>) {
     if args.len() < 2 {
         print_usage();
         std::process::exit(2);
     }
 
     let cmd = &args[1];
-    if cmd=="__native-permission-observer" {
-        if let Err(code)=crate::native_permission_observer::hook(&args[2..]) {
-            println!("{}",serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":code}}));
+    if cmd == "__native-permission-observer" {
+        if let Err(code) = crate::native_permission_observer::hook(&args[2..]) {
+            println!(
+                "{}",
+                serde_json::json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":code}})
+            );
         }
         return;
     }
@@ -254,6 +261,7 @@ pub fn run() {
         "adopt-stopped" => cmd_adopt_stopped(&args[2..]),
         "send" => cmd_send(&args[2..]),
         "guichet" => cmd_guichet(&args[2..]),
+        "queue" => cmd_queue(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
         "requests" => cmd_requests(&args[2..]),
         "rename" => cmd_rename(&args[2..]),
@@ -683,6 +691,7 @@ fn print_usage() {
            adopt-stopped <N>...   Importe explicitement d'anciens agents arrêtés\n  \
            send --to <N> [--] <MSG> Envoie un message\n  \
            reply [--] <MSG>       Répond au dernier expéditeur\n  \
+           queue --target <N>     Lit les remises en attente, filtrées par droits\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
@@ -709,6 +718,7 @@ fn print_usage() {
            --from <nom>           Se nommer ; le nom doit être adressable en\n  \
            \x20                      retour, sinon l'envoi est refusé\n  \
            --in-reply-to <id>     Lie la réponse à une demande suivie\n  \
+           --intent <V>           queue (défaut), steer (guidage), interrupt (nouveau tour)\n  \
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
            --hops <N>             Sauts restants (défaut: 4)\n  \
@@ -3497,6 +3507,8 @@ fn cmd_send(args: &[String]) {
     let mut to: Option<String> = None;
     let mut from: Option<String> = None;
     let mut reply = false;
+    let mut intent = None;
+    let mut intent_seen = false;
     let mut hops: i32 = 4;
     let mut timeout_secs: Option<u64> = None;
     let mut id: Option<String> = None;
@@ -3531,6 +3543,17 @@ fn cmd_send(args: &[String]) {
                 Ok(value) => from = Some(value),
                 Err(error) => send_usage_error(&error),
             },
+            "--intent" if !intent_seen => {
+                let value = option_value(args, &mut i, "--intent")
+                    .unwrap_or_else(|error| send_usage_error(&error));
+                intent = match value.as_str() {
+                    "queue" => None,
+                    "steer" => Some(bridget_core::MessageIntent::SteerCurrent),
+                    "interrupt" => Some(bridget_core::MessageIntent::InterruptAndStart),
+                    _ => send_usage_error("invalid_intent : attendu queue, steer ou interrupt"),
+                };
+                intent_seen = true;
+            }
             "--reply" => {
                 reply = true;
             }
@@ -3572,6 +3595,9 @@ fn cmd_send(args: &[String]) {
         i += 1;
     }
 
+    if reply && intent == Some(bridget_core::MessageIntent::SteerCurrent) {
+        send_usage_error("invalid_intent : steer est incompatible avec --reply");
+    }
     let to = match to {
         Some(t) => t,
         None => {
@@ -3626,6 +3652,7 @@ fn cmd_send(args: &[String]) {
     }
     let mut msg = BridgetMessage::new(&sender, &to, &body);
     msg.from_declared = from_declared;
+    msg.intent = intent;
     msg.in_reply_to = in_reply_to;
     msg.reply = reply;
     msg.hops = hops;
@@ -4560,6 +4587,38 @@ fn parse_cancel_args(args: &[String]) -> Result<CancelArgs, String> {
         return Err(unknown_argument("cancel", argument));
     }
     Ok(CancelArgs { id, reason })
+}
+
+fn parse_queue_args(args: &[String]) -> Result<String, String> {
+    match args {
+        [option, target]
+            if option == "--target" && !target.is_empty() && !target.starts_with("--") =>
+        {
+            Ok(target.clone())
+        }
+        _ => Err("queue : attendu --target <cible>, sans autre argument".into()),
+    }
+}
+
+fn cmd_queue(args: &[String]) {
+    let target = parse_queue_args(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let identity = match crate::mcp_identity::resolve_current_identity() {
+        Ok(identity) => Some(identity),
+        Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly) => {
+            eprintln!(
+                "bridget queue : delegated_tool_forbidden : une preuve enfant ne peut pas consulter la file"
+            );
+            std::process::exit(1);
+        }
+        Err(_) => None, // même client humain nu que l'envoi ordinaire.
+    };
+    match crate::mcp::execute_queue(identity.as_ref(), &target, &socket_path()) {
+        Ok(result) => println!("{}", serde_json::to_string(&result).unwrap()),
+        Err(error) => {
+            eprintln!("bridget queue : {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn cmd_cancel(args: &[String]) {
@@ -9815,6 +9874,279 @@ mod depot_tests {
         ] {
             let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
             assert!(parse_control_posture(&args).is_err(), "{args:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod guidance156_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::process::{Command, Output, Stdio};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    // Recette cli_arguments_integration_test::run_cli_as/capture_one_message,
+    // adaptée au testlib par current_exe (core_089_isolation_test).
+    // Trois usages : cmd_send sort du processus, aucun parseur factice requis.
+    fn guidance156_cli_run(test: &str, extra: &[&str]) -> (Output, Option<String>) {
+        let root = std::env::temp_dir().join(format!(
+            "g156-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+        for path in [
+            &root,
+            &root.join("ns"),
+            &root.join("home"),
+            &root.join("tmp"),
+        ] {
+            crate::environment::ensure_private_directory(path).unwrap();
+        }
+        let socket = root.join("ns/bridget.sock");
+        let queue_parse_only = test == "guidance156_cli_queue_parse";
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        if queue_parse_only {
+            std::fs::remove_file(&socket).unwrap();
+        }
+        let (stop, stopped) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            if queue_parse_only {
+                return None;
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break Some(stream),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stopped.try_recv().is_ok() || Instant::now() >= deadline {
+                            break None;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("socket privée : {error}"),
+                }
+            };
+            let Some(stream) = stream else {
+                return None;
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_control_message_for_guidance156(&mut reader),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            assert!(
+                matches!(read_control_message_for_guidance156(&mut reader), WrapperToDaemon::ClientHello { capabilities, .. } if capabilities == vec![ClientCapability::SendIdempotent])
+            );
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            let sent = read_control_message_for_guidance156(&mut reader);
+            assert!(matches!(&sent, WrapperToDaemon::SendIdempotent { .. }));
+            let wire = encode(&sent).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::IdempotencyResult {
+                    operation_kind: "send".into(),
+                    idempotency_key: "guidance156-cli".into(),
+                    issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                    project_warnings: Vec::new(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            Some(wire)
+        });
+        let mut args: Vec<String> = if queue_parse_only {
+            Vec::new()
+        } else {
+            [
+                "--to",
+                "89000000-0000-4000-8000-000000000157",
+                "--from",
+                "human",
+                "--id",
+                "guidance156-cli",
+                "--issued-at",
+                "1700000000",
+                "--issuer-scope",
+                "guidance156-cli",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+        };
+        args.extend(extra.iter().map(|argument| argument.to_string()));
+        if !queue_parse_only {
+            args.extend(["--".into(), "octets $VAR intacts".into()]);
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("cli::guidance156_tests::{test}"),
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("HOME", root.join("home"))
+            .env("TMPDIR", root.join("tmp"))
+            .env("BRIDGET_HOME", root.join("ns"))
+            .env("BRIDGET_SOCKET", &socket)
+            .env("PATH", "/usr/bin:/bin")
+            .env(
+                "BRIDGET_GUIDANCE156_CLI_ARGS",
+                serde_json::to_string(&args).unwrap(),
+            )
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let _ = stop.send(());
+        let wire = server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        (output, wire)
+    }
+
+    fn read_control_message_for_guidance156(reader: &mut BufReader<UnixStream>) -> WrapperToDaemon {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        decode(line.trim_end()).unwrap()
+    }
+
+    #[test]
+    fn guidance156_cli_intent_valide() {
+        if let Ok(args) = std::env::var("BRIDGET_GUIDANCE156_CLI_ARGS") {
+            cmd_send(&serde_json::from_str::<Vec<String>>(&args).unwrap());
+            return;
+        }
+        for (intent, expected) in [
+            ("queue", None),
+            ("steer", Some(bridget_core::MessageIntent::SteerCurrent)),
+            (
+                "interrupt",
+                Some(bridget_core::MessageIntent::InterruptAndStart),
+            ),
+        ] {
+            let (output, wire) =
+                guidance156_cli_run("guidance156_cli_intent_valide", &["--intent", intent]);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let WrapperToDaemon::SendIdempotent { message, .. } = decode(&wire.unwrap()).unwrap()
+            else {
+                panic!("SendIdempotent")
+            };
+            assert_eq!(message.intent, expected);
+        }
+    }
+
+    #[test]
+    fn guidance156_cli_intent_inconnue() {
+        if let Ok(args) = std::env::var("BRIDGET_GUIDANCE156_CLI_ARGS") {
+            cmd_send(&serde_json::from_str::<Vec<String>>(&args).unwrap());
+            return;
+        }
+        let (output, wire) =
+            guidance156_cli_run("guidance156_cli_intent_inconnue", &["--intent", "auto"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("invalid_intent"));
+        assert!(wire.is_none(), "valeur inconnue refusée avant connexion");
+    }
+
+    #[test]
+    fn guidance156_cli_sans_intent_inchange() {
+        if let Ok(args) = std::env::var("BRIDGET_GUIDANCE156_CLI_ARGS") {
+            cmd_send(&serde_json::from_str::<Vec<String>>(&args).unwrap());
+            return;
+        }
+        let (output, wire) = guidance156_cli_run("guidance156_cli_sans_intent_inchange", &[]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut message = BridgetMessage::new(
+            "human",
+            "89000000-0000-4000-8000-000000000157",
+            "octets $VAR intacts",
+        );
+        message.id = "guidance156-cli".into();
+        message.from_declared = true;
+        let expected = encode(&WrapperToDaemon::SendIdempotent {
+            message,
+            message_id: "guidance156-cli".into(),
+            issued_at: 1_700_000_000,
+        })
+        .unwrap();
+        assert_eq!(
+            wire.unwrap(),
+            expected,
+            "trame historique complète inchangée"
+        );
+    }
+
+    #[test]
+    fn guidance156_cli_queue_parse() {
+        if let Ok(args) = std::env::var("BRIDGET_GUIDANCE156_CLI_ARGS") {
+            let mut command = vec!["bridget".to_string()];
+            command.extend(serde_json::from_str::<Vec<String>>(&args).unwrap());
+            run_with_args(command);
+            return;
+        }
+        let (accepted, wire) = guidance156_cli_run(
+            "guidance156_cli_queue_parse",
+            &["queue", "--target", "89000000-0000-4000-8000-000000000157"],
+        );
+        assert_eq!(
+            accepted.status.code(),
+            Some(1),
+            "arguments acceptés puis socket privée absente : {}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+        assert!(String::from_utf8_lossy(&accepted.stderr).contains("daemon_unreachable"));
+        assert!(
+            wire.is_none(),
+            "aucun daemon n'est lancé pour ce test de parse"
+        );
+        for args in [
+            &["queue"][..],
+            &["queue", "--target", ""][..],
+            &["queue", "--target", "cible", "--intent", "queue"][..],
+        ] {
+            let (rejected, wire) = guidance156_cli_run("guidance156_cli_queue_parse", args);
+            assert_eq!(rejected.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&rejected.stderr).contains("queue : attendu --target"));
+            assert!(wire.is_none());
         }
     }
 }

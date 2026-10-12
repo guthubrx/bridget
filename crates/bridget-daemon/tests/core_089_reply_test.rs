@@ -145,7 +145,9 @@ fn cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent() {
         .get_ref()
         .set_read_timeout(Some(Duration::from_secs(12)))
         .unwrap();
-    assert!(matches!(actor.receive(), DaemonToWrapper::Deliver(message) if message.to == ACTOR));
+    assert!(
+        matches!(actor.receive(), DaemonToWrapper::Deliver { message, .. } if message.to == ACTOR)
+    );
     let final_requests = requests(&mut observer);
     for (id, state) in [
         ("089-answer-me", "answered"),

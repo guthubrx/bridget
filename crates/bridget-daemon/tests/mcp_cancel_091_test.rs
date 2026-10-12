@@ -50,7 +50,10 @@ fn annulation_mcp_verifie_identite_refuse_usurpation_et_persiste_le_recu() {
     request.reply = true;
     sender.send(WrapperToDaemon::Send(request.clone()));
     assert!(matches!(sender.receive(), DaemonToWrapper::Ack { .. }));
-    assert!(matches!(recipient.receive(), DaemonToWrapper::Deliver(_)));
+    assert!(matches!(
+        recipient.receive(),
+        DaemonToWrapper::Deliver { message: _, .. }
+    ));
     assert_eq!(state(&root), "open");
 
     let mut intruder = mcp(&root, MATRIX_AGENT, "091-intruder");

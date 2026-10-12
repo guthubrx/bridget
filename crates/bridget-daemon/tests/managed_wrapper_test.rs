@@ -506,11 +506,14 @@ while :; do :; done
         writeln!(
             writer,
             "{}",
-            encode(&DaemonToWrapper::Deliver(BridgetMessage::new(
-                "humain",
-                "89000000-0000-4000-8000-000000000803",
-                "tour bloqué",
-            )))
+            encode(&DaemonToWrapper::Deliver {
+                message: BridgetMessage::new(
+                    "humain",
+                    "89000000-0000-4000-8000-000000000803",
+                    "tour bloqué",
+                ),
+                mid_turn_ok: None
+            })
             .unwrap()
         )
         .unwrap();

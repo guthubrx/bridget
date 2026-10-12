@@ -165,7 +165,7 @@ fn gate_reel_claude_stream_json_reponse_liee_et_attach() {
     );
     let answer = read_frame(&mut reader);
     assert!(
-        matches!(answer, DaemonToWrapper::Deliver(ref reply)
+        matches!(answer, DaemonToWrapper::Deliver { message: ref reply, .. }
         if reply.in_reply_to.as_deref() == Some(message.id.as_str()) && reply.body.contains("BRIDGET-089-CLAUDE-OK")),
         "pas de réponse fournisseur corrélée : {answer:?}"
     );
@@ -431,7 +431,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     );
     let reply = loop {
         match read_frame(&mut sender_reader) {
-            DaemonToWrapper::Deliver(message) => break message,
+            DaemonToWrapper::Deliver { message, .. } => break message,
             DaemonToWrapper::Ack { .. } => {}
             other => panic!("retour natif inattendu: {other:?}"),
         }
@@ -637,7 +637,7 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
     ));
     let reply = loop {
         match read_frame(&mut sender_reader) {
-            DaemonToWrapper::Deliver(message) => break message,
+            DaemonToWrapper::Deliver { message, .. } => break message,
             DaemonToWrapper::Ack { .. } => {}
             other => panic!("retour Codex réel inattendu: {other:?}"),
         }

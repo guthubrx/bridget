@@ -176,8 +176,103 @@ La consigne injectée par ExecutionControlV1/SteerCurrent.message utilise aussi
 la garde partagée avant injection. Une cible extérieure connue exige le motif
 structuré ; l'inconnu reste averti. Les warnings sont hors du corps. Le résultat
 accepté les conserve après changement des faits ou restart, sans réinjecter.
-Les anciennes commandes rendent [] ; Interrupt sans message ne change pas.
-Cette règle n'annonce aucune option CLI de contrôle nouvelle.
+Les anciennes commandes rendent [] pour les warnings de projet. Interrupt sans
+message suit désormais la garde de droits156 décrite ci-dessous.
+### Guidage, interruption et lecture de file (156)
+
+Le contrat156 ajoute `intent` à `bridget_send` et `--intent` à `bridget send`.
+Vérifier les capacités du daemon et le catalogue MCP chargé avant de les employer.
+La présence de cette documentation ne prouve pas leur installation.
+
+| Intention | Demande |
+|---|---|
+| absente ou `queue` | Envoi ordinaire ; mêmes octets canoniques. |
+| `steer` | Corriger le tour actif, sans promettre son effet. |
+| `interrupt` | Demander son interruption ; le message reste dans la FIFO. |
+
+`auto` et les valeurs inconnues rendent `invalid_intent`. `steer` avec
+`reply=true` rend aussi ce refus avant connexion et réservation. Pour un envoi
+avec `steer` ou `interrupt`, le reçu porte l’intention demandée et
+`effect: "unconfirmed"`. Un message plus ancien peut porter le prochain tour.
+Le journal et l’accusé de remise décrivent le résultat du transport. Un steer
+sans réponse attendue ne garantit aucun avis ultérieur à son émetteur.
+Conserver la clé et l’enveloppe exactes : une autre intention sous la même clé
+rend `envelope_mismatch`. Un refus idempotent mémorisé exige une clé neuve.
+
+| Appelant attesté | Steer/interrupt explicites | File visible |
+|---|---|---|
+| Humain en rôle Attach | Oui, exempt de pause, rythme et mission_active. | Toute la file visible. |
+| Parent par lien ouvert ou tâche native | Oui, sous les gardes ci-dessous. | Toute la file visible. |
+| UI Client attestée | Non par sa seule provenance UI. | Toute la file visible. |
+| Destinataire | Non vers lui-même. | Toute la file visible. |
+| Autre agent ou client nu | Non. | Ses propres messages. |
+| Preuve enfant interne T3 | Refus. | Refus. |
+
+Un client CLI nu qui écrit `from=human` conserve l’envoi en file. Il ne reçoit
+aucun droit humain de contrôle : refus `intent_not_permitted`, motif
+`identity_unattested`. La preuve privée d’agent suit les voies MCP et CLI.
+La preuve enfant interne n’autorise ni contrôle explicite ni `bridget_queue` ;
+ces appels doivent être fermés à la frontière CLI/MCP avant connexion.
+
+Le daemon établit la provenance depuis la connexion. Une origine cliente
+`Human` ou `System` ne donne aucun droit. L’UI attestée garde son rôle Client :
+son credential, son instance primaire vivante et sa route prouvent seulement
+la provenance des messages ordinaires. La source système vient du producteur
+interne. La même garde couvre Send historique, SendIdempotent,
+ControlExecution et l’interruption active par `bridget_cancel`.
+Pour ControlExecution, reserve_control_command conserve canon et rejeu AVANT la garde. La garde d’une commande neuve précède mark_control_dispatched, le comptage et l’émission ; le rejeu conserve sa réponse existante.
+
+Pendant la pause, un agent reçoit `referent_paused` pour steer/interrupt ; la
+file reste admise. Une interruption d’agent vers un enfant en mission active
+rend `mission_active`. La reprise152 couvre pause/panne, pas une interruption
+utilisateur terminale. Le rythme agent est de 1 interruption par couple en
+30 s et de 3 par cible en 600 s, avec `interrupt_rate_limited` et
+`retry_after_secs`. À l’échéance exacte, l’admission redevient possible. Un
+refus ne consomme pas le rythme. L’interruption interne de pause est exempte.
+Pour SendIdempotent, l’admission guidance_events appartient à
+begin_send_delivery_with_guidance, transaction existante de remise/suivi/lien/journal. Sur historique/control/cancel, l’audit
+accepté est durable avant émission physique. Un INSERT échoué interdit le
+contrôle. Un crash entre admission durable et émission peut consommer le rythme
+sans effet physique : choix prudent, sans promesse exactement une fois physique.
+Aucun steer agent non consommé ne devient automatiquement une interruption.
+
+Vers T3, seul Claude a un guidage actif natif prouvé. Le steer explicite des
+autres fournisseurs, Cursor inclus, rend `steer_unavailable`. Cursor occupé
+attend même si `mid_turn_ok=true`. Pour Claude occupé, un message ordinaire
+déjà groupable reste immédiat avec ce flag calculé par le daemon pour Attach,
+UI attestée, système interne, parent ou enfant. Pairs et clients nus attendent.
+Deliver historique et DeliverIdempotent suivent cette règle en envoi/reprise.
+La remise immédiate utilise la connexion source réelle. À la récupération, from ne permet jamais d’emprunter une route UI ou humaine ; sans preuve UI persistée, la remise attend normalement. Pour les agents UUID, recalculer les liens depuis les faits actuels.
+Un flag absent impose l’attente ; aucune origine humaine n’est fabriquée.
+REST/V1 ne sait pas porter l’intention explicite : steer/interrupt sont refusés
+localement avant émission, par les erreurs existantes. L’envoi ordinaire reste
+inchangé ; le trajet installé149 est V2.
+
+`bridget_queue` prend seulement `target`, comme `bridget_send`.
+CLI : `bridget queue --target '<UUID>'`. La capacité `QueueListV1` est requise.
+Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1].
+Son rôle reste Attach, sans identité agent/conn_names ni autres capacités.
+L’UI Client attestée peut lire toute la projection ; elle reste Client et
+n’acquiert aucun droit de contrôle explicite par cette lecture.
+La lecture rend au plus 200 entrées : `message_id`, `from`, `intent`, `reply`,
+`age_secs`, `preview` (120 caractères), `position` et
+`state: "pending_or_injecting"`. `queue_bound` vaut 64 pour T3, `null` sinon.
+Elle couvre seulement les remises idempotentes dispatching, sans Send
+historique ni file interne du transport. Elle ne crée ni tour, événement de
+guidage, écriture de pause ou consommation de quota. LIMIT200 borne la sortie,
+pas le scan : coût O(log n + s), avec jointures indexées en plus et s candidats
+examinés, dont expirés. Cette vue ne prouve pas la position interne fournisseur.
+
+`bridget_cancel` annule la demande suivie propre et retire sa remise en attente.
+Le tour actif continue si la garde refuse son interruption. S’il passe la garde,
+l’interruption active peut être demandée et compte dans le rythme. Un ancien
+wrapper conserve son ancien comportement jusqu’à sa relance.
+
+Le cadre de menace couvre un agent qui utilise ses outils Bridget. Il ne couvre
+pas un processus hostile du même compte Unix qui lit les preuves privées,
+forge une nouvelle connexion Attach brute ou pilote son propre pseudo-terminal
+(ADR011/027). Les gardes supplémentaires de trames brutes sont une défense en
+profondeur, sans promesse d’isolation de ce compte.
 
 ### Garanties de communication et mise à jour 099
 

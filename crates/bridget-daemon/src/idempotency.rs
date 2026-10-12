@@ -860,6 +860,26 @@ impl IdempotencyStore {
             "INSERT OR IGNORE INTO idempotency_schema_migrations(version) VALUES (5)",
             [],
         )?;
+
+        // Session156 : objets additifs APRÈS la reconstructionv4 éventuelle.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS guidance_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at INTEGER NOT NULL,
+                actor TEXT NOT NULL,
+                target TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('steer','interrupt')),
+                path TEXT NOT NULL CHECK (path IN ('send_idempotent','send','control','cancel')),
+                message_id TEXT,
+                outcome TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_guidance_events_target
+                ON guidance_events(target, action, at);
+            CREATE INDEX IF NOT EXISTS idx_guidance_events_pair
+                ON guidance_events(actor, target, action, at);
+            CREATE INDEX IF NOT EXISTS idx_send_deliveries_recipient_phase
+                ON send_deliveries(recipient_instance_id, phase);",
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1018,6 +1038,79 @@ impl IdempotencyStore {
         } else {
             Err(IdempotencyError::MissingRecord)
         }
+    }
+
+    /// O(log n), journal de guidage seulement ; jamais un reçu de rejeu.
+    pub(crate) fn record_guidance_event(
+        &self,
+        at: i64,
+        actor: &str,
+        target: &str,
+        action: &str,
+        path: &str,
+        message_id: Option<&str>,
+        outcome: &str,
+    ) -> Result<(), IdempotencyError> {
+        self.conn.execute(
+            "INSERT INTO guidance_events(at,actor,target,action,path,message_id,outcome)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![at, actor, target, action, path, message_id, outcome],
+        )?;
+        Ok(())
+    }
+
+    /// O(log n+k), k événements de la fenêtre ; compteur et LAST admis du couple.
+    /// La borne since est inclusive. La garde pure admet exactement last+30<=now.
+    pub(crate) fn count_interrupts_pair(
+        &self,
+        actor: &str,
+        target: &str,
+        since: i64,
+    ) -> Result<(u32, Option<i64>), IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*), MAX(at) FROM guidance_events
+             WHERE actor=?1 AND actor!='human' AND target=?2 AND action='interrupt'
+               AND outcome='admitted' AND at>=?3",
+                params![actor, target, since],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(Into::into)
+    }
+
+    /// O(log n+k), compteur et THIRD_LATEST admis cible pour retry_after exact.
+    /// Même si k>3, ce fait désigne le3e plus récent, pas MIN(toute la fenêtre).
+    /// Aucun timestamp si moins de3 ; since inclusif, expiry third+600<=now.
+    pub(crate) fn count_interrupts_target(
+        &self,
+        target: &str,
+        since: i64,
+    ) -> Result<(u32, Option<i64>), IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*),
+                (SELECT at FROM guidance_events
+                 WHERE target=?1 AND action='interrupt' AND actor!='human'
+                   AND outcome='admitted' AND at>=?2
+                 ORDER BY at DESC,id DESC LIMIT 1 OFFSET 2)
+             FROM guidance_events
+             WHERE target=?1 AND action='interrupt' AND actor!='human'
+               AND outcome='admitted' AND at>=?2",
+                params![target, since],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(Into::into)
+    }
+
+    /// O(n), purge24h du journal seul ; reçus idempotents et remises conservés.
+    /// Le caller run_maintenance fournit son horloge commune.
+    pub(crate) fn purge_guidance_events(&self, now: i64) -> Result<usize, IdempotencyError> {
+        self.conn
+            .execute(
+                "DELETE FROM guidance_events WHERE at<?1",
+                params![now.saturating_sub(86_400)],
+            )
+            .map_err(Into::into)
     }
 
     pub fn purge_expired(&self, now: i64) -> Result<usize, IdempotencyError> {

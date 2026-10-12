@@ -1,11 +1,18 @@
 # Rapport d'analyse - Session156 (spec, plan, tâches)
 
+État de reprise : les écarts U1/C1/I1/M1 et les contradictions Claude/Cursor
+sont corrigés, ainsi que les limites REST/V1 et de livraison. Six axes T002
+levés statiquement et reuse frais24/24/gate5/5. Baseline T001774 PASS/0 FAIL/7
+ignored par root ;31 IDs/oracles conservés. L’unique Analyze indépendant après
+autofix est terminé : PASS documentaire, 0 CRITICAL/0 HIGH/0 MEDIUM/0 LOW.
+Sa provenance figure dans le reçu final ci-dessous. Les PASS historiques
+ci-dessous gardent leurs dates.
 Date : 2026-10-11, révisé après les contre-revues rondes 1 et 2
 (`adversarial-review-codex.md`). Analyse non destructive de
 `specs/156-guidage-file/`. Le code du worktree 150 n'a pas été lu (consigne) ;
 les acquis 150 sont supposés livrés.
 
-## Verdict
+## Verdict historique du2026-10-11
 
 PASS avec 6 vérifications ouvertes, toutes affectées à T002. Ronde 1 : 11
 objections traitées (6 par correction, 5 par réduction de périmètre). Ronde 2 :
@@ -95,8 +102,8 @@ processus hostile du même compte qui forge des trames brutes (ADR 011, ADR
 ## Risques de conflit avec les autres sessions
 
 - 150, 152, 155, 157 modifient `daemon.rs`, `mcp.rs`. Exécution séquentielle.
-- 152 doit lever `mission_active` (T020).
-- 155 pourra ajouter un autre type de remise : `bridget_queue` ne suppose pas que toute entrée est un message d'agent.
+- 152 reprend pause/panne ; interruption utilisateur terminale. T020 conserve mission_active pour un agent ; humain explicite exempt.
+- Base155 livrée à revalider par T002 ; QueueList couvre seulement send_deliveries dispatching.
 - La future session d'édition de file reprend les prérequis de `research.md` R8.
 
 ## Questions utilisateur (défauts retenus)
@@ -104,3 +111,35 @@ processus hostile du même compte qui forge des trames brutes (ADR 011, ADR
 1. Un pair du même projet peut-il guider ? Défaut : non.
 2. Reporter `cancel`, `reorder`, `promote` de la file à une session dédiée ? Défaut : oui.
 3. Accepter deux changements visibles : les pairs attendent la fin du tour (guidage implicite T3) ; la CLI nue ne peut plus guider ? Défaut : oui.
+
+## Préparation R1 du2026-10-12 — aucune nouvelle Analyze exécutée
+
+Réponses aux neuf findings : /Users/moi/.cache/bridget-plan156-20261012-r1/response.md.
+F1/F2/F3/F5 arbitrés ; F4/F6/F7/F8/F9 clarifiés. Les31 tâches, leurs IDs, cases
+non cochées et noms des tests planifiés sont conservés. Extensions de scénarios
+existants seulement. La couverture historique ci-dessus n'est pas une nouvelle
+Analyze ni preuve runtime156. Application par root après livraison155, puis T002
+sur base intégrée et Analyze fraîche du pipeline156.
+
+## Reçu final de l’Analyze indépendant après autofix
+
+Le 2026-10-12 à 04:19:25 UTC, l’unique Analyze après autofix conclut
+**PASS documentaire : 0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW**. Les écarts
+U1/C1/I1/M1 sont résolus. La couverture est de 24 FR, 13 SC et 4 US pour
+31 tâches, sans exigence orpheline. La réutilisation fraîche couvre 24/24
+éléments et satisfait les cinq conditions du gate.
+
+Preuve indépendante immuable :
+/Users/moi/.cache/bridget-plan156-20261012-r1/base155-fresh/analyze-after-fix.md
+
+SHA-256 : `e3176427d5fee611d625a9f36df587fae33412cd91d9836c6f1ec23b9a81e38a`.
+
+Le gel analysé contenait T001 cochée et T002 ouverte. Le principal a ensuite
+coché T002 après lecture de ses six axes. Ce changement de case ne déclenche
+pas une nouvelle Analyze et ne modifie pas la preuve indépendante. Les
+31 identifiants de tâches et les oracles restent conservés.
+
+Le verdict porte sur les documents et leur cohérence. Il ne prouve aucune
+implémentation156, aucun test156 et aucun GREEN global. Les lectures ciblées
+de sources155 et du paquet149 gardent les limites décrites dans la preuve ;
+aucune lecture intégrale fraîche du dépôt n’est revendiquée.

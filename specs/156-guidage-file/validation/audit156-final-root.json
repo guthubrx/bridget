@@ -1,0 +1,193 @@
+{
+  "timestamp": "2026-10-12T06:34:53.695012+00:00",
+  "audit_archive": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/audit156-final.tgz",
+  "audit_archive_sha256": "fe21edda12899f0715d3452109e401216949ac16a17d60ee6f3820befda3f24c",
+  "validator": {
+    "rc": 0,
+    "errors": 0,
+    "warnings": 0
+  },
+  "audit_initial_hunk_coverage_percent": 90.99,
+  "final_fresh_hunk_coverage_percent": 4.65,
+  "final_fresh_line_coverage_percent": 13.03,
+  "critical": 0,
+  "high": 0,
+  "medium": 1,
+  "low": 4,
+  "release_blocked": false,
+  "grade": {
+    "grade": "A",
+    "date": "2026-10-12",
+    "spec": "156",
+    "scope": "Diff session156 — /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file",
+    "coverage_percent": 4.65,
+    "justification": "Calculv14 sur findings non supprimés, note sur couverture réelle déclarée ; aucun GREEN global.",
+    "metrics": {
+      "security": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "llm_security": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "supply_chain": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "observability": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "reliability": {
+        "grade": "A",
+        "numeric": 99,
+        "findings_count": 1
+      },
+      "tests": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "performance": {
+        "grade": "A",
+        "numeric": 96,
+        "findings_count": 2
+      },
+      "complexity": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "quality": {
+        "grade": "A",
+        "numeric": 99,
+        "findings_count": 1
+      },
+      "architecture": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "ai_hygiene": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "duplication": {
+        "grade": "A",
+        "numeric": 100,
+        "findings_count": 0
+      },
+      "minimalism": {
+        "grade": "A",
+        "numeric": 99,
+        "findings_count": 1
+      },
+      "ux": {
+        "grade": "N/A",
+        "findings_count": 0
+      }
+    }
+  },
+  "backlog": [
+    {
+      "id": "PERF-002",
+      "category": "performance",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 1092,
+      "title": "La nouvelle façade publique execute_queue ne documente pas son coût",
+      "description": "execute_queue est une nouvelle fonction pub(crate) non triviale. Elle négocie la connexion, peut parcourir un annuaire pour résoudre la cible, puis reçoit la projection SQL. Sa documentation décrit les droits, mais aucune complexité ni distinction entre coût local et coût distant. Le module04 exige une annotation MEDIUM pour cette interface non triviale ; aucun défaut runtime n’est déduit. Relecture indépendante après capture : le code et sa garde amont restent présents ; aucun correctif de ce constat n’a été appliqué.",
+      "evidence": "/// Lecture commune MCP/CLI, sans promotion du rôle Client ni autostart.\n/// L'absence d'identité auxiliaire garde le client humain nu et sa vue filtrée.\npub(crate) fn execute_queue(\n    identity: Option<&crate::mcp_identity::ResolvedIdentity>,\n    target: &str,\n    socket: &Path,\n) -> Result<Value, ToolError> {",
+      "exploitability": "N/A",
+      "impact": "Le lecteur ne distingue pas le parcours local de l’annuaire, les échanges en nombre fixe et le coût SQL distant. Réserve documentaire, sans latence excessive prouvée.",
+      "path_type": "hot",
+      "remediation": "Ajouter une annotation concise des coûts locaux O(a+B), a entrées d’annuaire si résolution et B octets de réponse, et préciser que les échanges sont en nombre fixe tandis que le coût du daemon est décrit dans handle_guidance_queue. Ne pas annoncer O(1) de bout en bout ni n<=200 candidats SQL.",
+      "verification": "Relecture de l’annotation contre la résolution1153–1173 et la réponse1175–1188. Correction documentaire seulement ; aucun nouveau scénario, bench ou test demandé.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "fingerprint": "7716ef6245e1"
+    },
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 9368,
+      "title": "QueueList relit l’appartenance en SQL pour chaque entrée du client nu",
+      "description": "Après le SELECT de projection, le client négocié sans identité relit send_delivery pour chaque ligne, même lorsque la ligne sera masquée. La lecture secondaire recharge aussi message_bytes. Le nombre de lignes est explicitement borné à 200 ; cette borne et l’index de clé justifient LOW plutôt que la sévérité normale du N+1. Aucun ralentissement runtime n’est mesuré. Relecture indépendante après capture : le code et sa garde amont restent présents ; aucun correctif de ce constat n’a été appliqué.",
+      "evidence": "                message.id.clone(),\n            ) {\n                Ok(key) => key,\n                Err(_) => return unavailable(),\n            };\n            match st.idempotency.send_delivery(&key) {\n                Ok(owned) => owned.is_some_and(|owned| owned.delivery_id == delivery.delivery_id),\n                Err(_) => return unavailable(),\n            }",
+      "exploitability": "CONFIRMED",
+      "impact": "Un SELECT de projection puis k SELECT indexés d’appartenance, k<=200, sous le verrou commun de QueueList ; ces SELECT secondaires rechargent l’enveloppe complète. Aucun p95/p99, blocage ou incident de mémoire n’est prouvé.",
+      "path_type": "hot",
+      "remediation": "Backlog autorisé seulement : projeter les métadonnées du reçu déjà disponibles dans le JOIN pour conserver exactement la vérification de scope/clé/delivery_id, ordre et limite. Gain qualitatif : retirer k SELECT secondaires. Revenir au contrôle actuel si l’appartenance ou l’ordre diffère.",
+      "verification": "Constat confirmé par décompte causal du SELECT borné et de la boucle relus ; aucune latence mesurée. Toute correction future doit conserver les oracles QueueList existants et comparer nombre de SELECT/durée sur les mêmes données. Aucun test ni bench supplémentaire lancé ou demandé pour cette livraison.",
+      "effort": "S",
+      "regression_risk": "MEDIUM",
+      "exploitation_scenario": "Séquence causale, non exécutée : 200 remises dispatching non expirées pour une instance attestée ; client nu négocié consulte son UUID via execute_queue(None). La projection bornée rend k<=200 lignes et le handler appelle send_delivery pour chacune avant filtrage. Aucun accès non autorisé ne résulte de ce constat.",
+      "fingerprint": "c7a8699d0421"
+    },
+    {
+      "id": "REL-001",
+      "category": "reliability",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 19317,
+      "title": "Le Send historique conserve son suivi après le refus de stockage du guidage",
+      "description": "Le Send historique appelle track_reply_cycle et crée pending_attach_sends avant INSERT admitted. Si cet INSERT échoue, Nack revient sans retrait de ces entrées ; le push est inatteignable. Une demande de réponse peut donc rester suivie sans remise. La panne partielle n’a pas été reproduite dans cette passe.",
+      "evidence": "                    warn!(\"refus de guidage non journalisé : {error}\");\n                }\n                return Some(DaemonToWrapper::Nack {\n                    id: bridge_msg.id.clone(),\n                    reason: format!(\"guidage non persisté: {error}\"),\n                });\n            }",
+      "exploitability": "LIKELY",
+      "impact": "Suivi durable ou mémoire incohérent après Nack en panne partielle de stockage ; relances/notifications ultérieures inutiles possibles. Aucun effet physique autorisé par la branche fautive.",
+      "path_type": "hot",
+      "remediation": "Dans la branche d’échec admitted, retirer les entrées mémoire créées pour cet ID et solder la demande suivie via l’opération existante appropriée avant de rendre Nack. Conserver le message historique durable et la trace du refus. Ne pas annoncer un rollback si la réparation SQL échoue ; journaliser cet échec. Ne pas simplement avancer admitted avant un suivi dont l’écriture peut encore refuser.",
+      "verification": "Lecture de 9523–9562, 19273–19323 et du push19324–19336 : suivi avant audit, retour avant émission, aucun nettoyage dans la branche. L’oracle idempotent de rollback ne couvre pas cette branche historique. Aucune injection, nouveau scénario ou test demandé ici.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "fingerprint": "08e3cf1192db"
+    },
+    {
+      "id": "MIN-001",
+      "category": "minimalism",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/guidance.rs",
+      "line": 182,
+      "title": "Deux libellés répètent le même oracle avec les mêmes faits",
+      "description": "parent_source change seulement la chaîne du diagnostic. base, action et path restent identiques dans les deux itérations ; le même authorize(&base) est donc évalué deux fois. Le test pur ne prouve pas par cette boucle deux montages parent distincts. La réserveT031 correspondante est documentée dans implementation.md91–98 ; les vrais appelants continuent de porter les preuves de lien/tâche. Deux lignes froides sont supprimables, sans changer la garde. Relecture indépendante après capture : le code et sa garde amont restent présents ; aucun correctif de ce constat n’a été appliqué.",
+      "evidence": "                for parent_source in [\"lien ouvert\", \"propriétaire natif\"] {\n                    assert_eq!(\n                        authorize(&base),\n                        Ok(()),\n                        \"{parent_source}/{path:?}/{action:?}\"\n                    );\n                }",
+      "exploitability": "N/A",
+      "impact": "Deux lignes de test et un passage redondant du même oracle ; aucune ligne de production prouvée supprimable.",
+      "path_type": "cold",
+      "remediation": "Conserver un seul assert_eq! pour base dans la boucle path/action ; supprimer la boucle parent_source et sa fermeture, puis retirer parent_source du libellé. Garder les tests de vrais liens/tâches sans nouvel oracle/helper. Réserve nonbloquante au backlog.",
+      "verification": "Lecture fraîche de facts147–169 et matrix172–209 : parent_source ne change que le diagnostic. Les mêmes faits et la même assertion restent dans les deux itérations. Aucun nouveau test ni refactor demandé.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "removable_lines_estimate": 2,
+      "fingerprint": "c175d4bdc534"
+    },
+    {
+      "id": "QUAL-001",
+      "category": "quality",
+      "severity": "LOW",
+      "file": "specs/156-guidage-file/implementation.md",
+      "line": 3,
+      "title": "En-tête T031 présenté comme clôture courante après T032 et Converge2",
+      "description": "Les lignes3–6 annoncent31/31 et aucun Converge, sans qualifier explicitement cet en-tête comme historique. La spec8–10 et validation/converge156-pass2.md3 annoncent32/32/CONVERGED. Le complémentT032 reste honnête mais un lecteur de maintenance peut retenir un état dépassé. ROOT conserve cet ancien texte pendant le gel et prévoit un reçu de livraison daté qui le qualifiera comme checkpointT031. Aucune correction sur cette capture n’est acquise. Relecture indépendante après capture : le code et sa garde amont restent présents ; aucun correctif de ce constat n’a été appliqué.",
+      "evidence": "État de clôture documentaire : T029/T030 sont validées par le principal dans\nleur périmètre. Les lectures T031 attribuées et le contrôle du principal sont terminés.\nROOT valide T031 et le statut Implemented, 31/31 tâches.\nAucun Converge, audit final ou livraison annoncé.",
+      "exploitability": "THEORETICAL",
+      "impact": "Ambiguïté de l’état documentaire ; aucun défaut de contrôle ou échec de test déduit.",
+      "path_type": "cold",
+      "remediation": "Dans le reçu de livraison autoritatif prévu, qualifier explicitement l’en-tête implementation.md3–6 comme checkpointT031 antérieur à T032 ; annoncer32/32 et Converge2 avec références, sans réécrire les anciens FULL ni revendiquer un audit/une livraison encore pending.",
+      "verification": "Lecture fraîche implementation3–6/123–166 et spec8–11 : en-tête31/31, complémentT032 postérieur, état courant32/32. Le reçu autoritatif futur n’est pas encore une correction acquise ; aucun test nécessaire.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "fingerprint": "efa8ae2a6b1e"
+    }
+  ],
+  "implementation_checkpoint": "Le titre31/31 sans Converge est le checkpoint T031 avant T032. Le statut courant est32/32 CONVERGED passage2.",
+  "global_tests_green": false
+}

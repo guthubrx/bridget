@@ -1,0 +1,149 @@
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -27229,6 +27229,8 @@
+             "012_scope_guard_tests156",
+             "89000000-0000-4000-8000-000000000200",
+         );
++        let db = rusqlite::Connection::open(&config.db_path).unwrap();
++        let peer_before = unix_now_secs();
+         let mut message = idempotent_message("rate-peer-refused156");
+         message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+         let response = handle_wrapper_message(
+@@ -27258,6 +27260,27 @@
+                 .0,
+             0
+         );
++        let peer_after = unix_now_secs();
++        let peer_counts: (i64, i64) = db.query_row(
++            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
++            ["rate-peer-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
++        ).unwrap();
++        assert_eq!(peer_counts, (1, 0), "FR-016 : premier refus peer tracé une seule fois, aucune admission");
++        let peer_trace: (i64, String, String, String, String, String, String) = db.query_row(
++            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
++            ["rate-peer-refused156"],
++            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
++        ).unwrap();
++        assert_eq!(
++            (peer_trace.1.as_str(), peer_trace.2.as_str(), peer_trace.3.as_str(), peer_trace.4.as_str(), peer_trace.5.as_str()),
++            ("89000000-0000-4000-8000-000000000200", "89000000-0000-4000-8000-000000000102", "interrupt", "send_idempotent", "rate-peer-refused156"),
++            "faits réels du refus peer",
++        );
++        assert!(peer_before <= peer_trace.0 && peer_trace.0 <= peer_after, "date réelle du refus peer : {:?}", peer_trace);
++        assert_eq!(peer_trace.6, "refused:intent_not_permitted");
++        reader.get_ref().set_read_timeout(Some(Duration::from_millis(30))).unwrap();
++        let mut line = String::new();
++        assert!(reader.read_line(&mut line).is_err(), "aucune remise après refus peer : {line}");
+         guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+         {
+             let mut st = shared.lock().unwrap();
+@@ -27273,18 +27296,17 @@
+                     .insert(conn.into(), (Some(p.clone()), Some(p), false));
+             }
+         }
++        let project_before = unix_now_secs();
+         let mut message = idempotent_message("rate-project-refused156");
+         message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
++        let project_command = WrapperToDaemon::SendIdempotent {
++            message,
++            message_id: "rate-project-refused156".into(),
++            issued_at: unix_now_secs(),
++        };
+         let response = handle_wrapper_message(
+-            "g156-client",
+-            WrapperToDaemon::SendIdempotent {
+-                message,
+-                message_id: "rate-project-refused156".into(),
+-                issued_at: unix_now_secs(),
+-            },
+-            &shared,
+-        )
+-        .unwrap();
++            "g156-client", project_command.clone(), &shared,
++        ).unwrap();
+         assert!(
+             !matches!(
+                 response,
+@@ -27308,9 +27330,53 @@
+                 .0,
+             0
+         );
++        let DaemonToWrapper::IdempotencyResult {
++            issue: IdempotencyIssue::Rejected { category, .. }, ..
++        } = &response else { panic!("refus durable du projet attendu : {response:?}"); };
++        let project_after = unix_now_secs();
++        let project_counts: (i64, i64) = db.query_row(
++            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
++            ["rate-project-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
++        ).unwrap();
++        assert_eq!(project_counts, (1, 0), "FR-016 : premier refus project tracé une seule fois, aucune admission");
++        let project_trace: (i64, String, String, String, String, String, String) = db.query_row(
++            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
++            ["rate-project-refused156"],
++            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
++        ).unwrap();
++        assert_eq!(
++            (project_trace.1.as_str(), project_trace.2.as_str(), project_trace.3.as_str(), project_trace.4.as_str(), project_trace.5.as_str()),
++            ("89000000-0000-4000-8000-000000000200", "89000000-0000-4000-8000-000000000102", "interrupt", "send_idempotent", "rate-project-refused156"),
++            "faits réels du refus project",
++        );
++        assert!(project_before <= project_trace.0 && project_trace.0 <= project_after, "date réelle du refus project : {:?}", project_trace);
++        assert_eq!(project_trace.6, format!("refused:{category}"));
++        reader.get_ref().set_read_timeout(Some(Duration::from_millis(30))).unwrap();
++        let mut line = String::new();
++        assert!(reader.read_line(&mut line).is_err(), "aucune remise après refus project : {line}");
++        // Le rejeu du même refus conserve son résultat et sa trace, même après
++        // la suppression des faits de projet déjà prévue par la branche suivante.
+         shared.lock().unwrap().communication_projects.clear();
+-        let db = rusqlite::Connection::open(&config.db_path).unwrap();
++        let replay = handle_wrapper_message("g156-client", project_command, &shared).unwrap();
++        assert_eq!(encode(&replay).unwrap(), encode(&response).unwrap(), "rejeu exact du refus projet");
++        let replay_trace: (i64, String, String, String, String, String, String) = db.query_row(
++            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
++            ["rate-project-refused156"],
++            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
++        ).unwrap();
++        assert_eq!(replay_trace, project_trace, "un rejeu ne relit ni ne retrace les faits");
++        let replay_counts: (i64, i64) = db.query_row(
++            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
++            ["rate-project-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
++        ).unwrap();
++        assert_eq!(replay_counts, (1, 0));
++        assert_eq!(shared.lock().unwrap().idempotency.count_interrupts_target(
++            "89000000-0000-4000-8000-000000000102", unix_now_secs()-600,
++        ).unwrap().0, 0);
++        let mut line = String::new();
++        assert!(reader.read_line(&mut line).is_err(), "aucune remise sur rejeu du refus projet : {line}");
+         db.execute_batch("CREATE TRIGGER g156_refuse_delivery BEFORE INSERT ON send_deliveries BEGIN SELECT RAISE(ABORT,'fixture persistence refusal156'); END;").unwrap();
++        let persist_before = unix_now_secs();
+         let mut message = idempotent_message("rate-persist-refused156");
+         message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+         let response = handle_wrapper_message(
+@@ -27346,6 +27412,27 @@
+                 .0,
+             0
+         );
++        let persist_after = unix_now_secs();
++        let persist_counts: (i64, i64) = db.query_row(
++            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
++            ["rate-persist-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
++        ).unwrap();
++        assert_eq!(persist_counts, (1, 0), "FR-016 : premier refus persist tracé une seule fois, aucune admission");
++        let persist_trace: (i64, String, String, String, String, String, String) = db.query_row(
++            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
++            ["rate-persist-refused156"],
++            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
++        ).unwrap();
++        assert_eq!(
++            (persist_trace.1.as_str(), persist_trace.2.as_str(), persist_trace.3.as_str(), persist_trace.4.as_str(), persist_trace.5.as_str()),
++            ("89000000-0000-4000-8000-000000000200", "89000000-0000-4000-8000-000000000102", "interrupt", "send_idempotent", "rate-persist-refused156"),
++            "faits réels du refus persist",
++        );
++        assert!(persist_before <= persist_trace.0 && persist_trace.0 <= persist_after, "date réelle du refus persist : {:?}", persist_trace);
++        assert_eq!(persist_trace.6, "refused:persistence_failed");
++        reader.get_ref().set_read_timeout(Some(Duration::from_millis(30))).unwrap();
++        let mut line = String::new();
++        assert!(reader.read_line(&mut line).is_err(), "aucune remise après refus persist : {line}");
+         db.execute_batch("DROP TRIGGER g156_refuse_delivery;")
+             .unwrap();
+         drop(db);

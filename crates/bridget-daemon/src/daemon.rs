@@ -283,11 +283,17 @@ fn wait_request(
                     .ok_or("request_unavailable")?;
                 let frozen = if current == "open" {
                     native_delegation::request_frozen_secs(&st, id, unix_timestamp())?.unwrap_or(0)
-                } else { 0 };
+                } else {
+                    0
+                };
                 if permit.is_none() {
                     permit = Some(WaitPermit::acquire(&active)?);
                 }
-                (current, reply_deadline.saturating_add(frozen as i64), summary)
+                (
+                    current,
+                    reply_deadline.saturating_add(frozen as i64),
+                    summary,
+                )
             };
             // L'échéance métier est calculée : cette lecture ne ferme jamais la ligne.
             let now = unix_timestamp();
@@ -982,8 +988,14 @@ struct DaemonState {
     lineage_journals: HashMap<String, native_lineage::Journal>,
     /// Autorité éphémère : None interdit un fait contradictoire sur ce lien.
     t3_thread_bindings: HashMap<String, Option<String>>,
-    native_permission_facts: HashMap<String, (bridget_transport::protocol::ProviderPermissions,Option<String>)>,
-    native_permission_refusals: HashMap<String,String>,
+    native_permission_facts: HashMap<
+        String,
+        (
+            bridget_transport::protocol::ProviderPermissions,
+            Option<String>,
+        ),
+    >,
+    native_permission_refusals: HashMap<String, String>,
     workspace_work: Arc<Mutex<native_delegation::WorkspaceWork>>,
     /// La projection projet historique ne conserve pas son origine.
     t3_project_connections: HashSet<String>,
@@ -1695,7 +1707,10 @@ fn deliver_to_agent(
 ) -> std::io::Result<String> {
     let msg = bridget_core::BridgetMessage::new("bridget", target_name, body);
     let message_id = msg.id.clone();
-    let dtw = DaemonToWrapper::Deliver(msg);
+    let dtw = DaemonToWrapper::Deliver {
+        message: msg,
+        mid_turn_ok: Some(true),
+    };
     // Les notifications système partagent la même borne que les remises :
     // une cible non lectrice ne doit jamais immobiliser le thread de rappel.
     push_control_message_until(writer, &dtw, Instant::now() + CANCEL_NOTIFICATION_BUDGET)?;
@@ -1788,7 +1803,10 @@ fn queue_observation_notifications(
                     Instant::now() + Duration::from_secs(5),
                     DeferredControl {
                         writer,
-                        message: DaemonToWrapper::Deliver(message),
+                        message: DaemonToWrapper::Deliver {
+                            message,
+                            mid_turn_ok: Some(true),
+                        },
                     },
                 ))
                 .is_ok()
@@ -2015,6 +2033,7 @@ mod core_089_cancel_pressure_tests {
         let message = DaemonToWrapper::CancelDelivery {
             id: "request-exact".into(),
             reason: "annulation attestée".into(),
+            interrupt_active: None,
         };
         push_control_message_until(&writer, &message, Instant::now() + Duration::from_secs(1))
             .unwrap();
@@ -2029,7 +2048,7 @@ mod core_089_cancel_pressure_tests {
         reader.read_line(&mut line).unwrap();
         assert!(
             matches!(decode::<DaemonToWrapper>(line.trim_end()).unwrap(),
-            DaemonToWrapper::CancelDelivery { id, reason }
+            DaemonToWrapper::CancelDelivery { id, reason, .. }
                 if id == "request-exact" && reason == "annulation attestée")
         );
         let writer = writer.lock().unwrap();
@@ -4170,9 +4189,16 @@ impl DaemonState {
         // routage doit suivre la nouvelle connexion. Sans ce rattachement,
         // l'état `busy` est restauré alors que les relances continuent de
         // viser l'ancien identifiant et ne sont jamais différées.
-        let frozen: HashMap<_, _> = self.pending_replies.iter().map(|pending| {
-            (pending.msg_id.clone(), native_delegation::request_frozen_secs(self, &pending.msg_id, unix_timestamp()))
-        }).collect();
+        let frozen: HashMap<_, _> = self
+            .pending_replies
+            .iter()
+            .map(|pending| {
+                (
+                    pending.msg_id.clone(),
+                    native_delegation::request_frozen_secs(self, &pending.msg_id, unix_timestamp()),
+                )
+            })
+            .collect();
         for pending in &mut self.pending_replies {
             if let Some(Ok(Some(secs))) = frozen.get(&pending.msg_id) {
                 pending.frozen_secs = *secs;
@@ -4221,7 +4247,10 @@ impl DaemonState {
                 .unwrap_or_else(std::time::Instant::now);
             let frozen_secs = match native_delegation::request_frozen_secs(self, &request.id, now) {
                 Ok(secs) => secs.unwrap_or(0),
-                Err(error) => { warn!("gel de suivi illisible à la reconnexion: {error}"); continue; }
+                Err(error) => {
+                    warn!("gel de suivi illisible à la reconnexion: {error}");
+                    continue;
+                }
             };
             self.pending_replies.push(PendingReply {
                 msg_id: request.id,
@@ -4343,7 +4372,9 @@ fn reserve_managed_recoveries(
         }
         let ownership = if state.delegation_store.for_child(&name)?.is_some() {
             crate::fleet::ownership_from_desired(&equipier)
-        } else { None };
+        } else {
+            None
+        };
         let Some(resolved_definition) = equipier.resolved_definition else {
             warn!("reprise de {name} refusée: définition figée absente");
             absents.push(RecoveryLossEntry {
@@ -4447,7 +4478,9 @@ fn reserve_managed_recoveries(
                 .and_then(|_| native_delegation::native_child_env(&task, &mut recovery));
             if let Err(reason) = authorized {
                 native_delegation::fail_restart(state, &mut task, &reason)?;
-                let _ = state.fleet.fail(&recovery.lease, "recovery_failed", &reason);
+                let _ = state
+                    .fleet
+                    .fail(&recovery.lease, "recovery_failed", &reason);
                 continue;
             }
         }
@@ -4498,6 +4531,8 @@ fn defer_idempotent_delivery(
     target_conn: &str,
     delivery: SendDelivery,
     controls: &mut Vec<DeferredControl>,
+    trusted_producer: Option<bridget_core::MessageOrigin>,
+    origin_conn: Option<&str>,
 ) -> Result<(), String> {
     let mut message: bridget_core::BridgetMessage = serde_json::from_slice(&delivery.message_bytes)
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
@@ -4539,6 +4574,13 @@ fn defer_idempotent_delivery(
             return Err(format!("lien causal de remise illisible: {error}"));
         }
     };
+    let mid_turn_ok = Some(guidance_mid_turn_ok(
+        state,
+        &message,
+        &message.to,
+        trusted_producer,
+        origin_conn,
+    ));
     defer_control(
         state,
         target_conn,
@@ -4549,6 +4591,7 @@ fn defer_idempotent_delivery(
             expires_at: delivery.expires_at,
             message,
             execution,
+            mid_turn_ok,
         },
         controls,
     );
@@ -4578,19 +4621,25 @@ fn schedule_idempotent_delivery_recovery(
     for delivery in deliveries {
         // Une remise native incertaine n'est jamais une autorisation de
         // réexécuter sa mission, même sur la même instance reconnectée.
-        let native_mission = serde_json::from_slice::<bridget_core::BridgetMessage>(
-            &delivery.message_bytes,
-        ).map_err(|error| error.to_string()).and_then(|message|
-            state.delegation_store.for_mission(&message.id).map(|task| task.is_some()));
+        let native_mission =
+            serde_json::from_slice::<bridget_core::BridgetMessage>(&delivery.message_bytes)
+                .map_err(|error| error.to_string())
+                .and_then(|message| {
+                    state
+                        .delegation_store
+                        .for_mission(&message.id)
+                        .map(|task| task.is_some())
+                });
         if !matches!(native_mission, Ok(false)) {
             let _ = state.idempotency.mark_delivery_indeterminate(
-                &delivery.delivery_id, &delivery.recipient_instance_id,
+                &delivery.delivery_id,
+                &delivery.recipient_instance_id,
                 delivery.delivery_generation,
             );
             continue;
         }
         if let Err(error) =
-            defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls)
+            defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls, None, None)
         {
             error!("reprise idempotente mise en quarantaine: {error}");
             let _ = state.idempotency.mark_delivery_indeterminate(
@@ -4634,11 +4683,16 @@ fn schedule_execution_recovery(
         return;
     };
     let native_resume = match state.delegation_store.for_child(agent_name) {
-        Ok(Some(task)) => match native_delegation::may_resume(state, &task, parent_execution_id, instance_id) {
-            Ok(true) => true,
-            Ok(false) => return,
-            Err(error) => { error!("garde de reprise native refusée: {error}"); return; }
-        },
+        Ok(Some(task)) => {
+            match native_delegation::may_resume(state, &task, parent_execution_id, instance_id) {
+                Ok(true) => true,
+                Ok(false) => return,
+                Err(error) => {
+                    error!("garde de reprise native refusée: {error}");
+                    return;
+                }
+            }
+        }
         Err(error) => {
             error!("identité de mission native avant reprise illisible: {error}");
             return;
@@ -4698,10 +4752,10 @@ fn schedule_execution_recovery(
         // autorise une continuation, jamais le rejeu brut de cette remise.
         // Sous ce verrou, seule sa quarantaine peut retirer le dispatching
         // non expiré observé avant la réaffectation.
-        match state.idempotency.dispatching_delivery_for_execution_any_instance(
-            parent_execution_id,
-            now,
-        ) {
+        match state
+            .idempotency
+            .dispatching_delivery_for_execution_any_instance(parent_execution_id, now)
+        {
             Ok(None) => {}
             Ok(Some(_)) => return,
             Err(error) => {
@@ -4867,7 +4921,9 @@ fn schedule_execution_recovery(
     get_metrics().record_execution_admitted();
 
     let mut controls = Vec::new();
-    if let Err(error) = defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls) {
+    if let Err(error) =
+        defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls, None, None)
+    {
         error!("remise de reprise non sérialisable: {error}");
         let _ = state.idempotency.mark_delivery_indeterminate(
             &delivery.delivery_id,
@@ -4962,8 +5018,10 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     };
     let marker_store = ManagedMarkerStore::at_directory(state_root.join("managed"));
     let reconciled = marker_store.reconcile_stale_groups_with_native(
-        MANAGED_STOP_FORCED_GRACE, MANAGED_STOP_POLL,
-        &native_identities, Duration::from_secs(8),
+        MANAGED_STOP_FORCED_GRACE,
+        MANAGED_STOP_POLL,
+        &native_identities,
+        Duration::from_secs(8),
     )?;
     if !reconciled.is_empty() {
         info!(
@@ -5217,6 +5275,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                                     &DaemonToWrapper::CancelDelivery {
                                         id: msg_id.clone(),
                                         reason: "échéance de la demande dépassée".into(),
+                                        interrupt_active: None,
                                     },
                                     Instant::now() + Duration::from_secs(1),
                                 );
@@ -5463,9 +5522,20 @@ fn handle_connection(
                         .and_then(|kind| kind.as_str())
                         .map(str::to_owned)
                 });
-            if display_name_kind.as_deref()==Some("HumanLineage")
-                && (decode::<WrapperToDaemon>(line).is_err() || !serde_json::from_str::<serde_json::Value>(line).ok().is_some_and(|v|v.as_object().is_some_and(|o|o.len()==2))) {
-                writeln!(my_writer,"{}",encode(&DaemonToWrapper::HumanLineageResult {result:bridget_transport::protocol::HumanLineageError::InvalidRequest.result()})?)?;
+            if display_name_kind.as_deref() == Some("HumanLineage")
+                && (decode::<WrapperToDaemon>(line).is_err()
+                    || !serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .is_some_and(|v| v.as_object().is_some_and(|o| o.len() == 2)))
+            {
+                writeln!(
+                    my_writer,
+                    "{}",
+                    encode(&DaemonToWrapper::HumanLineageResult {
+                        result: bridget_transport::protocol::HumanLineageError::InvalidRequest
+                            .result()
+                    })?
+                )?;
                 my_writer.flush()?;
                 break;
             }
@@ -5644,8 +5714,10 @@ fn handle_connection(
         st.client_negotiations.remove(&conn_id);
         st.human_thread_watches.remove(&conn_id);
         st.lineage_watches.remove(&conn_id);
-        if let Some(journal)=st.lineage_journals.remove(&conn_id) {
-            if let Some(socket)=journal.shutdown {let _=socket.shutdown(std::net::Shutdown::Both);}
+        if let Some(journal) = st.lineage_journals.remove(&conn_id) {
+            if let Some(socket) = journal.shutdown {
+                let _ = socket.shutdown(std::net::Shutdown::Both);
+            }
         }
         st.service_negotiations.remove(&conn_id);
         st.peer_uids.remove(&conn_id);
@@ -7302,19 +7374,34 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
 
     // O(R * (log t + log r + log N + P)). Les demandes ordinaires restent
     // inchangées ; une pause native couvre aussi le palier d'expiration.
-    let frozen: HashMap<_, _> = state.pending_replies.iter().map(|pending| {
-        (pending.msg_id.clone(), native_delegation::request_frozen_secs(state, &pending.msg_id, unix_timestamp()))
-    }).collect();
+    let frozen: HashMap<_, _> = state
+        .pending_replies
+        .iter()
+        .map(|pending| {
+            (
+                pending.msg_id.clone(),
+                native_delegation::request_frozen_secs(state, &pending.msg_id, unix_timestamp()),
+            )
+        })
+        .collect();
     for pending in state.pending_replies.iter_mut() {
         match frozen.get(&pending.msg_id) {
             Some(Ok(Some(secs))) => {
                 pending.frozen_secs = *secs;
-                if paused { continue; }
+                if paused {
+                    continue;
+                }
             }
-            Some(Err(error)) => { warn!("gel de suivi natif illisible: {error}"); continue; }
+            Some(Err(error)) => {
+                warn!("gel de suivi natif illisible: {error}");
+                continue;
+            }
             _ => {}
         }
-        let elapsed = now.duration_since(pending.created_at).as_secs().saturating_sub(pending.frozen_secs);
+        let elapsed = now
+            .duration_since(pending.created_at)
+            .as_secs()
+            .saturating_sub(pending.frozen_secs);
         // Les deux extrémités comptent : `humain → agent` expirait aussi vite
         // que `agent → humain`, et les deux sens ont été mesurés le 28/08.
         let implique_humain = humains.contains(&pending.to) || humains.contains(&pending.from);
@@ -7608,7 +7695,10 @@ fn maintain_stores(st: &DaemonState, now: i64) {
             if acked > 0 {
                 info!("entretien: {acked} accusé(s) de remise native recopié(s) dans les tâches");
             }
-            match st.idempotency.purge_expired_sends(now, SEND_PURGE_GRACE_SECS) {
+            match st
+                .idempotency
+                .purge_expired_sends(now, SEND_PURGE_GRACE_SECS)
+            {
                 Ok(0) => {}
                 Ok(count) => {
                     info!("entretien: {count} envoi(s) expiré(s) depuis plus de 30 jours purgé(s)")
@@ -7621,6 +7711,9 @@ fn maintain_stores(st: &DaemonState, now: i64) {
         }
     }
     native_delegation::maintain_retention(st, now);
+    if let Err(error) = st.idempotency.purge_guidance_events(now) {
+        warn!("entretien: purge du guidage : {error}");
+    }
 }
 
 /// Session 116 : un passage d'entretien. Chaque étape est indépendante : un
@@ -8511,7 +8604,14 @@ fn project_thread_wake(
     st.idempotency
         .begin_send_delivery(&key, &delivery)
         .map_err(|error| error.to_string())?;
-    defer_idempotent_delivery(st, &departure.target_conn, delivery, controls)
+    defer_idempotent_delivery(
+        st,
+        &departure.target_conn,
+        delivery,
+        controls,
+        Some(bridget_core::MessageOrigin::System),
+        None,
+    )
 }
 
 /// Corrèle une issue de remise 099 à la génération de sollicitation figée.
@@ -8851,6 +8951,454 @@ fn artifact_read_response(
     }
 }
 
+// T015–T025 : mêmes faits sur les cinq puits ; aucun from/origin client ne prouve un droit.
+// O(log p+log routes), identité primaire ou auxiliaire attestée149 réutilisée.
+fn guidance_source(
+    st: &DaemonState,
+    conn: Option<&str>,
+) -> (
+    crate::guidance::GuidanceActor,
+    Option<(String, String)>,
+    bool,
+) {
+    use crate::guidance::GuidanceActor;
+    let Some(conn) = conn else {
+        return (GuidanceActor::BareClient, None, false);
+    };
+    let identity = live_connection_identity(st, conn);
+    let ui = identity.as_ref().is_some_and(|(agent, instance)| {
+        agent == UI_HUMAN_AGENT_ID
+            && st
+                .presences
+                .get(instance)
+                .is_some_and(|p| p.agent_type == "ui")
+    });
+    let actor = if st.connection_roles.get(conn) == Some(&ConnectionRole::Attach)
+        && st.connections.contains_key(conn)
+        && !st.conn_names.contains_key(conn)
+    {
+        GuidanceActor::AttachedHuman
+    } else if ui {
+        GuidanceActor::BareClient
+    } else if let Some((agent, _)) = &identity {
+        GuidanceActor::Agent { id: agent.clone() }
+    } else {
+        GuidanceActor::BareClient
+    };
+    (actor, identity, ui)
+}
+
+// O(log p), avant les deux canons et la persistance ; aucune origine Human fabriquée.
+fn normalize_guidance_origin(
+    st: &DaemonState,
+    conn: &str,
+    message: &mut bridget_core::BridgetMessage,
+    control: bool,
+) {
+    let (actor, _, ui) = guidance_source(st, Some(conn));
+    if message.origin == Some(bridget_core::MessageOrigin::System)
+        || message.origin == Some(bridget_core::MessageOrigin::Human)
+            && (control || actor != crate::guidance::GuidanceActor::AttachedHuman && !ui)
+    {
+        message.origin = None;
+    }
+}
+
+// O(log p+log liens+log tâches+log événements+k), lectures indexées, k événements récents.
+fn guidance_facts(
+    st: &DaemonState,
+    conn: Option<&str>,
+    target: &str,
+    action: crate::guidance::GuidanceAction,
+    path: crate::guidance::GuidancePath,
+    trusted_producer: Option<bridget_core::MessageOrigin>,
+    child_proof: bool,
+    now: i64,
+) -> Result<crate::guidance::GuidanceFacts, String> {
+    use crate::guidance::{GuidanceAction, GuidanceActor, GuidanceFacts, GuidancePath};
+    let (mut actor, identity, ui) = guidance_source(st, conn);
+    if conn.is_none() && action == GuidanceAction::Interrupt && path == GuidancePath::Control {
+        actor = GuidanceActor::InternalPause;
+    }
+    let target = routing_agent_id(target);
+    let target_instance = st
+        .router
+        .get_agent(target)
+        .and_then(|r| live_connection_identity(st, &r.connection_id))
+        .map(|(_, i)| i);
+    let mut parent = false;
+    let mut child = false;
+    let task = st.delegation_store.for_child(target)?;
+    if let (Some((agent, instance)), Some(target_instance)) = (&identity, &target_instance) {
+        if let Some(link) = st
+            .fleet
+            .agent_link_for_child(target_instance)
+            .map_err(|e| e.to_string())?
+        {
+            parent = link.parent_instance_id == *instance
+                && matches!(
+                    link.state,
+                    crate::idempotency::AgentLinkState::Open
+                        | crate::idempotency::AgentLinkState::Transferred
+                );
+        }
+        if let Some(task) = &task {
+            parent |= task.owner == *agent
+                && task.owner_instance == *instance
+                && task.child_instance.as_ref() == Some(target_instance);
+        }
+        if let Some(link) = st
+            .fleet
+            .agent_link_for_child(instance)
+            .map_err(|e| e.to_string())?
+        {
+            child = link.parent_instance_id == *target_instance
+                && matches!(
+                    link.state,
+                    crate::idempotency::AgentLinkState::Open
+                        | crate::idempotency::AgentLinkState::Transferred
+                );
+        }
+        if let Some(own) = st.delegation_store.for_child(agent)? {
+            child |= own.owner == target
+                && own.owner_instance == *target_instance
+                && own.child_instance.as_ref() == Some(instance);
+        }
+    }
+    let cross_project = conn
+        .and_then(|c| connection_communication_project(st, c))
+        .zip(agent_communication_project(st, target))
+        .is_some_and(|(from, to)| from != to);
+    let control =
+        crate::referent_control::read(st.store.connection()).map_err(|e| e.to_string())?;
+    let paused = matches!(
+        crate::referent_control::admit_autonomous_effect(
+            crate::referent_control::AutonomousEffect::AgentGuidance,
+            &control
+        ),
+        crate::referent_control::Admission::Deferred { .. }
+    );
+    let (pair_count, last_pair, target_count, third_target) = if action == GuidanceAction::Interrupt
+        && let GuidanceActor::Agent { id } = &actor
+    {
+        let (pair, last) = st
+            .idempotency
+            .count_interrupts_pair(id, target, now.saturating_sub(30))
+            .map_err(|e| e.to_string())?;
+        let (count, third) = st
+            .idempotency
+            .count_interrupts_target(target, now.saturating_sub(600))
+            .map_err(|e| e.to_string())?;
+        (pair, last, count, third)
+    } else {
+        (0, None, 0, None)
+    };
+    Ok(GuidanceFacts {
+        action,
+        path,
+        identity_attested: identity.is_some() || actor == GuidanceActor::AttachedHuman,
+        actor_is_target: identity.as_ref().is_some_and(|(agent, _)| agent == target),
+        actor_is_parent: parent,
+        actor_is_child: child,
+        actor,
+        trusted_origin: trusted_producer.or(if ui {
+            Some(bridget_core::MessageOrigin::Human)
+        } else {
+            None
+        }),
+        child_proof,
+        cross_project,
+        paused,
+        target_has_active_native_task: task.as_ref().is_some_and(|task| {
+            !task.terminal()
+                && !task.mission.is_empty()
+                && task.child_instance.is_some()
+                && task.child_instance == target_instance
+        }),
+        recent_interrupts_pair: pair_count,
+        recent_interrupts_target: target_count,
+        now,
+        last_interrupt_pair_at: last_pair,
+        third_latest_interrupt_target_at: third_target,
+    })
+}
+
+// O(1), noms fermés partagés par l'audit et les quatre chemins de contrôle.
+fn guidance_event_labels(
+    actor: &crate::guidance::GuidanceActor,
+    action: crate::guidance::GuidanceAction,
+    path: crate::guidance::GuidancePath,
+) -> (&str, &'static str, &'static str) {
+    use crate::guidance::{GuidanceAction, GuidanceActor, GuidancePath};
+    let actor = match actor {
+        GuidanceActor::Agent { id } => id.as_str(),
+        GuidanceActor::AttachedHuman => "human",
+        GuidanceActor::BareClient => "unattested",
+        GuidanceActor::InternalPause => "internal_pause",
+    };
+    let action = match action {
+        GuidanceAction::Steer => "steer",
+        GuidanceAction::Interrupt => "interrupt",
+        GuidanceAction::MidTurnDelivery | GuidanceAction::QueueList => "read_only",
+    };
+    let path = match path {
+        GuidancePath::SendIdempotent => "send_idempotent",
+        GuidancePath::Send => "send",
+        GuidancePath::Control => "control",
+        GuidancePath::Cancel => "cancel",
+    };
+    (actor, action, path)
+}
+
+// FR016 : quatre puits réels de refus avant la garde ; aucune autorité ni quota admis.
+// O(log p+log n), identité existante puis INSERT ; aucune lecture des faits/rates/projets.
+fn record_guidance_refusal(
+    st: &DaemonState,
+    conn: Option<&str>,
+    target: &str,
+    id: &str,
+    action: Option<crate::guidance::GuidanceAction>,
+    path: crate::guidance::GuidancePath,
+    code: &str,
+) {
+    use crate::guidance::{GuidanceAction, GuidancePath};
+    let Some(action @ (GuidanceAction::Steer | GuidanceAction::Interrupt)) = action else {
+        return;
+    };
+    if conn.is_none() && path == GuidancePath::Control {
+        return; // Pause interne : ni admission ni refus de guidage utilisateur.
+    }
+    let (actor, _, _) = guidance_source(st, conn);
+    let (actor, action, path) = guidance_event_labels(&actor, action, path);
+    if let Err(error) = st.idempotency.record_guidance_event(
+        unix_timestamp(),
+        actor,
+        routing_agent_id(target),
+        action,
+        path,
+        Some(id),
+        &format!("refused:{code}"),
+    ) {
+        warn!("refus de guidage non journalisé : {error}");
+    }
+}
+
+// O(log n), refus/admissions seulement ; pause interne et lecture ne sont jamais comptées.
+fn record_guidance_outcome(
+    st: &DaemonState,
+    facts: &crate::guidance::GuidanceFacts,
+    target: &str,
+    id: &str,
+    outcome: &str,
+) -> Result<(), String> {
+    use crate::guidance::{GuidanceAction, GuidanceActor};
+    if facts.actor == GuidanceActor::InternalPause
+        || !matches!(
+            facts.action,
+            GuidanceAction::Steer | GuidanceAction::Interrupt
+        )
+    {
+        return Ok(());
+    }
+    let (actor, action, path) = guidance_event_labels(&facts.actor, facts.action, facts.path);
+    st.idempotency
+        .record_guidance_event(
+            facts.now,
+            actor,
+            routing_agent_id(target),
+            action,
+            path,
+            Some(id),
+            outcome,
+        )
+        .map_err(|e| e.to_string())
+}
+
+// O(log p+log liens+log tâches+log événements+k), une décision commune et nommée.
+fn check_guidance(
+    st: &DaemonState,
+    conn: Option<&str>,
+    target: &str,
+    action: crate::guidance::GuidanceAction,
+    path: crate::guidance::GuidancePath,
+    trusted_producer: Option<bridget_core::MessageOrigin>,
+    child_proof: bool,
+    id: &str,
+) -> Result<crate::guidance::GuidanceFacts, (String, String)> {
+    let facts = guidance_facts(
+        st,
+        conn,
+        target,
+        action,
+        path,
+        trusted_producer,
+        child_proof,
+        unix_timestamp(),
+    )
+    .map_err(|error| {
+        record_guidance_refusal(
+            st,
+            conn,
+            target,
+            id,
+            Some(action),
+            path,
+            "intent_not_permitted",
+        );
+        warn!("faits de guidage indisponibles : {error}");
+        ("intent_not_permitted".into(), "identity_unattested".into())
+    })?;
+    if let Err(refusal) = crate::guidance::authorize(&facts) {
+        use crate::guidance::GuidanceRefusal;
+        let (code, reason) = match refusal {
+            GuidanceRefusal::IntentNotPermitted { reason } => ("intent_not_permitted", reason.to_string()),
+            GuidanceRefusal::ReferentPaused => ("referent_paused", "referent_paused".into()),
+            GuidanceRefusal::MissionActive => ("mission_active", "mission_active".into()),
+            GuidanceRefusal::InterruptRateLimited { retry_after_secs } => ("interrupt_rate_limited", serde_json::json!({"code":"interrupt_rate_limited","retry_after_secs":retry_after_secs}).to_string()),
+        };
+        if let Err(error) =
+            record_guidance_outcome(st, &facts, target, id, &format!("refused:{code}"))
+        {
+            warn!("refus de guidage non journalisé : {error}");
+        }
+        return Err((code.into(), reason));
+    }
+    Ok(facts)
+}
+
+// O(log p+log liens+log tâches), recalcul à chaque remise ; provenance legacy non probante.
+fn guidance_mid_turn_ok(
+    st: &DaemonState,
+    message: &bridget_core::BridgetMessage,
+    target: &str,
+    trusted_producer: Option<bridget_core::MessageOrigin>,
+    origin_conn: Option<&str>,
+) -> bool {
+    let conn = origin_conn
+        .or_else(|| {
+            st.pending_attach_sends
+                .get(&message.id)
+                .map(|pending| pending.conn_id.as_str())
+        })
+        .or_else(|| {
+            // Une étiquette humaine ou UI durable ne prouve jamais la connexion qui l'a émise.
+            (message.from != UI_HUMAN_AGENT_ID && Uuid::parse_str(&message.from).is_ok())
+                .then(|| {
+                    st.router
+                        .get_agent(&message.from)
+                        .map(|r| r.connection_id.as_str())
+                })
+                .flatten()
+        });
+    guidance_facts(
+        st,
+        conn,
+        target,
+        crate::guidance::GuidanceAction::MidTurnDelivery,
+        crate::guidance::GuidancePath::SendIdempotent,
+        trusted_producer,
+        message.delegated_origin.is_some(),
+        unix_timestamp(),
+    )
+    .is_ok_and(|facts| crate::guidance::authorize(&facts).is_ok())
+}
+
+// O(log n+s+k log r+B), s lignes dispatching examinées dont expirées, k<=200 sorties ; aucune écriture.
+fn handle_guidance_queue(st: &DaemonState, conn: &str, target: &str) -> DaemonToWrapper {
+    let unavailable = || DaemonToWrapper::Nack {
+        id: "queue".into(),
+        reason: "target_unavailable".into(),
+    };
+    let target = routing_agent_id(target);
+    let Some(route) = st.router.get_agent(target) else {
+        return unavailable();
+    };
+    let Some(instance) = st.conn_instances.get(&route.connection_id) else {
+        return unavailable();
+    };
+    if live_connection_identity(st, &route.connection_id).is_none() {
+        return unavailable();
+    }
+    let now = unix_timestamp();
+    let facts = match guidance_facts(
+        st,
+        Some(conn),
+        target,
+        crate::guidance::GuidanceAction::QueueList,
+        crate::guidance::GuidancePath::SendIdempotent,
+        None,
+        false,
+        now,
+    ) {
+        Ok(facts) if crate::guidance::authorize(&facts).is_ok() => facts,
+        _ => return unavailable(),
+    };
+    let (actor, identity, ui) = guidance_source(st, Some(conn));
+    let entire = actor == crate::guidance::GuidanceActor::AttachedHuman
+        || ui
+        || facts.actor_is_target
+        || facts.actor_is_parent;
+    let rows = match st
+        .idempotency
+        .queued_deliveries_for_recipient(instance, now, 200)
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!("lecture file impossible : {error}");
+            return unavailable();
+        }
+    };
+    let mut entries = Vec::new();
+    for (index, (delivery, issued_at)) in rows.into_iter().enumerate() {
+        let message: bridget_core::BridgetMessage =
+            match serde_json::from_slice(&delivery.message_bytes) {
+                Ok(message) => message,
+                Err(error) => {
+                    warn!("message en file illisible : {error}");
+                    return unavailable();
+                }
+            };
+        let own = if let Some((agent, _)) = &identity {
+            routing_agent_id(&message.from) == agent
+        } else if let Some(negotiated) = st.client_negotiations.get(conn) {
+            // Client nu : ses reçus dans son scope, jamais tous les from=human.
+            let key = match IdempotencyKey::new(
+                negotiated.issuer_scope.clone(),
+                OperationKind::Send,
+                message.id.clone(),
+            ) {
+                Ok(key) => key,
+                Err(_) => return unavailable(),
+            };
+            match st.idempotency.send_delivery(&key) {
+                Ok(owned) => owned.is_some_and(|owned| owned.delivery_id == delivery.delivery_id),
+                Err(_) => return unavailable(),
+            }
+        } else {
+            false
+        };
+        if !entire && !own {
+            continue;
+        }
+        let intent = match message.intent {
+            Some(bridget_core::MessageIntent::SteerCurrent) => "steer",
+            Some(bridget_core::MessageIntent::InterruptAndStart) => "interrupt",
+            _ => "queue",
+        };
+        entries.push(serde_json::json!({"message_id":message.id,"from":message.from,"intent":intent,"reply":message.reply,
+            "age_secs":now.saturating_sub(issued_at).max(0),"preview":message.body.chars().take(120).collect::<String>(),
+            "position":index+1,"state":"pending_or_injecting"}));
+    }
+    let t3 = st
+        .presences
+        .get(instance)
+        .is_some_and(|presence| presence.transport == "t3code");
+    DaemonToWrapper::QueueListResult {
+        entries,
+        queue_bound: if t3 { Some(64) } else { None },
+    }
+}
+
 fn prepare_dispatch(
     st: &mut DaemonState,
     message: &mut bridget_core::BridgetMessage,
@@ -9028,8 +9576,9 @@ fn handle_idempotent_send(
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
-    handle_idempotent_send_with_result_authority(conn_id, message, message_id, issued_at,
-        admission, st, controls, None)
+    handle_idempotent_send_with_result_authority(
+        conn_id, message, message_id, issued_at, admission, st, controls, None,
+    )
 }
 
 fn handle_idempotent_send_with_result_authority(
@@ -9042,6 +9591,12 @@ fn handle_idempotent_send_with_result_authority(
     controls: &mut Vec<DeferredControl>,
     authority: Option<&native_delegation::RetainedResultAuthority>,
 ) -> DaemonToWrapper {
+    if message.reply && message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
+        return DaemonToWrapper::Nack {
+            id: message_id,
+            reason: "invalid_intent".into(),
+        };
+    }
     // Session 102 : une alerte de fil n'est construite que par le daemon. Une
     // notice fournie par un client est neutralisée AVANT le canon d'idempotence,
     // pour que le rejeu reste identique et qu'aucun DM ne se fasse passer pour
@@ -9054,8 +9609,13 @@ fn handle_idempotent_send_with_result_authority(
     let human_from_bare_client = matches!(message.from.as_str(), "" | "human" | "humain")
         && !st.conn_names.contains_key(conn_id);
     if let Some(authority) = authority {
-        if let Err(reason) = native_delegation::authorize_retained_result(st, authority, conn_id, &message) {
-            return DaemonToWrapper::Nack { id: message_id, reason };
+        if let Err(reason) =
+            native_delegation::authorize_retained_result(st, authority, conn_id, &message)
+        {
+            return DaemonToWrapper::Nack {
+                id: message_id,
+                reason,
+            };
         }
     } else if !human_from_bare_client && !sender_is_authorized(st, conn_id, &message.from) {
         return DaemonToWrapper::Nack {
@@ -9202,6 +9762,15 @@ fn handle_idempotent_send_with_result_authority(
     let content_key = format!("{}:{}", key.issuer_scope, message.content_key());
     let scoped_message_id = format!("{}:{}", key.issuer_scope, message.id);
     let logical_sender = format!("client:{}", key.issuer_scope);
+    let guidance_action = match message.intent {
+        Some(bridget_core::MessageIntent::SteerCurrent) => {
+            Some(crate::guidance::GuidanceAction::Steer)
+        }
+        Some(bridget_core::MessageIntent::InterruptAndStart) => {
+            Some(crate::guidance::GuidanceAction::Interrupt)
+        }
+        _ => None,
+    };
     let prepared = match prepare_dispatch(
         st,
         &mut message,
@@ -9212,6 +9781,15 @@ fn handle_idempotent_send_with_result_authority(
     ) {
         Ok(prepared) => prepared,
         Err((category, reason)) => {
+            record_guidance_refusal(
+                st,
+                Some(conn_id),
+                &message.to,
+                &message.id,
+                guidance_action,
+                crate::guidance::GuidancePath::SendIdempotent,
+                category,
+            );
             return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(|error| {
                 DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
@@ -9220,7 +9798,43 @@ fn handle_idempotent_send_with_result_authority(
             });
         }
     };
+    let guidance_admission = match guidance_action {
+        Some(action) => {
+            match check_guidance(
+                st,
+                Some(conn_id),
+                &message.to,
+                action,
+                crate::guidance::GuidancePath::SendIdempotent,
+                None,
+                message.delegated_origin.is_some(),
+                &message.id,
+            ) {
+                Ok(facts) => Some(facts),
+                Err((code, reason)) => {
+                    return reject_idempotent_send(st, &key, code, reason).unwrap_or_else(
+                        |reason| DaemonToWrapper::Nack {
+                            id: key.idempotency_key.clone(),
+                            reason,
+                        },
+                    );
+                }
+            }
+        }
+        _ => None,
+    };
     let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
+        if let Some(facts) = &guidance_admission
+            && let Err(error) = record_guidance_outcome(
+                st,
+                facts,
+                &message.to,
+                &message.id,
+                "refused:recipient_unavailable",
+            )
+        {
+            warn!("refus de guidage non journalisé : {error}");
+        }
         return reject_idempotent_send(
             st,
             &key,
@@ -9245,6 +9859,17 @@ fn handle_idempotent_send_with_result_authority(
         }) {
             Ok(message_bytes) => message_bytes,
             Err(error) => {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        st,
+                        facts,
+                        &message.to,
+                        &message.id,
+                        "refused:persistence_failed",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
                 return DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
                     reason: format!("impossible de sérialiser la remise: {error}"),
@@ -9299,12 +9924,34 @@ fn handle_idempotent_send_with_result_authority(
                     })
                 }
                 Ok(_) => {
+                    if let Some(facts) = &guidance_admission
+                        && let Err(error) = record_guidance_outcome(
+                            st,
+                            facts,
+                            &message.to,
+                            &message.id,
+                            "refused:terminal_execution",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
                     return DaemonToWrapper::Nack {
                         id: key.idempotency_key.clone(),
                         reason: "soumission déjà terminale".to_string(),
                     };
                 }
                 Err(error) => {
+                    if let Some(facts) = &guidance_admission
+                        && let Err(error) = record_guidance_outcome(
+                            st,
+                            facts,
+                            &message.to,
+                            &message.id,
+                            "refused:persistence_failed",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
                     return DaemonToWrapper::Nack {
                         id: key.idempotency_key.clone(),
                         reason: format!("soumission existante illisible: {error}"),
@@ -9312,6 +9959,17 @@ fn handle_idempotent_send_with_result_authority(
                 }
             },
             Err(error) => {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        st,
+                        facts,
+                        &message.to,
+                        &message.id,
+                        "refused:persistence_failed",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
                 return DaemonToWrapper::Nack {
                     id: key.idempotency_key.clone(),
                     reason: format!("démarrage non persisté: {error}"),
@@ -9321,21 +9979,36 @@ fn handle_idempotent_send_with_result_authority(
     } else {
         None
     };
-    let delivery_result = match execution_link.as_ref() {
-        Some(link) => st.idempotency.begin_send_delivery_with_execution(
-            &key,
-            &delivery,
-            reply_tracking.as_ref(),
-            link,
-        ),
-        None => match reply_tracking.as_ref() {
-            Some(reply) => st
-                .idempotency
-                .begin_send_delivery_with_reply(&key, &delivery, reply),
-            None => st.idempotency.begin_send_delivery(&key, &delivery),
-        },
-    };
+    let guidance_context = guidance_admission.as_ref().map(|facts| {
+        let (actor, action, path) = guidance_event_labels(&facts.actor, facts.action, facts.path);
+        (
+            facts.now,
+            actor,
+            routing_agent_id(&message.to),
+            action,
+            path,
+            Some(message.id.as_str()),
+        )
+    });
+    let delivery_result = st.idempotency.begin_send_delivery_with_guidance(
+        &key,
+        &delivery,
+        reply_tracking.as_ref(),
+        execution_link.as_ref(),
+        guidance_context,
+    );
     if let Err(error) = delivery_result {
+        if let Some(facts) = &guidance_admission
+            && let Err(error) = record_guidance_outcome(
+                st,
+                facts,
+                &message.to,
+                &message.id,
+                "refused:persistence_failed",
+            )
+        {
+            warn!("refus de guidage non journalisé : {error}");
+        }
         error!("idempotence dispatch: {error}");
         return DaemonToWrapper::Nack {
             id: key.idempotency_key.clone(),
@@ -9357,9 +10030,16 @@ fn handle_idempotent_send_with_result_authority(
         .mark_sent(&prepared.content_key, &message.to);
     st.envelope_guard
         .mark_relayed(&prepared.message_guard_id, &message.to);
-    if let Err(error) =
-        defer_idempotent_delivery(st, &prepared.target_conn, delivery.clone(), controls)
-    {
+    if let Err(error) = defer_idempotent_delivery(
+        st,
+        &prepared.target_conn,
+        delivery.clone(),
+        controls,
+        message
+            .origin
+            .filter(|origin| *origin == bridget_core::MessageOrigin::System),
+        Some(conn_id),
+    ) {
         error!("remise idempotente préparée mais non sérialisable: {error}");
     }
     #[cfg(feature = "test-support")]
@@ -9399,6 +10079,7 @@ fn control_result_with_project(
 
 fn control_refusal_from_reason(reason: &str) -> ExecutionControlRefusal {
     match reason {
+        "not_permitted" => ExecutionControlRefusal::NotPermitted,
         "capability_unavailable" => ExecutionControlRefusal::CapabilityUnavailable,
         "generation_mismatch" => ExecutionControlRefusal::GenerationMismatch,
         "revision_mismatch" => ExecutionControlRefusal::RevisionMismatch,
@@ -9496,6 +10177,9 @@ fn handle_execution_control(
             ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
         );
     }
+    if let (Some(conn), Some(message)) = (conn_id, command.message.as_mut()) {
+        normalize_guidance_origin(st, conn, message, true);
+    }
     let invalid_reason = if let Some(message) = command.message.as_mut() {
         match crate::communication::validate_cross_project_reason(
             message.cross_project_reason.as_deref(),
@@ -9554,6 +10238,11 @@ fn handle_execution_control(
     }
     // Le reçu durable est rendu avant toute réévaluation du contexte projet.
     // L'identité source vient de la connexion, jamais du champ from du message.
+    let action = if command.operation == ExecutionControlOperation::SteerCurrent {
+        crate::guidance::GuidanceAction::Steer
+    } else {
+        crate::guidance::GuidanceAction::Interrupt
+    };
     let scope_result = if invalid_reason {
         Err("invalid_cross_project_reason")
     } else if let Some(message) = command.message.as_ref() {
@@ -9583,12 +10272,35 @@ fn handle_execution_control(
             }
             None => Err("invalid_command"),
         }
+    } else if let Some(conn) = conn_id {
+        crate::communication::project_scope(
+            connection_communication_project(st, conn).as_ref(),
+            agent_communication_project(st, &target.target_agent).as_ref(),
+            &target.target_agent,
+            None,
+        )
+        .map_err(|error| {
+            if error.starts_with("cross_project_reason_required") {
+                "cross_project_reason_required"
+            } else {
+                "invalid_cross_project_reason"
+            }
+        })
     } else {
         Ok(Vec::new())
     };
     let project_warnings = match scope_result {
         Ok(warnings) => warnings,
         Err(reason) => {
+            record_guidance_refusal(
+                st,
+                conn_id,
+                &target.target_agent,
+                &command.command_id,
+                Some(action),
+                crate::guidance::GuidancePath::Control,
+                reason,
+            );
             let _ = st.execution_store.refuse_control_command(
                 issuer_scope,
                 &command.command_id,
@@ -9598,6 +10310,33 @@ fn handle_execution_control(
             return control_result(
                 &command,
                 ExecutionControlOutcome::Refused(control_refusal_from_reason(reason)),
+            );
+        }
+    };
+    let guidance_admission = match check_guidance(
+        st,
+        conn_id,
+        &target.target_agent,
+        action,
+        crate::guidance::GuidancePath::Control,
+        None,
+        command
+            .message
+            .as_ref()
+            .is_some_and(|m| m.delegated_origin.is_some()),
+        &command.command_id,
+    ) {
+        Ok(facts) => facts,
+        Err((_code, _reason)) => {
+            let _ = st.execution_store.refuse_control_command(
+                issuer_scope,
+                &command.command_id,
+                "not_permitted",
+                now,
+            );
+            return control_result(
+                &command,
+                ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
             );
         }
     };
@@ -9618,6 +10357,15 @@ fn handle_execution_control(
         None
     };
     if let Some(refusal) = refusal {
+        if let Err(error) = record_guidance_outcome(
+            st,
+            &guidance_admission,
+            &target.target_agent,
+            &command.command_id,
+            &format!("refused:{refusal}"),
+        ) {
+            warn!("refus de guidage non journalisé : {error}");
+        }
         let _ = st.execution_store.refuse_control_command(
             issuer_scope,
             &command.command_id,
@@ -9634,6 +10382,15 @@ fn handle_execution_control(
         .get_agent(&target.target_agent)
         .map(|agent| agent.connection_id.clone());
     let Some(target_conn) = target_conn else {
+        if let Err(error) = record_guidance_outcome(
+            st,
+            &guidance_admission,
+            &target.target_agent,
+            &command.command_id,
+            "refused:target_unavailable",
+        ) {
+            warn!("refus de guidage non journalisé : {error}");
+        }
         let _ = st.execution_store.refuse_control_command(
             issuer_scope,
             &command.command_id,
@@ -9646,6 +10403,15 @@ fn handle_execution_control(
         );
     };
     let Some(writer) = st.connections.get(&target_conn).cloned() else {
+        if let Err(error) = record_guidance_outcome(
+            st,
+            &guidance_admission,
+            &target.target_agent,
+            &command.command_id,
+            "refused:target_unavailable",
+        ) {
+            warn!("refus de guidage non journalisé : {error}");
+        }
         let _ = st.execution_store.refuse_control_command(
             issuer_scope,
             &command.command_id,
@@ -9662,15 +10428,56 @@ fn handle_execution_control(
         .mark_control_dispatched(issuer_scope, &command.command_id, now, &project_warnings)
         .unwrap_or(false)
     {
+        if let Err(error) = record_guidance_outcome(
+            st,
+            &guidance_admission,
+            &target.target_agent,
+            &command.command_id,
+            "refused:persistence_failed",
+        ) {
+            warn!("refus de guidage non journalisé : {error}");
+        }
         return control_result(&command, ExecutionControlOutcome::OutcomeUnknown);
     }
-    if !push_control_message(
+    if let Err(error) = record_guidance_outcome(
+        st,
+        &guidance_admission,
+        &target.target_agent,
+        &command.command_id,
+        "admitted",
+    ) {
+        let _ = st.execution_store.resolve_control_command(
+            issuer_scope,
+            &command.command_id,
+            false,
+            Some("not_permitted"),
+            now,
+        );
+        if let Err(error) = record_guidance_outcome(
+            st,
+            &guidance_admission,
+            &target.target_agent,
+            &command.command_id,
+            "refused:persistence_failed",
+        ) {
+            warn!("refus de guidage non journalisé : {error}");
+        }
+        warn!("guidage de contrôle non persisté : {error}");
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+        );
+    }
+    if push_control_message_until(
         &writer,
         &DaemonToWrapper::ControlExecutionDispatch {
             issuer_scope: issuer_scope.to_string(),
             command: command.clone(),
         },
-    ) {
+        Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+    )
+    .is_err()
+    {
         let _ = st.execution_store.resolve_control_command(
             issuer_scope,
             &command.command_id,
@@ -10634,7 +11441,7 @@ mod spec099_classic_delivery_tests {
         );
         let delivered = presence_tests::read_control(&mut reader);
         assert!(
-            matches!(delivered, DaemonToWrapper::Deliver(message) if message.body == "PRIVATE_BODY_exact")
+            matches!(delivered, DaemonToWrapper::Deliver { message, .. } if message.body == "PRIVATE_BODY_exact")
         );
     }
 
@@ -11380,7 +12187,7 @@ mod spec099_classic_delivery_tests {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         let delivered = decode::<DaemonToWrapper>(line.trim()).unwrap();
-        let DaemonToWrapper::Deliver(message) = delivered else {
+        let DaemonToWrapper::Deliver { message, .. } = delivered else {
             panic!("notification ordinaire attendue")
         };
         assert!(message.id.starts_with("bridget-observation:"));
@@ -11435,7 +12242,7 @@ mod spec099_classic_delivery_tests {
         let mut line = String::new();
         target.read_line(&mut line).unwrap();
         assert!(
-            matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(),DaemonToWrapper::Deliver(message) if message.reply && message.id==witness_id)
+            matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(),DaemonToWrapper::Deliver { message, .. } if message.reply && message.id==witness_id)
         );
         assert!(
             state
@@ -11743,7 +12550,10 @@ mod spec099_classic_delivery_tests {
         assert!(matches!(response, Some(DaemonToWrapper::Ack { .. })));
         let mut reader = BufReader::new(peers[1].try_clone().unwrap());
         let delivered = presence_tests::read_control(&mut reader);
-        assert!(matches!(delivered, DaemonToWrapper::Deliver(_)));
+        assert!(matches!(
+            delivered,
+            DaemonToWrapper::Deliver { message: _, .. }
+        ));
         let mut reply = BridgetMessage::new(TARGET, SENDER, "instant answer");
         reply.in_reply_to = Some("spec099-immediate".into());
         let response = handle_wrapper_message("target", WrapperToDaemon::Send(reply), &state);
@@ -14262,9 +15072,20 @@ fn human_client_guard(
     }) {
         return Err(E::UnsupportedVersion);
     }
-    let lineage=matches!(capability, ClientCapability::HumanLineageViewV1 | ClientCapability::HumanLineageWatchV1 | ClientCapability::HumanLineageCancelV1);
-    if (lineage && (t3_thread_id.is_empty() || t3_thread_id.len()>2048 || t3_thread_id.chars().any(bridget_core::is_disallowed_control)))
-        || (!lineage && crate::threads::canonical_uuid(t3_thread_id).is_none()) {
+    let lineage = matches!(
+        capability,
+        ClientCapability::HumanLineageViewV1
+            | ClientCapability::HumanLineageWatchV1
+            | ClientCapability::HumanLineageCancelV1
+    );
+    if (lineage
+        && (t3_thread_id.is_empty()
+            || t3_thread_id.len() > 2048
+            || t3_thread_id
+                .chars()
+                .any(bridget_core::is_disallowed_control)))
+        || (!lineage && crate::threads::canonical_uuid(t3_thread_id).is_none())
+    {
         return Err(E::InvalidRequest);
     }
     Ok(())
@@ -14631,7 +15452,9 @@ fn handle_wrapper_message_with_peer(
 ) -> Option<DaemonToWrapper> {
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        if native_lineage::invalid_message(&mut st,conn_id) {return None;}
+        if native_lineage::invalid_message(&mut st, conn_id) {
+            return None;
+        }
         if let Some(watch) = st.human_thread_watches.get_mut(conn_id) {
             watch
                 .queue
@@ -14640,8 +15463,8 @@ fn handle_wrapper_message_with_peer(
             return None;
         }
     }
-    if let WrapperToDaemon::HumanLineage {request}=&msg {
-        return native_lineage::handle(conn_id,request,state);
+    if let WrapperToDaemon::HumanLineage { request } = &msg {
+        return native_lineage::handle(conn_id, request, state);
     }
     // Cette consultation n'exécute aucune maintenance d'attach, même refusée.
     if let WrapperToDaemon::HumanThreadWatchV1 { request } = &msg {
@@ -14748,9 +15571,23 @@ fn handle_wrapper_message_with_peer(
 
     let attach_refusal = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        (st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach))
-            .then(|| msg.attach_refusal())
-            .flatten()
+        let queue_attach = st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach)
+            && !st.conn_names.contains_key(conn_id)
+            && st.connections.contains_key(conn_id)
+            && match &msg {
+                WrapperToDaemon::ClientHello { capabilities, .. } => {
+                    capabilities.as_slice() == [ClientCapability::QueueListV1]
+                }
+                WrapperToDaemon::QueueList { .. } => true,
+                _ => false,
+            };
+        if queue_attach {
+            None
+        } else {
+            (st.connection_roles.get(conn_id) == Some(&ConnectionRole::Attach))
+                .then(|| msg.attach_refusal())
+                .flatten()
+        }
     };
     if let Some(reason) = attach_refusal {
         return Some(DaemonToWrapper::AttachRejected {
@@ -14946,6 +15783,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::ServiceRequest { .. }
                 | WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
+                | WrapperToDaemon::QueueList { .. }
                 | WrapperToDaemon::ControlExecution { .. }
                 | WrapperToDaemon::ControlExecutionReported { .. }
                 | WrapperToDaemon::DelegatedRuntimeEvent { .. }
@@ -15014,7 +15852,30 @@ fn handle_wrapper_message_with_peer(
     let client_refusal = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         match st.connection_roles.get(conn_id) {
+            Some(ConnectionRole::Attach)
+                if matches!(&msg, WrapperToDaemon::ClientHello { .. })
+                    && st.client_negotiations.contains_key(conn_id) =>
+            {
+                Some(ClientRefusal::AlreadyNegotiated)
+            }
+            Some(ConnectionRole::Attach)
+                if matches!(&msg, WrapperToDaemon::QueueList { .. })
+                    && !st.client_negotiations.contains_key(conn_id) =>
+            {
+                Some(ClientRefusal::NegotiationRequired)
+            }
+            Some(ConnectionRole::Attach)
+                if matches!(&msg, WrapperToDaemon::QueueList { .. })
+                    && !st.client_negotiations.get(conn_id).is_some_and(|n| {
+                        n.capabilities.contains(&ClientCapability::QueueListV1)
+                    }) =>
+            {
+                Some(ClientRefusal::CapabilityNotNegotiated)
+            }
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::QueueList { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
+                WrapperToDaemon::QueueList { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueListV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
+                WrapperToDaemon::QueueList { .. } => None,
                 WrapperToDaemon::CommunicationProjectFact { .. } | WrapperToDaemon::DirectoryScoped { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::CommunicationProjectsV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
                 WrapperToDaemon::CommunicationProjectFact { .. } | WrapperToDaemon::DirectoryScoped { .. } => None,
                 WrapperToDaemon::RegisterAuxiliary { .. } => None,
@@ -15245,6 +16106,7 @@ fn handle_wrapper_message_with_peer(
                     WrapperToDaemon::ClientHello { .. }
                         | WrapperToDaemon::SendIdempotent { .. }
                         | WrapperToDaemon::Lookup { .. }
+                        | WrapperToDaemon::QueueList { .. }
                         | WrapperToDaemon::ControlExecution { .. }
                         | WrapperToDaemon::ProjectRoundRequest { .. }
                         | WrapperToDaemon::ProjectRoundDispatch { .. }
@@ -15266,6 +16128,10 @@ fn handle_wrapper_message_with_peer(
     }
 
     match msg {
+        WrapperToDaemon::QueueList { target } => {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            Some(handle_guidance_queue(&st, conn_id, &target))
+        }
         WrapperToDaemon::CommunicationProjectFact {
             root,
             source,
@@ -15357,7 +16223,9 @@ fn handle_wrapper_message_with_peer(
                 .set_source(conn_id, &agent, events, Instant::now());
             None
         }
-        WrapperToDaemon::HumanLineage {request} => native_lineage::handle(conn_id,&request,state),
+        WrapperToDaemon::HumanLineage { request } => {
+            native_lineage::handle(conn_id, &request, state)
+        }
         WrapperToDaemon::HumanThreadViewV1 { request } => {
             Some(handle_human_thread_view(conn_id, &request, state))
         }
@@ -16700,6 +17568,7 @@ fn handle_wrapper_message_with_peer(
                     matches!(
                         capability,
                         ClientCapability::SendIdempotent
+                            | ClientCapability::QueueListV1
                             | ClientCapability::ThreadMembersV1
                             | ClientCapability::HumanThreadViewV1
                             | ClientCapability::HumanThreadViewRecentV1
@@ -16746,13 +17615,14 @@ fn handle_wrapper_message_with_peer(
             ))
         }
         WrapperToDaemon::SendIdempotent {
-            message,
+            mut message,
             message_id,
             issued_at,
         } => {
             let (response, controls) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 let mut controls = Vec::new();
+                normalize_guidance_origin(&st, conn_id, &mut message, false);
                 let response = handle_idempotent_send(
                     conn_id,
                     message,
@@ -18149,6 +19019,15 @@ fn handle_wrapper_message_with_peer(
                 }
             }
 
+            normalize_guidance_origin(&st, conn_id, &mut bridge_msg, false);
+            if bridge_msg.reply
+                && bridge_msg.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "invalid_intent".into(),
+                });
+            }
             let logical_sender = bridge_msg.from.clone();
             let captured = match native_delegation::capture_reply(&mut st, conn_id, &bridge_msg) {
                 Ok(captured) => captured,
@@ -18168,6 +19047,15 @@ fn handle_wrapper_message_with_peer(
             }
             let content_key = bridge_msg.content_key();
             let message_guard_id = bridge_msg.id.clone();
+            let guidance_action = match bridge_msg.intent {
+                Some(bridget_core::MessageIntent::SteerCurrent) => {
+                    Some(crate::guidance::GuidanceAction::Steer)
+                }
+                Some(bridget_core::MessageIntent::InterruptAndStart) => {
+                    Some(crate::guidance::GuidanceAction::Interrupt)
+                }
+                _ => None,
+            };
             let prepared = match prepare_dispatch(
                 &mut st,
                 &mut bridge_msg,
@@ -18177,16 +19065,59 @@ fn handle_wrapper_message_with_peer(
                 message_guard_id,
             ) {
                 Ok(prepared) => prepared,
-                Err((_category, reason)) => {
+                Err((category, reason)) => {
+                    record_guidance_refusal(
+                        &st,
+                        Some(conn_id),
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        guidance_action,
+                        crate::guidance::GuidancePath::Send,
+                        category,
+                    );
                     return Some(DaemonToWrapper::Nack {
                         id: bridge_msg.id.clone(),
                         reason,
                     });
                 }
             };
+            let guidance_admission = match guidance_action {
+                Some(action) => {
+                    match check_guidance(
+                        &st,
+                        Some(conn_id),
+                        &bridge_msg.to,
+                        action,
+                        crate::guidance::GuidancePath::Send,
+                        None,
+                        bridge_msg.delegated_origin.is_some(),
+                        &bridge_msg.id,
+                    ) {
+                        Ok(facts) => Some(facts),
+                        Err((code, reason)) => {
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("{code}:{reason}"),
+                            });
+                        }
+                    }
+                }
+                _ => None,
+            };
             let is_ephemeral_cli_sender =
                 ephemeral_cli && prepared.reply_sender_conn.as_deref() == Some(conn_id);
             if bridge_msg.reply && is_ephemeral_cli_sender {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        &st,
+                        facts,
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        "refused:reply_sender_unavailable",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
                     reason: "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
@@ -18209,6 +19140,17 @@ fn handle_wrapper_message_with_peer(
                     touch_message_sender_activity(&mut st, &bridge_msg.from);
                 }
                 Err(error) => {
+                    if let Some(facts) = &guidance_admission
+                        && let Err(error) = record_guidance_outcome(
+                            &st,
+                            facts,
+                            &bridge_msg.to,
+                            &bridge_msg.id,
+                            "refused:persistence_failed",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
                     return Some(DaemonToWrapper::Nack {
                         id: bridge_msg.id.clone(),
                         reason: format!("message non persisté: {error}"),
@@ -18267,6 +19209,17 @@ fn handle_wrapper_message_with_peer(
                             });
                         }
                         Err(error) => {
+                            if let Some(facts) = &guidance_admission
+                                && let Err(error) = record_guidance_outcome(
+                                    &st,
+                                    facts,
+                                    &bridge_msg.to,
+                                    &bridge_msg.id,
+                                    "refused:persistence_failed",
+                                )
+                            {
+                                warn!("refus de guidage non journalisé : {error}");
+                            }
                             return Some(DaemonToWrapper::Nack {
                                 id: bridge_msg.id.clone(),
                                 reason: format!("démarrage non persisté: {error}"),
@@ -18295,6 +19248,13 @@ fn handle_wrapper_message_with_peer(
                 .unwrap_or("");
             stamp_turn_deadline_for_delivery(&mut delivered_message, &st.registry, agent_type);
             // Push vers le destinataire
+            let mid_turn_ok = Some(guidance_mid_turn_ok(
+                &st,
+                &bridge_msg,
+                &bridge_msg.to,
+                None,
+                Some(conn_id),
+            ));
             let execution_attempt = execution_delivery.clone();
             let dtw = match execution_delivery {
                 Some((execution_id, generation, revision)) => DaemonToWrapper::DeliverExecution {
@@ -18303,7 +19263,10 @@ fn handle_wrapper_message_with_peer(
                     generation,
                     revision,
                 },
-                None => DaemonToWrapper::Deliver(delivered_message),
+                None => DaemonToWrapper::Deliver {
+                    message: delivered_message,
+                    mid_turn_ok,
+                },
             };
             // Le destinataire peut répondre dès le premier octet remis : son
             // suivi et la route attach doivent donc exister AVANT le push.
@@ -18313,6 +19276,17 @@ fn handle_wrapper_message_with_peer(
                 prepared.reply_sender_conn.clone(),
                 target_conn.clone(),
             ) {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        &st,
+                        facts,
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        "refused:persistence_failed",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
                     reason,
@@ -18326,6 +19300,26 @@ fn handle_wrapper_message_with_peer(
                         expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
                     },
                 );
+            }
+            if let Some(facts) = &guidance_admission
+                && let Err(error) =
+                    record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "admitted")
+            {
+                if let Some(facts) = &guidance_admission
+                    && let Err(error) = record_guidance_outcome(
+                        &st,
+                        facts,
+                        &bridge_msg.to,
+                        &bridge_msg.id,
+                        "refused:persistence_failed",
+                    )
+                {
+                    warn!("refus de guidage non journalisé : {error}");
+                }
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: format!("guidage non persisté: {error}"),
+                });
             }
             let target_writer = st.connections.get(&target_conn).cloned();
             drop(st);
@@ -18745,12 +19739,92 @@ fn handle_wrapper_message_with_peer(
                     reason: "annulation réservée à la connexion de l'émetteur ou à son client auxiliaire attesté".to_string(),
                 });
             }
+            let pending_request = match st.store.get_request(&id) {
+                Ok(request) => request,
+                Err(error) => {
+                    return Some(DaemonToWrapper::Nack {
+                        id,
+                        reason: error.to_string(),
+                    });
+                }
+            };
+            let guidance_admission = pending_request
+                .as_ref()
+                .filter(|request| request.state == "open")
+                .and_then(|request| {
+                    let project = crate::communication::project_scope(
+                        connection_communication_project(&st, conn_id).as_ref(),
+                        agent_communication_project(&st, &request.target).as_ref(),
+                        &request.target,
+                        None,
+                    );
+                    if let Err(reason) = project {
+                        let code = if reason.starts_with("cross_project_reason_required") {
+                            "cross_project_reason_required"
+                        } else {
+                            "invalid_cross_project_reason"
+                        };
+                        record_guidance_refusal(
+                            &st,
+                            Some(conn_id),
+                            &request.target,
+                            &id,
+                            Some(crate::guidance::GuidanceAction::Interrupt),
+                            crate::guidance::GuidancePath::Cancel,
+                            code,
+                        );
+                        return None;
+                    }
+                    check_guidance(
+                        &st,
+                        Some(conn_id),
+                        &request.target,
+                        crate::guidance::GuidanceAction::Interrupt,
+                        crate::guidance::GuidancePath::Cancel,
+                        None,
+                        false,
+                        &id,
+                    )
+                    .ok()
+                });
             match st.store.cancel_request(&id, &sender, reason.as_deref()) {
-                Ok(Some(request)) if request.sender != sender => Some(DaemonToWrapper::Nack {
-                    id,
-                    reason: "seul l'émetteur peut annuler cette demande".to_string(),
-                }),
+                Ok(Some(request)) if request.sender != sender => {
+                    if let Some(facts) = &guidance_admission
+                        && let Err(error) = record_guidance_outcome(
+                            &st,
+                            facts,
+                            &request.target,
+                            &id,
+                            "refused:not_permitted",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
+                    Some(DaemonToWrapper::Nack {
+                        id,
+                        reason: "seul l'émetteur peut annuler cette demande".to_string(),
+                    })
+                }
                 Ok(Some(request)) if request.state == "cancelled" => {
+                    let interrupt_active = guidance_admission.as_ref().is_some_and(|facts| {
+                        match record_guidance_outcome(&st, facts, &request.target, &id, "admitted")
+                        {
+                            Ok(()) => true,
+                            Err(error) => {
+                                if let Err(error) = record_guidance_outcome(
+                                    &st,
+                                    facts,
+                                    &request.target,
+                                    &id,
+                                    "refused:persistence_failed",
+                                ) {
+                                    warn!("refus de guidage non journalisé : {error}");
+                                }
+                                warn!("interruption d'annulation non persistée : {error}");
+                                false
+                            }
+                        }
+                    });
                     st.delegation_store.wait_epoch().bump();
                     st.pending_replies
                         .retain(|pending| pending.msg_id != request.id);
@@ -18765,14 +19839,15 @@ fn handle_wrapper_message_with_peer(
                                     id: request.id.clone(),
                                     reason: request.cancel_reason.clone()
                                         .unwrap_or_else(|| "demande annulée".to_string()),
+                                    interrupt_active: Some(interrupt_active),
                                 }
                             } else {
-                                DaemonToWrapper::Deliver(bridget_core::BridgetMessage::new(
+                                DaemonToWrapper::Deliver { message: bridget_core::BridgetMessage::new(
                                     "bridget", &request.target,
                                     format!("Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
                                         request.id, sender, request.cancel_reason.as_deref()
                                             .map(|reason| format!(" Motif : {reason}")).unwrap_or_default()),
-                                ))
+                                ), mid_turn_ok: Some(true) }
                             };
                             (Arc::clone(writer), message)
                         }));
@@ -18796,18 +19871,57 @@ fn handle_wrapper_message_with_peer(
                         state: request.state,
                     })
                 }
-                Ok(Some(request)) => Some(DaemonToWrapper::Nack {
-                    id,
-                    reason: format!("demande déjà terminale: {}", request.state),
-                }),
-                Ok(None) => Some(DaemonToWrapper::Nack {
-                    id,
-                    reason: "demande introuvable".to_string(),
-                }),
-                Err(error) => Some(DaemonToWrapper::Nack {
-                    id,
-                    reason: error.to_string(),
-                }),
+                Ok(Some(request)) => {
+                    if let Some(facts) = &guidance_admission
+                        && let Err(error) = record_guidance_outcome(
+                            &st,
+                            facts,
+                            &request.target,
+                            &id,
+                            "refused:terminal_request",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
+                    Some(DaemonToWrapper::Nack {
+                        id,
+                        reason: format!("demande déjà terminale: {}", request.state),
+                    })
+                }
+                Ok(None) => {
+                    if let (Some(facts), Some(request)) = (&guidance_admission, &pending_request)
+                        && let Err(error) = record_guidance_outcome(
+                            &st,
+                            facts,
+                            &request.target,
+                            &id,
+                            "refused:request_unavailable",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
+                    Some(DaemonToWrapper::Nack {
+                        id,
+                        reason: "demande introuvable".to_string(),
+                    })
+                }
+                Err(error) => {
+                    if let (Some(facts), Some(request)) = (&guidance_admission, &pending_request)
+                        && let Err(error) = record_guidance_outcome(
+                            &st,
+                            facts,
+                            &request.target,
+                            &id,
+                            "refused:persistence_failed",
+                        )
+                    {
+                        warn!("refus de guidage non journalisé : {error}");
+                    }
+                    Some(DaemonToWrapper::Nack {
+                        id,
+                        reason: error.to_string(),
+                    })
+                }
             }
         }
 
@@ -20342,7 +21456,7 @@ mod spec140_title_tests {
             message_bytes: serde_json::to_vec(message).unwrap(),
         };
         let mut controls = Vec::new();
-        defer_idempotent_delivery(state, "conn-1", delivery, &mut controls).unwrap();
+        defer_idempotent_delivery(state, "conn-1", delivery, &mut controls, None, None).unwrap();
         match &controls[0].message {
             DaemonToWrapper::DeliverIdempotent { message, .. } => message.clone(),
             other => panic!("remise idempotente attendue : {other:?}"),
@@ -20418,12 +21532,22 @@ mod spec140_title_tests {
             .begin_send_delivery(&key, &delivery)
             .unwrap();
         let mut controls = Vec::new();
-        defer_idempotent_delivery(&state, "conn-1", delivery.clone(), &mut controls).unwrap();
+        defer_idempotent_delivery(
+            &state,
+            "conn-1",
+            delivery.clone(),
+            &mut controls,
+            None,
+            None,
+        )
+        .unwrap();
         defer_idempotent_delivery(
             &state,
             "conn-1",
             state.idempotency.send_delivery(&key).unwrap().unwrap(),
             &mut controls,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(controls.len(), 2);
@@ -20461,7 +21585,10 @@ mod spec140_title_tests {
         }
         let mut corrupt = delivery;
         corrupt.message_bytes = b"not JSON".to_vec();
-        assert!(defer_idempotent_delivery(&state, "conn-1", corrupt, &mut controls).is_err());
+        assert!(
+            defer_idempotent_delivery(&state, "conn-1", corrupt, &mut controls, None, None)
+                .is_err()
+        );
         assert_eq!(controls.len(), 2);
         drop(state);
         let _ = std::fs::remove_file(config.db_path);
@@ -20505,7 +21632,9 @@ mod spec140_title_tests {
             Some(DaemonToWrapper::Ack { .. })
         ));
         match presence_tests::read_control(&mut reader) {
-            DaemonToWrapper::Deliver(delivered) => {
+            DaemonToWrapper::Deliver {
+                message: delivered, ..
+            } => {
                 assert!(delivered.thread_display_title.is_none());
                 assert_eq!(delivered.body, "corps direct exact");
             }
@@ -21077,7 +22206,7 @@ mod presence_tests {
         assert!(matches!(result, Some(DaemonToWrapper::Ack { .. })));
         assert!(matches!(
             read_control(&mut target_reader),
-            DaemonToWrapper::Deliver(message)
+            DaemonToWrapper::Deliver { message, .. }
                 if message.from == "89000000-0000-4000-8000-000000000103" && message.to == "89000000-0000-4000-8000-000000000102"
         ));
         assert_sender_last_seen(&mut shared.lock().unwrap(), true);
@@ -21146,7 +22275,7 @@ mod presence_tests {
         assert!(
             matches!(
                 delivered,
-                DaemonToWrapper::Deliver(ref message)
+                DaemonToWrapper::Deliver { ref message, .. }
                     if message.from == "89000000-0000-4000-8000-000000000102" && message.to == "89000000-0000-4000-8000-000000000103"
             ),
             "trame reçue par la cible: {delivered:?}"
@@ -23882,6 +25011,5011 @@ mod presence_tests {
                     <= HUMAN_STEER_TIMEOUT_SECS.saturating_add(after.saturating_sub(before) + 1),
             "le steer explicite doit rester borné ; timeout={timeout}"
         );
+    }
+
+    // Lien durable réel partagé par les oracles d'envoi et de garde156.
+    pub(super) fn guidance156_link_parent(
+        st: &mut DaemonState,
+        parent_conn: &str,
+        target_conn: &str,
+    ) {
+        use crate::idempotency::{AgentLinkRecord, AgentLinkState};
+        let parent = st.conn_instances[parent_conn].clone();
+        let child = st.conn_instances[target_conn].clone();
+        let link = AgentLinkRecord {
+            link_id: Uuid::new_v4().to_string(),
+            parent_instance_id: parent.clone(),
+            child_instance_id: child.clone(),
+            parent_execution_id: None,
+            objective_id: None,
+            delegation_id: None,
+            project: None,
+            role: "native_delegate".into(),
+            agent_path: format!("{parent}/{child}"),
+            state: AgentLinkState::Reserved,
+            created_at: unix_now_secs(),
+            closed_at: None,
+            revision: 0,
+        };
+        st.idempotency.create_agent_link(&link).unwrap();
+        st.idempotency
+            .transition_agent_link(
+                &link.link_id,
+                &[AgentLinkState::Reserved],
+                AgentLinkState::Open,
+                unix_now_secs(),
+            )
+            .unwrap();
+        assert_eq!(
+            st.fleet
+                .agent_link_for_child(&child)
+                .unwrap()
+                .unwrap()
+                .parent_instance_id,
+            parent
+        );
+    }
+
+    #[test]
+    fn guidance156_send_canon_intention_demandee() {
+        let passive = idempotent_message("canon demandé156");
+        let scope = "012_scope_guidancecanon";
+        let id = "canon156";
+        let canon = canonical_send(scope, id, &passive, 123000);
+        for (intent, byte) in [
+            (bridget_core::MessageIntent::SteerCurrent, 3),
+            (bridget_core::MessageIntent::InterruptAndStart, 4),
+        ] {
+            let mut message = passive.clone();
+            message.intent = Some(intent);
+            let demanded = canonical_send(scope, id, &message, 123000);
+            assert_ne!(demanded, canon);
+            assert!(demanded.windows(3).any(|window| window == [255, 0, byte]));
+            assert_eq!(message.intent, Some(intent));
+        }
+    }
+
+    #[test]
+    fn guidance156_send_rejeu_actif_puis_inactif_identique() {
+        let (mut st, config) = state_with_registered_agent("guidance156-replay");
+        let (writer, mut reader) = control_socket("guidance156-replay");
+        st.connections.insert("conn-1".into(), writer);
+        st.presences.get_mut("instance-1").unwrap().state = "busy".into();
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidancereplay",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let mut message = idempotent_message("rejeu steer156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let issued_at = unix_now_secs();
+        let send = || WrapperToDaemon::SendIdempotent {
+            message: message.clone(),
+            message_id: "guidance-replay".into(),
+            issued_at,
+        };
+        let first = handle_wrapper_message("guidance-client", send(), &shared).unwrap();
+        assert!(matches!(
+            first,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            }
+        ));
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::DeliverIdempotent { message, .. }
+            if message.intent == Some(bridget_core::MessageIntent::SteerCurrent))
+        );
+        let before = shared.lock().unwrap().idempotency.record_count().unwrap();
+        {
+            let mut st = shared.lock().unwrap();
+            st.presences.get_mut("instance-1").unwrap().state = "stopped".into();
+            st.router.unregister_by_conn("conn-1");
+        }
+        let replay = handle_wrapper_message("guidance-client", send(), &shared).unwrap();
+        assert_eq!(encode(&replay).unwrap(), encode(&first).unwrap());
+        assert_eq!(
+            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            before
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_send_autre_intent_envelope_mismatch() {
+        let (mut st, config) = state_with_registered_agent("guidance156-mismatch");
+        let (writer, mut reader) = control_socket("guidance156-mismatch");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidancemismatch",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let issued_at = unix_now_secs();
+        let mut message = idempotent_message("intention différente156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        assert!(matches!(
+            handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message: message.clone(),
+                    message_id: "guidance-mismatch".into(),
+                    issued_at
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        read_control(&mut reader);
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        assert!(matches!(
+            handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: "guidance-mismatch".into(),
+                    issued_at
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::EnvelopeMismatch,
+                ..
+            })
+        ));
+        assert_eq!(
+            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            1
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_send_queue_octets_inchanges() {
+        let mut absent = idempotent_message("file156");
+        absent.id = "queue156".into();
+        let mut queue = absent.clone();
+        queue.intent = None; // queue API n'ajoute aucune intention message.
+        assert_eq!(
+            serde_json::to_vec(&queue).unwrap(),
+            serde_json::to_vec(&absent).unwrap()
+        );
+        assert_eq!(
+            canonical_send("scope156", "queue156", &queue, 123000),
+            vec![
+                98, 114, 105, 100, 103, 101, 116, 47, 99, 108, 105, 101, 110, 116, 45, 115, 101,
+                110, 100, 47, 118, 49, 0, 0, 0, 0, 0, 0, 0, 0, 8, 115, 99, 111, 112, 101, 49, 53,
+                54, 0, 0, 0, 0, 0, 0, 0, 8, 113, 117, 101, 117, 101, 49, 53, 54, 0, 0, 0, 0, 0, 0,
+                0, 36, 56, 57, 48, 48, 48, 48, 48, 48, 45, 48, 48, 48, 48, 45, 52, 48, 48, 48, 45,
+                56, 48, 48, 48, 45, 48, 48, 48, 48, 48, 48, 48, 48, 48, 49, 48, 50, 0, 0, 0, 0, 0,
+                0, 0, 7, 102, 105, 108, 101, 49, 53, 54, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 4, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1, 224, 120
+            ]
+        );
+        assert_eq!(
+            canonical_send("scope156", "queue156", &queue, 123000),
+            canonical_send("scope156", "queue156", &absent, 123000)
+        );
+    }
+
+    #[test]
+    fn guidance156_send_steer_transmis_tel_quel() {
+        let (mut st, config) = state_with_registered_agent("guidance156-steer");
+        let (writer, mut reader) = control_socket("guidance156-steer");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidancesteer",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let mut message = idempotent_message("steer transmis156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        assert!(matches!(
+            handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message: message.clone(),
+                    message_id: "guidance-steer".into(),
+                    issued_at: unix_now_secs()
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        let delivered = read_control(&mut reader);
+        assert!(
+            matches!(delivered, DaemonToWrapper::DeliverIdempotent { message, .. } if message.intent == Some(bridget_core::MessageIntent::SteerCurrent))
+        );
+        let before = shared.lock().unwrap().idempotency.record_count().unwrap();
+        message.reply = true;
+        message.body = "steer reply interdit156".into();
+        assert!(
+            matches!(handle_wrapper_message("guidance-client", WrapperToDaemon::SendIdempotent { message, message_id: "guidance-invalid-reply".into(), issued_at: unix_now_secs() }, &shared),
+            Some(DaemonToWrapper::Nack { reason, .. }) if reason == "invalid_intent")
+        );
+        assert_eq!(
+            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            before,
+            "refus avant réservation"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_send_interrupt_admet_execution() {
+        let (mut st, config) = state_with_registered_agent("guidance156-interrupt");
+        let (writer, mut reader) = control_socket("guidance156-interrupt");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidanceinterrupt",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let mut message = idempotent_message("interrupt exécuté156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        assert!(matches!(
+            handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: "guidance-interrupt".into(),
+                    issued_at: unix_now_secs()
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::DeliverIdempotent { message, execution: Some(_), .. }
+            if message.intent == Some(bridget_core::MessageIntent::InterruptAndStart))
+        );
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            st.execution_store
+                .execution_snapshot("execution-guidance-interrupt")
+                .unwrap()
+                .unwrap()
+                .state,
+            "starting"
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_guard_pair_meme_projet() {
+        let (mut st, config) = state_with_registered_agent("guidance156_guard_pair_meme_projet");
+        let (writer, mut reader) = control_socket("guidance156_guard_pair_meme_projet");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_guard_pair_meme_projet",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut message = idempotent_message("garde brute156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "guard156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "refus attendu : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        let mut legacy = idempotent_message("garde historique156");
+        legacy.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(legacy),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { .. }),
+            "historique : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_guard_autre_projet() {
+        let (mut st, config) = state_with_registered_agent("guidance156_guard_autre_projet");
+        let (writer, mut reader) = control_socket("guidance156_guard_autre_projet");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_guard_autre_projet",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        {
+            let mut st = shared.lock().unwrap();
+            for (conn, root) in [
+                ("owner-89000000-0000-4000-8000-000000000200", "/from/.git"),
+                ("conn-1", "/to/.git"),
+            ] {
+                let project = bridget_transport::protocol::CommunicationProject {
+                    host: "fixture".into(),
+                    root: root.into(),
+                };
+                st.communication_projects
+                    .insert(conn.into(), (Some(project.clone()), Some(project), false));
+            }
+        }
+        let mut message = idempotent_message("garde brute156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "guard156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "refus attendu : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        let mut legacy = idempotent_message("garde historique156");
+        legacy.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(legacy),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { .. }),
+            "historique : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_guard_soi_meme() {
+        let (mut st, config) = state_with_registered_agent("guidance156_guard_soi_meme");
+        let (writer, mut reader) = control_socket("guidance156_guard_soi_meme");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_guard_soi_meme",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut message = idempotent_message("garde brute156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        message.to = "89000000-0000-4000-8000-000000000200".into();
+        message.from = "89000000-0000-4000-8000-000000000200".into();
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "guard156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "refus attendu : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        let mut legacy = idempotent_message("garde historique156");
+        legacy.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        legacy.to = "89000000-0000-4000-8000-000000000200".into();
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(legacy),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { .. }),
+            "historique : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_guard_non_atteste() {
+        let (mut st, config) = state_with_registered_agent("guidance156_guard_non_atteste");
+        let (writer, mut reader) = control_socket("guidance156_guard_non_atteste");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_guard_non_atteste",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "bare",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        handle_wrapper_message(
+            "bare",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_bare156".into(),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+            &shared,
+        )
+        .unwrap();
+        let mut message = idempotent_message("garde brute156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        message.from = "humain".into();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        let response = handle_wrapper_message(
+            "bare",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "guard156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "refus attendu : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        let mut legacy = idempotent_message("garde historique156");
+        legacy.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(legacy),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { .. }),
+            "historique : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_guard_preuve_enfant() {
+        let (mut st, config) = state_with_registered_agent("guidance156_guard_preuve_enfant");
+        let (writer, mut reader) = control_socket("guidance156_guard_preuve_enfant");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_guard_preuve_enfant",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut message = idempotent_message("garde brute156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        message.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "child-proof156".into(),
+        });
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "guard156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "refus attendu : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        let mut legacy = idempotent_message("garde historique156");
+        legacy.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        legacy.delegated_origin = Some(bridget_core::DelegatedOrigin {
+            provider: "codex".into(),
+            child_ref: "child-proof156".into(),
+        });
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(legacy),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { .. }),
+            "historique : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_guard_from_forge() {
+        let (mut st, config) = state_with_registered_agent("guidance156_guard_from_forge");
+        let (writer, mut reader) = control_socket("guidance156_guard_from_forge");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_guard_from_forge",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut message = idempotent_message("garde brute156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        message.from = "89000000-0000-4000-8000-000000000999".into();
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "guard156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "refus attendu : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        let mut legacy = idempotent_message("garde historique156");
+        legacy.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        legacy.from = "89000000-0000-4000-8000-000000000999".into();
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(legacy),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { .. }),
+            "historique : {response:?}"
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_origin_human_forgee_par_agent_retiree() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_origin_human_forgee_par_agent_retiree");
+        let (writer, mut reader) =
+            control_socket("guidance156_origin_human_forgee_par_agent_retiree");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_origin_human_forgee_par_agent_retiree",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let mut message = idempotent_message("origine156");
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "origin156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::DeliverIdempotent {message,..} if message.origin.is_none())
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["guidance-client"],
+            ConnectionRole::Client
+        );
+        assert!(!matches!(
+            handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_origin_human_attach_conservee() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_origin_human_attach_conservee");
+        let (writer, mut reader) = control_socket("guidance156_origin_human_attach_conservee");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_origin_human_attach_conservee",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let (writer, _peer) = control_socket("attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        let mut message = idempotent_message("origine156");
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        assert!(matches!(
+            handle_wrapper_message("attach156", WrapperToDaemon::Send(message), &shared),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::Deliver {message,..} if message.origin==Some(bridget_core::MessageOrigin::Human))
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_pause_steer_agent_refuse() {
+        let (mut st, config) = state_with_registered_agent("guidance156_pause_steer_agent_refuse");
+        let (writer, mut reader) = control_socket("guidance156_pause_steer_agent_refuse");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_pause_steer_agent_refuse",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        let mut message = idempotent_message("pause156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "pause-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {category,..},..} if category=="referent_paused")
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_pause_interrupt_agent_refuse() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_pause_interrupt_agent_refuse");
+        let (writer, mut reader) = control_socket("guidance156_pause_interrupt_agent_refuse");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_pause_interrupt_agent_refuse",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        let mut message = idempotent_message("pause156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "pause-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {category,..},..} if category=="referent_paused")
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_pause_queue_admise() {
+        let (mut st, config) = state_with_registered_agent("guidance156_pause_queue_admise");
+        let (writer, mut reader) = control_socket("guidance156_pause_queue_admise");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_pause_queue_admise",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        let message = idempotent_message("pause156");
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "pause-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            response,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent { .. }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_pause_humain_admis() {
+        let (mut st, config) = state_with_registered_agent("guidance156_pause_humain_admis");
+        let (writer, mut reader) = control_socket("guidance156_pause_humain_admis");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_pause_humain_admis",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        let (writer, _peer) = control_socket("pause-human156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("attach156".into(), writer);
+        handle_wrapper_message(
+            "attach156",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        )
+        .unwrap();
+        let mut message = idempotent_message("humain pendant pause156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        assert!(matches!(
+            handle_wrapper_message("attach156", WrapperToDaemon::Send(message), &shared),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_pause_aucun_tour_cree() {
+        let (mut st, config) = state_with_registered_agent("guidance156_pause_aucun_tour_cree");
+        let (writer, mut reader) = control_socket("guidance156_pause_aucun_tour_cree");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_pause_aucun_tour_cree",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        let mut message = idempotent_message("pause156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "pause-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {category,..},..} if category=="referent_paused")
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus : {line}"
+        );
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .execution_store
+                .execution_snapshot("execution-pause-message156")
+                .unwrap()
+                .is_none()
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_midturn_pair_attend_fin_de_tour() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_midturn_pair_attend_fin_de_tour");
+        let (writer, mut reader) = control_socket("guidance156_midturn_pair_attend_fin_de_tour");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_midturn_pair_attend_fin_de_tour",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let message = idempotent_message("midturn156");
+        handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "midturn-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent {
+                mid_turn_ok: Some(false),
+                ..
+            }
+        ));
+        let legacy = idempotent_message("même relation historique156");
+        assert!(matches!(
+            handle_wrapper_message(
+                "owner-89000000-0000-4000-8000-000000000200",
+                WrapperToDaemon::Send(legacy),
+                &shared
+            ),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(false),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_midturn_enfant_vers_parent_immediat() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_midturn_enfant_vers_parent_immediat");
+        let (writer, mut reader) =
+            control_socket("guidance156_midturn_enfant_vers_parent_immediat");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_midturn_enfant_vers_parent_immediat",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "conn-1", "guidance-client");
+        let message = idempotent_message("midturn156");
+        handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "midturn-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        let legacy = idempotent_message("même relation historique156");
+        assert!(matches!(
+            handle_wrapper_message(
+                "owner-89000000-0000-4000-8000-000000000200",
+                WrapperToDaemon::Send(legacy),
+                &shared
+            ),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_midturn_parent_immediat() {
+        let (mut st, config) = state_with_registered_agent("guidance156_midturn_parent_immediat");
+        let (writer, mut reader) = control_socket("guidance156_midturn_parent_immediat");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_midturn_parent_immediat",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let message = idempotent_message("midturn156");
+        handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "midturn-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        let legacy = idempotent_message("même relation historique156");
+        assert!(matches!(
+            handle_wrapper_message(
+                "owner-89000000-0000-4000-8000-000000000200",
+                WrapperToDaemon::Send(legacy),
+                &shared
+            ),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_midturn_humain_attache_immediat() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_midturn_humain_attache_immediat");
+        let (writer, mut reader) = control_socket("guidance156_midturn_humain_attache_immediat");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_midturn_humain_attache_immediat",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let (writer, _peer) = control_socket("mid-human156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("attach156".into(), writer);
+        handle_wrapper_message(
+            "attach156",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        )
+        .unwrap();
+        let message = idempotent_message("midturn156");
+        handle_wrapper_message("attach156", WrapperToDaemon::Send(message), &shared).unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        // UI réelle : Register réservé puis auxiliaire attestée ; son rôle reste Client.
+        {
+            let mut st = shared.lock().unwrap();
+            let host = st.host.clone();
+            assert!(matches!(
+                handle_register_with_channel(
+                    "ui-primary156",
+                    2,
+                    "ui".into(),
+                    UI_HUMAN_AGENT_ID.into(),
+                    Some(host),
+                    None,
+                    ChannelReport::Omitted,
+                    Some(PresenceMode::Cli),
+                    None,
+                    Some("test".into()),
+                    Some("bridget-ui-guidance156".into()),
+                    None,
+                    false,
+                    Some(false),
+                    &mut st
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+            let _ = super::spec094_live_test_connection(&mut st, "ui-primary156");
+        }
+        negotiate_idempotent_client(
+            &shared,
+            "ui-client156",
+            "012_scope_uimid156_attested",
+            "humain",
+        );
+        let ui = BridgetMessage::new(
+            UI_HUMAN_SENDER,
+            "89000000-0000-4000-8000-000000000102",
+            "UI sans origin forgée156",
+        );
+        let response = handle_wrapper_message(
+            "ui-client156",
+            WrapperToDaemon::SendIdempotent {
+                message: ui.clone(),
+                message_id: "ui-midturn156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "UI attestée : {response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::DeliverIdempotent {message,mid_turn_ok:Some(true),..} if message.origin.is_none())
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["ui-client156"],
+            ConnectionRole::Client
+        );
+        assert!(matches!(
+            handle_wrapper_message("ui-primary156", WrapperToDaemon::Send(ui), &shared),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        // Une UI présente n'atteste pas le Client nu qui emploie son libellé.
+        handle_wrapper_message(
+            "bare-human156",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+            &shared,
+        )
+        .unwrap();
+        handle_wrapper_message(
+            "bare-human156",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_barehuman156".into(),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+            &shared,
+        )
+        .unwrap();
+        handle_wrapper_message(
+            "bare-human156",
+            WrapperToDaemon::SendIdempotent {
+                message: BridgetMessage::new(
+                    "humain",
+                    "89000000-0000-4000-8000-000000000102",
+                    "étiquette sans autorité156",
+                ),
+                message_id: "bare-human156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent {
+                mid_turn_ok: Some(false),
+                ..
+            }
+        ));
+        // Producteurs internes existants, jamais une origine fournie par un client.
+        {
+            let mut st = shared.lock().unwrap();
+            let writer = st.connections["conn-1"].clone();
+            deliver_to_agent(
+                &writer,
+                "89000000-0000-4000-8000-000000000102",
+                "notice système156",
+            )
+            .unwrap();
+            let now = unix_now_secs();
+            let departure = ThreadWakeDeparture {
+                thread_id: Uuid::new_v4().to_string(),
+                agent_id: "89000000-0000-4000-8000-000000000102".into(),
+                through_seq: 1,
+                generation: 1,
+                delivery_id: Uuid::new_v4().to_string(),
+                delivery_key: "system-wake156".into(),
+                recipient_instance_id: "instance-1".into(),
+                delivery_generation: next_delivery_generation(),
+                issued_at: now,
+                expires_at: now + 600,
+                target_conn: "conn-1".into(),
+            };
+            let mut controls = Vec::new();
+            project_thread_wake(&mut st, &departure, &mut controls).unwrap();
+            assert!(matches!(
+                &controls[0].message,
+                DaemonToWrapper::DeliverIdempotent {
+                    mid_turn_ok: Some(true),
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_midturn_trame_sans_valeur_attend() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_midturn_trame_sans_valeur_attend");
+        let (writer, mut reader) = control_socket("guidance156_midturn_trame_sans_valeur_attend");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_midturn_trame_sans_valeur_attend",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let message = idempotent_message("midturn156");
+        handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            WrapperToDaemon::Send(message),
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(false),
+                ..
+            }
+        ));
+        handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message: idempotent_message("sans valeur idempotent156"),
+                message_id: "no-proof-idemp156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent {
+                mid_turn_ok: Some(false),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_midturn_reprise_recalcule() {
+        let (mut st, config) = state_with_registered_agent("guidance156_midturn_reprise_recalcule");
+        let (writer, mut reader) = control_socket("guidance156_midturn_reprise_recalcule");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_midturn_reprise_recalcule",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "guidance-client", "conn-1");
+        let message = idempotent_message("midturn156");
+        handle_wrapper_message(
+            "guidance-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "midturn-message156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::DeliverIdempotent {
+                mid_turn_ok: Some(true),
+                ..
+            }
+        ));
+        {
+            let mut st = shared.lock().unwrap();
+            let child = st.conn_instances["conn-1"].clone();
+            let link = st.fleet.agent_link_for_child(&child).unwrap().unwrap();
+            st.idempotency
+                .transition_agent_link(
+                    &link.link_id,
+                    &[crate::idempotency::AgentLinkState::Open],
+                    crate::idempotency::AgentLinkState::Closed,
+                    unix_now_secs(),
+                )
+                .unwrap();
+            let record = st.idempotency.record_count().unwrap();
+            schedule_idempotent_delivery_recovery(&mut st, "conn-1", "instance-1");
+            assert_eq!(st.idempotency.record_count().unwrap(), record);
+            assert!(matches!(
+                &st.pending_post_response_controls["conn-1"][0].message,
+                DaemonToWrapper::DeliverIdempotent {
+                    mid_turn_ok: Some(false),
+                    ..
+                }
+            ));
+        }
+        let legacy = idempotent_message("même relation historique156");
+        assert!(matches!(
+            handle_wrapper_message(
+                "owner-89000000-0000-4000-8000-000000000200",
+                WrapperToDaemon::Send(legacy),
+                &shared
+            ),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::Deliver {
+                mid_turn_ok: Some(false),
+                ..
+            }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_control_interrupt_client_non_autorise() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_control_interrupt_client_non_autorise");
+        let (writer, mut reader) =
+            control_socket("guidance156_control_interrupt_client_non_autorise");
+        st.connections.insert("conn-1".into(), writer);
+        st.execution_store
+            .record_starting(
+                "submission156",
+                "execution156",
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs(),
+            )
+            .unwrap();
+        st.execution_store
+            .transition_if_current(
+                "execution156",
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                unix_now_secs(),
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_control_interrupt_client_non_autorise",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut st = shared.lock().unwrap();
+        let message = None;
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "control156".into(),
+            execution_id: "execution156".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::Interrupt,
+            message,
+        };
+        let response = handle_execution_control(
+            Some("guidance-client"),
+            "012_scope_control156",
+            command,
+            &mut st,
+        );
+        assert!(matches!(
+            response,
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+                ..
+            }
+        ));
+        drop(st);
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).is_err());
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_control_steer_pair_refuse() {
+        let (mut st, config) = state_with_registered_agent("guidance156_control_steer_pair_refuse");
+        let (writer, mut reader) = control_socket("guidance156_control_steer_pair_refuse");
+        st.connections.insert("conn-1".into(), writer);
+        st.execution_store
+            .record_starting(
+                "submission156",
+                "execution156",
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs(),
+            )
+            .unwrap();
+        st.execution_store
+            .transition_if_current(
+                "execution156",
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                unix_now_secs(),
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_control_steer_pair_refuse",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut st = shared.lock().unwrap();
+        let message = {
+            let mut m = idempotent_message("controle156");
+            m.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+            Some(m)
+        };
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "control156".into(),
+            execution_id: "execution156".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::SteerCurrent,
+            message,
+        };
+        let response = handle_execution_control(
+            Some("guidance-client"),
+            "012_scope_control156",
+            command,
+            &mut st,
+        );
+        assert!(matches!(
+            response,
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+                ..
+            }
+        ));
+        drop(st);
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).is_err());
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_control_pause_interne_admise() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_control_pause_interne_admise");
+        let (writer, mut reader) = control_socket("guidance156_control_pause_interne_admise");
+        st.connections.insert("conn-1".into(), writer);
+        st.execution_store
+            .record_starting(
+                "submission156",
+                "execution156",
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs(),
+            )
+            .unwrap();
+        st.execution_store
+            .transition_if_current(
+                "execution156",
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                unix_now_secs(),
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_control_pause_interne_admise",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut st = shared.lock().unwrap();
+        let message = None;
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "control156".into(),
+            execution_id: "execution156".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::Interrupt,
+            message,
+        };
+        let before = st
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap();
+        let response = handle_execution_control(None, "012_scope_control156", command, &mut st);
+        assert!(matches!(
+            response,
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::OutcomeUnknown,
+                ..
+            }
+        ));
+        assert_eq!(
+            st.idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap(),
+            before
+        );
+        drop(st);
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::ControlExecutionDispatch { .. }
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_human_client_nu_refuse_pour_controle() {
+        let (mut st, config) = state_with_registered_agent("g15600a0d635");
+        let (writer, mut reader) = control_socket("g15600a0d635");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "bare156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        handle_wrapper_message(
+            "bare156",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_bare_human156".into(),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+            &shared,
+        )
+        .unwrap();
+        let mut message = idempotent_message("bare-steer156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        message.from = "human".into();
+        let response = handle_wrapper_message(
+            "bare156",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "bare-steer156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {ref category,ref reason,..},..} if category=="intent_not_permitted" && reason=="identity_unattested"),
+            "{response:?}"
+        );
+        let mut queue = idempotent_message("human queue toujours admise156");
+        queue.from = "human".into();
+        let queued = handle_wrapper_message(
+            "bare156",
+            WrapperToDaemon::SendIdempotent {
+                message: queue,
+                message_id: "bare-queue156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                queued,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{queued:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::DeliverIdempotent {message,..} if message.body=="human queue toujours admise156")
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            0
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_human_reconnexion_agent_sans_autorite() {
+        let (mut st, config) = state_with_registered_agent("g1566c628943");
+        let (writer, mut reader) = control_socket("g1566c628943");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let result = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Attach,
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                result,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Attach
+                }
+            ),
+            "rôle déjà Client : {result:?}"
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("g156-client"),
+            Some(&ConnectionRole::Client)
+        );
+        let mut message = idempotent_message("reconnect-steer156");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "reconnect-steer156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { ref category, .. }, .. } if category == "intent_not_permitted"),
+            "{response:?}"
+        );
+        negotiate_idempotent_client(
+            &shared,
+            "reconnect156",
+            "012_scope_reconnect156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut message = idempotent_message("reconnect proof agent156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "reconnect156",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "reconnect-interrupt156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { ref category, .. }, .. } if category == "intent_not_permitted"),
+            "{response:?}"
+        );
+        // Une nouvelle Attach brute du même compte reste hors modèle ADR011.
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise : {line}"
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_human_attach_admis() {
+        let (mut st, config) = state_with_registered_agent("g15666d50ccc");
+        let (writer, mut reader) = control_socket("g15666d50ccc");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let (writer, _attach_reader) = control_socket("g156-attached");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(!shared.lock().unwrap().conn_names.contains_key("attach156"));
+        let mut message = idempotent_message("human attach steer156");
+        message.from = "human".into();
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let response =
+            handle_wrapper_message("attach156", WrapperToDaemon::Send(message), &shared).unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Ack { .. }),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::Deliver {message,..} if message.intent==Some(bridget_core::MessageIntent::SteerCurrent))
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles.get("attach156"),
+            Some(&ConnectionRole::Attach)
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_rate_cooldown_30s() {
+        let (mut st, config) = state_with_registered_agent("g156e984483c");
+        let (writer, mut reader) = control_socket("g156e984483c");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        let mut message = idempotent_message("cooldown-first156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "cooldown-first156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        read_control(&mut reader);
+        let mut message = idempotent_message("cooldown-second156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "cooldown-second156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { ref category, .. }, .. } if category == "interrupt_rate_limited"),
+            "{response:?}"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            1
+        );
+        let recorded = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_pair(
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 30,
+            )
+            .unwrap();
+        assert_eq!(recorded.0, 1);
+        let db = rusqlite::Connection::open(&config.db_path).unwrap();
+        db.execute(
+            "UPDATE guidance_events SET at=?1 WHERE outcome='admitted'",
+            [unix_now_secs() - 30],
+        )
+        .unwrap();
+        drop(db);
+        let mut message = idempotent_message("cooldown-boundary156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "cooldown-boundary156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        read_control(&mut reader);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            2
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_rate_plafond_3_par_10min() {
+        let (mut st, config) = state_with_registered_agent("g1563f3f8d4b");
+        let (writer, mut reader) = control_socket("g1563f3f8d4b");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        let now = unix_now_secs();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                now - 500,
+                "other-parent-a",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                now - 300,
+                "other-parent-b",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                now - 100,
+                "other-parent-c",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        let mut message = idempotent_message("target-cap156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "target-cap156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { ref category, .. }, .. } if category == "interrupt_rate_limited"),
+            "{response:?}"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            3
+        );
+        let db = rusqlite::Connection::open(&config.db_path).unwrap();
+        db.execute(
+            "UPDATE guidance_events SET at=?1 WHERE actor='other-parent-a'",
+            [unix_now_secs() - 601],
+        )
+        .unwrap();
+        drop(db);
+        let mut message = idempotent_message("target-cap-boundary156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "target-cap-boundary156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        read_control(&mut reader);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            3
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_rate_retry_after_exact() {
+        let (mut st, config) = state_with_registered_agent("g15608e07778");
+        let (writer, _reader) = control_socket("g15608e07778");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        let last = unix_now_secs() - 17;
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                last,
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        let mut message = idempotent_message("retry-after156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "retry-after156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let db = rusqlite::Connection::open(&config.db_path).unwrap();
+        let now:i64=db.query_row("SELECT at FROM guidance_events WHERE message_id='retry-after156' AND outcome LIKE 'refused:%' ORDER BY id DESC LIMIT 1",[],|row|row.get(0)).unwrap();
+        drop(db);
+        let DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::Rejected {
+                category, reason, ..
+            },
+            ..
+        } = response
+        else {
+            panic!("refus quota attendu : {response:?}")
+        };
+        assert_eq!(category, "interrupt_rate_limited");
+        let reason: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        assert_eq!(
+            reason,
+            serde_json::json!({"code":"interrupt_rate_limited","retry_after_secs":(last+30-now).max(0)})
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            1
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_rate_humain_exempt() {
+        let (mut st, config) = state_with_registered_agent("g15660783bb7");
+        let (writer, mut reader) = control_socket("g15660783bb7");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        let now = unix_now_secs();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                now,
+                "other-parent-a",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                now,
+                "other-parent-b",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                now,
+                "other-parent-c",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        let (writer, _attach_reader) = control_socket("g156-human-rate");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        for n in 0..4 {
+            let mut message = idempotent_message(&format!("human rate exempt156-{n}"));
+            message.from = "human".into();
+            message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+            let response =
+                handle_wrapper_message("attach156", WrapperToDaemon::Send(message), &shared)
+                    .unwrap();
+            assert!(
+                matches!(response, DaemonToWrapper::Ack { .. }),
+                "{response:?}"
+            );
+            read_control(&mut reader);
+        }
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            3
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_rate_refus_non_compte() {
+        let (mut st, config) = state_with_registered_agent("g1569f556c4d");
+        let (writer, mut reader) = control_socket("g1569f556c4d");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let db = rusqlite::Connection::open(&config.db_path).unwrap();
+        let peer_before = unix_now_secs();
+        let mut message = idempotent_message("rate-peer-refused156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "rate-peer-refused156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { ref category, .. }, .. } if category == "intent_not_permitted"),
+            "{response:?}"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            0
+        );
+        let peer_after = unix_now_secs();
+        let peer_counts: (i64, i64) = db.query_row(
+            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
+            ["rate-peer-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(
+            peer_counts,
+            (1, 0),
+            "FR-016 : premier refus peer tracé une seule fois, aucune admission"
+        );
+        let peer_trace: (i64, String, String, String, String, String, String) = db.query_row(
+            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
+            ["rate-peer-refused156"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        ).unwrap();
+        assert_eq!(
+            (
+                peer_trace.1.as_str(),
+                peer_trace.2.as_str(),
+                peer_trace.3.as_str(),
+                peer_trace.4.as_str(),
+                peer_trace.5.as_str()
+            ),
+            (
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                "rate-peer-refused156"
+            ),
+            "faits réels du refus peer",
+        );
+        assert!(
+            peer_before <= peer_trace.0 && peer_trace.0 <= peer_after,
+            "date réelle du refus peer : {:?}",
+            peer_trace
+        );
+        assert_eq!(peer_trace.6, "refused:intent_not_permitted");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus peer : {line}"
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        {
+            let mut st = shared.lock().unwrap();
+            for (conn, root) in [
+                ("owner-89000000-0000-4000-8000-000000000200", "/from/.git"),
+                ("conn-1", "/to/.git"),
+            ] {
+                let p = bridget_transport::protocol::CommunicationProject {
+                    host: "fixture".into(),
+                    root: root.into(),
+                };
+                st.communication_projects
+                    .insert(conn.into(), (Some(p.clone()), Some(p), false));
+            }
+        }
+        let project_before = unix_now_secs();
+        let mut message = idempotent_message("rate-project-refused156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let project_command = WrapperToDaemon::SendIdempotent {
+            message,
+            message_id: "rate-project-refused156".into(),
+            issued_at: unix_now_secs(),
+        };
+        let response =
+            handle_wrapper_message("g156-client", project_command.clone(), &shared).unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            0
+        );
+        let DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::Rejected { category, .. },
+            ..
+        } = &response
+        else {
+            panic!("refus durable du projet attendu : {response:?}");
+        };
+        let project_after = unix_now_secs();
+        let project_counts: (i64, i64) = db.query_row(
+            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
+            ["rate-project-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(
+            project_counts,
+            (1, 0),
+            "FR-016 : premier refus project tracé une seule fois, aucune admission"
+        );
+        let project_trace: (i64, String, String, String, String, String, String) = db.query_row(
+            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
+            ["rate-project-refused156"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        ).unwrap();
+        assert_eq!(
+            (
+                project_trace.1.as_str(),
+                project_trace.2.as_str(),
+                project_trace.3.as_str(),
+                project_trace.4.as_str(),
+                project_trace.5.as_str()
+            ),
+            (
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                "rate-project-refused156"
+            ),
+            "faits réels du refus project",
+        );
+        assert!(
+            project_before <= project_trace.0 && project_trace.0 <= project_after,
+            "date réelle du refus project : {:?}",
+            project_trace
+        );
+        assert_eq!(project_trace.6, format!("refused:{category}"));
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus project : {line}"
+        );
+        // Le rejeu du même refus conserve son résultat et sa trace, même après
+        // la suppression des faits de projet déjà prévue par la branche suivante.
+        shared.lock().unwrap().communication_projects.clear();
+        let replay = handle_wrapper_message("g156-client", project_command, &shared).unwrap();
+        assert_eq!(
+            encode(&replay).unwrap(),
+            encode(&response).unwrap(),
+            "rejeu exact du refus projet"
+        );
+        let replay_trace: (i64, String, String, String, String, String, String) = db.query_row(
+            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
+            ["rate-project-refused156"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        ).unwrap();
+        assert_eq!(
+            replay_trace, project_trace,
+            "un rejeu ne relit ni ne retrace les faits"
+        );
+        let replay_counts: (i64, i64) = db.query_row(
+            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
+            ["rate-project-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(replay_counts, (1, 0));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600,
+                )
+                .unwrap()
+                .0,
+            0
+        );
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise sur rejeu du refus projet : {line}"
+        );
+        db.execute_batch("CREATE TRIGGER g156_refuse_delivery BEFORE INSERT ON send_deliveries BEGIN SELECT RAISE(ABORT,'fixture persistence refusal156'); END;").unwrap();
+        let persist_before = unix_now_secs();
+        let mut message = idempotent_message("rate-persist-refused156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "rate-persist-refused156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            !matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            0
+        );
+        let persist_after = unix_now_secs();
+        let persist_counts: (i64, i64) = db.query_row(
+            "SELECT count(*), coalesce(sum(outcome='admitted'),0) FROM guidance_events WHERE message_id=?1",
+            ["rate-persist-refused156"], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(
+            persist_counts,
+            (1, 0),
+            "FR-016 : premier refus persist tracé une seule fois, aucune admission"
+        );
+        let persist_trace: (i64, String, String, String, String, String, String) = db.query_row(
+            "SELECT at,actor,target,action,path,message_id,outcome FROM guidance_events WHERE message_id=?1",
+            ["rate-persist-refused156"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        ).unwrap();
+        assert_eq!(
+            (
+                persist_trace.1.as_str(),
+                persist_trace.2.as_str(),
+                persist_trace.3.as_str(),
+                persist_trace.4.as_str(),
+                persist_trace.5.as_str()
+            ),
+            (
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                "rate-persist-refused156"
+            ),
+            "faits réels du refus persist",
+        );
+        assert!(
+            persist_before <= persist_trace.0 && persist_trace.0 <= persist_after,
+            "date réelle du refus persist : {:?}",
+            persist_trace
+        );
+        assert_eq!(persist_trace.6, "refused:persistence_failed");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "aucune remise après refus persist : {line}"
+        );
+        db.execute_batch("DROP TRIGGER g156_refuse_delivery;")
+            .unwrap();
+        drop(db);
+        let mut message = idempotent_message("rate-after-refus156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "rate-after-refus156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        read_control(&mut reader);
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            1
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_rate_survit_au_redemarrage() {
+        let (mut st, _first_config) = state_with_registered_agent("g156c9af4b48");
+        let (writer, mut reader) = control_socket("g156c9af4b48");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        let mut message = idempotent_message("restart-first156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "restart-first156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        read_control(&mut reader);
+        let keep_root = shared.lock().unwrap().fixture_root.take();
+        drop(shared);
+        let (mut st, config) = state_with_registered_agent("g156c9af4b48");
+        let (writer, _reader) = control_socket("g156c9af4b48");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        let mut message = idempotent_message("restart-second156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let response = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "restart-second156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { ref category, .. }, .. } if category == "interrupt_rate_limited"),
+            "{response:?}"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            1
+        );
+        drop(keep_root);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_cancel_pair_demande_active_acp_sans_interruption() {
+        let (mut st, config) = state_with_registered_agent("g15654afce7c");
+        let (writer, mut reader) = control_socket("g15654afce7c");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        shared
+            .lock()
+            .unwrap()
+            .set_turn_state("conn-1", true)
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "cancel-request156",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let command = WrapperToDaemon::CancelRequest {
+            id: "cancel-request156".into(),
+            sender: "89000000-0000-4000-8000-000000000200".into(),
+            reason: Some("annulation156".into()),
+        };
+        let before = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap()
+            .0;
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command.clone(),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::RequestCancelled {ref state,..} if state=="cancelled"),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::CancelDelivery {id,interrupt_active,..} if id=="cancel-request156" && interrupt_active==Some(false))
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request("cancel-request156")
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 0
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_cancel_pair_demande_en_file_retiree() {
+        let (mut st, config) = state_with_registered_agent("g156a0151891");
+        let (writer, mut reader) = control_socket("g156a0151891");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        shared
+            .lock()
+            .unwrap()
+            .set_turn_state("conn-1", true)
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "cancel-request156",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let command = WrapperToDaemon::CancelRequest {
+            id: "cancel-request156".into(),
+            sender: "89000000-0000-4000-8000-000000000200".into(),
+            reason: Some("annulation156".into()),
+        };
+        let before = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap()
+            .0;
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command.clone(),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::RequestCancelled {ref state,..} if state=="cancelled"),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::CancelDelivery {id,interrupt_active,..} if id=="cancel-request156" && interrupt_active==Some(false))
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request("cancel-request156")
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 0
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_cancel_parent_interrompt() {
+        let (mut st, config) = state_with_registered_agent("g1563798cd3b");
+        let (writer, mut reader) = control_socket("g1563798cd3b");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "cancel-request156",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let command = WrapperToDaemon::CancelRequest {
+            id: "cancel-request156".into(),
+            sender: "89000000-0000-4000-8000-000000000200".into(),
+            reason: Some("annulation156".into()),
+        };
+        let before = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap()
+            .0;
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command.clone(),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::RequestCancelled {ref state,..} if state=="cancelled"),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::CancelDelivery {id,interrupt_active,..} if id=="cancel-request156" && interrupt_active==Some(true))
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request("cancel-request156")
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 1
+        );
+        let replay = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command,
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(replay,DaemonToWrapper::RequestCancelled {state,..} if state=="cancelled")
+        );
+        // Le rejeu peut notifier le retrait ; il ne doit jamais réinterrompre.
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_ok() && !line.is_empty() {
+            assert!(matches!(
+                decode::<DaemonToWrapper>(line.trim()).unwrap(),
+                DaemonToWrapper::CancelDelivery {
+                    interrupt_active: Some(false),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 1
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_cancel_parent_pause_sans_interruption() {
+        let (mut st, config) = state_with_registered_agent("g1565fae8d8b");
+        let (writer, mut reader) = control_socket("g1565fae8d8b");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "cancel-pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "cancel-request156",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let command = WrapperToDaemon::CancelRequest {
+            id: "cancel-request156".into(),
+            sender: "89000000-0000-4000-8000-000000000200".into(),
+            reason: Some("annulation156".into()),
+        };
+        let before = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap()
+            .0;
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command.clone(),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::RequestCancelled {ref state,..} if state=="cancelled"),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::CancelDelivery {id,interrupt_active,..} if id=="cancel-request156" && interrupt_active==Some(false))
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request("cancel-request156")
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 0
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_cancel_parent_plafond_sans_interruption() {
+        let (mut st, config) = state_with_registered_agent("g15674fd2037");
+        let (writer, mut reader) = control_socket("g15674fd2037");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                unix_now_secs() - 100,
+                "other-parent-a",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                unix_now_secs() - 90,
+                "other-parent-b",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .record_guidance_event(
+                unix_now_secs() - 80,
+                "other-parent-c",
+                "89000000-0000-4000-8000-000000000102",
+                "interrupt",
+                "send_idempotent",
+                Some("seed156"),
+                "admitted",
+            )
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "cancel-request156",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let command = WrapperToDaemon::CancelRequest {
+            id: "cancel-request156".into(),
+            sender: "89000000-0000-4000-8000-000000000200".into(),
+            reason: Some("annulation156".into()),
+        };
+        let before = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap()
+            .0;
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command.clone(),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::RequestCancelled {ref state,..} if state=="cancelled"),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::CancelDelivery {id,interrupt_active,..} if id=="cancel-request156" && interrupt_active==Some(false))
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request("cancel-request156")
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 0
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_cancel_interruption_comptee() {
+        let (mut st, config) = state_with_registered_agent("g15693c475ea");
+        let (writer, mut reader) = control_socket("g15693c475ea");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "cancel-request156",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let command = WrapperToDaemon::CancelRequest {
+            id: "cancel-request156".into(),
+            sender: "89000000-0000-4000-8000-000000000200".into(),
+            reason: Some("annulation156".into()),
+        };
+        let before = shared
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs() - 600,
+            )
+            .unwrap()
+            .0;
+        let response = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command.clone(),
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::RequestCancelled {ref state,..} if state=="cancelled"),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut reader),DaemonToWrapper::CancelDelivery {id,interrupt_active,..} if id=="cancel-request156" && interrupt_active==Some(true))
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .get_request("cancel-request156")
+                .unwrap()
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 1
+        );
+        let replay = handle_wrapper_message(
+            "owner-89000000-0000-4000-8000-000000000200",
+            command,
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(replay,DaemonToWrapper::RequestCancelled {state,..} if state=="cancelled")
+        );
+        // Le rejeu peut notifier le retrait ; il ne doit jamais réinterrompre.
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_ok() && !line.is_empty() {
+            assert!(matches!(
+                decode::<DaemonToWrapper>(line.trim()).unwrap(),
+                DaemonToWrapper::CancelDelivery {
+                    interrupt_active: Some(false),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            before + 1
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_human_cli_sans_preuve_refuse() {
+        let (mut st, config) = state_with_registered_agent("g156-cli-bare");
+        let (writer, mut target_reader) = control_socket("g156-cli-target");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        let root = std::env::temp_dir().join(format!(
+            "g156cli-{}",
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        for dir in ["", "home", "ns", "tmp"] {
+            crate::environment::ensure_private_directory(&root.join(dir)).unwrap();
+        }
+        let socket = root.join("ns/bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let current = std::env::current_exe().unwrap();
+        let binary = current.parent().unwrap().parent().unwrap().join("bridget");
+        assert!(
+            binary.is_file(),
+            "binaire Bridget construit par T013 attendu : {} (current_exe={})",
+            binary.display(),
+            current.display()
+        );
+        let server = shared.clone();
+        let pump = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let (stream, _) = loop {
+                match listener.accept() {
+                    Ok(peer) => break peer,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "CLI privée jamais connectée");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept CLI privée : {error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(stream.try_clone().unwrap())));
+            server
+                .lock()
+                .unwrap()
+                .connections
+                .insert("cli-bare156".into(), writer.clone());
+            let mut reader = BufReader::new(stream);
+            let mut commands = Vec::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 {
+                    break;
+                }
+                let command = decode::<WrapperToDaemon>(line.trim()).unwrap();
+                commands.push(command.clone());
+                if let Some(response) = handle_wrapper_message("cli-bare156", command, &server) {
+                    let mut writer = writer.lock().unwrap();
+                    writeln!(writer, "{}", encode(&response).unwrap()).unwrap();
+                    writer.flush().unwrap();
+                }
+            }
+            commands
+        });
+        let output = Command::new(&binary)
+            .args([
+                "send",
+                "--intent",
+                "steer",
+                "--to",
+                "89000000-0000-4000-8000-000000000102",
+                "CLI privée sans preuve156",
+            ])
+            .env_clear()
+            .env("HOME", root.join("home"))
+            .env("BRIDGET_HOME", root.join("ns"))
+            .env("BRIDGET_SOCKET", &socket)
+            .env("TMPDIR", root.join("tmp"))
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let commands = pump.join().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "binary={} namespace={} stderr={stderr}",
+            binary.display(),
+            root.display()
+        );
+        assert!(
+            stderr.contains("identity_unattested"),
+            "refus daemon réel attendu : {stderr}"
+        );
+        assert!(commands.iter().any(|command|matches!(command,WrapperToDaemon::Send(message) if message.from=="human" && message.intent==Some(bridget_core::MessageIntent::SteerCurrent))),"vraie trame CLI : {commands:?}");
+        assert!(commands.iter().any(|command|matches!(command,WrapperToDaemon::Register {agent_type,..} if agent_type=="cli")),"inscription CLI historique : {commands:?}");
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            st.connection_roles.get("cli-bare156"),
+            Some(&ConnectionRole::Wrapper),
+            "la connexion historique n’est pas promue Attach"
+        );
+        assert!(
+            live_connection_identity(&st, "cli-bare156").is_none(),
+            "Register CLI sans instance ne produit pas une identité attestée : {:?}",
+            st.conn_instances.get("cli-bare156")
+        );
+        drop(st);
+        target_reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            target_reader.read_line(&mut line).is_err(),
+            "aucune remise : {line}"
+        );
+        drop(shared);
+        std::fs::remove_dir_all(root).unwrap();
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_combo_envoi_controle_annulation_pause() {
+        let (mut st, config) = state_with_registered_agent("g156-combo");
+        let (writer, mut reader) = control_socket("g156-combo");
+        st.connections.insert("conn-1".into(), writer);
+        st.execution_store
+            .record_starting(
+                "combo-submission",
+                "combo-execution",
+                "89000000-0000-4000-8000-000000000102",
+                unix_now_secs(),
+            )
+            .unwrap();
+        st.execution_store
+            .transition_if_current(
+                "combo-execution",
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                unix_now_secs(),
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "g156-client",
+            "012_scope_guard_tests156",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
+        let mut message = idempotent_message("combo first send156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let result = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "combo-send-first156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                result,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{result:?}"
+        );
+        read_control(&mut reader);
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "combo-cancel-blocked",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        assert!(matches!(
+            handle_wrapper_message(
+                "owner-89000000-0000-4000-8000-000000000200",
+                WrapperToDaemon::CancelRequest {
+                    id: "combo-cancel-blocked".into(),
+                    sender: "89000000-0000-4000-8000-000000000200".into(),
+                    reason: None
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RequestCancelled { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::CancelDelivery {
+                interrupt_active: Some(false),
+                ..
+            }
+        ));
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "combo-control-blocked".into(),
+            execution_id: "combo-execution".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::Interrupt,
+            message: None,
+        };
+        let response = handle_execution_control(
+            Some("g156-client"),
+            "012_scope_combo_control156",
+            command,
+            &mut shared.lock().unwrap(),
+        );
+        assert!(matches!(
+            response,
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+                ..
+            }
+        ));
+        let db = rusqlite::Connection::open(&config.db_path).unwrap();
+        db.execute(
+            "UPDATE guidance_events SET at=?1 WHERE outcome='admitted'",
+            [unix_now_secs() - 31],
+        )
+        .unwrap();
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "combo-control-admitted".into(),
+            execution_id: "combo-execution".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::Interrupt,
+            message: None,
+        };
+        let response = handle_execution_control(
+            Some("g156-client"),
+            "012_scope_combo_control156",
+            command,
+            &mut shared.lock().unwrap(),
+        );
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::ControlExecutionResult {
+                    outcome: ExecutionControlOutcome::OutcomeUnknown,
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::ControlExecutionDispatch { .. }
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            2
+        );
+        db.execute(
+            "UPDATE guidance_events SET at=?1 WHERE outcome='admitted'",
+            [unix_now_secs() - 31],
+        )
+        .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .create_request(
+                "combo-cancel-admitted",
+                "89000000-0000-4000-8000-000000000200",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        assert!(matches!(
+            handle_wrapper_message(
+                "owner-89000000-0000-4000-8000-000000000200",
+                WrapperToDaemon::CancelRequest {
+                    id: "combo-cancel-admitted".into(),
+                    sender: "89000000-0000-4000-8000-000000000200".into(),
+                    reason: None
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RequestCancelled { .. })
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::CancelDelivery {
+                interrupt_active: Some(true),
+                ..
+            }
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            3
+        );
+        let mut message = idempotent_message("combo cancel blocks send156");
+        message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+        let result = handle_wrapper_message(
+            "g156-client",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "combo-send-blocked156".into(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(result,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {category,..},..} if category=="interrupt_rate_limited")
+        );
+        // Trois interruptions humaines admises malgré le quota agent complet.
+        let (writer, _human_reader) = control_socket("g156-combo-human");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        for n in 0..3 {
+            let mut message = idempotent_message(&format!("combo human interrupt156-{n}"));
+            message.from = "human".into();
+            message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+            let result =
+                handle_wrapper_message("attach156", WrapperToDaemon::Send(message), &shared)
+                    .unwrap();
+            assert!(matches!(result, DaemonToWrapper::Ack { .. }), "{result:?}");
+            read_control(&mut reader);
+        }
+        {
+            let st = shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "combo-pause156",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle156"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        for (n, intent) in [
+            bridget_core::MessageIntent::SteerCurrent,
+            bridget_core::MessageIntent::InterruptAndStart,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut message = idempotent_message(&format!("combo paused idempotent156-{n}"));
+            message.intent = Some(intent);
+            let result = handle_wrapper_message(
+                "g156-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("combo-paused-idempotent-{n}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(
+                matches!(result,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {category,..},..} if category=="referent_paused")
+            );
+            let mut message = idempotent_message(&format!("combo paused legacy156-{n}"));
+            message.intent = Some(intent);
+            assert!(
+                matches!(handle_wrapper_message("owner-89000000-0000-4000-8000-000000000200",WrapperToDaemon::Send(message),&shared),Some(DaemonToWrapper::Nack {reason,..}) if reason.contains("referent_paused"))
+            );
+            let message = if intent == bridget_core::MessageIntent::SteerCurrent {
+                let mut m = idempotent_message("combo paused control steer156");
+                m.intent = Some(intent);
+                Some(m)
+            } else {
+                None
+            };
+            let command = ExecutionControlCommand {
+                version: 1,
+                command_id: format!("combo-paused-control-{n}"),
+                execution_id: "combo-execution".into(),
+                generation: 1,
+                revision: 1,
+                operation: if message.is_some() {
+                    ExecutionControlOperation::SteerCurrent
+                } else {
+                    ExecutionControlOperation::Interrupt
+                },
+                message,
+            };
+            assert!(matches!(
+                handle_execution_control(
+                    Some("g156-client"),
+                    "012_scope_combo_control156",
+                    command,
+                    &mut shared.lock().unwrap()
+                ),
+                DaemonToWrapper::ControlExecutionResult {
+                    outcome: ExecutionControlOutcome::Refused(
+                        ExecutionControlRefusal::NotPermitted
+                    ),
+                    ..
+                }
+            ));
+            let id = format!("combo-paused-cancel-{n}");
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .create_request(
+                    &id,
+                    "89000000-0000-4000-8000-000000000200",
+                    "89000000-0000-4000-8000-000000000102",
+                    60,
+                )
+                .unwrap();
+            assert!(matches!(
+                handle_wrapper_message(
+                    "owner-89000000-0000-4000-8000-000000000200",
+                    WrapperToDaemon::CancelRequest {
+                        id,
+                        sender: "89000000-0000-4000-8000-000000000200".into(),
+                        reason: None
+                    },
+                    &shared
+                ),
+                Some(DaemonToWrapper::RequestCancelled { .. })
+            ));
+            assert!(matches!(
+                read_control(&mut reader),
+                DaemonToWrapper::CancelDelivery {
+                    interrupt_active: Some(false),
+                    ..
+                }
+            ));
+        }
+        let before: i64 = db
+            .query_row("SELECT count(*) FROM guidance_events", [], |row| row.get(0))
+            .unwrap();
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "combo-internal-pause".into(),
+            execution_id: "combo-execution".into(),
+            generation: 1,
+            revision: 1,
+            operation: ExecutionControlOperation::Interrupt,
+            message: None,
+        };
+        assert!(matches!(
+            handle_execution_control(
+                None,
+                "012_scope_combo_pause156",
+                command,
+                &mut shared.lock().unwrap()
+            ),
+            DaemonToWrapper::ControlExecutionResult {
+                outcome: ExecutionControlOutcome::OutcomeUnknown,
+                ..
+            }
+        ));
+        assert!(matches!(
+            read_control(&mut reader),
+            DaemonToWrapper::ControlExecutionDispatch { .. }
+        ));
+        let after: i64 = db
+            .query_row("SELECT count(*) FROM guidance_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, before, "pause interne hors journal et quota");
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .idempotency
+                .count_interrupts_target(
+                    "89000000-0000-4000-8000-000000000102",
+                    unix_now_secs() - 600
+                )
+                .unwrap()
+                .0,
+            3
+        );
+        drop(db);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_list_ordre_rowid() {
+        let (mut st, config) = state_with_registered_agent("guidance156_queue_list_ordre_rowid");
+        let (writer, mut reader) = control_socket("guidance156_queue_list_ordre_rowid");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_list_ordre_rowid",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..3 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        let (writer, _peer) = control_socket("queue-attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("queue-attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("queue-attach156",WrapperToDaemon::ClientHello {contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:"012_scope_queueattach156".into(),capabilities:vec![ClientCapability::QueueListV1]},&shared),Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities==vec![ClientCapability::QueueListV1])
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-attach156"],
+            ConnectionRole::Attach
+        );
+        let response = handle_wrapper_message(
+            "queue-attach156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound: _,
+        } = response
+        else {
+            panic!("résultat file attendu : {response:?}")
+        };
+        assert_eq!(entries.len(), 3);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["message_id"], format!("queue156-{index:03}"));
+            assert_eq!(entry["position"], index + 1);
+            assert_eq!(entry["preview"].as_str().unwrap().chars().count(), 120);
+            assert_eq!(entry["state"], "pending_or_injecting");
+            assert!(entry.get("references").is_none());
+            assert!(entry.get("body").is_none());
+        }
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_list_apres_reaffectation_meme_ordre() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_queue_list_apres_reaffectation_meme_ordre");
+        let (writer, mut reader) =
+            control_socket("guidance156_queue_list_apres_reaffectation_meme_ordre");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_list_apres_reaffectation_meme_ordre",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..3 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        let (writer, _peer) = control_socket("queue-attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("queue-attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("queue-attach156",WrapperToDaemon::ClientHello {contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:"012_scope_queueattach156".into(),capabilities:vec![ClientCapability::QueueListV1]},&shared),Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities==vec![ClientCapability::QueueListV1])
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-attach156"],
+            ConnectionRole::Attach
+        );
+        {
+            let mut st = shared.lock().unwrap();
+            let delivery = st
+                .idempotency
+                .queued_deliveries_for_recipient("instance-1", unix_now_secs(), 200)
+                .unwrap()[1]
+                .0
+                .clone();
+            assert_eq!(
+                st.idempotency
+                    .reassign_dispatching_deliveries(
+                        "instance-1",
+                        "queue-reassigned156",
+                        unix_now_secs()
+                    )
+                    .unwrap(),
+                3
+            );
+            st.router.unregister_by_conn("conn-1");
+            st.mark_unreachable("conn-1");
+            st.connections.remove("conn-1");
+            let host = st.host.clone();
+            assert!(matches!(
+                handle_register_with_channel(
+                    "queue-target-new156",
+                    2,
+                    "claude".into(),
+                    "89000000-0000-4000-8000-000000000102".into(),
+                    Some(host),
+                    Some("acp".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("test".into()),
+                    Some("queue-reassigned156".into()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+            let (writer, _peer) = control_socket("queue-newtarget156");
+            st.connections.insert("queue-target-new156".into(), writer);
+            assert!(
+                st.idempotency
+                    .queued_deliveries_for_recipient("queue-reassigned156", unix_now_secs(), 200)
+                    .unwrap()
+                    .iter()
+                    .any(|(row, _)| row.delivery_id == delivery.delivery_id)
+            );
+        }
+        let response = handle_wrapper_message(
+            "queue-attach156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound: _,
+        } = response
+        else {
+            panic!("résultat file attendu : {response:?}")
+        };
+        assert_eq!(entries.len(), 3);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["message_id"], format!("queue156-{index:03}"));
+            assert_eq!(entry["position"], index + 1);
+            assert_eq!(entry["preview"].as_str().unwrap().chars().count(), 120);
+            assert_eq!(entry["state"], "pending_or_injecting");
+            assert!(entry.get("references").is_none());
+            assert!(entry.get("body").is_none());
+        }
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_list_filtre_par_droits() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_queue_list_filtre_par_droits");
+        let (writer, mut reader) = control_socket("guidance156_queue_list_filtre_par_droits");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_list_filtre_par_droits",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..3 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        let (writer, _peer) = control_socket("queue-attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("queue-attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("queue-attach156",WrapperToDaemon::ClientHello {contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:"012_scope_queueattach156".into(),capabilities:vec![ClientCapability::QueueListV1]},&shared),Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities==vec![ClientCapability::QueueListV1])
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-attach156"],
+            ConnectionRole::Attach
+        );
+        let response = handle_wrapper_message(
+            "queue-attach156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound: _,
+        } = response
+        else {
+            panic!("résultat file attendu : {response:?}")
+        };
+        assert_eq!(entries.len(), 3);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["message_id"], format!("queue156-{index:03}"));
+            assert_eq!(entry["position"], index + 1);
+            assert_eq!(entry["preview"].as_str().unwrap().chars().count(), 120);
+            assert_eq!(entry["state"], "pending_or_injecting");
+            assert!(entry.get("references").is_none());
+            assert!(entry.get("body").is_none());
+        }
+        // Une vraie identité auxiliaire destinataire voit toutes les lignes.
+        for (conn, sender, expected) in [
+            ("queue-target156", "89000000-0000-4000-8000-000000000102", 3),
+            ("queue-own156", "89000000-0000-4000-8000-000000000200", 3),
+            ("queue-peer156", "89000000-0000-4000-8000-000000000300", 0),
+        ] {
+            let (instance, credential) = {
+                let mut st = shared.lock().unwrap();
+                let owner = st
+                    .router
+                    .get_agent(sender)
+                    .map(|r| r.connection_id.clone())
+                    .unwrap_or_else(|| "queue-peer-owner156".into());
+                if !st.identity_credentials.contains_key(&owner) {
+                    let host = st.host.clone();
+                    assert!(matches!(
+                        handle_register_with_channel(
+                            &owner,
+                            2,
+                            "fixture".into(),
+                            sender.into(),
+                            Some(host),
+                            Some("acp".into()),
+                            ChannelReport::Known("unix".into()),
+                            Some(PresenceMode::Acp),
+                            None,
+                            Some("test".into()),
+                            Some("queue-peer-instance156".into()),
+                            None,
+                            false,
+                            Some(false),
+                            &mut st
+                        ),
+                        DaemonToWrapper::Registered { .. }
+                    ));
+                    let _ = super::spec094_live_test_connection(&mut st, &owner);
+                }
+                (
+                    st.conn_instances[&owner].clone(),
+                    st.identity_credentials[&owner].clone(),
+                )
+            };
+            handle_wrapper_message(
+                conn,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                handle_wrapper_message(
+                    conn,
+                    WrapperToDaemon::RegisterAuxiliary {
+                        agent_id: sender.into(),
+                        instance_id: instance,
+                        credential
+                    },
+                    &shared
+                ),
+                Some(DaemonToWrapper::Registered { .. })
+            ));
+            handle_wrapper_message(
+                conn,
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: format!("012_scope_{conn}"),
+                    capabilities: vec![ClientCapability::QueueListV1],
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(
+                matches!(handle_wrapper_message(conn,WrapperToDaemon::QueueList {target:"89000000-0000-4000-8000-000000000102".into()},&shared),Some(DaemonToWrapper::QueueListResult {entries,..}) if entries.len()==expected)
+            );
+        }
+        {
+            let mut st = shared.lock().unwrap();
+            guidance156_link_parent(&mut st, "queue-peer156", "conn-1");
+        }
+        assert!(
+            matches!(handle_wrapper_message("queue-peer156",WrapperToDaemon::QueueList {target:"89000000-0000-4000-8000-000000000102".into()},&shared),Some(DaemonToWrapper::QueueListResult {entries,..}) if entries.len()==3)
+        );
+        // L'identité d'agent ne peut pas devenir Attach par un second handshake.
+        assert!(!matches!(
+            handle_wrapper_message(
+                "queue-own156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-own156"],
+            ConnectionRole::Client
+        );
+        // UI attestée : identité primaire réservée, auxiliaire réelle, capacité lecture seule.
+        let (ui_instance, ui_credential, _ui_peer) = {
+            let mut st = shared.lock().unwrap();
+            let host = st.host.clone();
+            assert!(matches!(
+                handle_register_with_channel(
+                    "queue-ui-primary156",
+                    2,
+                    "ui".into(),
+                    UI_HUMAN_AGENT_ID.into(),
+                    Some(host),
+                    None,
+                    ChannelReport::Omitted,
+                    Some(PresenceMode::Cli),
+                    None,
+                    Some("test".into()),
+                    Some("bridget-ui-queue156".into()),
+                    None,
+                    false,
+                    Some(false),
+                    &mut st
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+            let peer = super::spec094_live_test_connection(&mut st, "queue-ui-primary156");
+            (
+                st.conn_instances["queue-ui-primary156"].clone(),
+                st.identity_credentials["queue-ui-primary156"].clone(),
+                peer,
+            )
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-ui156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        let response = handle_wrapper_message(
+            "queue-ui156",
+            WrapperToDaemon::RegisterAuxiliary {
+                agent_id: UI_HUMAN_AGENT_ID.into(),
+                instance_id: ui_instance,
+                credential: ui_credential,
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DaemonToWrapper::Registered { .. }),
+            "attestation UI : {response:?}"
+        );
+        let response = handle_wrapper_message(
+            "queue-ui156",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_queue_ui156_attested".into(),
+                capabilities: vec![ClientCapability::QueueListV1],
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::ClientWelcome {ref capabilities,..} if capabilities==&vec![ClientCapability::QueueListV1]),
+            "capacité UI : {response:?}"
+        );
+        let response = handle_wrapper_message(
+            "queue-ui156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(
+            matches!(response,DaemonToWrapper::QueueListResult {ref entries,..} if entries.len()==3),
+            "lecture UI complète : {response:?}"
+        );
+        assert!(!matches!(
+            handle_wrapper_message(
+                "queue-ui156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-ui156"],
+            ConnectionRole::Client
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_list_borne_200() {
+        let (mut st, config) = state_with_registered_agent("guidance156_queue_list_borne_200");
+        let (writer, mut reader) = control_socket("guidance156_queue_list_borne_200");
+        st.connections.insert("conn-1".into(), writer);
+        st.circuit_breaker = CircuitBreaker::new(config.circuit_breaker_window, 512);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_list_borne_200",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..201 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        let (writer, _peer) = control_socket("queue-attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("queue-attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("queue-attach156",WrapperToDaemon::ClientHello {contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:"012_scope_queueattach156".into(),capabilities:vec![ClientCapability::QueueListV1]},&shared),Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities==vec![ClientCapability::QueueListV1])
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-attach156"],
+            ConnectionRole::Attach
+        );
+        let response = handle_wrapper_message(
+            "queue-attach156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound: _,
+        } = response
+        else {
+            panic!("résultat file attendu : {response:?}")
+        };
+        assert_eq!(entries.len(), 200);
+        assert_eq!(entries[199]["position"], 200);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["message_id"], format!("queue156-{index:03}"));
+            assert_eq!(entry["position"], index + 1);
+            assert_eq!(entry["preview"].as_str().unwrap().chars().count(), 120);
+            assert_eq!(entry["state"], "pending_or_injecting");
+            assert!(entry.get("references").is_none());
+            assert!(entry.get("body").is_none());
+        }
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_list_ne_modifie_rien() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_queue_list_ne_modifie_rien");
+        let (writer, mut reader) = control_socket("guidance156_queue_list_ne_modifie_rien");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_list_ne_modifie_rien",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..3 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        let (writer, _peer) = control_socket("queue-attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("queue-attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("queue-attach156",WrapperToDaemon::ClientHello {contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:"012_scope_queueattach156".into(),capabilities:vec![ClientCapability::QueueListV1]},&shared),Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities==vec![ClientCapability::QueueListV1])
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-attach156"],
+            ConnectionRole::Attach
+        );
+        let before = std::fs::read(&config.db_path).unwrap();
+        let count = shared.lock().unwrap().idempotency.record_count().unwrap();
+        let response = handle_wrapper_message(
+            "queue-attach156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound: _,
+        } = response
+        else {
+            panic!("résultat file attendu : {response:?}")
+        };
+        assert_eq!(entries.len(), 3);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["message_id"], format!("queue156-{index:03}"));
+            assert_eq!(entry["position"], index + 1);
+            assert_eq!(entry["preview"].as_str().unwrap().chars().count(), 120);
+            assert_eq!(entry["state"], "pending_or_injecting");
+            assert!(entry.get("references").is_none());
+            assert!(entry.get("body").is_none());
+        }
+        assert_eq!(
+            shared.lock().unwrap().idempotency.record_count().unwrap(),
+            count
+        );
+        assert_eq!(std::fs::read(&config.db_path).unwrap(), before);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_negociation_requise() {
+        let (mut st, config) = state_with_registered_agent("guidance156_queue_negociation_requise");
+        let (writer, mut reader) = control_socket("guidance156_queue_negociation_requise");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_negociation_requise",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..3 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        handle_wrapper_message(
+            "queue-bare156",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-bare156",
+                WrapperToDaemon::QueueList {
+                    target: "89000000-0000-4000-8000-000000000102".into()
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired
+            })
+        ));
+        handle_wrapper_message(
+            "queue-bare156",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_queuenocap156".into(),
+                capabilities: vec![ClientCapability::Lookup],
+            },
+            &shared,
+        )
+        .unwrap();
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-bare156",
+                WrapperToDaemon::QueueList {
+                    target: "89000000-0000-4000-8000-000000000102".into()
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::CapabilityNotNegotiated
+            })
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn guidance156_queue_bound_t3_64_sinon_null() {
+        let (mut st, config) =
+            state_with_registered_agent("guidance156_queue_bound_t3_64_sinon_null");
+        let (writer, mut reader) = control_socket("guidance156_queue_bound_t3_64_sinon_null");
+        st.connections.insert("conn-1".into(), writer);
+        let shared = Arc::new(Mutex::new(st));
+        negotiate_idempotent_client(
+            &shared,
+            "guidance-client",
+            "012_scope_guidance156_queue_bound_t3_64_sinon_null",
+            "89000000-0000-4000-8000-000000000200",
+        );
+        for index in 0..3 {
+            let mut message = idempotent_message(&format!("file{index:03} {}", "é".repeat(130)));
+            message.references = vec!["reference156".into()];
+            let response = handle_wrapper_message(
+                "guidance-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: format!("queue156-{index:03}"),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            )
+            .unwrap();
+            assert!(matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+            read_control(&mut reader);
+        }
+        let (writer, _peer) = control_socket("queue-attach156");
+        shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("queue-attach156".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Attach
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Attach
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("queue-attach156",WrapperToDaemon::ClientHello {contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:"012_scope_queueattach156".into(),capabilities:vec![ClientCapability::QueueListV1]},&shared),Some(DaemonToWrapper::ClientWelcome {capabilities,..}) if capabilities==vec![ClientCapability::QueueListV1])
+        );
+        assert_eq!(
+            shared.lock().unwrap().connection_roles["queue-attach156"],
+            ConnectionRole::Attach
+        );
+        let response = handle_wrapper_message(
+            "queue-attach156",
+            WrapperToDaemon::QueueList {
+                target: "89000000-0000-4000-8000-000000000102".into(),
+            },
+            &shared,
+        )
+        .unwrap();
+        let DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound,
+        } = response
+        else {
+            panic!("résultat file attendu : {response:?}")
+        };
+        assert_eq!(entries.len(), 3);
+        for (index, entry) in entries.iter().enumerate() {
+            assert_eq!(entry["message_id"], format!("queue156-{index:03}"));
+            assert_eq!(entry["position"], index + 1);
+            assert_eq!(entry["preview"].as_str().unwrap().chars().count(), 120);
+            assert_eq!(entry["state"], "pending_or_injecting");
+            assert!(entry.get("references").is_none());
+            assert!(entry.get("body").is_none());
+        }
+        assert_eq!(queue_bound, None);
+        shared
+            .lock()
+            .unwrap()
+            .presences
+            .get_mut("instance-1")
+            .unwrap()
+            .transport = "t3code".into();
+        assert!(matches!(
+            handle_wrapper_message(
+                "queue-attach156",
+                WrapperToDaemon::QueueList {
+                    target: "89000000-0000-4000-8000-000000000102".into()
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::QueueListResult {
+                queue_bound: Some(64),
+                ..
+            })
+        ));
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]
@@ -31129,15 +37263,35 @@ mod presence_tests {
         state.managed_tx = managed_tx;
         assert!(matches!(
             handle_register_with_channel(
-                "late-child", 2, "claude".into(), child.into(), Some("fixture".into()),
-                Some("acp".into()), ChannelReport::Known("unix".into()),
-                Some(PresenceMode::Acp), None, Some("test".into()),
-                Some("instance-late-child".into()), None, false, Some(false), &mut state,
+                "late-child",
+                2,
+                "claude".into(),
+                child.into(),
+                Some("fixture".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("test".into()),
+                Some("instance-late-child".into()),
+                None,
+                false,
+                Some(false),
+                &mut state,
             ),
-            DaemonToWrapper::Registered { credential: Some(_), .. }
+            DaemonToWrapper::Registered {
+                credential: Some(_),
+                ..
+            }
         ));
-        assert_eq!(live_connection_identity(&state, "conn-1"), Some((owner.into(), "instance-1".into())));
-        assert_eq!(live_connection_identity(&state, "late-child"), Some((child.into(), "instance-late-child".into())));
+        assert_eq!(
+            live_connection_identity(&state, "conn-1"),
+            Some((owner.into(), "instance-1".into()))
+        );
+        assert_eq!(
+            live_connection_identity(&state, "late-child"),
+            Some((child.into(), "instance-late-child".into()))
+        );
         assert!(sender_is_authorized(&state, "late-child", child));
         let now = unix_now_secs();
         let task: crate::delegation::Task = serde_json::from_value(serde_json::json!({
@@ -31153,15 +37307,42 @@ mod presence_tests {
             "state":"result_available", "result":"résultat de la première ronde", "error":null,
             "result_sent":true, "guarded":true, "idle_deadline_at":now + 120
         })).unwrap();
-        state.delegation_store.insert(&task, "late-delegate", b"canon-t028").unwrap();
-        let current = state.delegation_store.begin_round(
-            &task.task_id, 1, || now,
-            crate::delegation::RoundRecord { round:2, request_id:"late-continue".into(), digest:"canon-r2".into() },
-            &uuid::Uuid::new_v4().to_string(), "mission de la ronde 2",
-        ).unwrap();
+        state
+            .delegation_store
+            .insert(&task, "late-delegate", b"canon-t028")
+            .unwrap();
+        let current = state
+            .delegation_store
+            .begin_round(
+                &task.task_id,
+                1,
+                || now,
+                crate::delegation::RoundRecord {
+                    round: 2,
+                    request_id: "late-continue".into(),
+                    digest: "canon-r2".into(),
+                },
+                &uuid::Uuid::new_v4().to_string(),
+                "mission de la ronde 2",
+            )
+            .unwrap();
         assert_eq!(current.round_no(), 2);
-        assert!(state.delegation_store.for_mission(&task.mission).unwrap().is_none());
-        assert_eq!(state.delegation_store.past_mission_task(&task.mission).unwrap().unwrap().task_id, task.task_id);
+        assert!(
+            state
+                .delegation_store
+                .for_mission(&task.mission)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .delegation_store
+                .past_mission_task(&task.mission)
+                .unwrap()
+                .unwrap()
+                .task_id,
+            task.task_id
+        );
         let mut message = BridgetMessage::new(child, owner, "réponse tardive de la ronde 1");
         message.in_reply_to = Some(task.mission);
         message.hops = 4;
@@ -31169,38 +37350,92 @@ mod presence_tests {
         negotiate_idempotent_client(&shared, "late-client", "012_scope_lateresponse", child);
         let receiver = {
             let state = shared.lock().unwrap();
-            assert_eq!(live_connection_identity(&state, "late-client"), Some((child.into(), "instance-late-child".into())));
+            assert_eq!(
+                live_connection_identity(&state, "late-client"),
+                Some((child.into(), "instance-late-child".into()))
+            );
             assert!(sender_is_authorized(&state, "late-client", &message.from));
             assert_eq!(message.to, current.owner);
             assert_eq!(message.from, current.child);
-            assert_eq!(current.child_instance.as_deref(), Some("instance-late-child"));
+            assert_eq!(
+                current.child_instance.as_deref(),
+                Some("instance-late-child")
+            );
             let receiver = state.delegation_store.change_receiver().unwrap();
             state.delegation_store.take_changes();
             while receiver.try_recv().is_ok() {}
             while managed_rx.try_recv().is_ok() {}
             receiver
         };
-        (shared, config, current, message, owner_reader, child_reader, receiver, managed_rx)
+        (
+            shared,
+            config,
+            current,
+            message,
+            owner_reader,
+            child_reader,
+            receiver,
+            managed_rx,
+        )
     }
 
     #[test]
     fn native153_ronde_reponse_tardive_chemin_idempotent() {
-        let (shared, config, current, message, mut owner_reader, _child_reader, receiver, managed_rx) =
-            native153_reponse_tardive_fixture("n153-late-id");
+        let (
+            shared,
+            config,
+            current,
+            message,
+            mut owner_reader,
+            _child_reader,
+            receiver,
+            managed_rx,
+        ) = native153_reponse_tardive_fixture("n153-late-id");
         let (epoch, meta, pending, departures) = {
             let state = shared.lock().unwrap();
-            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap(),
-                state.pending_replies.len(), state.thread_wake_departures.len())
+            (
+                state.delegation_store.wait_epoch().get(),
+                state.delegation_store.projection_meta().unwrap(),
+                state.pending_replies.len(),
+                state.thread_wake_departures.len(),
+            )
         };
-        let key = IdempotencyKey { issuer_scope:"012_scope_lateresponse".into(), operation_kind:OperationKind::Send, idempotency_key:message.id.clone() };
-        let result = handle_wrapper_message("late-client", WrapperToDaemon::SendIdempotent {
-            message:message.clone(), message_id:message.id.clone(), issued_at:unix_now_secs(),
-        }, &shared);
-        assert!(matches!(result, Some(DaemonToWrapper::IdempotencyResult {
-            issue:IdempotencyIssue::Accepted { .. }, ..
-        })), "réponse passée absorbée : {result:?}");
+        let key = IdempotencyKey {
+            issuer_scope: "012_scope_lateresponse".into(),
+            operation_kind: OperationKind::Send,
+            idempotency_key: message.id.clone(),
+        };
+        let result = handle_wrapper_message(
+            "late-client",
+            WrapperToDaemon::SendIdempotent {
+                message: message.clone(),
+                message_id: message.id.clone(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(
+            matches!(
+                result,
+                Some(DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::Accepted { .. },
+                    ..
+                })
+            ),
+            "réponse passée absorbée : {result:?}"
+        );
         let state = shared.lock().unwrap();
-        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(
+            serde_json::to_value(
+                state
+                    .delegation_store
+                    .get(&current.task_id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(&current).unwrap()
+        );
         assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
         let after = state.delegation_store.projection_meta().unwrap();
         assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
@@ -31210,10 +37445,19 @@ mod presence_tests {
         assert_eq!(state.pending_replies.len(), pending);
         assert_eq!(state.thread_wake_departures.len(), departures);
         assert!(state.store.recent_messages(10).unwrap().is_empty());
-        assert!(state.idempotency.send_delivery_phase(&key).unwrap().is_none());
+        assert!(
+            state
+                .idempotency
+                .send_delivery_phase(&key)
+                .unwrap()
+                .is_none()
+        );
         owner_reader.get_ref().set_nonblocking(true).unwrap();
         let mut line = String::new();
-        assert_eq!(owner_reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            owner_reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert!(line.is_empty());
         drop(state);
         drop(shared);
@@ -31222,17 +37466,43 @@ mod presence_tests {
 
     #[test]
     fn native153_ronde_reponse_tardive_chemin_ordinaire() {
-        let (shared, config, current, message, mut owner_reader, _child_reader, receiver, managed_rx) =
-            native153_reponse_tardive_fixture("n153-late-ord");
+        let (
+            shared,
+            config,
+            current,
+            message,
+            mut owner_reader,
+            _child_reader,
+            receiver,
+            managed_rx,
+        ) = native153_reponse_tardive_fixture("n153-late-ord");
         let (epoch, meta, pending, departures) = {
             let state = shared.lock().unwrap();
-            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap(),
-                state.pending_replies.len(), state.thread_wake_departures.len())
+            (
+                state.delegation_store.wait_epoch().get(),
+                state.delegation_store.projection_meta().unwrap(),
+                state.pending_replies.len(),
+                state.thread_wake_departures.len(),
+            )
         };
-        let result = handle_wrapper_message("late-child", WrapperToDaemon::Send(message.clone()), &shared);
+        let result = handle_wrapper_message(
+            "late-child",
+            WrapperToDaemon::Send(message.clone()),
+            &shared,
+        );
         assert!(matches!(result, Some(DaemonToWrapper::Ack { id, .. }) if id == message.id));
         let state = shared.lock().unwrap();
-        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(
+            serde_json::to_value(
+                state
+                    .delegation_store
+                    .get(&current.task_id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(&current).unwrap()
+        );
         assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
         let after = state.delegation_store.projection_meta().unwrap();
         assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
@@ -31244,7 +37514,10 @@ mod presence_tests {
         assert!(state.store.recent_messages(10).unwrap().is_empty());
         owner_reader.get_ref().set_nonblocking(true).unwrap();
         let mut line = String::new();
-        assert_eq!(owner_reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            owner_reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert!(line.is_empty());
         drop(state);
         drop(shared);
@@ -31253,29 +37526,77 @@ mod presence_tests {
 
     #[test]
     fn native153_ronde_reponse_tardive_rejeu() {
-        let (shared, config, current, message, mut owner_reader, _child_reader, receiver, managed_rx) =
-            native153_reponse_tardive_fixture("n153-late-re");
+        let (
+            shared,
+            config,
+            current,
+            message,
+            mut owner_reader,
+            _child_reader,
+            receiver,
+            managed_rx,
+        ) = native153_reponse_tardive_fixture("n153-late-re");
         let (epoch, meta) = {
             let state = shared.lock().unwrap();
-            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap())
+            (
+                state.delegation_store.wait_epoch().get(),
+                state.delegation_store.projection_meta().unwrap(),
+            )
         };
         let issued_at = unix_now_secs();
-        let key = IdempotencyKey { issuer_scope:"012_scope_lateresponse".into(), operation_kind:OperationKind::Send, idempotency_key:message.id.clone() };
+        let key = IdempotencyKey {
+            issuer_scope: "012_scope_lateresponse".into(),
+            operation_kind: OperationKind::Send,
+            idempotency_key: message.id.clone(),
+        };
         let mut first = None;
         for _ in 0..3 {
-            let response = handle_wrapper_message("late-client", WrapperToDaemon::SendIdempotent {
-                message:message.clone(), message_id:message.id.clone(), issued_at,
-            }, &shared);
-            assert!(matches!(response, Some(DaemonToWrapper::IdempotencyResult {
-                issue:IdempotencyIssue::Accepted { .. }, ..
-            })), "rejeu passé absorbé : {response:?}");
+            let response = handle_wrapper_message(
+                "late-client",
+                WrapperToDaemon::SendIdempotent {
+                    message: message.clone(),
+                    message_id: message.id.clone(),
+                    issued_at,
+                },
+                &shared,
+            );
+            assert!(
+                matches!(
+                    response,
+                    Some(DaemonToWrapper::IdempotencyResult {
+                        issue: IdempotencyIssue::Accepted { .. },
+                        ..
+                    })
+                ),
+                "rejeu passé absorbé : {response:?}"
+            );
             let encoded = serde_json::to_value(response).unwrap();
-            if let Some(previous) = &first { assert_eq!(&encoded, previous); } else { first = Some(encoded); }
+            if let Some(previous) = &first {
+                assert_eq!(&encoded, previous);
+            } else {
+                first = Some(encoded);
+            }
         }
         let state = shared.lock().unwrap();
         assert_eq!(state.idempotency.record_count().unwrap(), 1);
-        assert!(state.idempotency.send_delivery_phase(&key).unwrap().is_none());
-        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert!(
+            state
+                .idempotency
+                .send_delivery_phase(&key)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            serde_json::to_value(
+                state
+                    .delegation_store
+                    .get(&current.task_id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(&current).unwrap()
+        );
         assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
         let after = state.delegation_store.projection_meta().unwrap();
         assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
@@ -31287,7 +37608,10 @@ mod presence_tests {
         assert!(state.store.recent_messages(10).unwrap().is_empty());
         owner_reader.get_ref().set_nonblocking(true).unwrap();
         let mut line = String::new();
-        assert_eq!(owner_reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(
+            owner_reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         assert!(line.is_empty());
         drop(state);
         drop(shared);
@@ -31296,35 +37620,97 @@ mod presence_tests {
 
     #[test]
     fn native153_ronde_reponse_tardive_expediteur_inconnu() {
-        let (shared, config, current, mut message, mut owner_reader, _child_reader, receiver, managed_rx) =
-            native153_reponse_tardive_fixture("n153-late-oth");
+        let (
+            shared,
+            config,
+            current,
+            mut message,
+            mut owner_reader,
+            _child_reader,
+            receiver,
+            managed_rx,
+        ) = native153_reponse_tardive_fixture("n153-late-oth");
         let stranger = "89000000-0000-4000-8000-000000000201";
         let (writer, _stranger_reader) = control_socket("153t");
         let (epoch, meta) = {
             let mut state = shared.lock().unwrap();
             state.connections.insert("late-stranger".into(), writer);
-            assert!(matches!(handle_register_with_channel(
-                "late-stranger", 2, "claude".into(), stranger.into(), Some("fixture".into()),
-                Some("acp".into()), ChannelReport::Known("unix".into()), Some(PresenceMode::Acp),
-                None, Some("test".into()), Some("instance-stranger".into()), None, false, Some(false), &mut state,
-            ), DaemonToWrapper::Registered { credential:Some(_), .. }));
-            assert_eq!(live_connection_identity(&state, "late-stranger"), Some((stranger.into(), "instance-stranger".into())));
+            assert!(matches!(
+                handle_register_with_channel(
+                    "late-stranger",
+                    2,
+                    "claude".into(),
+                    stranger.into(),
+                    Some("fixture".into()),
+                    Some("acp".into()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("test".into()),
+                    Some("instance-stranger".into()),
+                    None,
+                    false,
+                    Some(false),
+                    &mut state,
+                ),
+                DaemonToWrapper::Registered {
+                    credential: Some(_),
+                    ..
+                }
+            ));
+            assert_eq!(
+                live_connection_identity(&state, "late-stranger"),
+                Some((stranger.into(), "instance-stranger".into()))
+            );
             assert!(sender_is_authorized(&state, "late-stranger", stranger));
             assert_ne!(current.child, stranger);
             while managed_rx.try_recv().is_ok() {}
-            (state.delegation_store.wait_epoch().get(), state.delegation_store.projection_meta().unwrap())
+            (
+                state.delegation_store.wait_epoch().get(),
+                state.delegation_store.projection_meta().unwrap(),
+            )
         };
         message.from = stranger.into();
-        let result = handle_wrapper_message("late-stranger", WrapperToDaemon::Send(message.clone()), &shared);
+        let result = handle_wrapper_message(
+            "late-stranger",
+            WrapperToDaemon::Send(message.clone()),
+            &shared,
+        );
         assert!(matches!(result, Some(DaemonToWrapper::Ack { id, .. }) if id == message.id));
         let delivered = match read_control(&mut owner_reader) {
-            DaemonToWrapper::Deliver(delivered) => delivered,
+            DaemonToWrapper::Deliver {
+                message: delivered, ..
+            } => delivered,
             other => panic!("le tiers reste sur la remise ordinaire : {other:?}"),
         };
-        assert_eq!((delivered.id, delivered.from, delivered.to, delivered.in_reply_to, delivered.body),
-            (message.id, message.from, message.to, message.in_reply_to, message.body));
+        assert_eq!(
+            (
+                delivered.id,
+                delivered.from,
+                delivered.to,
+                delivered.in_reply_to,
+                delivered.body
+            ),
+            (
+                message.id,
+                message.from,
+                message.to,
+                message.in_reply_to,
+                message.body
+            )
+        );
         let state = shared.lock().unwrap();
-        assert_eq!(serde_json::to_value(state.delegation_store.get(&current.task_id).unwrap().unwrap()).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(
+            serde_json::to_value(
+                state
+                    .delegation_store
+                    .get(&current.task_id)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            serde_json::to_value(&current).unwrap()
+        );
         assert_eq!(state.delegation_store.wait_epoch().get(), epoch);
         let after = state.delegation_store.projection_meta().unwrap();
         assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
@@ -31514,6 +37900,35 @@ fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
         ),
         Ok(ConditionalTransition::Applied(_))
     ));
+    // La remise de contrôle exige une véritable identité parent149/156.
+    let (parent_writer, _parent_reader) =
+        presence_tests::control_socket("execution-control-parent");
+    state
+        .connections
+        .insert("control-parent".into(), parent_writer);
+    let DaemonToWrapper::Registered {
+        credential: Some(parent_credential),
+        ..
+    } = handle_register_with_channel(
+        "control-parent",
+        2,
+        "fixture".into(),
+        "89000000-0000-4000-8000-000000000101".into(),
+        Some("fixture".into()),
+        Some("acp".into()),
+        ChannelReport::Known("unix".into()),
+        Some(PresenceMode::Acp),
+        None,
+        Some("test".into()),
+        Some("control-parent-instance".into()),
+        None,
+        false,
+        Some(false),
+        &mut state,
+    )
+    else {
+        panic!("identité primaire du parent de contrôle absente");
+    };
     let shared = Arc::new(Mutex::new(state));
     assert!(matches!(
         handle_wrapper_message(
@@ -31530,6 +37945,26 @@ fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
     assert!(matches!(
         handle_wrapper_message(
             "client-control",
+            WrapperToDaemon::RegisterAuxiliary {
+                agent_id: "89000000-0000-4000-8000-000000000101".into(),
+                instance_id: "control-parent-instance".into(),
+                credential: parent_credential,
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::Registered {
+            credential: None,
+            ..
+        })
+    ));
+    presence_tests::guidance156_link_parent(
+        &mut shared.lock().unwrap(),
+        "client-control",
+        "conn-1",
+    );
+    assert!(matches!(
+        handle_wrapper_message(
+            "client-control",
             WrapperToDaemon::ClientHello {
                 contract_version: CLIENT_CONTRACT_VERSION,
                 issuer_scope: "012_scope_controltestx".to_string(),
@@ -31543,7 +37978,7 @@ fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
         Some(DaemonToWrapper::ClientWelcome { .. })
     ));
     let mut correction = bridget_core::BridgetMessage::new(
-        "operateur",
+        "89000000-0000-4000-8000-000000000101",
         "89000000-0000-4000-8000-000000000102",
         "corrige le point",
     );
@@ -31645,23 +38080,40 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
         &registry_path,
     )
     .unwrap();
+    // La distinction des intentions s’exerce avec un parent réellement inscrit.
+    let (sender_writer, _sender_reader) = presence_tests::control_socket("intentions-us1-sender");
     state
-        .router
-        .register(
-            "89000000-0000-4000-8000-000000000101",
-            &bridget_core::AgentType::Codex,
+        .connections
+        .insert("conn-sender".into(), sender_writer);
+    assert!(matches!(
+        handle_register_with_channel(
             "conn-sender",
-        )
-        .unwrap();
-    state.conn_names.insert(
-        "conn-sender".to_string(),
-        "89000000-0000-4000-8000-000000000101".to_string(),
-    );
+            2,
+            "fixture".into(),
+            "89000000-0000-4000-8000-000000000101".into(),
+            Some("fixture".into()),
+            Some("acp".into()),
+            ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("test".into()),
+            Some("intentions-parent-instance".into()),
+            None,
+            false,
+            Some(false),
+            &mut state,
+        ),
+        DaemonToWrapper::Registered {
+            credential: Some(_),
+            ..
+        }
+    ));
     let (target_writer, mut target_reader) =
         presence_tests::control_socket("intentions-us1-target");
     state
         .connections
         .insert("conn-1".to_string(), target_writer);
+    presence_tests::guidance156_link_parent(&mut state, "conn-sender", "conn-1");
     let shared = Arc::new(Mutex::new(state));
 
     let mut queue = bridget_core::BridgetMessage::new(
@@ -31732,7 +38184,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     ));
     assert!(matches!(
         presence_tests::read_control(&mut target_reader),
-        DaemonToWrapper::Deliver(message)
+        DaemonToWrapper::Deliver { message, .. }
             if message.id == "steer-us1"
                 && message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
     ));

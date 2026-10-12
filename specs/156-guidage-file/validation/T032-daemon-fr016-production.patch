@@ -1,0 +1,545 @@
+--- a/crates/bridget-daemon/src/daemon.rs
++++ b/crates/bridget-daemon/src/daemon.rs
+@@ -9124,29 +9124,59 @@
+ }
+ 
+ // O(1), noms fermés partagés par l'audit et les quatre chemins de contrôle.
+ fn guidance_event_labels(
+-    facts: &crate::guidance::GuidanceFacts,
++    actor: &crate::guidance::GuidanceActor,
++    action: crate::guidance::GuidanceAction,
++    path: crate::guidance::GuidancePath,
+ ) -> (&str, &'static str, &'static str) {
+     use crate::guidance::{GuidanceAction, GuidanceActor, GuidancePath};
+-    let actor = match &facts.actor {
++    let actor = match actor {
+         GuidanceActor::Agent { id } => id.as_str(),
+         GuidanceActor::AttachedHuman => "human",
+         GuidanceActor::BareClient => "unattested",
+         GuidanceActor::InternalPause => "internal_pause",
+     };
+-    let action = match facts.action {
++    let action = match action {
+         GuidanceAction::Steer => "steer",
+         GuidanceAction::Interrupt => "interrupt",
+         GuidanceAction::MidTurnDelivery | GuidanceAction::QueueList => "read_only",
+     };
+-    let path = match facts.path {
++    let path = match path {
+         GuidancePath::SendIdempotent => "send_idempotent",
+         GuidancePath::Send => "send",
+         GuidancePath::Control => "control",
+         GuidancePath::Cancel => "cancel",
+     };
+     (actor, action, path)
++}
++
++// FR016 : quatre puits réels de refus avant la garde ; aucune autorité ni quota admis.
++// O(log p+log n), identité existante puis INSERT ; aucune lecture des faits/rates/projets.
++fn record_guidance_refusal(
++    st: &DaemonState,
++    conn: Option<&str>,
++    target: &str,
++    id: &str,
++    action: Option<crate::guidance::GuidanceAction>,
++    path: crate::guidance::GuidancePath,
++    code: &str,
++) {
++    use crate::guidance::{GuidanceAction, GuidancePath};
++    let Some(action @ (GuidanceAction::Steer | GuidanceAction::Interrupt)) = action else {
++        return;
++    };
++    if conn.is_none() && path == GuidancePath::Control {
++        return; // Pause interne : ni admission ni refus de guidage utilisateur.
++    }
++    let (actor, _, _) = guidance_source(st, conn);
++    let (actor, action, path) = guidance_event_labels(&actor, action, path);
++    if let Err(error) = st.idempotency.record_guidance_event(
++        unix_timestamp(), actor, routing_agent_id(target), action, path,
++        Some(id), &format!("refused:{code}"),
++    ) {
++        warn!("refus de guidage non journalisé : {error}");
++    }
+ }
+ 
+ // O(log n), refus/admissions seulement ; pause interne et lecture ne sont jamais comptées.
+ fn record_guidance_outcome(
+@@ -9164,9 +9194,9 @@
+         )
+     {
+         return Ok(());
+     }
+-    let (actor, action, path) = guidance_event_labels(facts);
++    let (actor, action, path) = guidance_event_labels(&facts.actor, facts.action, facts.path);
+     st.idempotency
+         .record_guidance_event(
+             facts.now,
+             actor,
+@@ -9200,8 +9230,9 @@
+         child_proof,
+         unix_timestamp(),
+     )
+     .map_err(|error| {
++        record_guidance_refusal(st, conn, target, id, Some(action), path, "intent_not_permitted");
+         warn!("faits de guidage indisponibles : {error}");
+         ("intent_not_permitted".into(), "identity_unattested".into())
+     })?;
+     if let Err(refusal) = crate::guidance::authorize(&facts) {
+@@ -9717,8 +9748,13 @@
+     // scopes sont deux émetteurs logiques et ne se contaminent pas.
+     let content_key = format!("{}:{}", key.issuer_scope, message.content_key());
+     let scoped_message_id = format!("{}:{}", key.issuer_scope, message.id);
+     let logical_sender = format!("client:{}", key.issuer_scope);
++    let guidance_action = match message.intent {
++        Some(bridget_core::MessageIntent::SteerCurrent) => Some(crate::guidance::GuidanceAction::Steer),
++        Some(bridget_core::MessageIntent::InterruptAndStart) => Some(crate::guidance::GuidanceAction::Interrupt),
++        _ => None,
++    };
+     let prepared = match prepare_dispatch(
+         st,
+         &mut message,
+         conn_id,
+@@ -9727,26 +9763,20 @@
+         scoped_message_id,
+     ) {
+         Ok(prepared) => prepared,
+         Err((category, reason)) => {
++            record_guidance_refusal(st, Some(conn_id), &message.to, &message.id,
++                guidance_action, crate::guidance::GuidancePath::SendIdempotent, category);
+             return reject_idempotent_send(st, &key, category, reason).unwrap_or_else(|error| {
+                 DaemonToWrapper::Nack {
+                     id: key.idempotency_key.clone(),
+                     reason: error,
+                 }
+             });
+         }
+     };
+-    let guidance_admission = match message.intent {
+-        Some(
+-            bridget_core::MessageIntent::SteerCurrent
+-            | bridget_core::MessageIntent::InterruptAndStart,
+-        ) => {
+-            let action = if message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
+-                crate::guidance::GuidanceAction::Steer
+-            } else {
+-                crate::guidance::GuidanceAction::Interrupt
+-            };
++    let guidance_admission = match guidance_action {
++        Some(action) => {
+             match check_guidance(
+                 st,
+                 Some(conn_id),
+                 &message.to,
+@@ -9769,8 +9799,13 @@
+         }
+         _ => None,
+     };
+     let Some(recipient_instance_id) = st.conn_instances.get(&prepared.target_conn).cloned() else {
++        if let Some(facts) = &guidance_admission
++            && let Err(error) = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:recipient_unavailable")
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         return reject_idempotent_send(
+             st,
+             &key,
+             "recipient_unavailable",
+@@ -9793,8 +9828,13 @@
+             serde_json::to_vec(&envelope)
+         }) {
+             Ok(message_bytes) => message_bytes,
+             Err(error) => {
++                if let Some(facts) = &guidance_admission
++                    && let Err(error) = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:persistence_failed")
++                {
++                    warn!("refus de guidage non journalisé : {error}");
++                }
+                 return DaemonToWrapper::Nack {
+                     id: key.idempotency_key.clone(),
+                     reason: format!("impossible de sérialiser la remise: {error}"),
+                 };
+@@ -9847,21 +9887,36 @@
+                         execution_id,
+                     })
+                 }
+                 Ok(_) => {
++                    if let Some(facts) = &guidance_admission
++                        && let Err(error) = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:terminal_execution")
++                    {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
+                     return DaemonToWrapper::Nack {
+                         id: key.idempotency_key.clone(),
+                         reason: "soumission déjà terminale".to_string(),
+                     };
+                 }
+                 Err(error) => {
++                    if let Some(facts) = &guidance_admission
++                        && let Err(error) = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:persistence_failed")
++                    {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
+                     return DaemonToWrapper::Nack {
+                         id: key.idempotency_key.clone(),
+                         reason: format!("soumission existante illisible: {error}"),
+                     };
+                 }
+             },
+             Err(error) => {
++                if let Some(facts) = &guidance_admission
++                    && let Err(error) = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:persistence_failed")
++                {
++                    warn!("refus de guidage non journalisé : {error}");
++                }
+                 return DaemonToWrapper::Nack {
+                     id: key.idempotency_key.clone(),
+                     reason: format!("démarrage non persisté: {error}"),
+                 };
+@@ -9870,9 +9925,9 @@
+     } else {
+         None
+     };
+     let guidance_context = guidance_admission.as_ref().map(|facts| {
+-        let (actor, action, path) = guidance_event_labels(facts);
++        let (actor, action, path) = guidance_event_labels(&facts.actor, facts.action, facts.path);
+         (
+             facts.now,
+             actor,
+             routing_agent_id(&message.to),
+@@ -9888,8 +9943,13 @@
+         execution_link.as_ref(),
+         guidance_context,
+     );
+     if let Err(error) = delivery_result {
++        if let Some(facts) = &guidance_admission
++            && let Err(error) = record_guidance_outcome(st, facts, &message.to, &message.id, "refused:persistence_failed")
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         error!("idempotence dispatch: {error}");
+         return DaemonToWrapper::Nack {
+             id: key.idempotency_key.clone(),
+             reason: "impossible de préparer la remise".to_string(),
+@@ -10117,8 +10177,13 @@
+         ControlReservation::New => {}
+     }
+     // Le reçu durable est rendu avant toute réévaluation du contexte projet.
+     // L'identité source vient de la connexion, jamais du champ from du message.
++    let action = if command.operation == ExecutionControlOperation::SteerCurrent {
++        crate::guidance::GuidanceAction::Steer
++    } else {
++        crate::guidance::GuidanceAction::Interrupt
++    };
+     let scope_result = if invalid_reason {
+         Err("invalid_cross_project_reason")
+     } else if let Some(message) = command.message.as_ref() {
+         match conn_id {
+@@ -10166,8 +10231,10 @@
+     };
+     let project_warnings = match scope_result {
+         Ok(warnings) => warnings,
+         Err(reason) => {
++            record_guidance_refusal(st, conn_id, &target.target_agent, &command.command_id,
++                Some(action), crate::guidance::GuidancePath::Control, reason);
+             let _ = st.execution_store.refuse_control_command(
+                 issuer_scope,
+                 &command.command_id,
+                 reason,
+@@ -10177,13 +10244,8 @@
+                 &command,
+                 ExecutionControlOutcome::Refused(control_refusal_from_reason(reason)),
+             );
+         }
+-    };
+-    let action = if command.operation == ExecutionControlOperation::SteerCurrent {
+-        crate::guidance::GuidanceAction::Steer
+-    } else {
+-        crate::guidance::GuidanceAction::Interrupt
+     };
+     let guidance_admission = match check_guidance(
+         st,
+         conn_id,
+@@ -10227,8 +10289,13 @@
+     } else {
+         None
+     };
+     if let Some(refusal) = refusal {
++        if let Err(error) = record_guidance_outcome(st, &guidance_admission,
++            &target.target_agent, &command.command_id, &format!("refused:{refusal}"))
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         let _ = st.execution_store.refuse_control_command(
+             issuer_scope,
+             &command.command_id,
+             refusal,
+@@ -10243,8 +10310,13 @@
+         .router
+         .get_agent(&target.target_agent)
+         .map(|agent| agent.connection_id.clone());
+     let Some(target_conn) = target_conn else {
++        if let Err(error) = record_guidance_outcome(st, &guidance_admission,
++            &target.target_agent, &command.command_id, "refused:target_unavailable")
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         let _ = st.execution_store.refuse_control_command(
+             issuer_scope,
+             &command.command_id,
+             "target_unavailable",
+@@ -10255,8 +10327,13 @@
+             ExecutionControlOutcome::Refused(ExecutionControlRefusal::TargetUnavailable),
+         );
+     };
+     let Some(writer) = st.connections.get(&target_conn).cloned() else {
++        if let Err(error) = record_guidance_outcome(st, &guidance_admission,
++            &target.target_agent, &command.command_id, "refused:target_unavailable")
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         let _ = st.execution_store.refuse_control_command(
+             issuer_scope,
+             &command.command_id,
+             "target_unavailable",
+@@ -10271,8 +10348,13 @@
+         .execution_store
+         .mark_control_dispatched(issuer_scope, &command.command_id, now, &project_warnings)
+         .unwrap_or(false)
+     {
++        if let Err(error) = record_guidance_outcome(st, &guidance_admission,
++            &target.target_agent, &command.command_id, "refused:persistence_failed")
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         return control_result(&command, ExecutionControlOutcome::OutcomeUnknown);
+     }
+     if let Err(error) = record_guidance_outcome(
+         st,
+@@ -10287,8 +10369,13 @@
+             false,
+             Some("not_permitted"),
+             now,
+         );
++        if let Err(error) = record_guidance_outcome(st, &guidance_admission,
++            &target.target_agent, &command.command_id, "refused:persistence_failed")
++        {
++            warn!("refus de guidage non journalisé : {error}");
++        }
+         warn!("guidage de contrôle non persisté : {error}");
+         return control_result(
+             &command,
+             ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+@@ -18872,8 +18959,13 @@
+                 });
+             }
+             let content_key = bridge_msg.content_key();
+             let message_guard_id = bridge_msg.id.clone();
++            let guidance_action = match bridge_msg.intent {
++                Some(bridget_core::MessageIntent::SteerCurrent) => Some(crate::guidance::GuidanceAction::Steer),
++                Some(bridget_core::MessageIntent::InterruptAndStart) => Some(crate::guidance::GuidanceAction::Interrupt),
++                _ => None,
++            };
+             let prepared = match prepare_dispatch(
+                 &mut st,
+                 &mut bridge_msg,
+                 conn_id,
+@@ -18881,26 +18973,19 @@
+                 content_key,
+                 message_guard_id,
+             ) {
+                 Ok(prepared) => prepared,
+-                Err((_category, reason)) => {
++                Err((category, reason)) => {
++                    record_guidance_refusal(&st, Some(conn_id), &bridge_msg.to, &bridge_msg.id,
++                        guidance_action, crate::guidance::GuidancePath::Send, category);
+                     return Some(DaemonToWrapper::Nack {
+                         id: bridge_msg.id.clone(),
+                         reason,
+                     });
+                 }
+             };
+-            let guidance_admission = match bridge_msg.intent {
+-                Some(
+-                    bridget_core::MessageIntent::SteerCurrent
+-                    | bridget_core::MessageIntent::InterruptAndStart,
+-                ) => {
+-                    let action =
+-                        if bridge_msg.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
+-                            crate::guidance::GuidanceAction::Steer
+-                        } else {
+-                            crate::guidance::GuidanceAction::Interrupt
+-                        };
++            let guidance_admission = match guidance_action {
++                Some(action) => {
+                     match check_guidance(
+                         &st,
+                         Some(conn_id),
+                         &bridge_msg.to,
+@@ -18923,8 +19008,13 @@
+             };
+             let is_ephemeral_cli_sender =
+                 ephemeral_cli && prepared.reply_sender_conn.as_deref() == Some(conn_id);
+             if bridge_msg.reply && is_ephemeral_cli_sender {
++                if let Some(facts) = &guidance_admission
++                    && let Err(error) = record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "refused:reply_sender_unavailable")
++                {
++                    warn!("refus de guidage non journalisé : {error}");
++                }
+                 return Some(DaemonToWrapper::Nack {
+                     id: bridge_msg.id.clone(),
+                     reason: "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
+                 });
+@@ -18945,8 +19035,13 @@
+                     // durable avant de rafraîchir la capacité de l'expéditeur.
+                     touch_message_sender_activity(&mut st, &bridge_msg.from);
+                 }
+                 Err(error) => {
++                    if let Some(facts) = &guidance_admission
++                        && let Err(error) = record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "refused:persistence_failed")
++                    {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
+                     return Some(DaemonToWrapper::Nack {
+                         id: bridge_msg.id.clone(),
+                         reason: format!("message non persisté: {error}"),
+                     });
+@@ -19003,8 +19098,13 @@
+                                 id: bridge_msg.id.clone(),
+                             });
+                         }
+                         Err(error) => {
++                            if let Some(facts) = &guidance_admission
++                                && let Err(error) = record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "refused:persistence_failed")
++                            {
++                                warn!("refus de guidage non journalisé : {error}");
++                            }
+                             return Some(DaemonToWrapper::Nack {
+                                 id: bridge_msg.id.clone(),
+                                 reason: format!("démarrage non persisté: {error}"),
+                             });
+@@ -19059,8 +19159,13 @@
+                 &bridge_msg,
+                 prepared.reply_sender_conn.clone(),
+                 target_conn.clone(),
+             ) {
++                if let Some(facts) = &guidance_admission
++                    && let Err(error) = record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "refused:persistence_failed")
++                {
++                    warn!("refus de guidage non journalisé : {error}");
++                }
+                 return Some(DaemonToWrapper::Nack {
+                     id: bridge_msg.id.clone(),
+                     reason,
+                 });
+@@ -19077,8 +19182,13 @@
+             if let Some(facts) = &guidance_admission
+                 && let Err(error) =
+                     record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "admitted")
+             {
++                if let Some(facts) = &guidance_admission
++                    && let Err(error) = record_guidance_outcome(&st, facts, &bridge_msg.to, &bridge_msg.id, "refused:persistence_failed")
++                {
++                    warn!("refus de guidage non journalisé : {error}");
++                }
+                 return Some(DaemonToWrapper::Nack {
+                     id: bridge_msg.id.clone(),
+                     reason: format!("guidage non persisté: {error}"),
+                 });
+@@ -19519,9 +19629,15 @@
+                         agent_communication_project(&st, &request.target).as_ref(),
+                         &request.target,
+                         None,
+                     );
+-                    if project.is_err() {
++                    if let Err(reason) = project {
++                        let code = if reason.starts_with("cross_project_reason_required") {
++                            "cross_project_reason_required"
++                        } else { "invalid_cross_project_reason" };
++                        record_guidance_refusal(&st, Some(conn_id), &request.target, &id,
++                            Some(crate::guidance::GuidanceAction::Interrupt),
++                            crate::guidance::GuidancePath::Cancel, code);
+                         return None;
+                     }
+                     check_guidance(
+                         &st,
+@@ -19535,18 +19651,29 @@
+                     )
+                     .ok()
+                 });
+             match st.store.cancel_request(&id, &sender, reason.as_deref()) {
+-                Ok(Some(request)) if request.sender != sender => Some(DaemonToWrapper::Nack {
+-                    id,
+-                    reason: "seul l'émetteur peut annuler cette demande".to_string(),
+-                }),
++                Ok(Some(request)) if request.sender != sender => {
++                    if let Some(facts) = &guidance_admission
++                        && let Err(error) = record_guidance_outcome(&st, facts,
++                            &request.target, &id, "refused:not_permitted") {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
++                    Some(DaemonToWrapper::Nack {
++                        id,
++                        reason: "seul l'émetteur peut annuler cette demande".to_string(),
++                    })
++                },
+                 Ok(Some(request)) if request.state == "cancelled" => {
+                     let interrupt_active = guidance_admission.as_ref().is_some_and(|facts| {
+                         match record_guidance_outcome(&st, facts, &request.target, &id, "admitted")
+                         {
+                             Ok(()) => true,
+                             Err(error) => {
++                                if let Err(error) = record_guidance_outcome(&st, facts,
++                                    &request.target, &id, "refused:persistence_failed") {
++                                    warn!("refus de guidage non journalisé : {error}");
++                                }
+                                 warn!("interruption d'annulation non persistée : {error}");
+                                 false
+                             }
+                         }
+@@ -19596,20 +19723,34 @@
+                         id: request.id,
+                         state: request.state,
+                     })
+                 }
+-                Ok(Some(request)) => Some(DaemonToWrapper::Nack {
+-                    id,
+-                    reason: format!("demande déjà terminale: {}", request.state),
+-                }),
+-                Ok(None) => Some(DaemonToWrapper::Nack {
+-                    id,
+-                    reason: "demande introuvable".to_string(),
+-                }),
+-                Err(error) => Some(DaemonToWrapper::Nack {
+-                    id,
+-                    reason: error.to_string(),
+-                }),
++                Ok(Some(request)) => {
++                    if let Some(facts) = &guidance_admission
++                        && let Err(error) = record_guidance_outcome(&st, facts,
++                            &request.target, &id, "refused:terminal_request") {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
++                    Some(DaemonToWrapper::Nack {
++                        id, reason: format!("demande déjà terminale: {}", request.state),
++                    })
++                },
++                Ok(None) => {
++                    if let (Some(facts), Some(request)) = (&guidance_admission, &pending_request)
++                        && let Err(error) = record_guidance_outcome(&st, facts,
++                            &request.target, &id, "refused:request_unavailable") {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
++                    Some(DaemonToWrapper::Nack { id, reason: "demande introuvable".to_string() })
++                },
++                Err(error) => {
++                    if let (Some(facts), Some(request)) = (&guidance_admission, &pending_request)
++                        && let Err(error) = record_guidance_outcome(&st, facts,
++                            &request.target, &id, "refused:persistence_failed") {
++                        warn!("refus de guidage non journalisé : {error}");
++                    }
++                    Some(DaemonToWrapper::Nack { id, reason: error.to_string() })
++                },
+             }
+         }
+ 
+         WrapperToDaemon::ListRequests { sender, limit } => {

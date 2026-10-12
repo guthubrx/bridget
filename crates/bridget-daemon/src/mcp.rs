@@ -639,6 +639,11 @@ fn execute_tool_at_with_identity(
         ),
         "bridget_request_wait" => execute_request_wait(identity, arguments, socket),
         "bridget_send" => execute_send(identity, arguments, socket),
+        "bridget_queue" => {
+            reject_unknown_arguments(arguments, &["target"])?;
+            let target = required_non_empty_string(arguments, "target")?;
+            execute_queue(Some(identity), &target, socket)
+        }
         "bridget_events" => {
             let request = serde_json::from_value(Value::Object(arguments.clone()))
                 .map_err(|error| ToolError::InvalidParams(format!("events : {error}")))?;
@@ -904,8 +909,29 @@ fn execute_send(
             "id",
             "issued_at",
             "cross_project_reason",
+            "intent",
         ],
     )?;
+    // Refus de forme avant toute connexion, même celle de résolution UUID.
+    let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
+    let requested_intent = match arguments.get("intent") {
+        None => None,
+        Some(Value::String(value)) if matches!(value.as_str(), "queue" | "steer" | "interrupt") => {
+            Some(value.as_str())
+        }
+        _ => {
+            return Err(ToolError::Technical {
+                code: "invalid_intent",
+                message: "intent attendu : queue, steer ou interrupt".into(),
+            });
+        }
+    };
+    if requested_intent == Some("steer") && reply {
+        return Err(ToolError::Technical {
+            code: "invalid_intent",
+            message: "steer ne peut pas demander reply=true".into(),
+        });
+    }
     let cross_project_reason = project_reason(arguments)?;
     let mut to = required_non_empty_string(arguments, "to")?;
     let uuid_prefix =
@@ -930,7 +956,6 @@ fn execute_send(
         .map_err(ToolError::InvalidParams)?;
     }
     let body = required_non_empty_string(arguments, "body")?;
-    let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
     let reply_timeout = optional_positive_u64(arguments, "reply_timeout")?;
     let in_reply_to = optional_non_empty_string(arguments, "in_reply_to")?;
     if !reply && reply_timeout.is_some() {
@@ -968,6 +993,11 @@ fn execute_send(
     message.in_reply_to = in_reply_to;
     message.delegated_origin = identity.delegated_origin.clone();
     message.cross_project_reason = cross_project_reason;
+    message.intent = match requested_intent {
+        Some("steer") => Some(bridget_core::MessageIntent::SteerCurrent),
+        Some("interrupt") => Some(bridget_core::MessageIntent::InterruptAndStart),
+        _ => None, // queue explicite et absence gardent les octets historiques.
+    };
     let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -1023,7 +1053,7 @@ fn execute_send(
         }
         other => return unexpected_response(other),
     }
-    match connection.send_then_wait(&WrapperToDaemon::SendIdempotent {
+    let mut result = match connection.send_then_wait(&WrapperToDaemon::SendIdempotent {
         message,
         message_id: id.clone(),
         issued_at,
@@ -1050,6 +1080,112 @@ fn execute_send(
             "reason": format!("{DIAGNOSTIC_ACCUSE_PERDU} — {REJEU_A_L_IDENTIQUE} ({message})")
         })),
         Err(error) => Err(error),
+    }?;
+    // Aussi sur accusé perdu : intention demandée, jamais effet promis.
+    if let Some(intent) = requested_intent {
+        result["intent"] = json!(intent);
+        result["effect"] = json!("unconfirmed");
+    }
+    Ok(result)
+}
+
+/// Lecture commune MCP/CLI, sans promotion du rôle Client ni autostart.
+/// L'absence d'identité auxiliaire garde le client humain nu et sa vue filtrée.
+pub(crate) fn execute_queue(
+    identity: Option<&crate::mcp_identity::ResolvedIdentity>,
+    target: &str,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    if identity.is_some_and(|identity| identity.delegated_origin.is_some()) {
+        return Err(ToolError::Technical {
+            code: "delegated_tool_forbidden",
+            message: "une preuve enfant ne peut pas consulter la file".into(),
+        });
+    }
+    let mut connection = DaemonConnection::connect(socket)?;
+    match connection.exchange(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Client,
+    })? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        other => return unexpected_response(other),
+    }
+    if let Some(identity) = identity {
+        crate::communication::client::authenticate_auxiliary(
+            &mut connection,
+            &identity.name,
+            &identity.instance_id,
+            socket,
+        )?;
+    }
+    let instance = identity
+        .map(|identity| identity.instance_id.as_str())
+        .unwrap_or("human");
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: issuer_scope(instance),
+        capabilities: vec![ClientCapability::QueueListV1],
+    })? {
+        DaemonToWrapper::ClientWelcome {
+            capabilities,
+            build_id,
+            ..
+        } if capabilities.contains(&ClientCapability::QueueListV1) => {
+            if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
+                eprintln!("{warning}");
+            }
+        }
+        DaemonToWrapper::ClientWelcome { .. } => {
+            return Err(ToolError::Technical {
+                code: "queue_unsupported",
+                message: "le daemon ne négocie pas QueueListV1 ; aucune lecture envoyée".into(),
+            });
+        }
+        DaemonToWrapper::ClientRejected { reason } => {
+            return Err(ToolError::Technical {
+                code: "daemon_protocol",
+                message: format!("négociation client refusée : {reason:?}"),
+            });
+        }
+        other => return unexpected_response(other),
+    }
+    let target = if bridget_core::router::validate_agent_id(target).is_ok() {
+        target.to_owned()
+    } else {
+        let DaemonToWrapper::AgentList { agents } =
+            DaemonConnection::connect(socket)?.exchange(&WrapperToDaemon::ListAgents)?
+        else {
+            return Err(ToolError::Technical {
+                code: "target_unavailable",
+                message: "annuaire indisponible : donner l'UUID".into(),
+            });
+        };
+        crate::cli::resolve_name_in_directory(
+            target,
+            agents
+                .iter()
+                .map(|agent| (agent.display_name.as_str(), agent.agent_id.as_str())),
+        )
+        .map_err(|message| ToolError::Technical {
+            code: "target_unavailable",
+            message,
+        })?
+    };
+    match connection.exchange(&WrapperToDaemon::QueueList { target })? {
+        DaemonToWrapper::QueueListResult {
+            entries,
+            queue_bound,
+        } => Ok(json!({"entries":entries,"queue_bound":queue_bound})),
+        DaemonToWrapper::Nack { reason, .. } => Err(ToolError::Technical {
+            code: if reason.starts_with("target_unavailable") {
+                "target_unavailable"
+            } else {
+                "queue_refused"
+            },
+            message: reason,
+        }),
+        other => unexpected_response(other),
     }
 }
 
@@ -2251,6 +2387,7 @@ pub(crate) fn tools() -> Vec<Value> {
                     "to": { "type": "string", "minLength": 1 },
                     "body": { "type": "string", "minLength": 1 },
                     "cross_project_reason": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Motif volontaire d'un échange hors projet ; 1–512 octets UTF-8 sans contrôles. Ne pas déduire le motif depuis body. Le warning est rendu hors corps." },
+                    "intent": { "type": "string", "enum": ["queue", "steer", "interrupt"], "default": "queue", "description": "Intention demandée ; aucun effet confirmé. steer est incompatible avec reply=true." },
                     "reply": { "type": "boolean", "default": false },
                     "reply_timeout": { "type": "integer", "minimum": 1 },
                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
@@ -2260,6 +2397,12 @@ pub(crate) fn tools() -> Vec<Value> {
                 "required": ["to", "body"],
                 "additionalProperties": false
             }
+        }),
+        json!({
+            "name": "bridget_queue",
+            "description": "Lire jusqu'à200 remises idempotentes en attente ou injection. N'inclut ni Send historique ni file interne du fournisseur. La vue est filtrée par droits ; aucune modification de file.",
+            "inputSchema": {"type":"object","properties":{"target":{"type":"string","minLength":1}},"required":["target"],"additionalProperties":false},
+            "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}
         }),
         json!({
             "name": "bridget_cancel",
@@ -2470,6 +2613,307 @@ mod tests {
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
     #[test]
+    fn guidance156_mcp_queue_schema() {
+        // ADR044 : origine enfant attestée par le résolveur, pas par le
+        // payload QueueList et jamais par un issuer_scope inventé.
+        let socket = test_socket("g156-childproof");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let child = crate::mcp_identity::ResolvedIdentity {
+            name: "89000000-0000-4000-8000-000000000156".into(),
+            instance_id: "guidance156-childproof".into(),
+            delegated_origin: Some(bridget_core::DelegatedOrigin {
+                provider: "codex".into(),
+                child_ref: "opaque-child-proof156".into(),
+            }),
+        };
+        // Appel direct : le seul filtre global du dispatch MCP ne suffit pas.
+        let refused = super::execute_tool_at_with_identity(
+            &child,
+            "bridget_queue",
+            json!({"target":"89000000-0000-4000-8000-000000000157"})
+                .as_object()
+                .unwrap(),
+            &socket,
+        );
+        let no_connection =
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock);
+        drop(listener);
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+        assert!(
+            matches!(
+                refused,
+                Err(ToolError::Technical {
+                    code: "delegated_tool_forbidden",
+                    ..
+                })
+            ),
+            "preuve enfant refusée : {refused:?}"
+        );
+        assert!(
+            no_connection,
+            "refus avant toute connexion, enregistrement ou négociation QueueListV1"
+        );
+
+        let queue = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_queue")
+            .expect("outil de lecture de file publié en phase V");
+        assert_eq!(queue["inputSchema"]["required"], json!(["target"]));
+        assert_eq!(queue["inputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            queue["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["target"]
+        );
+        assert_eq!(
+            queue["inputSchema"]["properties"]["target"]["type"],
+            "string"
+        );
+        assert_eq!(queue["inputSchema"]["properties"]["target"]["minLength"], 1);
+        assert_eq!(queue["annotations"]["readOnlyHint"], true);
+        assert_eq!(queue["annotations"]["destructiveHint"], false);
+    }
+
+    // Trois oracles wire partagent ce réemploi des helpers MCP existants.
+    fn guidance156_capture_send(arguments: Value) -> Result<(String, Value), ToolError> {
+        let socket = test_socket("g156");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (stop, stopped) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break Some(stream),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if stopped.try_recv().is_ok() || Instant::now() >= deadline {
+                            break None;
+                        }
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("socket privée : {error}"),
+                }
+            };
+            let Some(stream) = stream else {
+                return None;
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+            );
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::ClientHello { capabilities, .. } if capabilities == vec![ClientCapability::SendIdempotent])
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-build".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+            );
+            let sent = read_command(&mut reader);
+            assert!(matches!(&sent, WrapperToDaemon::SendIdempotent { .. }));
+            let bytes = encode(&sent).unwrap();
+            write_command(
+                &mut writer,
+                DaemonToWrapper::IdempotencyResult {
+                    operation_kind: "send".into(),
+                    idempotency_key: "guidance156".into(),
+                    issue: IdempotencyIssue::Accepted { expires_at: 60 },
+                    project_warnings: Vec::new(),
+                },
+            );
+            Some(bytes)
+        });
+        let result = execute_tool_at(
+            "89000000-0000-4000-8000-000000000156",
+            "bridget_send",
+            arguments.as_object().unwrap(),
+            &socket,
+        );
+        let _ = stop.send(());
+        let bytes = server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+        result.map(|result| (bytes.expect("vraie trame SendIdempotent reçue"), result))
+    }
+
+    #[test]
+    fn guidance156_mcp_schema_intent() {
+        let send = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_send")
+            .unwrap();
+        assert_eq!(
+            send["inputSchema"]["properties"]["intent"]["enum"],
+            json!(["queue", "steer", "interrupt"])
+        );
+        assert_eq!(
+            send["inputSchema"]["properties"]["intent"]["default"],
+            "queue"
+        );
+        assert_eq!(send["inputSchema"]["additionalProperties"], false);
+        assert_eq!(send["inputSchema"]["required"], json!(["to", "body"]));
+
+        let socket = test_socket("g156-caps");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } = read_command(&mut reader)
+            else {
+                panic!("identité auxiliaire requise")
+            };
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    agent_id,
+                    credential: None,
+                },
+            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::NativeDelegation {
+                    request: bridget_transport::protocol::NativeDelegationRequest::Catalogue
+                } | WrapperToDaemon::NativeDelegationT3 {
+                    request: bridget_transport::protocol::NativeDelegationRequest::Catalogue,
+                    ..
+                }
+            ));
+            write_command(
+                &mut writer,
+                DaemonToWrapper::NativeDelegationResult {
+                    result: json!({"providers":[]}),
+                },
+            );
+        });
+        let capabilities = execute_tool_at(
+            "89000000-0000-4000-8000-000000000156",
+            "bridget_capabilities",
+            json!({}).as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(
+            capabilities["guidance"],
+            json!({"intents":["queue","steer","interrupt"], "interrupt_cooldown_secs":30, "interrupt_cap_per_10min":3, "queue_tool":true})
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn guidance156_mcp_intent_inconnue_refusee() {
+        let socket = test_socket("g156-refus");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        for (intent, reply) in [
+            (json!("auto"), false),
+            (json!(null), false),
+            (json!(3), false),
+            (json!("steer"), true),
+        ] {
+            let arguments =
+                json!({"to":"890000", "body":"guidage", "intent":intent, "reply":reply});
+            assert!(matches!(
+                execute_tool_at(
+                    "owner",
+                    "bridget_send",
+                    arguments.as_object().unwrap(),
+                    &socket
+                ),
+                Err(ToolError::Technical {
+                    code: "invalid_intent",
+                    ..
+                })
+            ));
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+                "invalid_intent précède même la résolution UUID par connexion"
+            );
+        }
+        drop(listener);
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn guidance156_mcp_queue_egal_absent() {
+        let absent = json!({"to":"89000000-0000-4000-8000-000000000157", "body":"octets $VAR intacts", "id":"guidance156", "issued_at":1_700_000_000});
+        let mut queue = absent.clone();
+        queue["intent"] = json!("queue");
+        let (old_wire, old_result) = guidance156_capture_send(absent).unwrap();
+        let (queue_wire, queue_result) = guidance156_capture_send(queue).unwrap();
+        assert_eq!(
+            queue_wire, old_wire,
+            "aucun intent QueueOnly explicite dans le canon historique"
+        );
+        assert_eq!(
+            old_result,
+            json!({"status":"accepted", "id":"guidance156", "issued_at":1_700_000_000i64, "hops":4})
+        );
+        assert_eq!(queue_result["intent"], "queue");
+        assert_eq!(queue_result["effect"], "unconfirmed");
+        assert!(
+            serde_json::from_str::<Value>(&queue_wire).unwrap()["message"]
+                .get("intent")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn guidance156_mcp_steer_pose_steer_current() {
+        let (wire, result) = guidance156_capture_send(json!({"to":"89000000-0000-4000-8000-000000000157", "body":"guidage", "id":"guidance156", "issued_at":1_700_000_000, "intent":"steer"})).unwrap();
+        let WrapperToDaemon::SendIdempotent { message, .. } = decode(&wire).unwrap() else {
+            panic!("SendIdempotent")
+        };
+        assert_eq!(
+            message.intent,
+            Some(bridget_core::MessageIntent::SteerCurrent)
+        );
+        assert_eq!(result["intent"], "steer");
+        assert_eq!(result["effect"], "unconfirmed");
+    }
+
+    #[test]
+    fn guidance156_mcp_interrupt_pose_interrupt_and_start() {
+        let (wire, result) = guidance156_capture_send(json!({"to":"89000000-0000-4000-8000-000000000157", "body":"nouveau tour", "id":"guidance156", "issued_at":1_700_000_000, "intent":"interrupt"})).unwrap();
+        let WrapperToDaemon::SendIdempotent { message, .. } = decode(&wire).unwrap() else {
+            panic!("SendIdempotent")
+        };
+        assert_eq!(
+            message.intent,
+            Some(bridget_core::MessageIntent::InterruptAndStart)
+        );
+        assert_eq!(result["intent"], "interrupt");
+        assert_eq!(result["effect"], "unconfirmed");
+    }
+
+    #[test]
     fn native153_mcp_continue_catalogue_et_champs_fermes() {
         let catalogue = tools();
         let handoff_schema = &catalogue
@@ -2535,7 +2979,7 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_task_ack")
             .expect("outil ACK informatif publié");
-        assert_eq!(catalogue.len(), 29);
+        assert_eq!(catalogue.len(), 30);
         let brief_schema = &catalogue
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
@@ -3858,7 +4302,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    29
+                    30
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -4150,6 +4594,7 @@ mod tests {
             "bridget_request_wait",
             "bridget_task_cancel",
             "bridget_cancel",
+            "bridget_queue",
             "bridget_control_status",
             "bridget_dnd",
             "bridget_domain",

@@ -2569,3 +2569,416 @@ fn native150_purge_phase_de_remise_cinq_cas() {
         Some("orphaned")
     );
 }
+
+/// T006 : horloge injectée, borne SQL inclusive ; la garde pure tranche t==30/600.
+#[test]
+fn guidance156_store_compteurs_aux_bornes_30s_10min() {
+    let store = IdempotencyStore::open_in_memory().unwrap();
+    for (at, actor, target, action, outcome) in [
+        (NOW - 601, "parent156", "target156", "interrupt", "admitted"),
+        (NOW - 600, "parent156", "target156", "interrupt", "admitted"),
+        (NOW - 31, "parent156", "target156", "interrupt", "admitted"),
+        (NOW - 30, "parent156", "target156", "interrupt", "admitted"),
+        (NOW - 29, "other156", "target156", "interrupt", "admitted"),
+        (
+            NOW - 1,
+            "parent156",
+            "target156",
+            "interrupt",
+            "refused:referent_paused",
+        ),
+        (NOW, "human", "target156", "interrupt", "admitted"),
+        (NOW, "parent156", "target156", "steer", "admitted"),
+        (NOW, "parent156", "other-target156", "interrupt", "admitted"),
+    ] {
+        store
+            .record_guidance_event(at, actor, target, action, "send_idempotent", None, outcome)
+            .unwrap();
+    }
+    assert_eq!(
+        store
+            .count_interrupts_pair("parent156", "target156", NOW - 30)
+            .unwrap(),
+        (1, Some(NOW - 30))
+    );
+    assert_eq!(
+        store
+            .count_interrupts_pair("parent156", "target156", NOW - 29)
+            .unwrap(),
+        (0, None)
+    );
+    assert_eq!(
+        store
+            .count_interrupts_target("target156", NOW - 600)
+            .unwrap(),
+        (4, Some(NOW - 31)),
+        "3e plus récent, pas le minimum lorsque plus de trois admissions sont présentes"
+    );
+    assert_eq!(
+        store
+            .count_interrupts_target("target156", NOW - 599)
+            .unwrap(),
+        (3, Some(NOW - 31))
+    );
+    assert_eq!(
+        store
+            .count_interrupts_target("target156", NOW - 30)
+            .unwrap(),
+        (2, None)
+    );
+    assert_eq!(
+        store
+            .count_interrupts_pair("human", "target156", NOW - 600)
+            .unwrap(),
+        (0, None)
+    );
+}
+
+/// T006 : le reçu existant suffit ; le magasin de rythme peut être indisponible.
+#[test]
+fn guidance156_store_rejeu_sans_lecture_des_evenements() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    assert!(matches!(
+        reserve(&store, b"canon156"),
+        Reservation::Prepared { .. }
+    ));
+    let delivery = SendDelivery {
+        delivery_id: "guidance-replay156".into(),
+        recipient_instance_id: "instance156".into(),
+        delivery_generation: 1,
+        expires_at: NOW + HORIZON,
+        message_bytes: sample_message_bytes("message-1", "peer156"),
+    };
+    let reply = ReplyTracking {
+        request_id: "message-1".into(),
+        sender: "sender-peer".into(),
+        target: "peer156".into(),
+        created_at: NOW,
+        deadline_at: NOW + HORIZON,
+    };
+    let link = DeliveryExecutionLink {
+        delivery_id: delivery.delivery_id.clone(),
+        submission_id: "submission156".into(),
+        execution_id: "execution156".into(),
+    };
+    let guidance = (
+        NOW,
+        "parent156",
+        "peer156",
+        "interrupt",
+        "send_idempotent",
+        Some("message-1"),
+    );
+    // Échec réel SQLite APRÈS la remise/ledger/suivi/lien, pas un mock du verdict.
+    store
+        .conn
+        .execute_batch(
+            "CREATE TEMP TRIGGER guidance156_admission_refusee
+         BEFORE INSERT ON guidance_events
+         BEGIN SELECT RAISE(ABORT,'guidance156_persistence_unavailable'); END;",
+        )
+        .unwrap();
+    let failed = store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            Some(&reply),
+            Some(&link),
+            Some(guidance),
+        )
+        .unwrap_err();
+    assert!(
+        failed
+            .to_string()
+            .contains("guidance156_persistence_unavailable"),
+        "{failed}"
+    );
+    assert_eq!(
+        store.prepared_expiry(&key(), NOW).unwrap(),
+        Some(NOW + HORIZON)
+    );
+    assert!(store.send_delivery(&key()).unwrap().is_none());
+    assert!(
+        store
+            .delivery_execution_link(&delivery.delivery_id)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(ledger_rows_for(&store, "message-1"), 0);
+    let tracked: u32 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM tracked_requests WHERE id='message-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tracked, 0);
+    assert_eq!(
+        store
+            .count_interrupts_pair("parent156", "peer156", NOW - 30)
+            .unwrap(),
+        (0, None)
+    );
+    store
+        .conn
+        .execute_batch("DROP TRIGGER guidance156_admission_refusee;")
+        .unwrap();
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            Some(&reply),
+            Some(&link),
+            Some(guidance),
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .delivery_execution_link(&delivery.delivery_id)
+            .unwrap(),
+        Some(link)
+    );
+    assert_eq!(ledger_rows_for(&store, "message-1"), 1);
+    let tracked: u32 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM tracked_requests WHERE id='message-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tracked, 1);
+    assert_eq!(
+        store
+            .count_interrupts_pair("parent156", "peer156", NOW - 30)
+            .unwrap(),
+        (1, Some(NOW))
+    );
+    assert!(matches!(
+        store
+            .reserve(&key(), b"canon156", NOW, HORIZON, NOW + 1, 30)
+            .unwrap(),
+        Reservation::Replayed(_)
+    ));
+    assert_eq!(
+        store
+            .count_interrupts_pair("parent156", "peer156", NOW - 30)
+            .unwrap(),
+        (1, Some(NOW)),
+        "un rejeu ne compte pas une deuxième admission"
+    );
+    assert_eq!(
+        store
+            .acknowledge_send_delivery(&delivery.delivery_id, "instance156", 1)
+            .unwrap(),
+        None
+    );
+    let expected = store.lookup(&key(), NOW).unwrap();
+    assert_eq!(
+        expected,
+        LookupResult::Accepted {
+            expires_at: NOW + HORIZON
+        }
+    );
+    store
+        .conn
+        .execute_batch("DROP TABLE guidance_events;")
+        .unwrap();
+    assert_eq!(
+        store
+            .reserve(&key(), b"canon156", NOW, HORIZON, NOW + 1, 30)
+            .unwrap(),
+        Reservation::Replayed(expected.clone())
+    );
+    assert_eq!(store.lookup(&key(), NOW + 1).unwrap(), expected);
+    assert_eq!(store.record_count().unwrap(), 1);
+}
+
+/// T006 : clé/ordre de la saga existante, limites et filtres de la lecture seule.
+#[test]
+fn guidance156_store_file_rowid_apres_reaffectation() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for (offset, id, instance, expires_at) in [
+        (0, "z-first156", "old156", NOW + HORIZON),
+        (1, "a-second156", "old156", NOW + HORIZON),
+        (2, "acked156", "old156", NOW + HORIZON),
+        (3, "expired156", "old156", NOW + 4),
+        (4, "foreign156", "foreign156", NOW + HORIZON),
+    ] {
+        let key = IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, id).unwrap();
+        store
+            .reserve(&key, id.as_bytes(), NOW + offset, HORIZON, NOW + offset, 30)
+            .unwrap();
+        let delivery = SendDelivery {
+            delivery_id: id.into(),
+            recipient_instance_id: instance.into(),
+            delivery_generation: 1,
+            expires_at,
+            message_bytes: sample_message_bytes(id, "peer156"),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+    }
+    assert_eq!(
+        store
+            .acknowledge_send_delivery("acked156", "old156", 1)
+            .unwrap(),
+        None
+    );
+    let before: Vec<(String, i64)> = {
+        let mut query = store
+            .conn
+            .prepare("SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid")
+            .unwrap();
+        let rows = query
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        rows
+    };
+    assert_eq!(
+        store
+            .reassign_dispatching_deliveries("old156", "new156", NOW + 5)
+            .unwrap(),
+        2
+    );
+    let after: Vec<(String, i64)> = {
+        let mut query = store
+            .conn
+            .prepare("SELECT delivery_id,rowid FROM send_deliveries ORDER BY rowid")
+            .unwrap();
+        let rows = query
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        rows
+    };
+    assert_eq!(
+        after, before,
+        "réaffectation en place, sans nouvelle insertion"
+    );
+    let queued = store
+        .queued_deliveries_for_recipient("new156", NOW + 5, 500)
+        .unwrap();
+    assert_eq!(
+        queued
+            .iter()
+            .map(|(delivery, issued)| (delivery.delivery_id.as_str(), *issued))
+            .collect::<Vec<_>>(),
+        vec![("z-first156", NOW), ("a-second156", NOW + 1)]
+    );
+    assert_eq!(
+        queued[0].0.message_bytes,
+        sample_message_bytes("z-first156", "peer156")
+    );
+    assert_eq!(queued[0].0.recipient_instance_id, "new156");
+    assert_eq!(
+        store
+            .queued_deliveries_for_recipient("new156", NOW + 5, 1)
+            .unwrap(),
+        queued[..1]
+    );
+    assert!(
+        store
+            .queued_deliveries_for_recipient("new156", NOW + 5, 0)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .queued_deliveries_for_recipient("old156", NOW + 5, 200)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// T006 : mêmes tables150/résultats ; migration additive et entretien24h isolé.
+#[test]
+fn guidance156_store_migration150_sans_perte_et_retention24h() {
+    let path = TempDbGuard::new("guidance156-migration150");
+    let delivery = SendDelivery {
+        delivery_id: "legacy150-guidance156".into(),
+        recipient_instance_id: "legacy-instance150".into(),
+        delivery_generation: 1,
+        expires_at: NOW + HORIZON,
+        message_bytes: sample_message_bytes("message-1", "peer150"),
+    };
+    {
+        let mut legacy = IdempotencyStore::open(path.path()).unwrap();
+        assert!(matches!(
+            reserve(&legacy, b"legacy150"),
+            Reservation::Prepared { .. }
+        ));
+        legacy.begin_send_delivery(&key(), &delivery).unwrap();
+        // Les tables d'idempotence150 restent byte-pour-byte inchangées ; seuls
+        // les objets additifs156 sont absents dans cette base privée héritée.
+        legacy.conn.execute_batch("DROP TABLE IF EXISTS guidance_events; DROP INDEX IF EXISTS idx_send_deliveries_recipient_phase;").unwrap();
+    }
+    let store = IdempotencyStore::open(path.path()).unwrap();
+    assert_eq!(store.record_count().unwrap(), 1);
+    assert_eq!(store.send_delivery(&key()).unwrap(), Some(delivery.clone()));
+    assert_eq!(
+        store.lookup(&key(), NOW).unwrap(),
+        LookupResult::OutcomeUnknown {
+            expires_at: NOW + HORIZON
+        }
+    );
+    let canonical: Vec<u8> = store
+        .conn
+        .query_row(
+            "SELECT canonical_bytes FROM idempotency_records",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(canonical, b"legacy150");
+    for index in [
+        "idx_guidance_events_target",
+        "idx_guidance_events_pair",
+        "idx_send_deliveries_recipient_phase",
+    ] {
+        let count: u32 = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "index additif présent : {index}");
+    }
+    for at in [NOW - 86_401, NOW - 86_400, NOW - 30] {
+        store
+            .record_guidance_event(
+                at,
+                "parent156",
+                "peer150",
+                "interrupt",
+                "control",
+                Some("control156"),
+                "admitted",
+            )
+            .unwrap();
+    }
+    assert_eq!(store.purge_guidance_events(NOW).unwrap(), 1);
+    let oldest: i64 = store
+        .conn
+        .query_row("SELECT MIN(at) FROM guidance_events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        oldest,
+        NOW - 86_400,
+        "strictement plus de24h, pas la borne exacte"
+    );
+    assert_eq!(store.record_count().unwrap(), 1);
+    assert_eq!(store.send_delivery(&key()).unwrap(), Some(delivery));
+    assert_eq!(
+        store
+            .queued_deliveries_for_recipient("legacy-instance150", NOW, 200)
+            .unwrap()
+            .len(),
+        1
+    );
+}

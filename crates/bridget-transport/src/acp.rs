@@ -730,6 +730,40 @@ impl ManagedSession for AcpTransport {
         }
         events
     }
+    /// O(n), borné par queue_capacity. Le passage au tour actif et le retrait
+    /// utilisent le même verrou ; aucune annulation active n'est envoyée ici.
+    fn cancel_queued(&self, message_id: &str, reason: &str) -> bool {
+        let message = {
+            let (queue, wakeup) = &*self.queue;
+            let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+            if queue
+                .active
+                .as_ref()
+                .is_some_and(|active| active.message_id == message_id)
+            {
+                return false;
+            }
+            let Some(index) = queue
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+            else {
+                return false;
+            };
+            let message = queue.messages.remove(index).expect("message ACP présent");
+            wakeup.notify_one();
+            message
+        };
+        self.events
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push_back(AcpEvent::DeliveryRejected {
+                message_id: message.id,
+                reason: reason.to_string(),
+            });
+        true
+    }
+
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
         AcpTransport::cancel_delivery(self, message_id, reason)
     }
@@ -3541,6 +3575,123 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("l'update de session étrangère n'a pas été diagnostiquée");
+    }
+
+    /// Le même verrou protège le retrait FIFO et le passage file -> actif.
+    #[test]
+    fn guidance156_acp_cancel_queued_atomique() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read first_prompt
+read cancel
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}'
+cat >/dev/null
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            queue_capacity: 4,
+            permissions: "allow".into(),
+            notify_timeout_secs: 30,
+            provider_observation: None,
+        })
+        .unwrap();
+        transport.deliver(&message("active")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !transport.drain_events().iter().any(|event| {
+            matches!(
+                event, AcpEvent::PromptDispatched { message_id } if message_id == "active"
+            )
+        }) {
+            assert!(Instant::now() < deadline, "prompt actif non écrit");
+            thread::sleep(Duration::from_millis(5));
+        }
+        for id in ["first", "remove", "race", "last"] {
+            transport.deliver(&message(id)).unwrap();
+        }
+        assert!(!ManagedSession::cancel_queued(
+            &transport,
+            "active",
+            "file seulement"
+        ));
+        assert!(ManagedSession::cancel_queued(
+            &transport,
+            "remove",
+            "file seulement"
+        ));
+        assert!(!ManagedSession::cancel_queued(
+            &transport,
+            "absent",
+            "file seulement"
+        ));
+        let rejected = transport.drain_events();
+        assert!(
+            matches!(rejected.as_slice(), [AcpEvent::DeliveryRejected { message_id, reason }]
+            if message_id == "remove" && reason == "file seulement")
+        );
+
+        let (lock, _) = &*transport.queue;
+        let mut queue = lock.lock().unwrap();
+        let original_active = queue.active.take().expect("tour actif");
+        assert!(!original_active.cancelled.load(Ordering::SeqCst));
+        assert_eq!(
+            queue
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "race", "last"]
+        );
+        let (cancellation, cancelled_rx) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        // Le worker peut gagner le verrou et rendre la remise active avant
+        // cancel_queued. Le retrait doit alors refuser sans envoyer cancel.
+        thread::scope(|scope| {
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let session = &transport;
+            let attempt = scope.spawn(move || {
+                entered_tx.send(()).unwrap();
+                ManagedSession::cancel_queued(session, "race", "file seulement")
+            });
+            entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            let index = queue.messages.iter().position(|m| m.id == "race").unwrap();
+            let promoted = queue.messages.remove(index).unwrap();
+            queue.active = Some(ActiveTurn {
+                message_id: promoted.id,
+                cancellation,
+                cancelled: cancelled.clone(),
+            });
+            drop(queue);
+            assert!(
+                !attempt.join().unwrap(),
+                "une remise devenue active ne doit pas être annulée"
+            );
+        });
+        assert!(!cancelled.load(Ordering::SeqCst));
+        assert!(matches!(
+            cancelled_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        let mut queue = lock.lock().unwrap();
+        assert_eq!(queue.active.as_ref().unwrap().message_id, "race");
+        assert_eq!(
+            queue
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "last"]
+        );
+        queue.active = Some(original_active);
+        drop(queue);
+        for id in ["first", "last"] {
+            assert!(ManagedSession::cancel_queued(&transport, id, "fin fixture"));
+        }
+        assert!(transport.cancel_delivery("active", "fin fixture"));
+        transport.shutdown();
     }
 
     #[test]

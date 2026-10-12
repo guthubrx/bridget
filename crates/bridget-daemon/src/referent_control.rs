@@ -115,6 +115,8 @@ pub enum AutonomousEffect {
     NativeDelegation,
     /// Lancement ou remise d'une mission native déjà admise (session 152).
     NativeMissionDispatch,
+    /// Guidage explicite ou implicite effectué par un agent (session156).
+    AgentGuidance,
 }
 
 /// Verdict de la garde unique.
@@ -135,7 +137,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
         | AutonomousEffect::ReminderNudge
         | AutonomousEffect::Continuation
         | AutonomousEffect::NativeDelegation
-        | AutonomousEffect::NativeMissionDispatch => Admission::Admitted,
+        | AutonomousEffect::NativeMissionDispatch
+        | AutonomousEffect::AgentGuidance => Admission::Admitted,
     }
 }
 
@@ -855,6 +858,22 @@ mod tests {
         assert!(state.paused, "la pause survit à la réouverture");
         assert_eq!(state.generation, 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn guidance156_pause_garde_table() {
+        let mut state = read(&conn()).unwrap();
+        for paused in [false, true] {
+            state.paused = paused;
+            assert_eq!(
+                admit_autonomous_effect(AutonomousEffect::AgentGuidance, &state),
+                if paused {
+                    Admission::Deferred { motif: "pause" }
+                } else {
+                    Admission::Admitted
+                }
+            );
+        }
     }
 
     #[test]

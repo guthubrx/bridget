@@ -720,7 +720,7 @@ fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {
     while replies.len() < expected_ids.len() {
         assert!(Instant::now() < deadline, "réponses ACP incomplètes");
         match peer.recv() {
-            DaemonToWrapper::Deliver(message) => {
+            DaemonToWrapper::Deliver { message, .. } => {
                 let in_reply_to = message.in_reply_to.as_deref().unwrap_or_default();
                 if in_reply_to.is_empty() {
                     assert_eq!(

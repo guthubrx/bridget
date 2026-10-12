@@ -56,7 +56,7 @@ impl IdempotencyStore {
         key: &IdempotencyKey,
         delivery: &SendDelivery,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_inner(key, delivery, None, None)
+        self.begin_send_delivery_with_guidance(key, delivery, None, None, None)
     }
 
     /// Prépare atomiquement la remise et le suivi d'une réponse attendue.
@@ -66,7 +66,7 @@ impl IdempotencyStore {
         delivery: &SendDelivery,
         reply: &ReplyTracking,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_inner(key, delivery, Some(reply), None)
+        self.begin_send_delivery_with_guidance(key, delivery, Some(reply), None, None)
     }
 
     /// Prépare la remise et son rattachement causal dans la même transaction.
@@ -80,15 +80,19 @@ impl IdempotencyStore {
         reply: Option<&ReplyTracking>,
         link: &DeliveryExecutionLink,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_inner(key, delivery, reply, Some(link))
+        self.begin_send_delivery_with_guidance(key, delivery, reply, Some(link), None)
     }
 
-    fn begin_send_delivery_inner(
+    /// O(B+log n), B enveloppe, n lignes des magasins. Transaction unique réemployée.
+    /// guidance=(at,actor,target,action,path,message_id), admis SEULEMENT au COMMIT.
+    /// reply/lien gardent leurs types existants ; None conserve les appels historiques.
+    pub(crate) fn begin_send_delivery_with_guidance(
         &mut self,
         key: &IdempotencyKey,
         delivery: &SendDelivery,
         reply: Option<&ReplyTracking>,
         execution_link: Option<&DeliveryExecutionLink>,
+        guidance: Option<(i64, &str, &str, &str, &str, Option<&str>)>,
     ) -> Result<(), IdempotencyError> {
         if key.operation_kind != OperationKind::Send || delivery.delivery_id.is_empty() {
             return Err(IdempotencyError::InvalidDelivery);
@@ -158,6 +162,15 @@ impl IdempotencyStore {
                     reply.created_at,
                     reply.deadline_at,
                 ],
+            )?;
+        }
+        if let Some((at, actor, target, action, path, message_id)) = guidance {
+            // Pas de compteur anticipé : toute erreur de guidage annule aussi
+            // remise, ledger, suivi et lien causal ; aucun effet avant ce COMMIT.
+            tx.execute(
+                "INSERT INTO guidance_events(at,actor,target,action,path,message_id,outcome)
+                 VALUES (?1,?2,?3,?4,?5,?6,'admitted')",
+                params![at, actor, target, action, path, message_id],
             )?;
         }
         tx.commit()?;
@@ -384,13 +397,53 @@ impl IdempotencyStore {
             .map_err(Into::into)
     }
 
+    /// O(log n+k log r+B), k candidats de cette instance, r reçus, B octets lus.
+    /// Lecture seule, rang d'insertion conservé par reassign ; au plus200 résultats.
+    /// Les files éphémères et le Send historique ne sont pas représentés ici.
+    pub(crate) fn queued_deliveries_for_recipient(
+        &self,
+        recipient_instance_id: &str,
+        now: i64,
+        limit: usize,
+    ) -> Result<Vec<(SendDelivery, i64)>, IdempotencyError> {
+        let mut query = self.conn.prepare(
+            "SELECT d.delivery_id,d.recipient_instance_id,d.delivery_generation,
+                    d.expires_at,d.message_bytes,r.issued_at
+             FROM send_deliveries d
+             JOIN idempotency_records r
+               ON r.issuer_scope=d.issuer_scope
+              AND r.operation_kind=d.operation_kind
+              AND r.idempotency_key=d.idempotency_key
+             WHERE d.recipient_instance_id=?1 AND d.phase='dispatching' AND d.expires_at>?2
+             ORDER BY d.rowid LIMIT ?3",
+        )?;
+        let rows = query
+            .query_map(
+                params![recipient_instance_id, now, limit.min(200) as i64],
+                |row| {
+                    Ok((
+                        SendDelivery {
+                            delivery_id: row.get(0)?,
+                            recipient_instance_id: row.get(1)?,
+                            delivery_generation: row.get(2)?,
+                            expires_at: row.get(3)?,
+                            message_bytes: row.get(4)?,
+                        },
+                        row.get(5)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Reprise bornée : seules les remises encore en cours pour l'instance
     /// exacte sont relivrées. Une remise Acked ou Indeterminate ne l'est pas.
     /// Toute ligne `dispatching` sans enveloppe est classée `indeterminate`
     /// dans la même transaction avant que les autres remises soient rendues.
     ///
-    /// Complexité : O(N), N étant le nombre total de remises faute d'index sur
-    /// l'instance ; le reclassement est groupé pour éviter N écritures.
+    /// O(log N+K log K+B), K remises de cette instance, B enveloppes ; index156
+    /// recipient/phase puis tri delivery_id, reclassement groupé.
     pub fn dispatching_deliveries_for_instance(
         &mut self,
         recipient_instance_id: &str,

@@ -168,7 +168,7 @@ fn spec138_real_daemon_steer_scope_and_durable_replay() {
     });
     same_frame(source.receive(), &invalid);
     assert_no_delivery(&mut target);
-    command.command_id = "control138-admitted".into();
+    command.command_id = "control138-permission-refused".into();
     target
         .reader
         .get_ref()
@@ -178,41 +178,15 @@ fn spec138_real_daemon_steer_scope_and_durable_replay() {
     source.send(WrapperToDaemon::ControlExecution {
         command: command.clone(),
     });
-    let admitted = source.receive();
+    let permission_denied = source.receive();
+    // Un motif de projet valide ne donne pas une autorité de guidage156.
     assert!(
-        matches!(&admitted,DaemonToWrapper::ControlExecutionResult {outcome:ExecutionControlOutcome::OutcomeUnknown,project_warnings,..} if project_warnings[0].code=="cross_project" && project_warnings[0].reason.as_deref()==Some("shared review"))
+        matches!(&permission_denied,DaemonToWrapper::ControlExecutionResult {
+            outcome:ExecutionControlOutcome::Refused(ExecutionControlRefusal::NotPermitted),
+            project_warnings,..} if project_warnings.is_empty()),
+        "un Client nu ne pilote pas un autre projet : {permission_denied:?}"
     );
-    let DaemonToWrapper::ControlExecutionDispatch {
-        issuer_scope,
-        command: dispatched,
-    } = target.receive()
-    else {
-        panic!("control delivery expected")
-    };
-    assert_eq!(
-        dispatched.message.as_ref().unwrap().body,
-        command.message.as_ref().unwrap().body
-    );
-    assert_eq!(
-        dispatched
-            .message
-            .as_ref()
-            .unwrap()
-            .cross_project_reason
-            .as_deref(),
-        Some("shared review")
-    );
-    target.send(WrapperToDaemon::ControlExecutionReported {
-        issuer_scope,
-        command_id: command.command_id.clone(),
-        execution_id: command.execution_id.clone(),
-        accepted: true,
-        refusal_reason: None,
-    });
-    let accepted = source.receive();
-    assert!(
-        matches!(&accepted,DaemonToWrapper::ControlExecutionResult {outcome:ExecutionControlOutcome::Accepted,project_warnings,..} if project_warnings.len()==1)
-    );
+    assert_no_delivery(&mut target);
     drop(source);
     drop(target);
     drop(store);
@@ -222,19 +196,19 @@ fn spec138_real_daemon_steer_scope_and_durable_replay() {
     drop(process);
     daemon = Some(spawn_daemon(&root, None));
     let mut target = registered_target(&socket);
-    // Projet volontairement devenu identique : le reçu accepté ne change pas.
+    // Projet volontairement devenu identique : le refus durable ne change pas.
     fact(&mut target, &project_a);
     let mut source = controller(&socket, &project_a);
     source.send(WrapperToDaemon::ControlExecution {
         command: command.clone(),
     });
-    same_frame(source.receive(), &accepted);
+    same_frame(source.receive(), &permission_denied);
     assert_no_delivery(&mut target);
     source.send(WrapperToDaemon::Lookup {
         operation_kind: "execution_control".into(),
         idempotency_key: command.command_id,
     });
-    same_frame(source.receive(), &accepted);
+    same_frame(source.receive(), &permission_denied);
     drop(source);
     drop(target);
     let mut process = daemon.take().unwrap();

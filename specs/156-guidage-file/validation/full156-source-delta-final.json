@@ -1,0 +1,17 @@
+{
+  "checked_at": "2026-10-12T05:27:24.051393+00:00",
+  "checked_sources": 216,
+  "changed_after_full": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "full": "726d16d387cface2d882df55f563b40ec74ee14fb014036219a86ef154571268",
+      "current": "0dfd46715aa3b1440f85b046c791e05f750753cbc26ad864c334d248a1ffedbd"
+    },
+    {
+      "file": "crates/bridget-daemon/tests/spec138_project_test.rs",
+      "full": "9c40fbff67dcf32cded75d0970f9c67c5b8ea402ca3ad2be6452dd9d8ac0d121",
+      "current": "7cc7e7ebaf80ea9ef63668330333dddc16fa868c775d2bb34d543c4af593f816"
+    }
+  ],
+  "scope": "Two test-only fixture deltas reviewed; no production logic modification after full. Not a before/after source guard for targeted replays."
+}

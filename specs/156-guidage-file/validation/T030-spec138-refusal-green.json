@@ -1,0 +1,43 @@
+{
+  "label": "T030-spec138-refusal-green",
+  "command": [
+    "/usr/bin/nice",
+    "-n",
+    "10",
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "bridget-daemon",
+    "--test",
+    "spec138_project_test",
+    "--features",
+    "test-support",
+    "spec138_real_daemon_steer_scope_and_durable_replay",
+    "--",
+    "--test-threads=2"
+  ],
+  "started_at": "2026-10-12T05:24:12.644408+00:00",
+  "seconds": 7.67,
+  "rc": 0,
+  "test_results": [
+    [
+      "ok",
+      "1",
+      "0",
+      "0"
+    ]
+  ],
+  "failed_tests": [],
+  "log_sha256": "deeda4675380e9fe704b61f4b980cd5fdd3344aa0789d8d6d43c45c03d2a4b35",
+  "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-spec138-refusal-green.log",
+  "private_ns": "/private/tmp/b.v4lbpxhm",
+  "limits": {
+    "cargo_jobs": 2,
+    "test_threads": 2,
+    "nice": 10
+  }
+}

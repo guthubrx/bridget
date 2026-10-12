@@ -5,10 +5,10 @@
 
 Spec: 156-guidage-file
 Titre: Guidage et interruption exposés aux agents, droits complets, lecture de la file
-Statut: Spécifiée (révisée après contre-revues Codex rondes 1 et 2, 2026-10-11)
+Statut: Implemented (32/32 ; Converge passage2, audit et livraison à suivre)
 Priorité: P1
-Tâches: 31 à cocher (voir tasks.md)
-Tests: rouges d'abord, filtres `guidance156_*`
+Tâches: 32/32 (T001–T032 validées par le principal)
+Tests: suite unique 2350 PASS Cargo + 3 PASS enfants séparés / 11 FAIL / 73 ignored ; 80 unitaires156 et 3 E2E inclus, trois fixtures corrigées par reprises 2+1 PASS ; huit échecs hérités, aucun GREEN global
 
 Résumé:
 - Contexte: Le protocole sait déjà guider un tour (`SteerCurrent`) et l'interrompre (`InterruptAndStart`, `Interrupt`). Seule la pause du référent s'en sert. `bridget_send` et la CLI n'ont aucun paramètre d'intention. Pire : un agent attesté peut déjà guider ou interrompre un autre agent par une trame brute, car le daemon ne vérifie aucun droit entre agents.
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-156-guidage-file`
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implemented
 **Priority**: P1
 **Dependencies**: SPEC-150 (acquis supposés livrés), SPEC-148, SPEC-149
 
@@ -71,10 +71,11 @@ les fermer.
 - `bridget_cancel` : l'émetteur d'une demande déjà active interrompt la cible ACP, car `cancel_delivery` annule le tour actif (`daemon.rs:18128-18160`, `acp.rs:518-531`). FR-023.
 - `ControlExecution` : l'origine `Human` du message n'est pas normalisée ; Codex guide ET interrompt (`wrapper.rs:5639`, `codex_app_server.rs:866`). FR-009.
 
-**Constat transmis à la session152.** L'interruption d'un enfant en mission
-native fait échouer la mission pour de bon (`native_delegation.rs:1193-1203`,
-spec 150). Tant que 152 ne reprend pas une mission, cette session refuse
-d'interrompre un enfant qui a une mission active.
+**Mission native.** Une interruption utilisateur reste terminale. La session152
+reprend pause/panne, pas une interruption utilisateur. Un agent ne peut donc
+pas interrompre un enfant en mission active. L'humain explicitement autorisé
+est exempt comme FR012. Chemin réel : crates/bridget-daemon/src/daemon/native_delegation.rs.
+T002 doit revalider ce comportement sur la base155 livrée.
 
 **Hors périmètre (décision après contre-revue, Art. XIX)** :
 - **Éditer la file : `cancel`, `reorder`, `promote`.** Une édition sûre exige une saga durable : réservation avant émission, accusé durable, réconciliation à la reprise, phase d'annulation (le `CHECK` de `send_deliveries.phase` n'en admet pas, `idempotency.rs:534`), saga de promotion. Le coût dépasse le gain. Les demandes suivies (`reply=true`) ont déjà `bridget_cancel`. Voir la question 2.
@@ -86,9 +87,10 @@ d'interrompre un enfant qui a une mission active.
 
 Un parent voit son enfant partir dans la mauvaise direction. Il appelle
 `bridget_send` avec `intent: "steer"` et la correction. Avec `intent:
-"interrupt"`, le tour en cours s'arrête et le message démarre un nouveau tour.
-Sans `intent`, ou avec `intent: "queue"`, le comportement est exactement celui
-d'aujourd'hui. La CLI offre `--intent`.
+"interrupt"`, le transport demande l'arrêt du tour actif et garde le message dans la FIFO. Un message plus ancien peut porter le prochain tour ; aucune priorité nouvelle n'est promise.
+Sans `intent`, ou avec `intent: "queue"`, l'envoi ordinaire conserve ses octets
+canoniques. Les restrictions de provenance et le guidage implicite FR-022
+restent des changements visibles. La CLI offre `--intent`.
 
 Le résultat de l'envoi dit que l'intention demandée est admise. Il ne promet
 pas l'effet. L'effet réel est celui du transport : injecté dans le tour, remis
@@ -118,11 +120,14 @@ position. Il ne voit que ce que ses droits permettent. L'outil ne modifie rien.
 
 ### US4 - Aucun changement pour l'existant (P1)
 
-Un appel sans nouveau paramètre produit les mêmes octets canoniques et le même
-comportement qu'avant. La remise immédiate des messages groupables vers un fil
-Claude ou Cursor occupé (session 129) reste inchangée **pour l'humain, le parent
+Un envoi ordinaire légitime sans nouveau paramètre conserve ses octets
+canoniques et son comportement, sous les restrictions explicites de FR-009
+et FR-022. Une provenance forgée ne conserve aucun privilège. La remise immédiate des messages groupables vers un fil
+Claude occupé avec activeSteering natif prouvé reste inchangée **pour l'humain attaché, l'UI attestée, les systèmes internes, le parent
 et ses enfants** ; les autres expéditeurs attendent la fin du tour (FR-022,
-changement visible, question 3). Les 64 remises du pont restent la borne.
+changement visible, question 3). Cursor occupé attend aussi, même pour ces
+acteurs et mid_turn_ok=true ; son steer explicite est refusé pour fermer le
+repli interrupt_restart non sûr accepté par root. Les 64 remises du pont restent la borne.
 
 ## Exigences fonctionnelles
 
@@ -131,33 +136,33 @@ changement visible, question 3). Les 64 remises du pont restent la borne.
 - **FR-001** : `bridget_send` accepte `intent` parmi `queue`, `steer`, `interrupt`. Absent ou `queue` : aucune intention posée, octets canoniques inchangés.
 - **FR-002** : `bridget send` accepte `--intent` avec les mêmes valeurs.
 - **FR-003** : Une autre valeur est refusée `invalid_intent`. Rien n'est envoyé.
-- **FR-004** : L'intention DEMANDÉE est posée sur le message avant le canon : `steer` donne `SteerCurrent`, `interrupt` donne `InterruptAndStart`. Le daemon ne la réécrit jamais selon l'état de la cible. Rejouer une clé avec une autre intention rend `envelope_mismatch`. Le rejeu d'une clé admise rend le même résultat que le premier appel, que la cible soit active ou non.
+- **FR-004** : L'intention DEMANDÉE est posée sur le message avant le canon : `steer` donne `SteerCurrent`, `interrupt` donne `InterruptAndStart`. Le daemon ne la réécrit jamais selon l'état de la cible. Rejouer une clé avec une autre intention rend `envelope_mismatch`. Le rejeu d'une clé admise rend le même résultat que le premier appel, que la cible soit active ou non. `steer` avec `reply=true` est refusé `invalid_intent` avant connexion/réservation : aucun tour dédié ne porte sa réponse.
 - **FR-005** : Le résultat d'un envoi avec intention contient l'intention demandée et `effect: "unconfirmed"`. Le daemon ne dit jamais `steered`, `interrupted_restarted` ni `started`.
-- **FR-006** : Vers un fil T3, `steer` n'est envoyé que si le fournisseur a un guidage natif prouvé (Claude, Cursor). Sinon la remise est rejetée `steer_unavailable`. T3 ne reçoit jamais un `steer` qu'il pourrait transformer en interruption. `interrupt` pose `deliveryIntent: "restart"`.
+- **FR-006** : Vers un fil T3, `steer` n'est envoyé que si le fournisseur a un guidage natif prouvé (Claude seul confirmé ; Cursor refusé). Sinon la remise est rejetée `steer_unavailable`. T3 ne reçoit jamais un `steer` qu'il pourrait transformer en interruption. `interrupt` pose `deliveryIntent: "restart"`.
 - **FR-007** : Dans le pont T3, un message de guidage passe devant les messages bloqués de la file et n'entre jamais dans un lot.
 
 **Droits et garde-fous**
 
-- **FR-008** : `steer` et `interrupt` sont permis à l'humain attesté et au parent de la cible (lien d'agent ouvert, ou tâche de délégation native dont l'appelant est propriétaire). « Humain attesté » veut dire une connexion de rôle attach. Un client nu qui signe `from=human` (par exemple `env -i bridget send`) n'est PAS attesté pour le contrôle : refus `identity_unattested`. Il garde l'envoi en file. Tout autre appelant reçoit `intent_not_permitted` avec un motif (`not_parent`, `cross_project`, `self_target`, `identity_unattested`). Un agent attesté qui se reconnecte ou ouvre un autre rôle ne gagne aucune autorité humaine.
-- **FR-009** : L'identité de l'appelant vient de la connexion attestée, jamais de `from`. Le daemon fabrique l'origine : `origin=Human` n'est conservée que pour une connexion attach ou un client nu humain ; pour tout autre client elle est retirée avant le canon, sur `Send` et sur `SendIdempotent`.
-- **FR-010** : Le message porté par une commande `ControlExecution` reçoit la même normalisation d'origine que les envois, avant le canon et avant la garde ; `origin=Human` y est toujours retirée (une commande de contrôle n'est pas une voie attach). La même garde s'applique à `SendIdempotent`, `Send` historique (y compris `SteerCurrent`/`InterruptAndStart` bruts) et `ControlExecution` (opérations `SteerCurrent` et `Interrupt`). Refus de `ControlExecution` : nouvelle valeur `not_permitted` de `ExecutionControlRefusal`.
+- **FR-008** : Steer/interrupt explicites sont permis à l'humain attaché attesté et au parent de la cible (lien ouvert ou propriétaire natif). Un client nu signé from=human garde la file mais reçoit identity_unattested pour le contrôle. Autres refus : intent_not_permitted (not_parent, cross_project, self_target, identity_unattested). Le rôle est immuable sur la même connexion ; une reconnexion avec preuve d'agent ne devient pas humaine. Une nouvelle connexion Attach brute du même compte reste hors modèle. La provenance UI attestée des messages ordinaires ne change pas son rôle Client ni cette autorité explicite.
+- **FR-009** : L'identité vient de la connexion attestée, jamais de from. Le daemon normalise la provenance avant le canon sur Send et SendIdempotent. Une origine humaine déjà fournie est conservée seulement pour attach ou pour le relais UI prouvé (identité UI réservée, instance primaire vivante de type ui, credential existant validé). La provenance système interne vient du producteur, pas de origin=System déclaré par un client. Aucun droit ne vient du seul from=humain ni de l'origine cliente. Ne jamais fabriquer origin=Human pour autoriser mid_turn_ok.
+- **FR-010** : Le message porté par une commande `ControlExecution` reçoit la même normalisation d'origine que les envois, avant le canon et avant la garde ; `origin=Human` y est toujours retirée (une commande de contrôle n'est pas une voie attach). Pour ControlExecution, reserve_control_command conserve canon et rejeu AVANT la garde. La garde d’une commande neuve précède mark_control_dispatched, le comptage et l’émission ; le rejeu conserve sa réponse existante. La même garde s'applique à `SendIdempotent`, `Send` historique (y compris `SteerCurrent`/`InterruptAndStart` bruts) et `ControlExecution` (opérations `SteerCurrent` et `Interrupt`). Refus de `ControlExecution` : nouvelle valeur `not_permitted` de `ExecutionControlRefusal`.
 - **FR-011** : L'interruption de pause (sans connexion cliente, `daemon.rs:9667`) est une exception interne explicite. Elle n'est ni refusée ni comptée par les limites de rythme.
 - **FR-012** : `interrupt` par un agent est limité à 1 par 30 s par couple appelant/cible et à 3 par 10 min par cible. Refus `interrupt_rate_limited` avec `retry_after_secs`. L'humain attesté n'est pas limité.
-- **FR-013** : `interrupt` d'un enfant qui a une tâche de délégation native active est refusé `mission_active`. `steer` reste permis.
+- **FR-013** : Interrupt par un agent vers un enfant en mission native active est refusé mission_active : l'interruption utilisateur reste terminale malgré la reprise152 de pause/panne. L'humain explicitement autorisé est exempt comme FR012. Steer agent reste permis ; aucun repli automatique en turn/interrupt, même à l'échéance d'un steer non consommé ou avec une deadline fournie. Garder le timeout du steer humain validé et l'échéance propre du tour principal.
 - **FR-014** : Pendant la pause du référent, `steer` et `interrupt` par un agent rendent `referent_paused`. L'envoi en file reste admis. L'humain attesté n'est pas bloqué.
 - **FR-015** : Un refus de `SendIdempotent` est mémorisé par le mécanisme existant (`reject_idempotent_send`, jusqu'à l'expiration de l'enregistrement) : pour réessayer, il faut une nouvelle clé. Un refus de `Send` historique est un `Nack`. Aucun message n'est remis dans les deux cas.
-- **FR-016** : Chaque action de guidage admise ou refusée est tracée (appelant, cible, action, chemin, résultat, date) dans une table d'audit séparée du reçu d'idempotence. Elle sert aussi aux limites de rythme. Elle est purgée après 24 h.
+- **FR-016** : Chaque action de guidage admise ou refusée est tracée (appelant, cible, action, chemin, résultat, date) dans une table d'audit séparée du reçu d'idempotence. Elle sert aussi aux limites de rythme. Elle est purgée après 24 h. SendIdempotent inscrit l’admission guidance_events dans la même transaction begin_send_delivery_with_guidance que remise/suivi/lien/journal. Sur les chemins historique/control/cancel, l’audit accepté est durable avant émission physique. Un INSERT échoué interdit le contrôle. Un crash après admission mais avant émission peut consommer le rythme sans effet physique ; ce choix est conservateur.
 
 **Lecture de la file**
 
-- **FR-017** : `bridget_queue` (lecture seule) rend, pour une cible, au plus 200 remises en phase `dispatching` : `message_id`, `from`, `intent`, `reply`, `age_secs`, `preview` (120 caractères), `position`. Chaque entrée est marquée « en attente ou en cours d'injection ». La réponse ajoute `queue_bound` (64 pour un fil T3, `null` sinon).
-- **FR-018** : La file entière est visible au destinataire, à l'humain et au parent. Tout autre appelant ne voit que ses propres messages. La preuve enfant (ADR 044) est refusée.
+- **FR-017** : `bridget_queue` (lecture seule) rend, pour une cible, au plus 200 remises en phase `dispatching` : `message_id`, `from`, `intent`, `reply`, `age_secs`, `preview` (120 caractères), `position`. Chaque entrée est marquée « en attente ou en cours d'injection ». La réponse ajoute `queue_bound` (64 pour un fil T3, `null` sinon). Périmètre exact : send_deliveries idempotent en phase dispatching ; les Send historiques et les files internes des transports sont exclus.
+- **FR-018** : La file entière est visible au destinataire, à l’humain Attach, à l’UI Client attestée et au parent. Tout autre appelant ne voit que ses propres messages. La preuve enfant (ADR 044) est refusée.
 - **FR-019** : `bridget_capabilities` annonce `guidance` : intentions, délai et plafond d'interruption, présence de `bridget_queue`.
 
 **Compatibilité et documentation**
 
-- **FR-020** : Les anciens clients et trames se lisent sans changement. La nouvelle requête exige la capacité `QueueListV1`.
-- **FR-022** : Le guidage implicite du pont T3 est soumis à la garde. Un message ordinaire sans intention n'est remis en cours de tour (`deliveryIntent: "steer"`, session 129) que si son expéditeur est l'humain attesté, le parent de la cible ou un enfant de la cible. Le daemon calcule cette autorisation et la pose sur la trame de remise (`mid_turn_ok`). Les autres expéditeurs, dont les pairs, attendent la fin du tour. Sans la valeur (ancienne trame), le pont attend la fin du tour.
+- **FR-020** : Les anciens clients et trames se lisent sans changement. La nouvelle requête exige la capacité `QueueListV1`. Attach conserve son rôle et peut envoyer ClientHello uniquement avec la liste exacte [QueueListV1], sans identité agent/conn_names ni autre capacité. L’UI Client attestée garde son rôle et peut lire toute la projection.
+- **FR-022** : Le daemon calcule mid_turn_ok sur DeliverIdempotent ET Deliver historique, envoi/reprise. La remise immédiate utilise la connexion source réelle. À la récupération, from ne permet jamais d’emprunter une route UI ou humaine ; sans preuve UI persistée, la remise attend normalement. Pour les agents UUID, recalculer les liens depuis les faits actuels. Une remise ordinaire déjà groupable vers T3 Claude occupé, avec capacité activeSteering native prouvée, reste immédiate pour attach, UI attestée par sa preuve existante, producteur système interne, parent ou enfant de la cible. Le rôle Client de l'UI reste inchangé ; from=humain seul ne donne aucun droit. Les pairs/clients nus attendent ; valeur absente : attente. Cursor attend aussi en cours de tour, même avec mid_turn_ok=true, car son steer peut devenir interrupt_restart. Aucun origin=Human fabriqué. Les critères groupable existants restent : reply=true, sollicitations et notifications ne deviennent pas groupables.
 - **FR-023** : `bridget_cancel` distingue le retrait en attente de l'interruption active. Pour tout appelant, la demande est annulée et son message encore en file est retiré. Le tour actif n'est interrompu que si l'appelant passe la garde commune (droits, pause, rythme, mission) ; l'interruption compte dans les limites de rythme. Sinon le tour continue, comme le dit déjà la description de l'outil (« n'arrête pas l'agent »). La trame `CancelDelivery` porte `interrupt_active` (défaut faux) et l'acteur ACP exécute les deux cas de façon atomique sous son verrou.
 - **FR-024** : Le cadre de menace de cette spec figure dans `docs/reference-communication.md` et dans l'ADR.
 - **FR-021** : `docs/reference-communication.md` (lignes 175-180 : « aucune option CLI de contrôle nouvelle »), la skill Bridget et une ADR décrivent la nouveauté. La doc dit que `bridget_cancel` annule une demande suivie.
@@ -165,15 +170,15 @@ changement visible, question 3). Les 64 remises du pont restent la borne.
 ## Critères de succès
 
 - **SC-001** : Avec un transport Codex simulé en tour actif, un `steer` d'un parent produit l'événement `turn_steer` du transport sur le tour ciblé.
-- **SC-002** : Avec un transport Claude simulé, `steer` est rejeté et aucun tour n'est interrompu ; `interrupt` démarre un nouveau tour.
+- **SC-002** : Avec Claude simulé, steer est rejeté sans interruption. Interrupt arrête le tour actif et le message reste dans la FIFO ; sans message plus ancien dans la fixture, il porte le nouveau tour.
 - **SC-003** : 0 guidage ou interruption admis pour un pair du même projet, un appelant non attesté, une cible d'un autre projet ou soi-même, sur les quatre chemins (`SendIdempotent`, `Send`, `ControlExecution`, pont/CLI) et pour une `origin=Human` forgée.
 - **SC-004** : 4 interruptions d'agent en 10 min sur une même cible : la 4e est refusée. Deux en moins de 30 s du même couple : la 2e est refusée.
 - **SC-005** : 100 % des `steer`/`interrupt` d'un agent pendant la pause sont refusés `referent_paused` ; 0 tour créé ; l'envoi en file passe ; la pause interrompt toujours, même après 3 interruptions d'utilisateur.
 - **SC-006** : Dans le pont T3, un message de guidage derrière une tête de file bloquée est remis ; un `steer` vers un fournisseur hors liste n'est jamais envoyé à T3.
 - **SC-007** : Un appel sans `intent` produit les mêmes octets canoniques qu'avant ; les suites `spec_087`, `native148`, `native149`, `native150`, `t3code`, `mcp::` restent vertes.
 - **SC-008** : Un `ControlExecution` `Interrupt` d'un client non autorisé est refusé `not_permitted` (accepté avant).
-- **SC-010** : Parent autorisé, enfant en mission active, `steer` avec `origin=Human` forgée dans un `ControlExecution` : le tour n'est pas interrompu, la mission continue.
-- **SC-011** : Un pair du même projet qui envoie un message ordinaire à un fil Claude occupé : la remise attend la fin du tour. Un parent, un enfant ou l'humain attaché : remise immédiate comme avant.
+- **SC-010** : Parent autorisé, enfant en mission active, `steer` avec `origin=Human` forgée dans un `ControlExecution` : le tour n'est pas interrompu, la mission continue. Même à l'échéance du steer agent non consommé, aucune interruption automatique ; timeout humain validé conservé.
+- **SC-011** : Un message ordinaire groupable d'un pair vers T3 Claude occupé attend. Parent/enfant, attach, UI attestée et système interne conservent la remise immédiate sur les deux trames. Aucun droit ne vient du seul from=humain.
 - **SC-012** : `bridget_cancel` d'un pair sur sa demande déjà active vers une cible ACP : la demande est annulée, le tour n'est pas interrompu. Même appel d'un parent hors pause, sous le plafond, sans mission : le tour est interrompu.
 - **SC-013** : `env -i bridget send --intent steer` (client nu) est refusé `identity_unattested`.
 - **SC-009** : `bridget_queue` ne modifie aucune ligne (test d'égalité de la base avant/après) et filtre selon les droits.
@@ -189,14 +194,14 @@ changement visible, question 3). Les 64 remises du pont restent la borne.
 **Hypothèses**
 
 - Le parent s'établit par `agent_links` ouvert (`agent_links.rs:79-134`) ou par la tâche de délégation native (propriétaire de la tâche dont `child` est la cible).
-- « Humain attesté » pour le contrôle = connexion de rôle attach (UI, TUI). Un client nu n'en fait pas partie. L'humain qui veut guider depuis un terminal passe par l'attach ou l'interface T3 (question 3).
+- « Humain attesté » pour le contrôle = connexion de rôle attach. Un client nu n'en fait pas partie. L'humain qui veut un contrôle explicite depuis un terminal passe par l'attach. La provenance UI attestée des messages ordinaires est distincte (FR-022) et ne change pas le rôle Client.
 - Pendant la pause, l'agent ne guide ni n'interrompt (ADR 027, garde unique) ; l'envoi en file reste admis.
-- Un fournisseur T3 à guidage natif prouvé est Claude ou Cursor (session 129, `t3code.rs:3126`). Les autres sont refusés pour `steer`.
+- La preuve fraîche du bundle T3 installé149 établit Claude seul pour le guidage actif natif. Cursor n’a pas supportsActiveSteering ; son repli interrupt_restart est fermé. Les autres fournisseurs, Cursor inclus, sont refusés pour `steer` avec steer_unavailable. Le transport Codex natif garde ses propres gardes.
 - Les tests suivent la recette `umask 077` de la session150.
-- La livraison suit 147 à 150 : fichiers sur disque, sans relance de service.
+- La série152–160 autorise, après validation, build signé, installation et activation Bridget lorsqu’aucune mission native non terminale ne reste, puis nettoyage. T3 reste sans relance explicite. Aucune nouvelle permission n’est demandée ; les checkpoints sans relance147–150 sont historiques.
 
 ## Questions pour l'utilisateur
 
 1. **Un pair du même projet peut-il guider ?** Défaut retenu : non. Seuls l'humain et le parent guident ou interrompent.
 2. **Reporter `cancel`, `reorder`, `promote` à une session dédiée avec saga durable ?** Défaut retenu : oui. Conséquence : Guidage vise 4 sur 5 dans 156 ; le 5 vient avec cette session.
-3. **Acceptez-vous deux changements visibles ?** (a) Un message ordinaire vers un fil T3 Claude ou Cursor occupé n'est plus remis en cours de tour que s'il vient de l'humain, du parent ou d'un enfant de la cible ; un pair attend la fin du tour. (b) `bridget send --intent steer|interrupt` depuis un terminal nu est refusé ; l'humain guide par l'attach ou l'interface T3. Défaut retenu : oui aux deux, car sans (a) et (b) un pair ou un agent à l'environnement vidé contourne la garde.
+3. **Deux changements visibles retenus** : les pairs attendent la fin du tour T3 occupé ; la CLI nue ne peut demander steer/interrupt. Les messages ordinaires attach/UI attestés et systèmes internes restent compatibles. Arbitrages F1/F2/F3/F5 acceptés par root le2026-10-12, sans nouvelle question utilisateur.

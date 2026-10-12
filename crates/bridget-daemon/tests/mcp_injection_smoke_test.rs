@@ -244,7 +244,11 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
         writeln!(
             writer,
             "{}",
-            encode(&DaemonToWrapper::Deliver(message)).unwrap()
+            encode(&DaemonToWrapper::Deliver {
+                message,
+                mid_turn_ok: None
+            })
+            .unwrap()
         )
         .unwrap();
         writer.flush().unwrap();

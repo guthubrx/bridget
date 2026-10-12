@@ -367,7 +367,8 @@ fn contexte_fournisseur_refuse_le_non_proprietaire_la_generation_et_le_binding_i
     );
     let execution_id = loop {
         match owner.receive() {
-            DaemonToWrapper::Deliver(message) if message.id == "provider-context-trigger" => {}
+            DaemonToWrapper::Deliver { message, .. }
+                if message.id == "provider-context-trigger" => {}
             DaemonToWrapper::DeliverExecution {
                 execution_id,
                 generation,

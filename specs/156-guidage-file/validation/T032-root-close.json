@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-10-12T05:51:37.272979+00:00",
+  "status": "Implemented",
+  "pipeline": "In Progress",
+  "tasks_complete": 32,
+  "tasks_total": 32,
+  "tasks_sha256": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+  "diff_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/validation/diff-156-after-T032.patch",
+  "diff_sha256": "c0f9a9833b685a0b1ff2ed702aa13814e7c85b662f24fd49238edf453c140da1",
+  "daemon_sha256": "a11310b737d1ac186309a57f306babe3146ec8af7f57a921bc6adf6b398c3c3c",
+  "T032": "validated",
+  "converge": "passage2 à exécuter",
+  "current_source_receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/validation/T032-root-validation.json"
+}

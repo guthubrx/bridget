@@ -292,7 +292,9 @@ pub trait ManagedSession: Transport {
     }
     /// Politique réellement annoncée par le fournisseur, et sa session.
     /// Aucune valeur de repli ne donne de droits si le pilote ne l'observe pas.
-    fn provider_permissions(&self)->Option<(String,serde_json::Value,u64,Option<String>)>{None}
+    fn provider_permissions(&self) -> Option<(String, serde_json::Value, u64, Option<String>)> {
+        None
+    }
     /// Choix explicite de session, sans tour caché. Le défaut refuse : aucun
     /// adaptateur ne simule une commande de modèle par un prompt.
     fn select_runtime(
@@ -363,6 +365,11 @@ pub trait ManagedSession: Transport {
     /// Compatibilité locale avec les appelants historiques de steering.
     fn supports_steering(&self) -> bool {
         self.supports_operation(ProviderOperation::Steer)
+    }
+    /// Retire uniquement une remise encore en file. Un pilote sans cette
+    /// garantie refuse : ce défaut ne doit jamais appeler cancel_delivery.
+    fn cancel_queued(&self, _message_id: &str, _reason: &str) -> bool {
+        false
     }
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool;
     fn stop(&self);

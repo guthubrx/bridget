@@ -388,7 +388,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
     ));
     assert!(matches!(
         next(&mut recipient_reader),
-        DaemonToWrapper::Deliver(_)
+        DaemonToWrapper::Deliver { message: _, .. }
     ));
 
     // Mutation discriminante : si le fait était créé avant l'écriture/flush du
@@ -418,7 +418,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
     let reminder = next(&mut recipient_reader);
     assert!(matches!(
         reminder,
-        DaemonToWrapper::Deliver(message) if message.id == reminder_message_id
+        DaemonToWrapper::Deliver { message, .. } if message.id == reminder_message_id
     ));
 
     drop(service_reader);
@@ -537,7 +537,7 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
     ));
     assert!(matches!(
         next(&mut recipient_reader),
-        DaemonToWrapper::Deliver(_)
+        DaemonToWrapper::Deliver { message: _, .. }
     ));
     service_reader
         .get_ref()
@@ -604,7 +604,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     ));
     assert!(matches!(
         next(&mut recipient_reader),
-        DaemonToWrapper::Deliver(_)
+        DaemonToWrapper::Deliver { message: _, .. }
     ));
     wait_marker(&before_marker);
     kill_sigkill(&mut daemon);
@@ -661,7 +661,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     ));
     assert!(matches!(
         next(&mut recipient_reader),
-        DaemonToWrapper::Deliver(_)
+        DaemonToWrapper::Deliver { message: _, .. }
     ));
     wait_marker(&after_marker);
     kill_sigkill(&mut daemon);

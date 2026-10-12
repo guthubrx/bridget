@@ -273,7 +273,7 @@ fn wait_reply(sender: &mut Sender, request: &BridgetMessage) -> BridgetMessage {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         assert!(Instant::now() < deadline, "pas de réponse liée");
-        if let DaemonToWrapper::Deliver(reply) = sender.receive()
+        if let DaemonToWrapper::Deliver { message: reply, .. } = sender.receive()
             && reply.in_reply_to.as_deref() == Some(request.id.as_str())
         {
             return reply;

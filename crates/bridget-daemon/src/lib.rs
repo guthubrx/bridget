@@ -23,6 +23,7 @@ pub use execution_store::{
 pub mod federate;
 pub mod fleet;
 pub mod greffe_policy_refresh;
+pub(crate) mod guidance;
 pub mod handoff;
 pub mod human_inbox;
 pub mod idempotency;
@@ -39,6 +40,8 @@ pub(crate) mod delegation;
 pub(crate) mod delegation_mcp;
 pub mod mcp;
 pub mod mcp_identity;
+mod native_permission_observer;
+pub(crate) mod native_permissions;
 mod observation;
 pub mod project_compat;
 pub mod reaper;
@@ -59,7 +62,5 @@ mod t3code_mcp;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
 pub mod threads;
-pub mod wrapper;
 pub(crate) mod workspace_git;
-pub(crate) mod native_permissions;
-mod native_permission_observer;
+pub mod wrapper;

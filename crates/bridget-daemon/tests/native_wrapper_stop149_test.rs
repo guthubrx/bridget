@@ -198,11 +198,10 @@ fn lancer(label: &str, natif: bool, persistant: bool, fin: FinDaemon) -> Scenari
                         writeln!(
                             writer,
                             "{}",
-                            encode(&DaemonToWrapper::Deliver(BridgetMessage::new(
-                                "humain",
-                                AGENT_ID,
-                                "tour natif 149"
-                            )))
+                            encode(&DaemonToWrapper::Deliver {
+                                message: BridgetMessage::new("humain", AGENT_ID, "tour natif 149"),
+                                mid_turn_ok: None
+                            })
                             .unwrap()
                         )
                         .unwrap();

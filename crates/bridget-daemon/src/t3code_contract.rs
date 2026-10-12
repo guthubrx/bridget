@@ -194,17 +194,57 @@ pub struct SessionSummary {
 }
 
 /// Une projection native est un fil de présentation, jamais une présence fournisseur.
-pub(crate) fn is_native_projection(thread: &Value) -> Result<bool,ContractError> {
-    let Some(marker)=thread.get("bridgetTaskRef") else {return Ok(false)};
-    let bad=||shape("snapshot","threads[].bridgetTaskRef");
-    let object=marker.as_object().ok_or_else(bad)?;
-    const KEYS:[&str;7]=["version","taskId","rootThreadId","parentTaskId","generation","seq","status"];
-    if object.len()!=KEYS.len() || KEYS.iter().any(|key|!object.contains_key(*key)) || marker["version"]!=1 {return Err(bad())}
-    let uuid=|v:&Value|v.as_str().is_some_and(|s|crate::threads::canonical_uuid(s).as_deref()==Some(s));
-    if !uuid(&marker["taskId"]) || !uuid(&marker["generation"]) || (!marker["parentTaskId"].is_null()&&!uuid(&marker["parentTaskId"]))
-        || !marker["rootThreadId"].as_str().is_some_and(|s|!s.is_empty()&&s.len()<=2048&&!s.chars().any(bridget_core::is_disallowed_control))
-        || !marker["seq"].as_u64().is_some_and(|n|n<=bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ)
-        || !marker["status"].as_str().is_some_and(|s|matches!(s,"queued"|"starting"|"mission_pending"|"working"|"waiting_for_children"|"cancelling"|"result_available"|"failed"|"cancelled")) {return Err(bad())}
+pub(crate) fn is_native_projection(thread: &Value) -> Result<bool, ContractError> {
+    let Some(marker) = thread.get("bridgetTaskRef") else {
+        return Ok(false);
+    };
+    let bad = || shape("snapshot", "threads[].bridgetTaskRef");
+    let object = marker.as_object().ok_or_else(bad)?;
+    const KEYS: [&str; 7] = [
+        "version",
+        "taskId",
+        "rootThreadId",
+        "parentTaskId",
+        "generation",
+        "seq",
+        "status",
+    ];
+    if object.len() != KEYS.len()
+        || KEYS.iter().any(|key| !object.contains_key(*key))
+        || marker["version"] != 1
+    {
+        return Err(bad());
+    }
+    let uuid = |v: &Value| {
+        v.as_str()
+            .is_some_and(|s| crate::threads::canonical_uuid(s).as_deref() == Some(s))
+    };
+    if !uuid(&marker["taskId"])
+        || !uuid(&marker["generation"])
+        || (!marker["parentTaskId"].is_null() && !uuid(&marker["parentTaskId"]))
+        || !marker["rootThreadId"].as_str().is_some_and(|s| {
+            !s.is_empty() && s.len() <= 2048 && !s.chars().any(bridget_core::is_disallowed_control)
+        })
+        || !marker["seq"]
+            .as_u64()
+            .is_some_and(|n| n <= bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ)
+        || !marker["status"].as_str().is_some_and(|s| {
+            matches!(
+                s,
+                "queued"
+                    | "starting"
+                    | "mission_pending"
+                    | "working"
+                    | "waiting_for_children"
+                    | "cancelling"
+                    | "result_available"
+                    | "failed"
+                    | "cancelled"
+            )
+        })
+    {
+        return Err(bad());
+    }
     Ok(true)
 }
 
@@ -317,7 +357,9 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
         .and_then(Value::as_array)
         .ok_or_else(|| shape(SRC, "threads"))?
     {
-        if is_native_projection(thread)? {continue;}
+        if is_native_projection(thread)? {
+            continue;
+        }
         let session = match thread.get("session").filter(|s| !s.is_null()) {
             Some(session) => Some(SessionSummary {
                 provider_name: str_field(session, SRC, "threads[].session.providerName")?
@@ -681,7 +723,7 @@ impl Client {
     pub fn dispatch(
         &self,
         command: &Value,
-        steer_current: bool,
+        delivery_intent: Option<&str>,
     ) -> Result<DispatchResult, ContractError> {
         if self.v2.get().is_none() {
             self.snapshot()?;
@@ -691,13 +733,20 @@ impl Client {
                 &self.base_url,
                 &self.token,
                 "orchestration.dispatchCommand",
-                &v2::dispatch_command(command, steer_current)?,
+                &v2::dispatch_command(command, delivery_intent)?,
             )?;
             return Ok(DispatchResult {
                 sequence: value["sequence"]
                     .as_u64()
                     .ok_or_else(|| shape("orchestration.dispatchCommand", "sequence"))?,
             });
+        }
+        if let Some(intent) = delivery_intent {
+            return Err(ContractError::Transport(if intent == "steer" {
+                "steer_unavailable".into()
+            } else {
+                "interruption indisponible : protocole T3 historique sans deliveryIntent".into()
+            }));
         }
         const SRC: &str = "POST /api/orchestration/dispatch";
         let text = self.request("POST", "/api/orchestration/dispatch", Some(command))?;

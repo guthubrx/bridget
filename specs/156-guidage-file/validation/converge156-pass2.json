@@ -1,0 +1,1509 @@
+{
+  "feature": "156-guidage-file",
+  "passage": 2,
+  "phase": 6,
+  "verdict": "CONVERGED",
+  "tasks_added": 0,
+  "findings_confirmed": [],
+  "closed_finding": "FR-016/T032",
+  "task_count": {
+    "done": 32,
+    "total": 32
+  },
+  "tasks_before": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+  "tasks_after": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+  "tasks_byte_identical": true,
+  "pass1_reference": {
+    "json": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/converge156/pass1.json",
+    "sha256": "01a01d5e0161a93d939f9ba585fd78b1b17e55ddc204bf9637e919ceae7bd368",
+    "md": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/converge156/pass1.md",
+    "md_sha256": "eeb61a87e450e5fe064e9de689174de7a243dcee7f3882e5487ccf2c60753ee4"
+  },
+  "matrix": [
+    {
+      "id": "FR-001",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:917",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:996"
+      ],
+      "test": {
+        "name": "guidance156_mcp_queue_egal_absent",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:2865",
+        "executed_proofs": [
+          {
+            "name": "mcp::tests::guidance156_mcp_queue_egal_absent",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1258
+          }
+        ]
+      },
+      "proof_kind": "fixture/source + journal exécuté",
+      "note": "",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-002",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:3546"
+      ],
+      "test": {
+        "name": "guidance156_cli_intent_valide",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:10045",
+        "executed_proofs": [
+          {
+            "name": "cli::guidance156_tests::guidance156_cli_intent_valide",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 326
+          }
+        ]
+      },
+      "proof_kind": "fixture/source + journal exécuté",
+      "note": "",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-003",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:923",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:3553"
+      ],
+      "test": {
+        "name": "guidance156_mcp_intent_inconnue_refusee",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:2831",
+        "executed_proofs": [
+          {
+            "name": "mcp::tests::guidance156_mcp_intent_inconnue_refusee",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1256
+          }
+        ]
+      },
+      "proof_kind": "fixture/source + journal exécuté",
+      "note": "",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-004",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9653",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9706",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9594"
+      ],
+      "test": {
+        "name": "guidance156_send_autre_intent_envelope_mismatch",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:25129",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_send_autre_intent_envelope_mismatch",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 834
+          }
+        ]
+      },
+      "proof_kind": "handler réel + SQLite privé + journal",
+      "note": "Rejeu actuel/inactif24766 et steer+reply refusé avant réserve9550/2831.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-005",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:1084"
+      ],
+      "test": {
+        "name": "guidance156_mcp_steer_pose_steer_current",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:2889",
+        "executed_proofs": [
+          {
+            "name": "mcp::tests::guidance156_mcp_steer_pose_steer_current",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1261
+          }
+        ]
+      },
+      "proof_kind": "façade MCP réelle / socket de fixture",
+      "note": "Résultat bridget_send structuré ; effet non confirmé, y compris accusé perdu.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-006",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:1949",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code_contract_v2.rs:274"
+      ],
+      "test": {
+        "name": "guidance156_t3_steer_fournisseur_hors_liste_refuse",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:6669",
+        "executed_proofs": [
+          {
+            "name": "t3code::tests::guidance156_t3_steer_fournisseur_hors_liste_refuse",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1545
+          }
+        ]
+      },
+      "proof_kind": "Worker/pont et serveur de fixture",
+      "note": "Claude seul ; Cursor/REST-V1 refusés. Preuve bundle149 T002 réutilisée, pas nouveau runtime.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-007",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:1928",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:2068",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:3261"
+      ],
+      "test": {
+        "name": "guidance156_t3_guidage_derriere_tete_bloquee",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:6734",
+        "executed_proofs": [
+          {
+            "name": "t3code::tests::guidance156_t3_guidage_derriere_tete_bloquee",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1543
+          }
+        ]
+      },
+      "proof_kind": "Worker de fixture + journal",
+      "note": "Guidage hors lot6779 aussi PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-008",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:60",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:8956",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9008"
+      ],
+      "test": {
+        "name": "guidance156_matrix_droits",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:172",
+        "executed_proofs": [
+          {
+            "name": "guidance::tests::guidance156_matrix_droits",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1136
+          }
+        ]
+      },
+      "proof_kind": "garde pure + handlers attestés",
+      "note": "Tests guard24998..25386 ; Client nu26560 et reconnexion26653 ; rôle immutable existant.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-009",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:8992",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:17625",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19022"
+      ],
+      "test": {
+        "name": "guidance156_origin_human_forgee_par_agent_retiree",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:25769",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_origin_human_forgee_par_agent_retiree",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 816
+          }
+        ]
+      },
+      "proof_kind": "handler réel ; origine/socket/SQLite",
+      "note": "Attach25507 et UI/System26028 aussi PASS ; rôleClient préservé.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-010",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10181",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10206",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10316"
+      ],
+      "test": {
+        "name": "guidance156_control_interrupt_client_non_autorise",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:26659",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_control_interrupt_client_non_autorise",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 797
+          }
+        ]
+      },
+      "proof_kind": "handler contrôle réel + reçu SQLite",
+      "note": "Rejeu avant garde ; native steer Human retirée1160 aussi PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-011",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:63",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9020"
+      ],
+      "test": {
+        "name": "guidance156_control_pause_interne_admise",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:26797",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_control_pause_interne_admise",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 796
+          }
+        ]
+      },
+      "proof_kind": "handler contrôle réel + pause087",
+      "note": "Exception connNone non forgeable par le message public, aucune ligne/quota de pause.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-012",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:121",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency.rs:1064",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency.rs:1084"
+      ],
+      "test": {
+        "name": "guidance156_rate_retry_after_exact",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:27357",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_rate_retry_after_exact",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 833
+          }
+        ]
+      },
+      "proof_kind": "SQLite réel + horloge de fixture",
+      "note": "Cool30s26789, plafond26912, reopen27393, exemptions27119 et bornes2598 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-013",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:118",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9112",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/codex_app_server.rs:1814"
+      ],
+      "test": {
+        "name": "guidance156_mission_interrupt_enfant_refuse",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:1120",
+        "executed_proofs": [
+          {
+            "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::guidance156_mission_interrupt_enfant_refuse",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 541
+          }
+        ]
+      },
+      "proof_kind": "Task native de fixture + handler réel",
+      "note": "Steer1143 PASS ; E2ECodex817 sans fallback agent ; H6875 préserve timeout humain.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-014",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:112",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9073"
+      ],
+      "test": {
+        "name": "guidance156_pause_interrupt_agent_refuse",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:25927",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_pause_interrupt_agent_refuse",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 819
+          }
+        ]
+      },
+      "proof_kind": "pause durable + handler réel",
+      "note": "Steer25552, queue25677 et humain25737 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-015",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9815",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19097"
+      ],
+      "test": {
+        "name": "guidance156_rate_refus_non_compte",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:27534",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_rate_refus_non_compte",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 832
+          }
+        ]
+      },
+      "proof_kind": "refus/reçus réels dans fixture SQLite",
+      "note": "Refus mémorisé par reject_idempotent_send ; historique Nack, aucun push.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-016",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9155",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9187",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9239",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9784",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10002",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10295",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19069",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19767",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency/send_delivery.rs:167",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency.rs:1072"
+      ],
+      "test": {
+        "name": "guidance156_rate_refus_non_compte",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:27534",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_rate_refus_non_compte",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-green-regressions.log",
+            "line": 60
+          }
+        ],
+        "oracles": "refus pair/projet/persistance : une ligne complète at/actor/target/action/path/message_id/outcome, admitted=0, quota0 et aucun octet ; rejeu projet résultat/trace inchangés, puis admission ultérieure=1"
+      },
+      "proof_kind": "Lecture neuve delta production/oracle ; vrai handler, SQLite et sockets privés ; journal GREEN exécuté par ROOT.",
+      "note": "T032 clôt le manque. Quatre préflights + échec facts ; refus postguard tracés. Chaque branche individuelle des autres chemins n’a pas son oracle ciblé nouveau.",
+      "status": "MANQUE_P1_RESOLU_T032",
+      "reading_attribution": "Passage2 : patch production entier, helper réel, quatre chemins et oracle27534–27891 relus."
+    },
+    {
+      "id": "FR-017",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9307",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency/send_delivery.rs:403"
+      ],
+      "test": {
+        "name": "guidance156_queue_list_ordre_rowid",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:29134",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_queue_list_ordre_rowid",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 826
+          }
+        ]
+      },
+      "proof_kind": "SELECT/handler réels SQLite",
+      "note": "Borne20029148, age/preview/position29237, reassign28720 et64/null29412 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-018",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9336",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:1099"
+      ],
+      "test": {
+        "name": "guidance156_queue_list_filtre_par_droits",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:29362",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_queue_list_filtre_par_droits",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 824
+          }
+        ]
+      },
+      "proof_kind": "identités/socket/SQLite de fixture",
+      "note": "Attach et UIentire ; pairs propres ; ChildProof refusée avant connexion dans mcp2616.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-019",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/delegation_mcp.rs:267"
+      ],
+      "test": {
+        "name": "guidance156_mcp_schema_intent",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:2763",
+        "executed_proofs": [
+          {
+            "name": "mcp::tests::guidance156_mcp_schema_intent",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1260
+          }
+        ]
+      },
+      "proof_kind": "catalogue et façade de fixture",
+      "note": "Assertion capabilities guidance2823 vérifiée par le test PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-020",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs:211",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs:4343",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:15574",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:15876"
+      ],
+      "test": {
+        "name": "guidance156_protocol_trames_historiques_byte_identiques",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs:5501",
+        "executed_proofs": [
+          {
+            "name": "protocol::tests::guidance156_protocol_trames_historiques_byte_identiques",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 3204
+          }
+        ]
+      },
+      "proof_kind": "encode/decode réel + négociation daemon",
+      "note": "Attach [QueueListV1] exacte, rôle intact ; queue_negociation29332 et flags5543 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-021",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/docs/reference-communication.md:181",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/skills/bridget/SKILL.md:377",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/skills/bridget/references/commandes.md:96",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/docs/decisions/156-guidage-et-lecture-de-file.md:24"
+      ],
+      "test": {
+        "name": "guidance156_mcp_schema_intent",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:2763",
+        "executed_proofs": [
+          {
+            "name": "mcp::tests::guidance156_mcp_schema_intent",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1260
+          }
+        ]
+      },
+      "proof_kind": "lecture documentaire + oracle schéma public",
+      "note": "Exemples skill existants PASS FULL2352 ; ce test legacy ne couvre pas tous les parcours156.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-022",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9270",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:4529",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19251",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:3245"
+      ],
+      "test": {
+        "name": "guidance156_midturn_humain_attache_immediat",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:26341",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_midturn_humain_attache_immediat",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 810
+          }
+        ]
+      },
+      "proof_kind": "frames réelles sous fixture daemon + Worker",
+      "note": "Parent/enfant25924/25977, pair25873, absence26224, recovery26272 PASS ; UI non usurpée parfrom.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-023",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19725",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/wrapper.rs:4671",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/acp.rs:735"
+      ],
+      "test": {
+        "name": "guidance156_cancel_pair_demande_active_acp_sans_interruption",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:27976",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_cancel_pair_demande_active_acp_sans_interruption",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 790
+          }
+        ]
+      },
+      "proof_kind": "preuves composées handler/frame + processusACP synthétique",
+      "note": "ACP cancel_queued3582 PASS ; parent27643/pause27760/plafond27861/native1218/quota27983 PASS. Pas E2E dédié Cancel daemon→processus.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "FR-024",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/docs/reference-communication.md:211",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/docs/decisions/156-guidage-et-lecture-de-file.md:17"
+      ],
+      "test": {
+        "name": "guidance156_human_reconnexion_agent_sans_autorite",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:26966",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_human_reconnexion_agent_sans_autorite",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 808
+          }
+        ]
+      },
+      "proof_kind": "lecture cadre de menace + défense en profondeur",
+      "note": "Processus du mêmeUID avec socketAttach brute hors modèle, aucune promesse d’isolation Unix.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-001",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/codex_app_server.rs:914",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs:817"
+      ],
+      "test": {
+        "name": "guidance156_e2e_codex_actif_parent_steer_meme_tour",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs:817",
+        "executed_proofs": [
+          {
+            "name": "guidance156_e2e_codex_actif_parent_steer_meme_tour",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 2464
+          }
+        ]
+      },
+      "proof_kind": "E2E daemon/wrapper/provider synthétique",
+      "note": "turn_steer journalisé sur même turnID853–864 ; aucun modèle réel.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-002",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/claude_stream_json.rs:310",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs:871"
+      ],
+      "test": {
+        "name": "guidance156_e2e_claude_refuse_steer_interrupt_et_fifo",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs:871",
+        "executed_proofs": [
+          {
+            "name": "guidance156_e2e_claude_refuse_steer_interrupt_et_fifo",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 2465
+          }
+        ]
+      },
+      "proof_kind": "E2E daemon/wrapper/provider synthétique",
+      "note": "Refus sans turn_end933 puis vrai interrupt948 ; FIFO984.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-003",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:60",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9803",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10316"
+      ],
+      "test": {
+        "name": "guidance156_guard_pair_meme_projet",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:25311",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_guard_pair_meme_projet",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 802
+          }
+        ]
+      },
+      "proof_kind": "matrice pure + handlers/socket attestés",
+      "note": "Autre projet25066, own25148, unproved25219, ChildProof25309, forged25386 et origine25456 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-004",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:121"
+      ],
+      "test": {
+        "name": "guidance156_rate_plafond_3_par_10min",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:27225",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_rate_plafond_3_par_10min",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 831
+          }
+        ]
+      },
+      "proof_kind": "SQLite/horloge de fixture",
+      "note": "Cooldown26789 et exact timestamp27044 aussi PASS ; pas benchmark.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-005",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:112",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9020"
+      ],
+      "test": {
+        "name": "guidance156_combo_envoi_controle_annulation_pause",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:28725",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_combo_envoi_controle_annulation_pause",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 795
+          }
+        ]
+      },
+      "proof_kind": "handlers/demandes/exécutions/SQLite réels privés",
+      "note": "Quatre puits, zéro tour indû, pause interne non comptée ; pause_aucun_tour25802 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-006",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:1928"
+      ],
+      "test": {
+        "name": "guidance156_t3_guidage_derriere_tete_bloquee",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:6734",
+        "executed_proofs": [
+          {
+            "name": "t3code::tests::guidance156_t3_guidage_derriere_tete_bloquee",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 1543
+          }
+        ]
+      },
+      "proof_kind": "Worker/pont de fixture",
+      "note": "Hors fournisseur6669 et horslot6779 PASS.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-007",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9653",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:3549",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:996"
+      ],
+      "test": {
+        "name": "guidance156_send_queue_octets_inchanges",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:25185",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_send_queue_octets_inchanges",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 837
+          }
+        ]
+      },
+      "proof_kind": "comparaison canon + FULL unique et trois reprises",
+      "note": "763/763 baseline cumulative,7ignored inchangés. FULL antérieur aux deux fichiers fixtures ; pas fullGREEN final.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-008",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10331"
+      ],
+      "test": {
+        "name": "guidance156_control_interrupt_client_non_autorise",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:26659",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_control_interrupt_client_non_autorise",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 797
+          }
+        ]
+      },
+      "proof_kind": "handler contrôle/SQLite/frame",
+      "note": "NotPermitted avant mark_control_dispatched/émission.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-009",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9307"
+      ],
+      "test": {
+        "name": "guidance156_queue_list_ne_modifie_rien",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:29738",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_queue_list_ne_modifie_rien",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 825
+          }
+        ]
+      },
+      "proof_kind": "base SQLite byte-identique avant/après",
+      "note": "Oracle preview120scalaires, ni body/references, countreçus et bytes29313–29326.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-010",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:10181",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/codex_app_server.rs:1814"
+      ],
+      "test": {
+        "name": "guidance156_control_parent_mission_steer_origine_humaine_forgee",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:1160",
+        "executed_proofs": [
+          {
+            "name": "daemon::native_delegation::native_delegation_permissions149_tests::native_child_requests155_tests::guidance156_control_parent_mission_steer_origine_humaine_forgee",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 540
+          }
+        ]
+      },
+      "proof_kind": "handler natif + E2E/transport de fixture",
+      "note": "Commande publique n’a plusHuman1213 ; Codex817deadlineagent ; TEMOIN_H6875 timeoutHuman conservé.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-011",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9270",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:3245"
+      ],
+      "test": {
+        "name": "guidance156_midturn_pair_attend_fin_de_tour",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:26186",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_midturn_pair_attend_fin_de_tour",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 811
+          }
+        ]
+      },
+      "proof_kind": "handlers/frame + Worker de fixture",
+      "note": "Humain/UI/System26028, parent/enfant25924/25977, absent26224 ; Cursor attend mêmeflagtrue.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-012",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/wrapper.rs:4671",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/acp.rs:735"
+      ],
+      "test": {
+        "name": "guidance156_acp_cancel_queued_atomique",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/acp.rs:3582",
+        "executed_proofs": [
+          {
+            "name": "acp::tests::guidance156_acp_cancel_queued_atomique",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 2958
+          }
+        ]
+      },
+      "proof_kind": "processusACP simulé + preuve daemon séparée",
+      "note": "Actif inchangé, suppressionFIFO et course promotion atomiques3615–3676 ; flags daemon27475/27643.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "SC-013",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:3546",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:8956"
+      ],
+      "test": {
+        "name": "guidance156_human_cli_sans_preuve_refuse",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:28601",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_human_cli_sans_preuve_refuse",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 807
+          }
+        ]
+      },
+      "proof_kind": "sous-processus CLI existant + daemon privé",
+      "note": "Client nu26560 conservequeue ; rôle/proof reconnect26653, pas pseudo-terminal réel inspecté.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "US1",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:894",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:3506",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:1928"
+      ],
+      "test": {
+        "name": "guidance156_e2e_codex_actif_parent_steer_meme_tour",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs:817",
+        "executed_proofs": [
+          {
+            "name": "guidance156_e2e_codex_actif_parent_steer_meme_tour",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 2464
+          }
+        ]
+      },
+      "proof_kind": "E2E + façade/CLI de fixture",
+      "note": "FR001–007 et SC001/002/006 ; effetunconfirmed, pas priorité FIFO nouvelle.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "US2",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs:60",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9218",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:19725"
+      ],
+      "test": {
+        "name": "guidance156_combo_envoi_controle_annulation_pause",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:28725",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_combo_envoi_controle_annulation_pause",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 795
+          }
+        ]
+      },
+      "proof_kind": "handlers/SQLite privés + E2E/transport",
+      "note": "FR008–016/022/023 ; manque FR016 du passage1 fermé par T032.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "US3",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:9307",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs:1094",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs:4603"
+      ],
+      "test": {
+        "name": "guidance156_queue_list_ne_modifie_rien",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs:29738",
+        "executed_proofs": [
+          {
+            "name": "daemon::presence_tests::guidance156_queue_list_ne_modifie_rien",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 825
+          }
+        ]
+      },
+      "proof_kind": "SELECT/handlers de fixture",
+      "note": "FR017–019/020, ChildProof mcp2616.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    },
+    {
+      "id": "US4",
+      "code": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs:4343",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs:3245"
+      ],
+      "test": {
+        "name": "guidance156_protocol_trames_historiques_byte_identiques",
+        "source": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs:5501",
+        "executed_proofs": [
+          {
+            "name": "protocol::tests::guidance156_protocol_trames_historiques_byte_identiques",
+            "status": "ok",
+            "log": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log",
+            "line": 3204
+          }
+        ]
+      },
+      "proof_kind": "compatibilité wire/canon + baseline cumulative",
+      "note": "FR020–024 ; changementsprovenance/Claude/Cursor explicitement acceptés, aucun succès global.",
+      "status": "REALISATION_ET_PREUVE_REPEREES",
+      "reading_attribution": "Passage1 conservé ; fichiers inchangés vérifiés par SHA, lignes daemon relocalisées à partir de la capture P1 reconstruite au SHA exact. Pas de nouvelle lecture globale."
+    }
+  ],
+  "matrix_counts": {
+    "FR": 24,
+    "SC": 13,
+    "US": 4,
+    "total": 41
+  },
+  "current_artifacts": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/spec.md",
+      "sha256": "e536f18fe6a9896a3426bb99adaecc64dbac70c9f525237029755722d7130972",
+      "pass1_sha256": "5a3a5d9a1918e3c1f5c294e8baa583a295d57a9a4e436ed674416a72f0f13ec5",
+      "pass1_read": "1–207 intégral en préparation ; métadonnées finales1–16 relues",
+      "pass2_read": "1–12 ; exigence FR016154, delta de statut seulement"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/plan.md",
+      "sha256": "ed2fd6c10c66a717efa630cc0bf456a80b479c069d0045c8d29f9d3c4970f156",
+      "pass1_sha256": "83ac50b23ba059ae442f5454570fabe02b8a711d1343d04e749619693e7c0413",
+      "pass1_read": "1–191 intégral en préparation ; insertion finale statut1–12 relue",
+      "pass2_read": "1–10 ; statut T032 seulement"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/tasks.md",
+      "sha256": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+      "pass1_sha256": "51ca315a8a0a379cb997cb4f919e996be82b273617de8898f42772a3111bf0f2",
+      "pass1_read": "1–107 intégral en préparation ; seuls cochages finals66–73 relus et SHAavant/après",
+      "pass2_read": "1–12,109–111 ; appendT032 seul, 32 cases cochées"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/checklists/requirements.md",
+      "sha256": "e2ef076b1840df71e21ce1c10207a2ae77888dd2a526ba1bdd1511eac07681ba",
+      "pass1_sha256": "e2ef076b1840df71e21ce1c10207a2ae77888dd2a526ba1bdd1511eac07681ba",
+      "pass1_read": "1–49 intégral",
+      "pass2_read": "SHA inchangé : lecture intégrale attribuée à P1"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/contracts/guidance156.md",
+      "sha256": "6fcebc5881646742474041ac8527a2631e3862d99cb8f9cd9426c68d76af16a2",
+      "pass1_sha256": "6fcebc5881646742474041ac8527a2631e3862d99cb8f9cd9426c68d76af16a2",
+      "pass1_read": "1–169 intégral",
+      "pass2_read": "SHA inchangé : lecture intégrale attribuée à P1"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/implementation.md",
+      "sha256": "901542047c37c7c51a6c7014845865b2709ffb74d7097b7047dc33e3b203cdf0",
+      "pass1_sha256": "ce9aae7c4b2116eca4e7dc3df458daa7b07854f647b82d488211a8deae6dd92b",
+      "pass1_read": "1–121 intégral final",
+      "pass2_read": "123–166 ; append T032 complet"
+    }
+  ],
+  "new_read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a11310b737d1ac186309a57f306babe3146ec8af7f57a921bc6adf6b398c3c3c",
+      "ranges_read_semantically": [
+        [
+          9124,
+          9267
+        ],
+        [
+          9708,
+          10032
+        ],
+        [
+          10200,
+          10481
+        ],
+        [
+          19035,
+          19174
+        ],
+        [
+          19200,
+          19329
+        ],
+        [
+          19726,
+          19927
+        ],
+        [
+          27534,
+          27891
+        ]
+      ],
+      "whole_file_read": false,
+      "note": "Les sorties tronquées ne comptent pas comme lecture entière ; extraits nécessaires réaffichés en petits blocs. Patch production entier lu séparément."
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/convergence-fix/daemon-fr016-production.patch",
+      "sha256": "7b26b3a32b3c9b94b0e365ba443a7c438af9816d29721fe7896431e51d212f7f",
+      "whole_file_read": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "b467937682e8769ab5ccf27d2eb024fff22fe4d7c59d43ddd1ebdcfc5a31c5f7",
+      "ranges_read_semantically": [
+        [
+          1063,
+          1108
+        ]
+      ],
+      "whole_file_read": false
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/reuse-audit.md",
+      "sha256": "4b333affb4c3527a017e78feecccbc242c602cb743c9df2697d8094dedcce499",
+      "ranges_read_semantically": [
+        [
+          111,
+          161
+        ]
+      ],
+      "whole_file_read": false
+    }
+  ],
+  "unchanged_source_read_attribution": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          1,
+          392
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "b467937682e8769ab5ccf27d2eb024fff22fe4d7c59d43ddd1ebdcfc5a31c5f7",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          864,
+          884
+        ],
+        [
+          1050,
+          1125
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "f1b71c8516447a9d20c9a50b58497ec75c58029c344189439870f68377130d04",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          85,
+          191
+        ],
+        [
+          399,
+          433
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency/tests.rs",
+      "sha256": "647b5c34cfeacfb37aa9a2debbcffe5cd2d5b6b85df0f36811ae4b608e1fa598",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          2590,
+          2998
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+      "sha256": "267f17533fbf0df0f99393f35bcdbae031347369b26f6564c91b94bc0441398f",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          1113,
+          1267
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "04978c36d8955070004d01800f9b6b0c9160718fd377a101372b7fd53ccbdf3b",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          894,
+          936
+        ],
+        [
+          980,
+          1096
+        ],
+        [
+          1099,
+          1197
+        ],
+        [
+          2616,
+          2682
+        ],
+        [
+          2387,
+          2421
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs",
+      "sha256": "2a8e7c30daad48d595191770b05a1ee9c432627dcceed23a6322b27cb68248bd",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          3456,
+          3540
+        ],
+        [
+          3544,
+          3587
+        ],
+        [
+          3588,
+          3645
+        ],
+        [
+          4592,
+          4637
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "4bd59788f4742ab3737d9092bbb996660e198ab36309a8c4ba7b1fb1c4164192",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          258,
+          273
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs",
+      "sha256": "e0040b2b8e049a75b7f940d86d70417c6355e5cc02f79f5e1c8f7f91581b42ec",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          1924,
+          2088
+        ],
+        [
+          2133,
+          2159
+        ],
+        [
+          3240,
+          3277
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "sha256": "fbed353782da9d6adb48dc5fed392458fbef88b002b04578b8f02399853e3982",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          253,
+          280
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code_contract.rs",
+      "sha256": "b38ff3eeef55530038249e2107757accb48ec0c79f73c21beed20f7d888d6e94",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          723,
+          753
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          4664,
+          4686
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/acp.rs",
+      "sha256": "fc78deef60ebf9b6302667f7fb487dc7774c184d650e9c231b2a3bc373300b8c",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          730,
+          772
+        ],
+        [
+          3580,
+          3687
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/managed_session.rs",
+      "sha256": "ac156ac383097314ed0ae13b444f4e87b11be39a774ea797c8faa12aaf5088a6",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": []
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "2e19ecc41685cf43db8a762ddb9df74cac8e9fd39c5c26fbd931aa5359ecff6c",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          905,
+          921
+        ],
+        [
+          1803,
+          1825
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "b360cf27dd54fbce93e08de4075e2925e4524ae111f16b39edbc7a352b838bc1",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          200,
+          214
+        ],
+        [
+          4260,
+          4274
+        ],
+        [
+          4340,
+          4380
+        ],
+        [
+          5501,
+          5559
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "f7d9138e76cf440bdb448235eeb84ffe0fd45a3de2a49d476f3ed804ade01c19",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          810,
+          1044
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/docs/reference-communication.md",
+      "sha256": "cf10341a42cf0af024615f5a52c9d7cbb82198aa08c80c8ca1c6716ba4c26fcd",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          181,
+          263
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/skills/bridget/SKILL.md",
+      "sha256": "d959860da6a05fb04026dc6661a1cf1827f047f0df784aa13a4083feeed75aa4",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          376,
+          418
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/skills/bridget/references/commandes.md",
+      "sha256": "6eb0fcbc459bcd864092607d1344ed25a31b7c5cf66e9b137c5ba12c03e23fa5",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          96,
+          160
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/docs/decisions/156-guidage-et-lecture-de-file.md",
+      "sha256": "84571b074c611ad850e9656cafcb52d7cb7a25747e3f4b49947670ec2cb26b33",
+      "semantic_read_attribution": "Passage1",
+      "ranges_read_pass1": [
+        [
+          1,
+          107
+        ]
+      ]
+    }
+  ],
+  "source_verification": {
+    "count": 216,
+    "aggregate_sha256_json_sorted_compact": "52607a7d1d19e11dd11155a748b4219ca73535621f86dc9ce5fa58a69e7a6bbe",
+    "matches_root_final_receipt": true,
+    "stable_during_each_GREEN_run": true,
+    "GREEN_maps_same": true,
+    "postrun_format_only_restored_files": [
+      "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs"
+    ],
+    "all_five_restored_to_before_sha": true,
+    "daemon_sha256": "a11310b737d1ac186309a57f306babe3146ec8af7f57a921bc6adf6b398c3c3c"
+  },
+  "canonical_diff": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/validation/diff-156-after-T032.patch",
+    "sha256": "c0f9a9833b685a0b1ff2ed702aa13814e7c85b662f24fd49238edf453c140da1"
+  },
+  "current_receipt": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/validation/T032-root-validation.json",
+    "sha256": "23f1308749496f043975351821f2cdbc43efa63436a53f2fa8e3681b7138932d"
+  },
+  "proofs": [
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-red.json",
+      "sha256": "2275a9b02abfac12a54d67d3cb9953afdd10a53414f84ffe7dbd2246c59fbf80"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-red.log",
+      "sha256": "32e28cb3c23be03e185ea2f51ac011304bbd5d8571eb652d0bd0183e001b58a2"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-green-regressions.json",
+      "sha256": "f179ab429f0c3898bf6b9a261e93e32d8fc779a316cd7c0b0948dc278bf2b608"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-green-regressions.log",
+      "sha256": "0d54add94b0be1ad48dcbff28ab6e4df3b0c0e37989a928b51c92338af455c2e"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-e2e-green.json",
+      "sha256": "97eae39b5c5a2b212046dc696f3e7dd0dd2810ac3957b9a7a7761b67f76a7ad5"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-fr016-e2e-green.log",
+      "sha256": "bb077b291e7d78ddb3483a8440dd0685c0ff292ba5b2c0f33e8c2e264c1d5723"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/T032-format-only-restored.json",
+      "sha256": "ba4cacd72fd4925b340e572928f7f474304680cfaed5e5cbcb6724265a64a023"
+    }
+  ],
+  "T032_results": {
+    "RED": {
+      "pass": 0,
+      "fail": 1,
+      "rc": 101,
+      "seconds": 13.75
+    },
+    "GREEN_regressions": {
+      "pass": 93,
+      "fail": 0,
+      "ignored": 0,
+      "rc": 0,
+      "seconds": 21.91,
+      "groups": "80 guidance156 +11 spec087 +2 témoins"
+    },
+    "GREEN_E2E": {
+      "pass": 3,
+      "fail": 0,
+      "ignored": 0,
+      "rc": 0,
+      "seconds": 17.87,
+      "provider": "fixtures Codex/Claude ; daemon et trames réels, pas modèle réel"
+    }
+  },
+  "historical_full_results": {
+    "cargo_pass": 2350,
+    "embedded_child_pass_separate": 3,
+    "fail": 11,
+    "ignored": 73,
+    "rc": 101,
+    "single_full": true,
+    "eight_inherited_modes_reported_verified_by_root": true,
+    "new_fixture_failures_resolved_by_targeted_replays": 3,
+    "global_green": false
+  },
+  "historical_full_not_executed_on_T032": true,
+  "targeted_not_added_to_FULL": true,
+  "own_executions": {
+    "tests": 0,
+    "cargo": 0,
+    "git_mutations": 0,
+    "services": 0,
+    "models": 0,
+    "WT_writes": 0
+  },
+  "six_questions_XX": [
+    "Nécessité : FR016 imposait la trace des refus valides projet et persistance ; le RED montre (0,0) au lieu de (1,0). T032 réalise cette exigence sans autre besoin.",
+    "Simplicité : source d’identité, labels, journal guidance_events et record_guidance_outcome réutilisés ; helper privé de refus avec quatre préflights réels et un cinquième appel facts, sans nouveau type public/service/table.",
+    "Hypothèses : acteur de la connexion, intention valide et cible normalisée ; l’admission reste distincte de l’effet. Journal indisponible : warning et refus conservés, aucun contrôle autorisé.",
+    "Vérifié : delta production et oracle étendu relus ; canon/réservation/rejeu avant garde préservés ; refused exclu des compteurs SQL. RED0/1, GREEN93/0 et E2E3/0 dans leurs reçus/logs, 216 sources stables par run ; cinq restorations de forme conformes. Matrice41 avec attribution P1.",
+    "Non vérifié : aucun Cargo/test personnel, modèle réel, runtimeT3/UI, production, benchmark, couverture ou mutation. Pas de FULL sur T032 ni nouvel oracle individuel pour chacun des puits ; pas de relecture intégrale des37Rust ou du grand harnessE2E.",
+    "Conservé : droits, canon, reçus/rejeux, réservations, pause interne, quota, FIFO, interruptions, frontières transports et oracles antérieurs. Une seule extension de test prévu. Aucun changement WT par cet agent, zéro tâche nouvelle proposée."
+  ],
+  "limits": [
+    "Lectures P1 conservées et explicitement attribuées ; seules zones T032 et deltas documentaires relus en P2.",
+    "Pas de lecture entière personnelle des37Rust, du grand daemon ou du diff final ; T031 des autres owners reste une preuve séparée.",
+    "Huit échecs hérités et trois fixtures corrigées gardent leurs preuves historiques distinctes. Aucun GREEN global final.",
+    "Cinq hashes restaurés après GREEN diffèrent des sources exécutées par la seule forme ; preuve root de reproduction exacte vérifiée, aucun hash de run réécrit.",
+    "CONVERGED n’est ni un audit final ni une livraison."
+  ]
+}

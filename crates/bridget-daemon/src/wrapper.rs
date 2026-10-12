@@ -353,7 +353,9 @@ fn managed_resume_context(
                 resume_card_external_text(&attested.head)
             ));
             if attested.status_unavailable {
-                lines.push("Fichiers non commités : indisponible (configuration exécutable).".into());
+                lines.push(
+                    "Fichiers non commités : indisponible (configuration exécutable).".into(),
+                );
             } else if attested.modified.is_empty() {
                 lines.push("Fichiers non commités : aucun attesté.".to_string());
             } else {
@@ -417,7 +419,10 @@ impl NativeTerminationSignal {
     fn new() -> std::io::Result<Self> {
         let requested = Arc::new(AtomicBool::new(false));
         let registration = signal_hook::flag::register(libc::SIGTERM, requested.clone())?;
-        Ok(Self { requested, registration })
+        Ok(Self {
+            requested,
+            registration,
+        })
     }
 
     fn requested(&self) -> bool {
@@ -466,10 +471,13 @@ impl Drop for CodexInteractiveEndpoint {
         // après arrêt confirmé. Une erreur conserve l'endpoint pour diagnostic.
         let absent = matches!(std::fs::symlink_metadata(&self.socket),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound);
-        if absent && std::fs::symlink_metadata(&self.directory).is_ok_and(|metadata|
-            metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() }
-                && (metadata.dev(), metadata.ino()) == self.identity
-                && metadata.mode() & 0o077 == 0)
+        if absent
+            && std::fs::symlink_metadata(&self.directory).is_ok_and(|metadata| {
+                metadata.is_dir()
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && (metadata.dev(), metadata.ino()) == self.identity
+                    && metadata.mode() & 0o077 == 0
+            })
         {
             let _ = std::fs::remove_dir(&self.directory);
         }
@@ -574,7 +582,8 @@ fn deliver_injected_message<S: Transport + ?Sized>(
 /// même URL) et ne dépend PAS d'un chemin absolu gravé en dur.
 fn is_protected_principal_checkout(path: &Path) -> bool {
     let git = |args: &[&str]| -> Option<String> {
-        let output = crate::workspace_git::run_git(path, args, crate::workspace_git::READ_TIMEOUT).ok()?;
+        let output =
+            crate::workspace_git::run_git(path, args, crate::workspace_git::READ_TIMEOUT).ok()?;
         if !output.success() || output.truncated {
             return None;
         }
@@ -621,8 +630,11 @@ struct ResumeWorktree {
 
 fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
     let git = |args: &[&str]| -> Result<String, String> {
-        let output = crate::workspace_git::run_git(worktree, args, crate::workspace_git::READ_TIMEOUT)?;
-        if output.truncated { return Err("sortie Git tronquée à 1 Mio".into()); }
+        let output =
+            crate::workspace_git::run_git(worktree, args, crate::workspace_git::READ_TIMEOUT)?;
+        if output.truncated {
+            return Err("sortie Git tronquée à 1 Mio".into());
+        }
         if !output.success() {
             return Err(output.stderr.trim().to_string());
         }
@@ -634,9 +646,13 @@ fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
     // Répertoires non suivis repliés (`normal`, pas `all`) : un target de build
     // oublié listait 40 000 fichiers et faisait une carte de 1 Mo (2026-09-04).
     let status_unavailable = crate::workspace_git::executable_configuration(worktree)?;
-    let modified = if status_unavailable { Vec::new() } else {
+    let modified = if status_unavailable {
+        Vec::new()
+    } else {
         git(&["status", "--porcelain=v1", "--untracked-files=normal"])?
-            .lines().map(str::to_string).collect()
+            .lines()
+            .map(str::to_string)
+            .collect()
     };
     Ok(ResumeWorktree {
         path: worktree.display().to_string(),
@@ -2200,17 +2216,41 @@ pub fn launch(
     }
     final_args.extend(agent_args.iter().cloned());
 
-    let permission_observer=if mcp_enabled&&definition.protocol=="claude_stream_json" {
-        let mut owner_launch=definition.clone();owner_launch.command=agent_binary.into();
-        let emitter_writer=writer.clone();
-        crate::native_permission_observer::Observer::start(socket_path().parent().ok_or("socket sans racine")?,&owner_launch,&final_args,&instance_id,
-            Arc::new(move|message|send_wrapper_message(&emitter_writer,message))).map(Some).unwrap_or_else(|code|{
-                send_wrapper_message(&writer,WrapperToDaemon::NativePermissionFact{fact:None,request_id:None,observation_id:None,unavailable_code:Some(code)});None
-            })
-    }else{None};
-    let observer_acknowledgements=permission_observer.as_ref().map(|o|o.acknowledgement_sink());
-    if let Some(observer)=&permission_observer {
-        final_args.extend(["--settings".into(),observer.overlay().to_string_lossy().into_owned()]);
+    let permission_observer = if mcp_enabled && definition.protocol == "claude_stream_json" {
+        let mut owner_launch = definition.clone();
+        owner_launch.command = agent_binary.into();
+        let emitter_writer = writer.clone();
+        crate::native_permission_observer::Observer::start(
+            socket_path().parent().ok_or("socket sans racine")?,
+            &owner_launch,
+            &final_args,
+            &instance_id,
+            Arc::new(move |message| send_wrapper_message(&emitter_writer, message)),
+        )
+        .map(Some)
+        .unwrap_or_else(|code| {
+            send_wrapper_message(
+                &writer,
+                WrapperToDaemon::NativePermissionFact {
+                    fact: None,
+                    request_id: None,
+                    observation_id: None,
+                    unavailable_code: Some(code),
+                },
+            );
+            None
+        })
+    } else {
+        None
+    };
+    let observer_acknowledgements = permission_observer
+        .as_ref()
+        .map(|o| o.acknowledgement_sink());
+    if let Some(observer) = &permission_observer {
+        final_args.extend([
+            "--settings".into(),
+            observer.overlay().to_string_lossy().into_owned(),
+        ]);
     }
 
     // L'autorisation est déclarative : un type absent du registre est refusé
@@ -2233,7 +2273,9 @@ pub fn launch(
         .env("BRIDGET_AGENT_ID_FILE", &name_state_path)
         .env("BRIDGET_AGENT_DISPLAY_NAME", &my_display_name)
         .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id);
-    if let Some(profile)=&definition.claude_config_dir {command.env("CLAUDE_CONFIG_DIR",profile);}
+    if let Some(profile) = &definition.claude_config_dir {
+        command.env("CLAUDE_CONFIG_DIR", profile);
+    }
     let spawned = if agent_type == "claude" {
         crate::claude_interactive::PtySession::spawn(command).map(InteractiveChild::Pty)
     } else {
@@ -2255,7 +2297,9 @@ pub fn launch(
     };
 
     let agent_pid = child.id();
-    if let Some(observer)=&permission_observer{observer.bind_provider(agent_pid)?;}
+    if let Some(observer) = &permission_observer {
+        observer.bind_provider(agent_pid)?;
+    }
     // La voie de remise est fixée avant tout enregistrement de marqueur :
     // PTY possédé pour Claude, pane tmux attesté pour les autres types.
     let transport: Option<Box<dyn Transport>> = match &child {
@@ -2531,11 +2575,20 @@ pub fn launch(
             };
 
             match msg {
-                DaemonToWrapper::NativePermissionAcknowledged{observation_id,accepted}=>{
-                    if let Some(sink)=&observer_acknowledgements{crate::native_permission_observer::Observer::acknowledge(sink,observation_id,accepted);}
+                DaemonToWrapper::NativePermissionAcknowledged {
+                    observation_id,
+                    accepted,
+                } => {
+                    if let Some(sink) = &observer_acknowledgements {
+                        crate::native_permission_observer::Observer::acknowledge(
+                            sink,
+                            observation_id,
+                            accepted,
+                        );
+                    }
                 }
                 DaemonToWrapper::ProjectContextResult { .. } => {}
-                DaemonToWrapper::Deliver(bm) => {
+                DaemonToWrapper::Deliver { message: bm, .. } => {
                     info!(
                         "reçu de « {} »: {}",
                         bm.from,
@@ -2576,6 +2629,7 @@ pub fn launch(
                     expires_at,
                     message,
                     execution: _,
+                    ..
                 } => {
                     let reports = deliver_idempotent_to_interactive(
                         &mut idempotent_deliveries,
@@ -3699,9 +3753,19 @@ fn spawn_managed_session_transport(
     instance_id: &str,
     socket: &Path,
 ) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
-    if let Some(policy)=std::env::var(crate::native_permissions::CHILD_POLICY_ENV).ok().map(|raw|serde_json::from_str::<serde_json::Value>(&raw)).transpose().map_err(|_|"permission_attestation_unavailable")? {
-        if let Some(context)=policy.get("launch_context"){
-            crate::native_permissions::recheck_context(context,definition,&std::env::current_dir()?,&crate::lifecycle::source_environment())?;
+    if let Some(policy) = std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
+        .ok()
+        .map(|raw| serde_json::from_str::<serde_json::Value>(&raw))
+        .transpose()
+        .map_err(|_| "permission_attestation_unavailable")?
+    {
+        if let Some(context) = policy.get("launch_context") {
+            crate::native_permissions::recheck_context(
+                context,
+                definition,
+                &std::env::current_dir()?,
+                &crate::lifecycle::source_environment(),
+            )?;
         }
     }
     match definition.protocol.as_str() {
@@ -3936,11 +4000,20 @@ fn launch_session_with_status(
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
     let definition = registry.get(agent_type)?;
-    let inherited_policy:Option<serde_json::Value>=std::env::var(crate::native_permissions::CHILD_POLICY_ENV).ok()
-        .map(|raw|serde_json::from_str(&raw)).transpose().map_err(|_|"permission_attestation_unavailable")?;
-    if let Some(policy)=&inherited_policy {
-        if let Some(context)=policy.get("launch_context") {
-            crate::native_permissions::recheck_context(context,definition,&std::env::current_dir()?,&crate::lifecycle::source_environment())?;
+    let inherited_policy: Option<serde_json::Value> =
+        std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
+            .ok()
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .map_err(|_| "permission_attestation_unavailable")?;
+    if let Some(policy) = &inherited_policy {
+        if let Some(context) = policy.get("launch_context") {
+            crate::native_permissions::recheck_context(
+                context,
+                definition,
+                &std::env::current_dir()?,
+                &crate::lifecycle::source_environment(),
+            )?;
         }
     }
     if interactive.is_some() && definition.protocol != "codex_app_server" {
@@ -3984,15 +4057,20 @@ fn launch_session_with_status(
         .map(|reporter| reporter.instance_id().to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let native_bootstrap = if managed_reporter.is_some() && interactive.is_none() {
-        std::env::var(NATIVE_MISSION_BOOTSTRAP_ENV).ok()
+        std::env::var(NATIVE_MISSION_BOOTSTRAP_ENV)
+            .ok()
             .and_then(|raw| serde_json::from_str::<NativeMissionBootstrap>(&raw).ok())
-            .filter(|bootstrap| bootstrap.instance_id == instance_id
-                && uuid::Uuid::parse_str(&bootstrap.mission_id).is_ok())
+            .filter(|bootstrap| {
+                bootstrap.instance_id == instance_id
+                    && uuid::Uuid::parse_str(&bootstrap.mission_id).is_ok()
+            })
     } else {
         None
     };
-    let native_termination = native_bootstrap.as_ref()
-        .map(|_| NativeTerminationSignal::new()).transpose()?;
+    let native_termination = native_bootstrap
+        .as_ref()
+        .map(|_| NativeTerminationSignal::new())
+        .transpose()?;
     let name_state_path = instance_name_state_path(socket, &instance_id);
     if let Some(parent) = name_state_path.parent() {
         crate::environment::ensure_private_directory(parent)?;
@@ -4044,22 +4122,36 @@ fn launch_session_with_status(
         );
     }
     // Capture the exact provider inputs before its first process is created.
-    let mut permission_launch=definition.clone();permission_launch.args=native_args.clone();
-    let permission_cwd=std::env::current_dir()?;
-    let permission_environment=crate::lifecycle::source_environment();
-    let captured_context=if definition.protocol=="claude_stream_json" {
-        crate::native_permissions::capture_context_with_env(&permission_launch,&permission_cwd,&permission_environment).map(Some)
-    }else{Ok(None)};
-    let mut native_launch_refusal=captured_context.as_ref().err().cloned();
-    let mut native_launch_context=captured_context.ok().flatten();
+    let mut permission_launch = definition.clone();
+    permission_launch.args = native_args.clone();
+    let permission_cwd = std::env::current_dir()?;
+    let permission_environment = crate::lifecycle::source_environment();
+    let captured_context = if definition.protocol == "claude_stream_json" {
+        crate::native_permissions::capture_context_with_env(
+            &permission_launch,
+            &permission_cwd,
+            &permission_environment,
+        )
+        .map(Some)
+    } else {
+        Ok(None)
+    };
+    let mut native_launch_refusal = captured_context.as_ref().err().cloned();
+    let mut native_launch_context = captured_context.ok().flatten();
     let inherit_stderr = managed_reporter.is_some();
-    let codex_endpoint = interactive.as_ref()
-        .map(|_| CodexInteractiveEndpoint::new()).transpose()?;
-    let codex_socket = codex_endpoint.as_ref()
+    let codex_endpoint = interactive
+        .as_ref()
+        .map(|_| CodexInteractiveEndpoint::new())
+        .transpose()?;
+    let codex_socket = codex_endpoint
+        .as_ref()
         .map(|endpoint| endpoint.socket.clone())
         .unwrap_or_else(|| state_root.join(format!("c-{}.sock", &instance_id[..12])));
     let mut tui_binding = None;
-    if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {
+    if native_termination
+        .as_ref()
+        .is_some_and(NativeTerminationSignal::requested)
+    {
         return Err("mission native arrêtée avant le lancement du fournisseur".into());
     }
     let mut transport: Box<dyn ManagedSession> = if let Some(launch) = interactive.as_mut() {
@@ -4116,10 +4208,17 @@ fn launch_session_with_status(
             socket,
         )?
     };
-    if native_launch_context.as_ref().is_some_and(|context|
-        crate::native_permissions::recheck_context_with_env(context,&permission_launch,&permission_cwd,&permission_environment).is_err()){
-        native_launch_context=None;
-        native_launch_refusal=Some("settings_revision_changed".into());
+    if native_launch_context.as_ref().is_some_and(|context| {
+        crate::native_permissions::recheck_context_with_env(
+            context,
+            &permission_launch,
+            &permission_cwd,
+            &permission_environment,
+        )
+        .is_err()
+    }) {
+        native_launch_context = None;
+        native_launch_refusal = Some("settings_revision_changed".into());
     }
     let descriptor = transport.descriptor();
     let channel = connection_channel();
@@ -4241,17 +4340,25 @@ fn launch_session_with_status(
     let mut last_permission_fact = None;
     if interactive.is_some() {
         let observed = crate::native_permissions::observed_fact(
-            &instance_id, definition, native_launch_context.as_ref(), transport.as_ref(),
+            &instance_id,
+            definition,
+            native_launch_context.as_ref(),
+            transport.as_ref(),
         );
         let observation = match observed {
             Ok(fact) if native_launch_refusal.is_none() => (fact, None),
             Ok(_) => (None, native_launch_refusal.clone()),
             Err(code) => (None, Some(native_launch_refusal.clone().unwrap_or(code))),
         };
-        send_wrapper_message(&writer, WrapperToDaemon::NativePermissionFact {
-            fact: observation.0.clone(), request_id: None, observation_id: None,
-            unavailable_code: observation.1.clone(),
-        });
+        send_wrapper_message(
+            &writer,
+            WrapperToDaemon::NativePermissionFact {
+                fact: observation.0.clone(),
+                request_id: None,
+                observation_id: None,
+                unavailable_code: observation.1.clone(),
+            },
+        );
         last_permission_fact = Some(observation);
     }
     // Après Register, identité durable et activation du journal : aucun
@@ -4295,14 +4402,34 @@ fn launch_session_with_status(
     let mut consecutive_fast_failures = 0_u32;
 
     loop {
-        if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {
+        if native_termination
+            .as_ref()
+            .is_some_and(NativeTerminationSignal::requested)
+        {
             break;
         }
-        let observed=crate::native_permissions::observed_fact(&instance_id,definition,native_launch_context.as_ref(),transport.as_ref());
-        let observation=match observed{Ok(fact) if native_launch_refusal.is_none()=>(fact,None),Ok(_)=>(None,native_launch_refusal.clone()),Err(code)=>(None,Some(native_launch_refusal.clone().unwrap_or(code)))};
-        if last_permission_fact.as_ref()!=Some(&observation) {
-            send_wrapper_message(&writer,WrapperToDaemon::NativePermissionFact{fact:observation.0.clone(),request_id:None,observation_id:None,unavailable_code:observation.1.clone()});
-            last_permission_fact=Some(observation);
+        let observed = crate::native_permissions::observed_fact(
+            &instance_id,
+            definition,
+            native_launch_context.as_ref(),
+            transport.as_ref(),
+        );
+        let observation = match observed {
+            Ok(fact) if native_launch_refusal.is_none() => (fact, None),
+            Ok(_) => (None, native_launch_refusal.clone()),
+            Err(code) => (None, Some(native_launch_refusal.clone().unwrap_or(code))),
+        };
+        if last_permission_fact.as_ref() != Some(&observation) {
+            send_wrapper_message(
+                &writer,
+                WrapperToDaemon::NativePermissionFact {
+                    fact: observation.0.clone(),
+                    request_id: None,
+                    observation_id: None,
+                    unavailable_code: observation.1.clone(),
+                },
+            );
+            last_permission_fact = Some(observation);
         }
         if transport.is_alive()
             && consecutive_fast_failures > 0
@@ -4327,7 +4454,10 @@ fn launch_session_with_status(
         }
         let mut line = String::new();
         let read_result = reader.read_line(&mut line);
-        if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {
+        if native_termination
+            .as_ref()
+            .is_some_and(NativeTerminationSignal::requested)
+        {
             break;
         }
         match read_result {
@@ -4356,7 +4486,7 @@ fn launch_session_with_status(
                 };
                 reader = new_reader;
                 my_name = registered_name;
-                last_permission_fact=None;
+                last_permission_fact = None;
                 last_heartbeat = Instant::now();
                 if native_termination
                     .as_ref()
@@ -4380,7 +4510,7 @@ fn launch_session_with_status(
                 continue;
             }
             Ok(_) => match decode(line.trim()) {
-                Ok(DaemonToWrapper::Deliver(message)) => {
+                Ok(DaemonToWrapper::Deliver { message, .. }) => {
                     idempotent_deliveries.record_historic(&message.id);
                     if let Err(error) = deliver_provider_message(
                         transport.as_mut(),
@@ -4449,6 +4579,7 @@ fn launch_session_with_status(
                     expires_at,
                     message,
                     execution,
+                    ..
                 }) => {
                     let message_id = message.id.clone();
                     if bind_idempotent_delivery_execution(
@@ -4537,8 +4668,16 @@ fn launch_session_with_status(
                         WrapperToDaemon::RuntimeSelectionReported { token, outcome },
                     );
                 }
-                Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
-                    transport.cancel_delivery(&id, &reason);
+                Ok(DaemonToWrapper::CancelDelivery {
+                    id,
+                    reason,
+                    interrupt_active,
+                }) => {
+                    if interrupt_active.unwrap_or(false) {
+                        transport.cancel_delivery(&id, &reason);
+                    } else {
+                        transport.cancel_queued(&id, &reason);
+                    }
                 }
                 Ok(DaemonToWrapper::Subscribe {
                     subscription_id,
@@ -4600,7 +4739,7 @@ fn launch_session_with_status(
                 };
                 reader = new_reader;
                 my_name = registered_name;
-                last_permission_fact=None;
+                last_permission_fact = None;
                 last_heartbeat = Instant::now();
                 if native_termination
                     .as_ref()
@@ -4640,8 +4779,7 @@ fn launch_session_with_status(
             if terminal_journal_failed {
                 break;
             }
-            let persistent_relaunch =
-                interactive.is_none()
+            let persistent_relaunch = interactive.is_none()
                     && std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some()
                     // Une mission native ne change jamais de fournisseur
                     // après un échec. La saga conserve son état terminal.
@@ -4708,11 +4846,18 @@ fn launch_session_with_status(
             ) {
                 Ok(new_transport) => {
                     transport = new_transport;
-                    last_permission_fact=None;
-                    if native_launch_context.as_ref().is_some_and(|context|
-                        crate::native_permissions::recheck_context_with_env(context,&permission_launch,&permission_cwd,&permission_environment).is_err()){
-                        native_launch_context=None;
-                        native_launch_refusal=Some("settings_revision_changed".into());
+                    last_permission_fact = None;
+                    if native_launch_context.as_ref().is_some_and(|context| {
+                        crate::native_permissions::recheck_context_with_env(
+                            context,
+                            &permission_launch,
+                            &permission_cwd,
+                            &permission_environment,
+                        )
+                        .is_err()
+                    }) {
+                        native_launch_context = None;
+                        native_launch_refusal = Some("settings_revision_changed".into());
                     }
                     let adapter_pid = transport.process_id();
                     match crate::managed_process::process_birth(adapter_pid) {
@@ -4822,7 +4967,9 @@ fn launch_session_with_status(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => return Err(error.into()),
         }
-    } else { false };
+    } else {
+        false
+    };
     if codex_endpoint_retained {
         return Err(format!(
             "nettoyage du serveur Codex non confirmé ; socket conservée : {}",
@@ -7133,7 +7280,10 @@ mod prompt_tests {
         let script = root.join("fsmonitor.sh");
         fs::write(
             &script,
-            format!("#!/bin/sh\nprintf executed > '{}'\nprintf 'token\\0'\n", marker.display()),
+            format!(
+                "#!/bin/sh\nprintf executed > '{}'\nprintf 'token\\0'\n",
+                marker.display()
+            ),
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
@@ -7164,7 +7314,10 @@ mod prompt_tests {
         let script = root.join("clean.sh");
         fs::write(
             &script,
-            format!("#!/bin/sh\nprintf executed > '{}'\n/bin/cat\n", marker.display()),
+            format!(
+                "#!/bin/sh\nprintf executed > '{}'\n/bin/cat\n",
+                marker.display()
+            ),
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
@@ -7178,7 +7331,11 @@ mod prompt_tests {
                 .unwrap()
                 .success()
         );
-        fs::write(worktree.join(".gitattributes"), "tracked.txt filter=fixture154\n").unwrap();
+        fs::write(
+            worktree.join(".gitattributes"),
+            "tracked.txt filter=fixture154\n",
+        )
+        .unwrap();
         let card = managed_resume_context(&worktree, "sans-mission", "fixture", "acp", "digest");
         let executed = marker.exists();
         fs::remove_dir_all(&root).unwrap();
@@ -7206,7 +7363,9 @@ mod prompt_tests {
         }
         let script = root.join("bin/git");
         let status = match case {
-            "154-large" => "/usr/bin/awk 'BEGIN { for (i = 0; i < 393216; i++) print \" M file\" }'",
+            "154-large" => {
+                "/usr/bin/awk 'BEGIN { for (i = 0; i < 393216; i++) print \" M file\" }'"
+            }
             "154-slow" => "/bin/sleep 12; printf ' M file\\n'",
             _ => panic!("fixture inconnue"),
         };
@@ -7274,7 +7433,10 @@ mod prompt_tests {
             |root| {
                 if let Ok(worktree) = super::managed_resume_worktree(root) {
                     let retained: usize = worktree.modified.iter().map(|line| line.len() + 1).sum();
-                    assert!(retained <= 1024 * 1024, "sortie Git conservée sans borne : {retained} octets");
+                    assert!(
+                        retained <= 1024 * 1024,
+                        "sortie Git conservée sans borne : {retained} octets"
+                    );
                 }
             },
         );
@@ -7289,7 +7451,10 @@ mod prompt_tests {
                 let started = std::time::Instant::now();
                 let result = super::managed_resume_worktree(root);
                 assert!(result.is_err(), "le faux Git lent doit dépasser le délai");
-                assert!(started.elapsed() < std::time::Duration::from_secs(11), "lecture Git au-delà du délai de dix secondes");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(11),
+                    "lecture Git au-delà du délai de dix secondes"
+                );
             },
         );
     }

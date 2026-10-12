@@ -380,7 +380,7 @@ impl Fixture {
                 self.replies.push(message);
                 self.receive(parent)
             }
-            DaemonToWrapper::Deliver(message)
+            DaemonToWrapper::Deliver { message, .. }
             | DaemonToWrapper::DeliverExecution { message, .. } => {
                 self.replies.push(message);
                 self.receive(parent)
@@ -1927,7 +1927,7 @@ fn native151_e2e_boite_echec_pending_claimed_delivered() {
                 assert_eq!(message.id, format!("native-failure-{id}"));
                 break (delivery_id, delivery_generation, message);
             }
-            DaemonToWrapper::Deliver(message) => {
+            DaemonToWrapper::Deliver { message, .. } => {
                 assert_eq!(message.from, "bridget");
                 assert_eq!(message.to, PARENT);
                 assert!(!message.reply);

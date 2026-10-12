@@ -1,0 +1,1416 @@
+{
+  "task": "T031156",
+  "status": "READ_COMPLETE_ASSIGNED_SCOPE",
+  "reader": "audit_performance151",
+  "workspace": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file",
+  "started_at": "2026-10-12T05:16:54.215780+00:00",
+  "source_read_finished_at": "2026-10-12T05:26:01.599583+00:00",
+  "receipt_written_at": "2026-10-12T05:31:36.138608+00:00",
+  "primary_diff": {
+    "path": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/final-docs/diff-156-review.patch",
+    "sha256_start": "1991ad415fa4573d6cfd6a3eea077528f322e6d95bb4d9d62e7695fd91dbfaa0",
+    "sha256_end": "1991ad415fa4573d6cfd6a3eea077528f322e6d95bb4d9d62e7695fd91dbfaa0",
+    "total_lines": 15349,
+    "read_ranges_merged": [
+      [
+        1,
+        417
+      ],
+      [
+        8153,
+        12266
+      ],
+      [
+        13798,
+        15239
+      ]
+    ],
+    "files_read": 34,
+    "hunks_read": 179,
+    "diff_lines_read": 5973,
+    "truncated_outputs": "Les plages initialement tronquées ont été relues intégralement par lots plus petits ; couverture finale sans trou dans le périmètre assigné."
+  },
+  "files": [
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/cli.rs",
+      "current_sha256": "2a8e7c30daad48d595191770b05a1ee9c432627dcceed23a6322b27cb68248bd",
+      "read_diff_ranges": [
+        [
+          1,
+          417
+        ]
+      ],
+      "diff_lines_read": 417,
+      "hunks_read": 10,
+      "hunk_headers": [
+        {
+          "diff_line": 5,
+          "header": "@@ -147,16 +147,23 @@ fn delegated_cli_guard("
+        },
+        {
+          "diff_line": 33,
+          "header": "@@ -254,6 +261,7 @@ pub fn run() {"
+        },
+        {
+          "diff_line": 41,
+          "header": "@@ -683,6 +691,7 @@ fn print_usage() {"
+        },
+        {
+          "diff_line": 49,
+          "header": "@@ -709,6 +718,7 @@ fn print_usage() {"
+        },
+        {
+          "diff_line": 57,
+          "header": "@@ -3497,6 +3507,8 @@ fn cmd_send(args: &[String]) {"
+        },
+        {
+          "diff_line": 66,
+          "header": "@@ -3531,6 +3543,17 @@ fn cmd_send(args: &[String]) {"
+        },
+        {
+          "diff_line": 84,
+          "header": "@@ -3572,6 +3595,9 @@ fn cmd_send(args: &[String]) {"
+        },
+        {
+          "diff_line": 94,
+          "header": "@@ -3626,6 +3652,7 @@ fn cmd_send(args: &[String]) {"
+        },
+        {
+          "diff_line": 102,
+          "header": "@@ -4562,6 +4589,38 @@ fn parse_cancel_args(args: &[String]) -> Result<CancelArgs, String> {"
+        },
+        {
+          "diff_line": 141,
+          "header": "@@ -9818,3 +9877,276 @@ mod depot_tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/delegation_mcp.rs",
+      "current_sha256": "4bd59788f4742ab3737d9092bbb996660e198ab36309a8c4ba7b1fb1c4164192",
+      "read_diff_ranges": [
+        [
+          8153,
+          8308
+        ]
+      ],
+      "diff_lines_read": 156,
+      "hunks_read": 5,
+      "hunk_headers": [
+        {
+          "diff_line": 8157,
+          "header": "@@ -168,7 +168,11 @@ pub(crate) fn execute("
+        },
+        {
+          "diff_line": 8170,
+          "header": "@@ -258,7 +262,16 @@ pub(crate) fn execute("
+        },
+        {
+          "diff_line": 8188,
+          "header": "@@ -269,8 +282,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 8201,
+          "header": "@@ -285,22 +300,36 @@ mod tests {"
+        },
+        {
+          "diff_line": 8243,
+          "header": "@@ -412,28 +441,57 @@ mod tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency.rs",
+      "current_sha256": "b467937682e8769ab5ccf27d2eb024fff22fe4d7c59d43ddd1ebdcfc5a31c5f7",
+      "read_diff_ranges": [
+        [
+          8309,
+          8419
+        ]
+      ],
+      "diff_lines_read": 111,
+      "hunks_read": 2,
+      "hunk_headers": [
+        {
+          "diff_line": 8313,
+          "header": "@@ -860,6 +860,26 @@ impl IdempotencyStore {"
+        },
+        {
+          "diff_line": 8340,
+          "header": "@@ -1020,6 +1040,79 @@ impl IdempotencyStore {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "current_sha256": "f1b71c8516447a9d20c9a50b58497ec75c58029c344189439870f68377130d04",
+      "read_diff_ranges": [
+        [
+          8420,
+          8535
+        ]
+      ],
+      "diff_lines_read": 116,
+      "hunks_read": 5,
+      "hunk_headers": [
+        {
+          "diff_line": 8424,
+          "header": "@@ -56,7 +56,7 @@ impl IdempotencyStore {"
+        },
+        {
+          "diff_line": 8433,
+          "header": "@@ -66,7 +66,7 @@ impl IdempotencyStore {"
+        },
+        {
+          "diff_line": 8442,
+          "header": "@@ -80,15 +80,19 @@ impl IdempotencyStore {"
+        },
+        {
+          "diff_line": 8464,
+          "header": "@@ -160,6 +164,15 @@ impl IdempotencyStore {"
+        },
+        {
+          "diff_line": 8480,
+          "header": "@@ -384,13 +397,53 @@ impl IdempotencyStore {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/idempotency/tests.rs",
+      "current_sha256": "647b5c34cfeacfb37aa9a2debbcffe5cd2d5b6b85df0f36811ae4b608e1fa598",
+      "read_diff_ranges": [
+        [
+          8536,
+          8956
+        ]
+      ],
+      "diff_lines_read": 421,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 8540,
+          "header": "@@ -2569,3 +2569,416 @@ fn native150_purge_phase_de_remise_cinq_cas() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/lib.rs",
+      "current_sha256": "674cb14f46c88c91102aab6a6e74f9b41916c5ae22438286fb248bf6f5886aad",
+      "read_diff_ranges": [
+        [
+          8957,
+          8986
+        ]
+      ],
+      "diff_lines_read": 30,
+      "hunks_read": 3,
+      "hunk_headers": [
+        {
+          "diff_line": 8961,
+          "header": "@@ -23,6 +23,7 @@ pub use execution_store::{"
+        },
+        {
+          "diff_line": 8969,
+          "header": "@@ -39,6 +40,8 @@ pub(crate) mod delegation;"
+        },
+        {
+          "diff_line": 8978,
+          "header": "@@ -59,7 +62,5 @@ mod t3code_mcp;"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/mcp.rs",
+      "current_sha256": "04978c36d8955070004d01800f9b6b0c9160718fd377a101372b7fd53ccbdf3b",
+      "read_diff_ranges": [
+        [
+          8987,
+          9529
+        ]
+      ],
+      "diff_lines_read": 543,
+      "hunks_read": 12,
+      "hunk_headers": [
+        {
+          "diff_line": 8991,
+          "header": "@@ -639,6 +639,11 @@ fn execute_tool_at_with_identity("
+        },
+        {
+          "diff_line": 9003,
+          "header": "@@ -904,8 +909,29 @@ fn execute_send("
+        },
+        {
+          "diff_line": 9033,
+          "header": "@@ -930,7 +956,6 @@ fn execute_send("
+        },
+        {
+          "diff_line": 9041,
+          "header": "@@ -968,6 +993,11 @@ fn execute_send("
+        },
+        {
+          "diff_line": 9053,
+          "header": "@@ -1023,7 +1053,7 @@ fn execute_send("
+        },
+        {
+          "diff_line": 9062,
+          "header": "@@ -1050,6 +1080,112 @@ fn execute_send("
+        },
+        {
+          "diff_line": 9175,
+          "header": "@@ -2251,6 +2387,7 @@ pub(crate) fn tools() -> Vec<Value> {"
+        },
+        {
+          "diff_line": 9183,
+          "header": "@@ -2261,6 +2398,12 @@ pub(crate) fn tools() -> Vec<Value> {"
+        },
+        {
+          "diff_line": 9196,
+          "header": "@@ -2469,6 +2612,307 @@ mod tests {"
+        },
+        {
+          "diff_line": 9504,
+          "header": "@@ -2535,7 +2979,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 9513,
+          "header": "@@ -3858,7 +4302,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 9522,
+          "header": "@@ -4150,6 +4594,7 @@ mod tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/referent_control.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/referent_control.rs",
+      "current_sha256": "5a1720d9c79a102c3ccca0aa92f08e0b23402e8026b957f7a4cde4febe96f9f0",
+      "read_diff_ranges": [
+        [
+          9530,
+          9575
+        ]
+      ],
+      "diff_lines_read": 46,
+      "hunks_read": 3,
+      "hunk_headers": [
+        {
+          "diff_line": 9534,
+          "header": "@@ -115,6 +115,8 @@ pub enum AutonomousEffect {"
+        },
+        {
+          "diff_line": 9543,
+          "header": "@@ -135,7 +137,8 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra"
+        },
+        {
+          "diff_line": 9553,
+          "header": "@@ -857,6 +860,22 @@ mod tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/t3code.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code.rs",
+      "current_sha256": "e0040b2b8e049a75b7f940d86d70417c6355e5cc02f79f5e1c8f7f91581b42ec",
+      "read_diff_ranges": [
+        [
+          9576,
+          10404
+        ]
+      ],
+      "diff_lines_read": 829,
+      "hunks_read": 35,
+      "hunk_headers": [
+        {
+          "diff_line": 9580,
+          "header": "@@ -1671,8 +1671,8 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9591,
+          "header": "@@ -1681,7 +1681,7 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9600,
+          "header": "@@ -1873,6 +1873,7 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9608,
+          "header": "@@ -1897,7 +1898,9 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9619,
+          "header": "@@ -1921,6 +1924,61 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9681,
+          "header": "@@ -1962,27 +2020,20 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9714,
+          "header": "@@ -1997,17 +2048,46 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9764,
+          "header": "@@ -2024,7 +2104,7 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9773,
+          "header": "@@ -2051,12 +2131,24 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9799,
+          "header": "@@ -2116,7 +2208,12 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9813,
+          "header": "@@ -2127,6 +2224,7 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9821,
+          "header": "@@ -2203,13 +2301,7 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9836,
+          "header": "@@ -2220,6 +2312,18 @@ impl LinkWorker {"
+        },
+        {
+          "diff_line": 9855,
+          "header": "@@ -3016,6 +3120,8 @@ enum Discard {"
+        },
+        {
+          "diff_line": 9864,
+          "header": "@@ -3029,13 +3135,26 @@ fn request_state_label(state: &str) -> &'static str {"
+        },
+        {
+          "diff_line": 9894,
+          "header": "@@ -3120,11 +3239,11 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin"
+        },
+        {
+          "diff_line": 9910,
+          "header": "@@ -3140,7 +3259,16 @@ enum BatchFamily {"
+        },
+        {
+          "diff_line": 9928,
+          "header": "@@ -3636,7 +3764,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 9940,
+          "header": "@@ -3652,11 +3783,14 @@ mod tests {"
+        },
+        {
+          "diff_line": 9957,
+          "header": "@@ -3727,9 +3861,15 @@ mod tests {"
+        },
+        {
+          "diff_line": 9975,
+          "header": "@@ -3779,15 +3919,27 @@ mod tests {"
+        },
+        {
+          "diff_line": 10007,
+          "header": "@@ -3799,7 +3951,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10019,
+          "header": "@@ -3808,8 +3963,14 @@ mod tests {"
+        },
+        {
+          "diff_line": 10036,
+          "header": "@@ -4654,7 +4815,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10048,
+          "header": "@@ -4682,7 +4846,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10060,
+          "header": "@@ -4695,7 +4862,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10072,
+          "header": "@@ -4718,7 +4888,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10084,
+          "header": "@@ -4735,7 +4908,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10096,
+          "header": "@@ -4777,6 +4953,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 10104,
+          "header": "@@ -4808,7 +4985,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10116,
+          "header": "@@ -4863,6 +5043,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 10124,
+          "header": "@@ -4886,11 +5067,18 @@ mod tests {"
+        },
+        {
+          "diff_line": 10145,
+          "header": "@@ -4921,20 +5109,29 @@ mod tests {"
+        },
+        {
+          "diff_line": 10178,
+          "header": "@@ -6126,7 +6323,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10190,
+          "header": "@@ -6465,4 +6665,214 @@ mod tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/t3code_contract.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code_contract.rs",
+      "current_sha256": "b38ff3eeef55530038249e2107757accb48ec0c79f73c21beed20f7d888d6e94",
+      "read_diff_ranges": [
+        [
+          10405,
+          10520
+        ]
+      ],
+      "diff_lines_read": 116,
+      "hunks_read": 5,
+      "hunk_headers": [
+        {
+          "diff_line": 10409,
+          "header": "@@ -194,17 +194,57 @@ pub struct SessionSummary {"
+        },
+        {
+          "diff_line": 10478,
+          "header": "@@ -317,7 +357,9 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {"
+        },
+        {
+          "diff_line": 10489,
+          "header": "@@ -681,7 +723,7 @@ impl Client {"
+        },
+        {
+          "diff_line": 10498,
+          "header": "@@ -691,7 +733,7 @@ impl Client {"
+        },
+        {
+          "diff_line": 10507,
+          "header": "@@ -699,6 +741,13 @@ impl Client {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/t3code_contract_v2.rs",
+      "current_sha256": "fbed353782da9d6adb48dc5fed392458fbef88b002b04578b8f02399853e3982",
+      "read_diff_ranges": [
+        [
+          10521,
+          10669
+        ]
+      ],
+      "diff_lines_read": 149,
+      "hunks_read": 8,
+      "hunk_headers": [
+        {
+          "diff_line": 10525,
+          "header": "@@ -61,12 +61,17 @@ pub(crate) fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {"
+        },
+        {
+          "diff_line": 10549,
+          "header": "@@ -252,7 +257,7 @@ fn root_message("
+        },
+        {
+          "diff_line": 10558,
+          "header": "@@ -266,8 +271,11 @@ pub(crate) fn dispatch_command("
+        },
+        {
+          "diff_line": 10572,
+          "header": "@@ -422,7 +430,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 10581,
+          "header": "@@ -452,7 +460,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 10590,
+          "header": "@@ -572,10 +580,10 @@ mod tests {"
+        },
+        {
+          "diff_line": 10604,
+          "header": "@@ -648,7 +656,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 10613,
+          "header": "@@ -796,4 +804,56 @@ mod tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/wrapper.rs",
+      "current_sha256": "34efdf46f6c6b1fa517abc0440251ed1cc264615cbf27284f045be740ced9b81",
+      "read_diff_ranges": [
+        [
+          10670,
+          11262
+        ]
+      ],
+      "diff_lines_read": 593,
+      "hunks_read": 33,
+      "hunk_headers": [
+        {
+          "diff_line": 10674,
+          "header": "@@ -353,7 +353,9 @@ fn managed_resume_context("
+        },
+        {
+          "diff_line": 10685,
+          "header": "@@ -417,7 +419,10 @@ impl NativeTerminationSignal {"
+        },
+        {
+          "diff_line": 10697,
+          "header": "@@ -466,10 +471,13 @@ impl Drop for CodexInteractiveEndpoint {"
+        },
+        {
+          "diff_line": 10715,
+          "header": "@@ -574,7 +582,8 @@ fn deliver_injected_message<S: Transport + ?Sized>("
+        },
+        {
+          "diff_line": 10725,
+          "header": "@@ -621,8 +630,11 @@ struct ResumeWorktree {"
+        },
+        {
+          "diff_line": 10739,
+          "header": "@@ -634,9 +646,13 @@ fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {"
+        },
+        {
+          "diff_line": 10755,
+          "header": "@@ -2200,17 +2216,41 @@ pub fn launch("
+        },
+        {
+          "diff_line": 10808,
+          "header": "@@ -2233,7 +2273,9 @@ pub fn launch("
+        },
+        {
+          "diff_line": 10819,
+          "header": "@@ -2255,7 +2297,9 @@ pub fn launch("
+        },
+        {
+          "diff_line": 10830,
+          "header": "@@ -2531,11 +2575,20 @@ pub fn launch("
+        },
+        {
+          "diff_line": 10854,
+          "header": "@@ -2576,6 +2629,7 @@ pub fn launch("
+        },
+        {
+          "diff_line": 10862,
+          "header": "@@ -3699,9 +3753,19 @@ fn spawn_managed_session_transport("
+        },
+        {
+          "diff_line": 10885,
+          "header": "@@ -3936,11 +4000,20 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 10911,
+          "header": "@@ -3984,15 +4057,20 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 10937,
+          "header": "@@ -4044,22 +4122,36 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 10986,
+          "header": "@@ -4116,10 +4208,17 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11008,
+          "header": "@@ -4241,17 +4340,25 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11039,
+          "header": "@@ -4295,14 +4402,34 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11080,
+          "header": "@@ -4327,7 +4454,10 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11092,
+          "header": "@@ -4356,7 +4486,7 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11101,
+          "header": "@@ -4380,7 +4510,7 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11110,
+          "header": "@@ -4449,6 +4579,7 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11118,
+          "header": "@@ -4537,8 +4668,16 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11137,
+          "header": "@@ -4600,7 +4739,7 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11146,
+          "header": "@@ -4640,8 +4779,7 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11156,
+          "header": "@@ -4708,11 +4846,18 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11180,
+          "header": "@@ -4822,7 +4967,9 @@ fn launch_session_with_status("
+        },
+        {
+          "diff_line": 11191,
+          "header": "@@ -7133,7 +7280,10 @@ mod prompt_tests {"
+        },
+        {
+          "diff_line": 11203,
+          "header": "@@ -7164,7 +7314,10 @@ mod prompt_tests {"
+        },
+        {
+          "diff_line": 11215,
+          "header": "@@ -7178,7 +7331,11 @@ mod prompt_tests {"
+        },
+        {
+          "diff_line": 11228,
+          "header": "@@ -7206,7 +7363,9 @@ mod prompt_tests {"
+        },
+        {
+          "diff_line": 11239,
+          "header": "@@ -7274,7 +7433,10 @@ mod prompt_tests {"
+        },
+        {
+          "diff_line": 11251,
+          "header": "@@ -7289,7 +7451,10 @@ mod prompt_tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "current_sha256": "674205c49261ab76228bb7dd886c386fd2bfcf65b3efc548dd50257114a18cd1",
+      "read_diff_ranges": [
+        [
+          11263,
+          11276
+        ]
+      ],
+      "diff_lines_read": 14,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11267,
+          "header": "@@ -367,7 +367,8 @@ fn contexte_fournisseur_refuse_le_non_proprietaire_la_generation_et_le_binding_i"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+      "current_sha256": "4c5452e736d9c256576cdb8f34b91719a5a8add333c31373286e18770f05e52f",
+      "read_diff_ranges": [
+        [
+          11277,
+          11293
+        ]
+      ],
+      "diff_lines_read": 17,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11281,
+          "header": "@@ -218,7 +218,11 @@ fn run_mission_with("
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/coordination_events_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/coordination_events_test.rs",
+      "current_sha256": "301a5aa531a20897b32e3eb072ce0903ef1c09164d5019301bd4d0d96160becf",
+      "read_diff_ranges": [
+        [
+          11294,
+          11342
+        ]
+      ],
+      "diff_lines_read": 49,
+      "hunks_read": 5,
+      "hunk_headers": [
+        {
+          "diff_line": 11298,
+          "header": "@@ -388,7 +388,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {"
+        },
+        {
+          "diff_line": 11307,
+          "header": "@@ -418,7 +418,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {"
+        },
+        {
+          "diff_line": 11316,
+          "header": "@@ -537,7 +537,7 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {"
+        },
+        {
+          "diff_line": 11325,
+          "header": "@@ -604,7 +604,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {"
+        },
+        {
+          "diff_line": 11334,
+          "header": "@@ -661,7 +661,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "current_sha256": "0147500f8706f3e53397d8a33f456d911166b5b01e90b2a616cb83d4e254944a",
+      "read_diff_ranges": [
+        [
+          11343,
+          11355
+        ]
+      ],
+      "diff_lines_read": 13,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11347,
+          "header": "@@ -399,7 +399,7 @@ fn cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_eph"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_native_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/core_089_native_test.rs",
+      "current_sha256": "fee7c6a7341ac35165b7371858d5febe152cb238f05cac31392eae4fbc87d547",
+      "read_diff_ranges": [
+        [
+          11356,
+          11386
+        ]
+      ],
+      "diff_lines_read": 31,
+      "hunks_read": 3,
+      "hunk_headers": [
+        {
+          "diff_line": 11360,
+          "header": "@@ -165,7 +165,7 @@ fn gate_reel_claude_stream_json_reponse_liee_et_attach() {"
+        },
+        {
+          "diff_line": 11369,
+          "header": "@@ -431,7 +431,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {"
+        },
+        {
+          "diff_line": 11378,
+          "header": "@@ -637,7 +637,7 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_reply_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/core_089_reply_test.rs",
+      "current_sha256": "8e4910a2d57296b8768ee5d35a9983253370c93812ef981fbc0006aa12d2c64b",
+      "read_diff_ranges": [
+        [
+          11387,
+          11401
+        ]
+      ],
+      "diff_lines_read": 15,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11391,
+          "header": "@@ -145,7 +145,9 @@ fn cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/integration_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/integration_test.rs",
+      "current_sha256": "4e13f40abfd88a659ebaa54fa49f82949d753c0dad9ae547042b701fbf6abd05",
+      "read_diff_ranges": [
+        [
+          11402,
+          11472
+        ]
+      ],
+      "diff_lines_read": 71,
+      "hunks_read": 6,
+      "hunk_headers": [
+        {
+          "diff_line": 11406,
+          "header": "@@ -41,7 +41,7 @@ fn test_two_agents_communicate() {"
+        },
+        {
+          "diff_line": 11415,
+          "header": "@@ -108,7 +108,10 @@ fn test_only_sender_can_cancel_request() {"
+        },
+        {
+          "diff_line": 11427,
+          "header": "@@ -156,7 +159,7 @@ fn test_request_cancellation_stops_reminders() {"
+        },
+        {
+          "diff_line": 11436,
+          "header": "@@ -176,14 +179,17 @@ fn test_request_cancellation_stops_reminders() {"
+        },
+        {
+          "diff_line": 11456,
+          "header": "@@ -252,7 +258,7 @@ fn test_unknown_registry_type_completes_a_tracked_exchange() {"
+        },
+        {
+          "diff_line": 11465,
+          "header": "@@ -355,6 +361,7 @@ fn redelivery_idempotente_apres_reconnexion_n_injecte_qu_un_prompt() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/managed_parity_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/managed_parity_test.rs",
+      "current_sha256": "367b5142a1b64a1608b0ef3d1bd6859091c2cf22db02444071deed8e5601ff95",
+      "read_diff_ranges": [
+        [
+          11473,
+          11485
+        ]
+      ],
+      "diff_lines_read": 13,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11477,
+          "header": "@@ -720,7 +720,7 @@ fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/managed_wrapper_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/managed_wrapper_test.rs",
+      "current_sha256": "6b485fda12937c111cf2e2dbd86b1c37099d1df510a395bc76545034b87f2fe3",
+      "read_diff_ranges": [
+        [
+          11486,
+          11509
+        ]
+      ],
+      "diff_lines_read": 24,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11490,
+          "header": "@@ -506,11 +506,14 @@ while :; do :; done"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/mcp_cancel_091_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/mcp_cancel_091_test.rs",
+      "current_sha256": "433339bdf9c1470e7ddc7d8455ffb608b010a839a12b5f11dfcb116ac010ab50",
+      "read_diff_ranges": [
+        [
+          11510,
+          11525
+        ]
+      ],
+      "diff_lines_read": 16,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11514,
+          "header": "@@ -50,7 +50,10 @@ fn annulation_mcp_verifie_identite_refuse_usurpation_et_persiste_le_recu() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/mcp_injection_smoke_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/mcp_injection_smoke_test.rs",
+      "current_sha256": "ecbdec92f5086ec7fd643c323b933fef433bc33be1e1e34bf7115128d8277ce2",
+      "read_diff_ranges": [
+        [
+          11526,
+          11542
+        ]
+      ],
+      "diff_lines_read": 17,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11530,
+          "header": "@@ -244,7 +244,11 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "current_sha256": "91e399902b82dd48b0f1bde61fc2f9f844f13a21e5d7985b118d2bed656c88a8",
+      "read_diff_ranges": [
+        [
+          11543,
+          11564
+        ]
+      ],
+      "diff_lines_read": 22,
+      "hunks_read": 2,
+      "hunk_headers": [
+        {
+          "diff_line": 11547,
+          "header": "@@ -380,7 +380,7 @@ impl Fixture {"
+        },
+        {
+          "diff_line": 11556,
+          "header": "@@ -1927,7 +1927,7 @@ fn native151_e2e_boite_echec_pending_claimed_delivered() {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "current_sha256": "e6405710334eb66d5fbf0fbe0eb0d2ceecc01fcafc75f556b2c1e1276d8cfdce",
+      "read_diff_ranges": [
+        [
+          11565,
+          11577
+        ]
+      ],
+      "diff_lines_read": 13,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11569,
+          "header": "@@ -316,7 +316,7 @@ fn receive_until_native(parent: &mut support::Client, replies: &mut Vec<BridgetM"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_wrapper_stop149_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/native_wrapper_stop149_test.rs",
+      "current_sha256": "afdf42a2aebe0833de79406104bd658c1337ed402c6f5175f1b47e55af3bcf3a",
+      "read_diff_ranges": [
+        [
+          11578,
+          11597
+        ]
+      ],
+      "diff_lines_read": 20,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11582,
+          "header": "@@ -198,11 +198,10 @@ fn lancer(label: &str, natif: bool, persistant: bool, fin: FinDaemon) -> Scenari"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/spec101_observation_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/spec101_observation_test.rs",
+      "current_sha256": "654d74bb3f919ccdabe96c67dfad3111fd8979d74376d659b82fbb36394a7683",
+      "read_diff_ranges": [
+        [
+          11598,
+          11610
+        ]
+      ],
+      "diff_lines_read": 13,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11602,
+          "header": "@@ -179,7 +179,7 @@ impl Peer {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/t3code_098_test.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/t3code_098_test.rs",
+      "current_sha256": "084e0c08fc7256545ad75a7f519f90452f4d244caa6475aec6364450286714d1",
+      "read_diff_ranges": [
+        [
+          11611,
+          11623
+        ]
+      ],
+      "diff_lines_read": 13,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 11615,
+          "header": "@@ -273,7 +273,7 @@ fn wait_reply(sender: &mut Sender, request: &BridgetMessage) -> BridgetMessage {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-transport/src/acp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/acp.rs",
+      "current_sha256": "fc78deef60ebf9b6302667f7fb487dc7774c184d650e9c231b2a3bc373300b8c",
+      "read_diff_ranges": [
+        [
+          11624,
+          11792
+        ]
+      ],
+      "diff_lines_read": 169,
+      "hunks_read": 2,
+      "hunk_headers": [
+        {
+          "diff_line": 11628,
+          "header": "@@ -730,6 +730,40 @@ impl ManagedSession for AcpTransport {"
+        },
+        {
+          "diff_line": 11669,
+          "header": "@@ -3543,6 +3577,123 @@ echo '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"end_turn\"}}'"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-transport/src/codex_app_server.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/codex_app_server.rs",
+      "current_sha256": "2e19ecc41685cf43db8a762ddb9df74cac8e9fd39c5c26fbd931aa5359ecff6c",
+      "read_diff_ranges": [
+        [
+          11793,
+          11917
+        ]
+      ],
+      "diff_lines_read": 125,
+      "hunks_read": 5,
+      "hunk_headers": [
+        {
+          "diff_line": 11797,
+          "header": "@@ -907,13 +907,13 @@ impl Transport for CodexAppServerTransport {"
+        },
+        {
+          "diff_line": 11813,
+          "header": "@@ -1809,6 +1809,12 @@ fn earliest_unconfirmed_steer_deadline("
+        },
+        {
+          "diff_line": 11826,
+          "header": "@@ -6900,16 +6906,50 @@ for line in sys.stdin:"
+        },
+        {
+          "diff_line": 11878,
+          "header": "@@ -6918,7 +6958,14 @@ for line in sys.stdin:"
+        },
+        {
+          "diff_line": 11894,
+          "header": "@@ -6939,8 +6986,23 @@ for line in sys.stdin:"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-transport/src/managed_session.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/managed_session.rs",
+      "current_sha256": "ac156ac383097314ed0ae13b444f4e87b11be39a774ea797c8faa12aaf5088a6",
+      "read_diff_ranges": [
+        [
+          11918,
+          11944
+        ]
+      ],
+      "diff_lines_read": 27,
+      "hunks_read": 2,
+      "hunk_headers": [
+        {
+          "diff_line": 11922,
+          "header": "@@ -292,7 +292,9 @@ pub trait ManagedSession: Transport {"
+        },
+        {
+          "diff_line": 11933,
+          "header": "@@ -364,6 +366,11 @@ pub trait ManagedSession: Transport {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-transport/src/protocol.rs",
+      "current_sha256": "b360cf27dd54fbce93e08de4075e2925e4524ae111f16b39edbc7a352b838bc1",
+      "read_diff_ranges": [
+        [
+          11945,
+          12266
+        ]
+      ],
+      "diff_lines_read": 322,
+      "hunks_read": 18,
+      "hunk_headers": [
+        {
+          "diff_line": 11949,
+          "header": "@@ -207,6 +207,8 @@ pub enum ClientCapability {"
+        },
+        {
+          "diff_line": 11958,
+          "header": "@@ -258,6 +260,7 @@ pub enum ExecutionControlRefusal {"
+        },
+        {
+          "diff_line": 11966,
+          "header": "@@ -2011,9 +2014,17 @@ pub struct SpawnOwnership {"
+        },
+        {
+          "diff_line": 11986,
+          "header": "@@ -2110,7 +2121,11 @@ pub enum NativeDelegationRequest {"
+        },
+        {
+          "diff_line": 11999,
+          "header": "@@ -2295,7 +2310,9 @@ impl IdentityCredential {"
+        },
+        {
+          "diff_line": 12010,
+          "header": "@@ -3009,6 +3026,10 @@ pub enum WrapperToDaemon {"
+        },
+        {
+          "diff_line": 12021,
+          "header": "@@ -3902,6 +3923,12 @@ pub struct ResolvedAgentDefinition {"
+        },
+        {
+          "diff_line": 12034,
+          "header": "@@ -4233,6 +4260,13 @@ pub enum DaemonToWrapper {"
+        },
+        {
+          "diff_line": 12048,
+          "header": "@@ -4306,7 +4340,17 @@ pub enum DaemonToWrapper {"
+        },
+        {
+          "diff_line": 12067,
+          "header": "@@ -4322,6 +4366,13 @@ pub enum DaemonToWrapper {"
+        },
+        {
+          "diff_line": 12081,
+          "header": "@@ -5444,15 +5495,84 @@ mod tests {"
+        },
+        {
+          "diff_line": 12168,
+          "header": "@@ -5469,6 +5589,7 @@ mod tests {"
+        },
+        {
+          "diff_line": 12176,
+          "header": "@@ -5523,10 +5644,11 @@ mod tests {"
+        },
+        {
+          "diff_line": 12189,
+          "header": "@@ -6781,7 +6903,13 @@ mod tests {"
+        },
+        {
+          "diff_line": 12204,
+          "header": "@@ -8086,7 +8214,12 @@ mod spec104_search_contract_tests {"
+        },
+        {
+          "diff_line": 12218,
+          "header": "@@ -8102,9 +8235,12 @@ mod spec104_search_contract_tests {"
+        },
+        {
+          "diff_line": 12234,
+          "header": "@@ -8118,7 +8254,8 @@ mod spec104_search_contract_tests {"
+        },
+        {
+          "diff_line": 12244,
+          "header": "@@ -8130,12 +8267,18 @@ mod spec104_search_contract_tests {"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/src/guidance.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/src/guidance.rs",
+      "current_sha256": "592cbd364b9ff207d6f73c5b2e35cf95835e308070af9239d322a0e999a61968",
+      "read_diff_ranges": [
+        [
+          13798,
+          14192
+        ]
+      ],
+      "diff_lines_read": 395,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 13800,
+          "header": "@@ -0,0 +1,392 @@"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    },
+    {
+      "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "current_sha256": "f7d9138e76cf440bdb448235eeb84ffe0fd45a3de2a49d476f3ed804ade01c19",
+      "read_diff_ranges": [
+        [
+          14193,
+          15239
+        ]
+      ],
+      "diff_lines_read": 1047,
+      "hunks_read": 1,
+      "hunk_headers": [
+        {
+          "diff_line": 14195,
+          "header": "@@ -0,0 +1,1044 @@"
+        }
+      ],
+      "semantic_coverage": "Tous les hunks de ce fichier dans le patch principal ; le hash du fichier entier ne signifie pas une lecture hors diff."
+    }
+  ],
+  "supplement": {
+    "path": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/daemon-guard-tests-prep/T030-spec138-refusal-fixture-delta.patch",
+    "sha256": "76cd4f2d43e81f1c19809ddc98d9bdd0c19a3b46050537da4d0b32398f9d5628",
+    "read_diff_ranges": [
+      [
+        1,
+        84
+      ]
+    ],
+    "diff_lines_read": 84,
+    "hunks_read": 3,
+    "file": "crates/bridget-daemon/tests/spec138_project_test.rs",
+    "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/crates/bridget-daemon/tests/spec138_project_test.rs",
+    "current_sha256": "7cc7e7ebaf80ea9ef63668330333dddc16fa868c775d2bb34d543c4af593f816",
+    "current_source_read_ranges": [
+      [
+        157,
+        221
+      ]
+    ]
+  },
+  "excluded_other_owner": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "diff_ranges": [
+        [
+          418,
+          7963
+        ]
+      ],
+      "hunks": 76
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs",
+      "diff_ranges": [
+        [
+          7964,
+          8152
+        ]
+      ],
+      "hunks": 2
+    }
+  ],
+  "context_reads": [
+    {
+      "path": "/Users/moi/.speckit/constitution.md",
+      "ranges": [
+        [
+          466,
+          644
+        ]
+      ],
+      "purpose": "Articles XIX et XX"
+    },
+    {
+      "path": "/Users/moi/.speckit/ref/code-quality-details.md",
+      "ranges": [
+        [
+          1,
+          60
+        ]
+      ],
+      "purpose": "Lecture partielle des conventions"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/reuse-audit.md",
+      "ranges": [
+        [
+          1,
+          70
+        ]
+      ],
+      "purpose": "Contrat de réutilisation, sans preuve runtime déduite"
+    }
+  ],
+  "totals": {
+    "distinct_rust_files_read": 35,
+    "primary_hunks_read": 179,
+    "supplement_hunks_read": 3,
+    "hunks_read": 182,
+    "diff_lines_read": 6057
+  },
+  "counts": {
+    "CRITICAL": 0,
+    "HIGH": 0,
+    "MEDIUM": 0,
+    "LOW": 1
+  },
+  "findings": [
+    {
+      "id": "T031-MIN-001",
+      "category": "minimalism",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/guidance.rs",
+      "line": 182,
+      "title": "Deux libellés répètent la même assertion de parent",
+      "description": "La boucle parent_source change seulement le libellé du diagnostic. Les faits transmis à authorize restent identiques. Les deux itérations ne représentent donc pas deux autorités distinctes. Réserve facultative de lisibilité, sans défaut fonctionnel confirmé.",
+      "evidence": "                for parent_source in [\"lien ouvert\", \"propriétaire natif\"] {\n                    assert_eq!(\n                        authorize(&base),\n                        Ok(()),\n                        \"{parent_source}/{path:?}/{action:?}\"\n                    );\n                }",
+      "exploitability": "N/A",
+      "impact": "Deux évaluations identiques dans un test froid ; environ deux lignes supprimables. Aucun impact de production prouvé.",
+      "path_type": "cold",
+      "remediation": "Facultatif : retirer seulement la boucle et conserver une assertion avec le libellé path/action. Aucune correction demandée pendant le gel.",
+      "remediation_code": "                assert_eq!(\n                    authorize(&base),\n                    Ok(()),\n                    \"{path:?}/{action:?}\"\n                );",
+      "verification": "Lecture des faits inchangés et de la fonction pure ; aucun nouveau scénario ni test exécuté.",
+      "effort": "XS",
+      "regression_risk": "LOW"
+    }
+  ],
+  "limitations": [
+    "Couverture complète du diff Rust assigné uniquement ; pas du repository entier.",
+    "Deux fichiers Rust et leur lecture globale relèvent de l’autre lecteur.",
+    "Les hashes entiers ne valent pas lecture sémantique hors diff.",
+    "Aucun test/build/service/modèle exécuté et aucune métrique runtime produite.",
+    "Lecture T3 non indépendante du travail de préparation T3 de ce lecteur."
+  ],
+  "report": {
+    "path": "/Users/moi/.cache/bridget-delivery156.iuy6stuo/final-docs/T031-other-rust-review.md",
+    "sha256": "9e6b78ca310b18898bdd241a48c825ceb8816de44c02bbe2052c4923294b6b4c"
+  },
+  "source_changes_by_reader": 0,
+  "tests_executed_by_reader": 0
+}

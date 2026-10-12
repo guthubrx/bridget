@@ -61,12 +61,17 @@ pub(crate) fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
         .get_mut("threads")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| invalid("threads"))?;
-    let ordinary=std::mem::take(threads).into_iter().filter_map(|thread| {
-        match crate::t3code_contract::is_native_projection(&thread) {
-            Ok(true)=>None,Ok(false)=>Some(Ok(thread)),Err(error)=>Some(Err(error)),
-        }
-    }).collect::<Result<Vec<_>,_>>()?;
-    *threads=ordinary;
+    let ordinary = std::mem::take(threads)
+        .into_iter()
+        .filter_map(
+            |thread| match crate::t3code_contract::is_native_projection(&thread) {
+                Ok(true) => None,
+                Ok(false) => Some(Ok(thread)),
+                Err(error) => Some(Err(error)),
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    *threads = ordinary;
     for thread in threads {
         let status = string(thread, "status")?;
         let run_id = nullable_string(thread, "latestRunId")?;
@@ -252,7 +257,7 @@ fn root_message(
 
 pub(crate) fn dispatch_command(
     command: &Value,
-    steer_current: bool,
+    delivery_intent: Option<&str>,
 ) -> Result<Value, ContractError> {
     if string(command, "type")? != "thread.turn.start" {
         return Err(invalid("command.type"));
@@ -266,8 +271,11 @@ pub(crate) fn dispatch_command(
         "text":message["text"].as_str().ok_or_else(||invalid("message.text"))?,
         "attachments":[], "createdBy":"agent", "creationSource":"mcp",
         "dispatchMode":{"type":"queue_after_active"}});
-    if steer_current {
-        result["deliveryIntent"] = json!("steer");
+    if let Some(intent) = delivery_intent {
+        if !matches!(intent, "steer" | "restart") {
+            return Err(invalid("deliveryIntent"));
+        }
+        result["deliveryIntent"] = json!(intent);
     }
     Ok(result)
 }
@@ -422,7 +430,7 @@ mod tests {
         rpc(&base,&token,"orchestration.dispatchCommand",&json!({"type":"thread.create","commandId":uuid::Uuid::new_v4().to_string(),"threadId":thread,"projectId":project,"title":"Fixture sans modèle","createdBy":"agent","creationSource":"mcp","modelSelection":{"instanceId":"codex","model":"gpt-5"},"runtimeMode":"approval-required","interactionMode":"default","branch":null,"worktreePath":null})).unwrap();
         let command = json!({"type":"thread.turn.start","commandId":uuid::Uuid::new_v4().to_string(),"threadId":thread,
             "message":{"messageId":uuid::Uuid::new_v4().to_string(),"role":"user","text":"Fixture différée sans fournisseur"}});
-        let mut native = dispatch_command(&command, false).unwrap();
+        let mut native = dispatch_command(&command, None).unwrap();
         native["dispatchMode"] = json!({"type":"defer_start"});
         let first = rpc(&base, &token, "orchestration.dispatchCommand", &native).unwrap();
         assert_eq!(
@@ -452,7 +460,7 @@ mod tests {
         missing["threadId"] = json!(uuid::Uuid::new_v4().to_string());
         missing["commandId"] = json!(uuid::Uuid::new_v4().to_string());
         assert!(matches!(
-            client.dispatch(&missing, false),
+            client.dispatch(&missing, None),
             Err(ContractError::Transport(_))
         ));
     }
@@ -572,10 +580,10 @@ mod tests {
         assert_eq!(client.thread_detail("t", 20).unwrap().messages.len(), 2);
         let command = json!({"type":"thread.turn.start","commandId":"cmd","threadId":"t",
             "runtimeMode":"full-access","message":{"messageId":"m","role":"user","text":"exact"}});
-        assert_eq!(client.dispatch(&command, false).unwrap().sequence, 42);
-        assert_eq!(client.dispatch(&command, false).unwrap().sequence, 42);
+        assert_eq!(client.dispatch(&command, None).unwrap().sequence, 42);
+        assert_eq!(client.dispatch(&command, None).unwrap().sequence, 42);
         assert_eq!(
-            dispatch_command(&command, true).unwrap()["deliveryIntent"],
+            dispatch_command(&command, Some("steer")).unwrap()["deliveryIntent"],
             "steer"
         );
         server.join().unwrap();
@@ -648,7 +656,7 @@ mod tests {
             std::thread::spawn(move || rpc_reply(&listener, "orchestration.dispatchCommand", None));
         let command = json!({"type":"thread.turn.start","commandId":"cmd","threadId":"t","message":{"messageId":"m","role":"user","text":"exact"}});
         assert!(matches!(
-            client.dispatch(&command, false),
+            client.dispatch(&command, None),
             Err(ContractError::Transport(_))
         ));
         assert_eq!(server.join().unwrap()["messageId"], "m");
@@ -795,5 +803,57 @@ mod tests {
                 expected
             );
         }
+    }
+    #[test]
+    fn guidance156_t3_steer_pose_delivery_intent() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = Client::for_base_url(
+            &format!("http://{}", listener.local_addr().unwrap()),
+            "fixture",
+        );
+        client.set_test_protocol(true);
+        let server = std::thread::spawn(move || {
+            rpc_reply(
+                &listener,
+                "orchestration.dispatchCommand",
+                Some(json!({"sequence":42})),
+            )
+        });
+        let command = json!({"type":"thread.turn.start","commandId":"guide",
+            "threadId":"thread-1","message":{"messageId":"message-guide","role":"user","text":"complément"}});
+        assert_eq!(
+            client.dispatch(&command, Some("steer")).unwrap().sequence,
+            42
+        );
+        let frame = server.join().unwrap();
+        assert_eq!(frame["deliveryIntent"], "steer");
+        assert_eq!(frame["text"], "complément");
+        assert_eq!(frame["commandId"], "guide");
+    }
+
+    #[test]
+    fn guidance156_t3_interrupt_pose_restart() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = Client::for_base_url(
+            &format!("http://{}", listener.local_addr().unwrap()),
+            "fixture",
+        );
+        client.set_test_protocol(true);
+        let server = std::thread::spawn(move || {
+            rpc_reply(
+                &listener,
+                "orchestration.dispatchCommand",
+                Some(json!({"sequence":43})),
+            )
+        });
+        let command = json!({"type":"thread.turn.start","commandId":"restart",
+            "threadId":"thread-1","message":{"messageId":"message-restart","role":"user","text":"nouvelle direction"}});
+        assert_eq!(
+            client.dispatch(&command, Some("restart")).unwrap().sequence,
+            43
+        );
+        let frame = server.join().unwrap();
+        assert_eq!(frame["deliveryIntent"], "restart");
+        assert_eq!(frame["text"], "nouvelle direction");
     }
 }

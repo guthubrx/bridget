@@ -1671,8 +1671,8 @@ impl LinkWorker {
             // Verdict de l'annonce propriétaire, pas une livraison ni une
             // réponse de mission. Aucun texte n'est injecté dans le fil.
             DaemonToWrapper::ProjectContextResult { .. } => {}
-            delivery
-            @ (DaemonToWrapper::Deliver(_) | DaemonToWrapper::DeliverIdempotent { .. }) => {
+            delivery @ (DaemonToWrapper::Deliver { .. }
+            | DaemonToWrapper::DeliverIdempotent { .. }) => {
                 if self.queue.len() >= QUEUE_BOUND
                     && let Some((oldest, _)) = self.queue.pop_front()
                 {
@@ -1681,7 +1681,7 @@ impl LinkWorker {
                 self.queue.push_back((delivery, Instant::now()));
                 self.request_status();
             }
-            DaemonToWrapper::CancelDelivery { id, reason } => {
+            DaemonToWrapper::CancelDelivery { id, reason, .. } => {
                 self.cancelled
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -1873,6 +1873,7 @@ impl LinkWorker {
             }
             Discard::Expired(which) => format!("échéance {which} dépassée avant démarrage"),
             Discard::RequestClosed(state) => format!("demande {state} avant démarrage"),
+            Discard::GuidanceUnavailable(reason) => reason.into(),
         };
         warn!(
             "remise {} écartée du fil {} : {reason}",
@@ -1897,7 +1898,9 @@ impl LinkWorker {
         // Demande suivie encore ouverte : le daemon prévient l'expéditeur et,
         // sur un motif d'échéance, clôt la demande. Une demande déjà close a
         // déjà eu son issue : ne pas en fabriquer une seconde.
-        if message.reply && !matches!(why, Discard::RequestClosed(_)) {
+        if (message.reply || matches!(why, Discard::GuidanceUnavailable(_)))
+            && !matches!(why, Discard::RequestClosed(_))
+        {
             send_wrapper_message(
                 &self.writer,
                 WrapperToDaemon::DeliveryRejected {
@@ -1919,6 +1922,61 @@ impl LinkWorker {
                 self.queue.push_back((frame, received));
             }
         }
+    }
+
+    /// O(n), n<=64 : un guidage explicite peut dépasser une tête bloquée.
+    fn next_delivery_index(&mut self, summary: &ThreadSummary) -> Option<usize> {
+        let provider = thread_provider(summary);
+        let guidance = self.queue.iter().position(|(frame, _)| {
+            matches!(
+                delivery_message(frame).intent.as_ref(),
+                Some(
+                    bridget_core::MessageIntent::SteerCurrent
+                        | bridget_core::MessageIntent::InterruptAndStart
+                )
+            )
+        });
+        let index = guidance.unwrap_or(0);
+        let (frame, _) = self.queue.get(index)?;
+        let message = delivery_message(frame);
+        let v2 = self
+            .session
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .client
+            .uses_v2();
+        let unavailable = match message.intent.as_ref() {
+            Some(bridget_core::MessageIntent::SteerCurrent)
+                if !v2 || !deliverable_while_busy(provider.as_deref(), true) =>
+            {
+                Some("steer_unavailable")
+            }
+            Some(bridget_core::MessageIntent::InterruptAndStart) if !v2 => {
+                Some("interruption indisponible : protocole T3 historique sans deliveryIntent")
+            }
+            _ => None,
+        };
+        if let Some(reason) = unavailable {
+            let (frame, _) = self.queue.remove(index).expect("remise présente");
+            self.report_discard(&frame, Discard::GuidanceUnavailable(reason));
+            return None;
+        }
+        let busy = summary
+            .session
+            .as_ref()
+            .is_some_and(|session| session.active_turn_id.is_some());
+        if guidance.is_none()
+            && busy
+            && (!v2
+                || !deliverable_while_busy(
+                    provider.as_deref(),
+                    groupable(message) && delivery_mid_turn_ok(frame),
+                ))
+        {
+            return None;
+        }
+        Some(index)
     }
 
     fn drive_queue(&mut self, inbox: &Receiver<LinkEvent>) {
@@ -1962,27 +2020,20 @@ impl LinkWorker {
             .session
             .as_ref()
             .is_some_and(|s| s.active_turn_id.is_some());
-        if busy
-            && !deliverable_while_busy(
-                thread_provider(&summary).as_deref(),
-                self.queue
-                    .front()
-                    .is_some_and(|(frame, _)| groupable(delivery_message(frame))),
-            )
-        {
+        let Some(index) = self.next_delivery_index(&summary) else {
             return;
-        }
+        };
         // Le temps de la requête HTTP a pu faire passer une échéance.
         let stale = self
             .queue
-            .front()
+            .get(index)
             .and_then(|(frame, received)| self.discard_cause(frame, *received, unix_now()));
         if let Some(why) = stale {
-            let (frame, _) = self.queue.pop_front().expect("remise présente");
+            let (frame, _) = self.queue.remove(index).expect("remise présente");
             self.report_discard(&frame, why);
             return;
         }
-        let Some((frame, _)) = self.queue.front() else {
+        let Some((frame, _)) = self.queue.get(index) else {
             return;
         };
         let message = delivery_message(frame);
@@ -1997,17 +2048,46 @@ impl LinkWorker {
             self.request_status();
             return;
         }
+        let delivery_intent = match message.intent.as_ref() {
+            Some(bridget_core::MessageIntent::SteerCurrent) => Some("steer"),
+            Some(bridget_core::MessageIntent::InterruptAndStart) => Some("restart"),
+            _ if busy => Some("steer"),
+            _ => None,
+        };
+        let guidance_frame = message
+            .intent
+            .as_ref()
+            .is_some_and(|intent| {
+                matches!(
+                    intent,
+                    bridget_core::MessageIntent::SteerCurrent
+                        | bridget_core::MessageIntent::InterruptAndStart
+                )
+            })
+            .then(|| frame.clone());
+        let length = if guidance_frame.is_some() {
+            1
+        } else if busy {
+            self.queue
+                .iter()
+                .take(self.batchable_prefix())
+                .take_while(|(frame, _)| delivery_mid_turn_ok(frame))
+                .count()
+                .max(1)
+        } else {
+            self.batchable_prefix()
+        };
         // Session 114 : les messages sans réponse attendue en tête de file
         // partagent un seul tour. Sans cela, vingt-trois comptes rendus
         // d'avancement ouvraient vingt-trois tours chez le coordinateur : budget
         // consommé pour rien, et une corrélation faussée pour les demandes
         // voisines dès qu'un de ces tours ne produisait pas de texte.
         let mut batch = Vec::new();
-        for _ in 0..self.batchable_prefix() {
-            let (mut frame, received) = self.queue.pop_front().expect("remise présente");
+        for _ in 0..length {
+            let (mut frame, received) = self.queue.remove(index).expect("remise présente");
             // Session 112 : le budget d'exécution repart du dispatch réel.
             match &mut frame {
-                DaemonToWrapper::Deliver(message)
+                DaemonToWrapper::Deliver { message, .. }
                 | DaemonToWrapper::DeliverIdempotent { message, .. } => {
                     if let Some(deadline) = message.deadline_at {
                         let shifted = deadline_after_wait(deadline, received);
@@ -2024,7 +2104,7 @@ impl LinkWorker {
                 _ => {}
             }
             batch.push(match frame {
-                DaemonToWrapper::Deliver(message) => BatchedDelivery::Historic(message),
+                DaemonToWrapper::Deliver { message, .. } => BatchedDelivery::Historic(message),
                 DaemonToWrapper::DeliverIdempotent {
                     delivery_id,
                     recipient_instance_id,
@@ -2051,12 +2131,24 @@ impl LinkWorker {
         let mut outcome = Ok(());
         let mut tracker = self.tracker.take().expect("tracker présent");
         let reports = deliver_batch_to_interactive(&mut tracker, batch, now, |messages| {
-            outcome = self.dispatch_batch(messages, &summary);
+            outcome = self.dispatch_batch(messages, &summary, delivery_intent);
             outcome.clone()
         });
         self.tracker = Some(tracker);
         if let Err(e) = outcome {
             error!("remise au fil {} : {e}", self.thread_id);
+            if let Some(frame) = guidance_frame {
+                let reason = if e == "steer_unavailable" {
+                    Some("steer_unavailable")
+                } else if e.contains("protocole T3 historique sans deliveryIntent") {
+                    Some("interruption indisponible : protocole T3 historique sans deliveryIntent")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    self.report_discard(&frame, Discard::GuidanceUnavailable(reason));
+                }
+            }
         }
         for report in reports {
             send_wrapper_message(&self.writer, report);
@@ -2116,7 +2208,12 @@ impl LinkWorker {
         message: &bridget_core::BridgetMessage,
         summary: &ThreadSummary,
     ) -> Result<(), String> {
-        self.dispatch_batch(std::slice::from_ref(message), summary)
+        let intent = match message.intent.as_ref() {
+            Some(bridget_core::MessageIntent::SteerCurrent) => Some("steer"),
+            Some(bridget_core::MessageIntent::InterruptAndStart) => Some("restart"),
+            _ => None,
+        };
+        self.dispatch_batch(std::slice::from_ref(message), summary, intent)
     }
 
     /// Démarre le fil attesté libre par drive_queue, après contrôle d'autorité.
@@ -2127,6 +2224,7 @@ impl LinkWorker {
         &mut self,
         messages: &[bridget_core::BridgetMessage],
         summary: &ThreadSummary,
+        delivery_intent: Option<&str>,
     ) -> Result<(), String> {
         let Some(first) = messages.first() else {
             return Ok(());
@@ -2203,13 +2301,7 @@ impl LinkWorker {
                     "remise annulée, périmée ou autorité déconnectée avant dispatch".into(),
                 ));
             }
-            client.dispatch(
-                &command,
-                deliverable_while_busy(
-                    thread_provider(summary).as_deref(),
-                    messages.iter().all(groupable),
-                ),
-            )
+            client.dispatch(&command, delivery_intent)
         }) {
             Ok(result) => {
                 for message in messages {
@@ -2219,6 +2311,18 @@ impl LinkWorker {
                     );
                 }
                 Ok(())
+            }
+            Err(ContractError::Transport(reason))
+                if reason == "steer_unavailable"
+                    || reason.contains("protocole T3 historique sans deliveryIntent") =>
+            {
+                self.state.pending.retain(|pending| {
+                    !messages
+                        .iter()
+                        .any(|message| pending.request_id == message.id)
+                });
+                let _ = self.state.save(&self.state_path);
+                Err(reason)
             }
             // Seuls ces refus explicites attestent une commande rejetée.
             // JSON/sequence invalides APRÈS 2xx, 5xx ou coupure : le tour a pu
@@ -3016,6 +3120,8 @@ enum Discard {
     /// Demande suivie déjà close côté daemon : l'expéditeur le sait, seule
     /// la saga d'envoi reste à clore.
     RequestClosed(&'static str),
+    /// Capacité T3 absente : aucune injection ni interruption tentée.
+    GuidanceUnavailable(&'static str),
 }
 
 fn request_state_label(state: &str) -> &'static str {
@@ -3029,11 +3135,24 @@ fn request_state_label(state: &str) -> &'static str {
 
 fn delivery_message(frame: &DaemonToWrapper) -> &bridget_core::BridgetMessage {
     match frame {
-        DaemonToWrapper::Deliver(message) | DaemonToWrapper::DeliverIdempotent { message, .. } => {
-            message
-        }
+        DaemonToWrapper::Deliver { message, .. }
+        | DaemonToWrapper::DeliverIdempotent { message, .. } => message,
         _ => unreachable!("seules les remises sont mises en attente"),
     }
+}
+
+/// Le droit est porté par le daemon sur chaque remise, jamais par origin/from.
+fn delivery_mid_turn_ok(frame: &DaemonToWrapper) -> bool {
+    matches!(
+        frame,
+        DaemonToWrapper::Deliver {
+            mid_turn_ok: Some(true),
+            ..
+        } | DaemonToWrapper::DeliverIdempotent {
+            mid_turn_ok: Some(true),
+            ..
+        }
+    )
 }
 
 /// Titre présentable : espaces normalisés et longueur bornée, le daemon
@@ -3120,11 +3239,11 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
 /// reçu d'un coup treize messages qui attendaient sa fin. L'attente du repos
 /// sert à relier une réponse à sa demande ; un message sans réponse attendue
 /// n'a rien à relier. Chez les fournisseurs dont T3 pilote le tour en cours
-/// (Claude, donc GLM, et Cursor), il est remis aussitôt et lu à la prochaine
-/// étape de l'agent. Codex, les demandes suivies, les sollicitations de fil et
-/// les notifications attendent toujours la fin du tour.
+/// (Claude, donc GLM), il est remis aussitôt si mid_turn_ok vaut true.
+/// Cursor149, Codex, les demandes suivies, les sollicitations de fil et les
+/// notifications attendent la fin du tour. Cursor149 sait seulement relancer.
 fn deliverable_while_busy(provider: Option<&str>, groupable_front: bool) -> bool {
-    groupable_front && matches!(provider, Some("claude" | "cursor"))
+    groupable_front && matches!(provider, Some("claude"))
 }
 
 /// Famille de regroupement : seuls des membres d'une même famille partagent un
@@ -3140,7 +3259,16 @@ enum BatchFamily {
 }
 
 fn batch_family(message: &bridget_core::BridgetMessage) -> Option<BatchFamily> {
-    if message.reply || message.thread_notice.is_some() {
+    if message.reply
+        || message.thread_notice.is_some()
+        || matches!(
+            message.intent.as_ref(),
+            Some(
+                bridget_core::MessageIntent::SteerCurrent
+                    | bridget_core::MessageIntent::InterruptAndStart
+            )
+        )
+    {
         return None;
     }
     Some(if message.id.starts_with("bridget-observation:") {
@@ -3636,7 +3764,10 @@ mod tests {
             assert!(!message.reply);
             assert!(message.thread_notice.is_none());
             assert_eq!(batch_family(&message), Some(BatchFamily::Message));
-            worker.handle_frame(DaemonToWrapper::Deliver(message));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: message,
+                mid_turn_ok: None,
+            });
         }
         assert_eq!(worker.batchable_prefix(), 3);
         worker.journal.stop();
@@ -3652,11 +3783,14 @@ mod tests {
             .map(|index| plain114(&format!("r-{index}")))
             .collect();
         for message in &messages {
-            worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: message.clone(),
+                mid_turn_ok: None,
+            });
         }
         assert_eq!(worker.batchable_prefix(), 3, "les trois partagent un tour");
         let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
-        let result = worker.dispatch_batch(&messages, &summary(None));
+        let result = worker.dispatch_batch(&messages, &summary(None), None);
         let request = server.join().unwrap();
         worker.journal.stop();
         worker.relay.shutdown();
@@ -3727,9 +3861,15 @@ mod tests {
     fn spec130_notifications_successives_partagent_un_tour_sans_messages() {
         let (mut worker, _peer) = worker099();
         for id in ["bridget-observation:1", "bridget-observation:2"] {
-            worker.handle_frame(DaemonToWrapper::Deliver(plain114(id)));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: plain114(id),
+                mid_turn_ok: None,
+            });
         }
-        worker.handle_frame(DaemonToWrapper::Deliver(plain114("message")));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: plain114("message"),
+            mid_turn_ok: None,
+        });
         assert_eq!(
             worker.batchable_prefix(),
             2,
@@ -3779,15 +3919,27 @@ mod tests {
         let observation = plain114("bridget-observation:1");
         for special in [question, notice, observation] {
             let (mut worker, _peer) = worker099();
-            worker.handle_frame(DaemonToWrapper::Deliver(special.clone()));
-            worker.handle_frame(DaemonToWrapper::Deliver(plain114("suivant")));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: special.clone(),
+                mid_turn_ok: None,
+            });
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: plain114("suivant"),
+                mid_turn_ok: None,
+            });
             assert_eq!(worker.batchable_prefix(), 1, "{} en tête", special.id);
             worker.journal.stop();
             worker.relay.shutdown();
 
             let (mut worker, _peer) = worker099();
-            worker.handle_frame(DaemonToWrapper::Deliver(plain114("premier")));
-            worker.handle_frame(DaemonToWrapper::Deliver(special.clone()));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: plain114("premier"),
+                mid_turn_ok: None,
+            });
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: special.clone(),
+                mid_turn_ok: None,
+            });
             assert_eq!(worker.batchable_prefix(), 1, "{} en second", special.id);
             worker.journal.stop();
             worker.relay.shutdown();
@@ -3799,7 +3951,10 @@ mod tests {
     fn spec114_lot_borne_en_nombre_et_en_taille() {
         let (mut worker, _peer) = worker099();
         for index in 0..(BATCH_BOUND + 3) {
-            worker.handle_frame(DaemonToWrapper::Deliver(plain114(&format!("m-{index}"))));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: plain114(&format!("m-{index}")),
+                mid_turn_ok: None,
+            });
         }
         assert_eq!(worker.batchable_prefix(), BATCH_BOUND, "borne de nombre");
         worker.journal.stop();
@@ -3808,8 +3963,14 @@ mod tests {
         let (mut worker, _peer) = worker099();
         let mut enorme = plain114("enorme");
         enorme.body = "x".repeat(BATCH_BODY_BOUND);
-        worker.handle_frame(DaemonToWrapper::Deliver(enorme));
-        worker.handle_frame(DaemonToWrapper::Deliver(plain114("suivant")));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: enorme,
+            mid_turn_ok: None,
+        });
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: plain114("suivant"),
+            mid_turn_ok: None,
+        });
         assert_eq!(worker.batchable_prefix(), 1, "borne de taille");
         worker.journal.stop();
         worker.relay.shutdown();
@@ -4654,7 +4815,10 @@ mod tests {
         let mut message = bridget_core::BridgetMessage::new("alice", "bob", "budget");
         message.id = "budget-45min".into();
         message.deadline_at = Some(unix_now() + 2_700);
-        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message,
+            mid_turn_ok: None,
+        });
         // Antidater la réception au-delà du budget : sans report, la remise
         // serait périmée ; avec report, elle attend toujours.
         if let Some(entry) = worker.queue.front_mut() {
@@ -4682,7 +4846,10 @@ mod tests {
         let mut message = bridget_core::BridgetMessage::new("alice", "bob", "stale");
         message.id = "stale".into();
         message.deadline_at = Some(unix_now() - 10);
-        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message,
+            mid_turn_ok: None,
+        });
         let (_tx, inbox) = mpsc::channel();
         worker.drive_queue(&inbox);
         assert!(worker.queue.is_empty());
@@ -4695,7 +4862,10 @@ mod tests {
         let (mut worker, _peer) = worker099();
         let mut message = bridget_core::BridgetMessage::new("alice", "bob", "libération");
         message.id = "attente-longue".into();
-        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message,
+            mid_turn_ok: None,
+        });
         // Antidater la réception bien au-delà de l'ancien seuil.
         let ancien_seuil = worker.turn_wait * 10;
         if let Some(entry) = worker.queue.front_mut() {
@@ -4718,7 +4888,10 @@ mod tests {
         let mut message = bridget_core::BridgetMessage::new("alice", "bob", "périmée");
         message.id = "echeance-depassee".into();
         message.deadline_at = Some(unix_now() - 1);
-        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message,
+            mid_turn_ok: None,
+        });
         let (_tx, inbox) = mpsc::channel();
         worker.drive_queue(&inbox);
         assert!(
@@ -4735,7 +4908,10 @@ mod tests {
         for index in 0..(QUEUE_BOUND + 5) {
             let mut message = bridget_core::BridgetMessage::new("alice", "bob", "lot");
             message.id = format!("m-{index}");
-            worker.handle_frame(DaemonToWrapper::Deliver(message));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: message,
+                mid_turn_ok: None,
+            });
         }
         assert_eq!(worker.queue.len(), QUEUE_BOUND, "file bornée");
         assert_eq!(
@@ -4777,6 +4953,7 @@ mod tests {
             expires_at: unix_now() as i64 + 3600,
             message,
             execution: None,
+            mid_turn_ok: None,
         }
     }
 
@@ -4808,7 +4985,10 @@ mod tests {
         for index in 0..QUEUE_BOUND {
             let mut message = bridget_core::BridgetMessage::new("alice", "bob", "lot");
             message.id = format!("m-{index}");
-            worker.handle_frame(DaemonToWrapper::Deliver(message));
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: message,
+                mid_turn_ok: None,
+            });
         }
         assert_eq!(worker.queue.len(), QUEUE_BOUND);
         let frames = frames113(peer);
@@ -4863,6 +5043,7 @@ mod tests {
         worker.handle_frame(DaemonToWrapper::CancelDelivery {
             id: "annulee".into(),
             reason: "test".into(),
+            interrupt_active: None,
         });
         assert!(worker.queue.is_empty());
         let frames = frames113(peer);
@@ -4886,11 +5067,18 @@ mod tests {
         let mut next = cancelled.clone();
         next.id = "next".into();
         let started = Instant::now();
-        worker.handle_frame(DaemonToWrapper::Deliver(cancelled));
-        worker.handle_frame(DaemonToWrapper::Deliver(next));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: cancelled,
+            mid_turn_ok: None,
+        });
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: next,
+            mid_turn_ok: None,
+        });
         worker.handle_frame(DaemonToWrapper::CancelDelivery {
             id: "cancelled".into(),
             reason: "test".into(),
+            interrupt_active: None,
         });
         assert!(
             started.elapsed() < Duration::from_millis(100),
@@ -4921,20 +5109,29 @@ mod tests {
         });
         let mut message = bridget_core::BridgetMessage::new("alice", "bob", "périmée");
         message.deadline_at = Some(unix_now().saturating_sub(1));
-        worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message.clone(),
+            mid_turn_ok: None,
+        });
         let (_tx, inbox) = mpsc::channel();
         worker.drive_queue(&inbox);
         assert!(worker.queue.is_empty());
         message.deadline_at = Some(unix_now() + 1000);
         message.reply_timeout = Some(0);
-        worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message.clone(),
+            mid_turn_ok: None,
+        });
         worker.drive_queue(&inbox);
         assert!(
             worker.queue.is_empty(),
             "l'échéance demande peut précéder le tour"
         );
         message.reply_timeout = None;
-        worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: message.clone(),
+            mid_turn_ok: None,
+        });
         worker.requests.insert(
             message.id.clone(),
             RequestInfo {
@@ -6126,7 +6323,10 @@ mod tests {
     #[test]
     fn spec129_remise_pendant_un_tour_seulement_si_pilotable_et_sans_reponse() {
         assert!(deliverable_while_busy(Some("claude"), true));
-        assert!(deliverable_while_busy(Some("cursor"), true));
+        assert!(
+            !deliverable_while_busy(Some("cursor"), true),
+            "Cursor149 ne guide pas nativement"
+        );
         assert!(
             !deliverable_while_busy(Some("codex"), true),
             "Codex attend la fin du tour"
@@ -6464,5 +6664,215 @@ mod tests {
             worker.journal.stop();
             worker.relay.shutdown();
         }
+    }
+    #[test]
+    fn guidance156_t3_steer_fournisseur_hors_liste_refuse() {
+        // Cursor149 n'a pas activeSteering : son fallbackRestart ne prouve pas
+        // un guidage natif. Aucun steer n'est envoyé à Cursor, Codex ou inconnu.
+        for provider in [Some("cursor"), Some("codex"), None] {
+            let (mut worker, peer) = worker099();
+            worker
+                .session
+                .inner
+                .lock()
+                .unwrap()
+                .client
+                .set_test_protocol(true);
+            let mut frame = idempotent113("guide-refuse");
+            if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut frame {
+                message.reply = false;
+                message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+            }
+            worker.handle_frame(frame);
+            let mut thread = summary(None);
+            thread.provider_instance_id = provider.map(str::to_string);
+            assert_eq!(worker.next_delivery_index(&thread), None);
+            assert!(worker.queue.is_empty(), "le guidage refusé sort de la file");
+            let frames = frames113(peer);
+            assert!(saga_closed113(&frames, "d-guide-refuse"));
+            assert_eq!(
+                rejection113(&frames, "guide-refuse"),
+                Some("steer_unavailable")
+            );
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+        // Même oracle de capacité : V1 ne sait encoder aucune intention
+        // explicite. Le refus se produit avant tout HTTP fournisseur.
+        for intent in [
+            bridget_core::MessageIntent::SteerCurrent,
+            bridget_core::MessageIntent::InterruptAndStart,
+        ] {
+            let (mut worker, peer) = worker099();
+            worker
+                .session
+                .inner
+                .lock()
+                .unwrap()
+                .client
+                .set_test_protocol(false);
+            let mut frame = idempotent113("guide-v1");
+            if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut frame {
+                message.reply = false;
+                message.intent = Some(intent);
+            }
+            worker.handle_frame(frame);
+            let mut thread = summary(None);
+            thread.provider_instance_id = Some("claude".into());
+            assert_eq!(worker.next_delivery_index(&thread), None);
+            let frames = frames113(peer);
+            assert!(saga_closed113(&frames, "d-guide-v1"));
+            let reason = rejection113(&frames, "guide-v1").unwrap();
+            assert!(reason == "steer_unavailable" || reason.contains("deliveryIntent"));
+            assert!(worker.state.pending.is_empty());
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+    }
+
+    #[test]
+    fn guidance156_t3_guidage_derriere_tete_bloquee() {
+        for intent in [
+            bridget_core::MessageIntent::SteerCurrent,
+            bridget_core::MessageIntent::InterruptAndStart,
+        ] {
+            let (mut worker, _peer) = worker099();
+            worker
+                .session
+                .inner
+                .lock()
+                .unwrap()
+                .client
+                .set_test_protocol(true);
+            let mut waiting = plain114("suivie-en-tete");
+            waiting.reply = true;
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: waiting,
+                mid_turn_ok: Some(true),
+            });
+            let mut guidance = plain114("guidage");
+            guidance.intent = Some(intent);
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: guidance,
+                mid_turn_ok: None,
+            });
+            let mut thread = summary(Some(("tour-actif", "running")));
+            thread.session = Some(contract::SessionSummary {
+                provider_name: "claude".into(),
+                provider_instance_id: None,
+                status: "running".into(),
+                active_turn_id: Some("tour-actif".into()),
+            });
+            assert_eq!(
+                worker.next_delivery_index(&thread),
+                Some(1),
+                "le guidage passe la tête bloquée"
+            );
+            assert_eq!(delivery_message(&worker.queue[0].0).id, "suivie-en-tete");
+            assert_eq!(delivery_message(&worker.queue[1].0).id, "guidage");
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+    }
+
+    #[test]
+    fn guidance156_t3_guidage_hors_lot() {
+        for intent in [
+            bridget_core::MessageIntent::SteerCurrent,
+            bridget_core::MessageIntent::InterruptAndStart,
+        ] {
+            for guidance_first in [true, false] {
+                let (mut worker, _peer) = worker099();
+                let mut guidance = plain114("guidage");
+                guidance.intent = Some(intent);
+                let mut messages = vec![guidance, plain114("ordinaire")];
+                if !guidance_first {
+                    messages.reverse();
+                }
+                for message in messages {
+                    worker.handle_frame(DaemonToWrapper::Deliver {
+                        message,
+                        mid_turn_ok: Some(true),
+                    });
+                }
+                assert_eq!(worker.batchable_prefix(), 1, "aucun guidage dans un lot");
+                worker.journal.stop();
+                worker.relay.shutdown();
+            }
+        }
+    }
+
+    #[test]
+    fn guidance156_t3_groupable_claude_inchange() {
+        // Le daemon fournit le droit. Le pont n'en déduit rien depuis from
+        // ou origin ; l'absence du flag reste false sur les deux trames.
+        for idempotent in [false, true] {
+            for allowed in [None, Some(false), Some(true)] {
+                let (mut worker, _peer) = worker099();
+                worker
+                    .session
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .client
+                    .set_test_protocol(true);
+                let frame = if idempotent {
+                    let mut frame = idempotent113("ordinaire");
+                    if let DaemonToWrapper::DeliverIdempotent {
+                        message,
+                        mid_turn_ok,
+                        ..
+                    } = &mut frame
+                    {
+                        message.reply = false;
+                        *mid_turn_ok = allowed;
+                    }
+                    frame
+                } else {
+                    DaemonToWrapper::Deliver {
+                        message: plain114("ordinaire"),
+                        mid_turn_ok: allowed,
+                    }
+                };
+                worker.handle_frame(frame);
+                let mut thread = summary(Some(("tour", "running")));
+                thread.session = Some(contract::SessionSummary {
+                    provider_name: "claude".into(),
+                    provider_instance_id: None,
+                    status: "running".into(),
+                    active_turn_id: Some("tour".into()),
+                });
+                assert_eq!(
+                    worker.next_delivery_index(&thread),
+                    (allowed == Some(true)).then_some(0)
+                );
+                assert!(
+                    groupable(delivery_message(&worker.queue[0].0)),
+                    "groupable129 conservé"
+                );
+                thread.session.as_mut().unwrap().provider_name = "cursor".into();
+                assert_eq!(
+                    worker.next_delivery_index(&thread),
+                    None,
+                    "Cursor149 attend malgré un flag vrai"
+                );
+                worker.journal.stop();
+                worker.relay.shutdown();
+            }
+        }
+        let (mut worker, _peer) = worker099();
+        for id in ["a", "b"] {
+            worker.handle_frame(DaemonToWrapper::Deliver {
+                message: plain114(id),
+                mid_turn_ok: Some(true),
+            });
+        }
+        assert_eq!(
+            worker.batchable_prefix(),
+            2,
+            "FIFO et regroupement ordinaire129 conservés"
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
     }
 }

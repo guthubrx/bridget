@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-10-12T05:59:09.022828+00:00",
+  "status": "CONVERGED",
+  "passages": 2,
+  "tasks_complete": 32,
+  "tasks_total": 32,
+  "tasks_sha256": "7c9bd9a8e469a9f6aac9176ba8d645c0e3261749adf7bf8521fff4da349cb842",
+  "tasks_byte_identical_pass2": true,
+  "source_receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file/specs/156-guidage-file/validation/T032-root-validation.json",
+  "source_receipt_sha256": "23f1308749496f043975351821f2cdbc43efa63436a53f2fa8e3681b7138932d",
+  "pipeline_status": "In Progress",
+  "next": "Contre-revue fournisseur puis audit et livraison"
+}

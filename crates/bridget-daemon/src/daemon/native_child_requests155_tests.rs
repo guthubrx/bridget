@@ -471,7 +471,7 @@ fn native155_request_avis_idempotent() {
             Ok(_) => {
                 let frame: DaemonToWrapper = decode(line.trim()).unwrap();
                 let message = match frame {
-                    DaemonToWrapper::Deliver(message)
+                    DaemonToWrapper::Deliver { message, .. }
                     | DaemonToWrapper::DeliverExecution { message, .. }
                     | DaemonToWrapper::DeliverIdempotent { message, .. } => Some(message),
                     _ => None,
@@ -1115,3 +1115,175 @@ mod human155;
 
 #[path = "native_delegation_wait155_tests.rs"]
 mod wait155;
+
+#[test]
+fn guidance156_mission_interrupt_enfant_refuse() {
+    let mut fixture = RequestFixture155::new("guidance156_mission_interrupt_enfant_refuse");
+    let mut message = bridget_core::BridgetMessage::new(
+        &fixture.task.owner,
+        &fixture.task.child,
+        "mission guidée156",
+    );
+    message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+    let response =
+        handle_wrapper_message("conn-1", WrapperToDaemon::Send(message), &fixture.state).unwrap();
+    assert!(
+        matches!(response,DaemonToWrapper::Nack {reason,..} if reason.starts_with("mission_active"))
+    );
+    fixture
+        .child_reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(30)))
+        .unwrap();
+    let mut line = String::new();
+    assert!(fixture.child_reader.read_line(&mut line).is_err());
+}
+
+#[test]
+fn guidance156_mission_steer_enfant_admis() {
+    let mut fixture = RequestFixture155::new("guidance156_mission_steer_enfant_admis");
+    let mut message = bridget_core::BridgetMessage::new(
+        &fixture.task.owner,
+        &fixture.task.child,
+        "mission guidée156",
+    );
+    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+    let response =
+        handle_wrapper_message("conn-1", WrapperToDaemon::Send(message), &fixture.state).unwrap();
+    assert!(matches!(response, DaemonToWrapper::Ack { .. }));
+    assert!(
+        matches!(crate::daemon::presence_tests::read_control(&mut fixture.child_reader),DaemonToWrapper::Deliver {message,mid_turn_ok:Some(true)} if message.intent==Some(bridget_core::MessageIntent::SteerCurrent))
+    );
+}
+
+#[test]
+fn guidance156_control_parent_mission_steer_origine_humaine_forgee() {
+    let mut fixture = RequestFixture155::new("guidance156-native-control");
+    let mut st = fixture.state.lock().unwrap();
+    st.execution_store
+        .record_starting(
+            "submission-guidance156",
+            "execution-guidance156",
+            &fixture.task.child,
+            unix_timestamp(),
+        )
+        .unwrap();
+    st.execution_store
+        .transition_if_current(
+            "execution-guidance156",
+            "starting",
+            0,
+            1,
+            "running",
+            "provider_accepted",
+            unix_timestamp(),
+        )
+        .unwrap();
+    let mut message = bridget_core::BridgetMessage::new(
+        &fixture.task.owner,
+        &fixture.task.child,
+        "corriger sans interruption156",
+    );
+    message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+    message.origin = Some(bridget_core::MessageOrigin::Human);
+    let command = bridget_transport::protocol::ExecutionControlCommand {
+        version: 1,
+        command_id: "native-control156".into(),
+        execution_id: "execution-guidance156".into(),
+        generation: 1,
+        revision: 1,
+        operation: bridget_transport::protocol::ExecutionControlOperation::SteerCurrent,
+        message: Some(message),
+    };
+    let response = crate::daemon::handle_execution_control(
+        Some("conn-1"),
+        "012_scope_nativecontrol156",
+        command,
+        &mut st,
+    );
+    assert!(matches!(
+        response,
+        DaemonToWrapper::ControlExecutionResult {
+            outcome: bridget_transport::protocol::ExecutionControlOutcome::OutcomeUnknown,
+            ..
+        }
+    ));
+    drop(st);
+    assert!(
+        matches!(crate::daemon::presence_tests::read_control(&mut fixture.child_reader),DaemonToWrapper::ControlExecutionDispatch {command,..} if command.message.as_ref().is_some_and(|message|message.origin.is_none() && message.intent==Some(bridget_core::MessageIntent::SteerCurrent)))
+    );
+}
+
+#[test]
+fn guidance156_cancel_parent_mission_sans_interruption() {
+    let mut fixture = RequestFixture155::new("guidance156-cancel-native");
+    let response = handle_wrapper_message(
+        "conn-1",
+        WrapperToDaemon::CancelRequest {
+            id: fixture.task.mission.clone(),
+            sender: fixture.task.owner.clone(),
+            reason: Some("retrait de la demande156".into()),
+        },
+        &fixture.state,
+    )
+    .unwrap();
+    assert!(
+        matches!(response,DaemonToWrapper::RequestCancelled { ref state,.. } if state=="cancelled"),
+        "{response:?}"
+    );
+    // La définition native figée est codex_app_server/Cli : la voie CLI reçoit une notice passive.
+    let notification = crate::daemon::presence_tests::read_control(&mut fixture.child_reader);
+    assert!(
+        matches!(&notification,DaemonToWrapper::Deliver {message,..}
+        if message.intent.is_none() && message.origin.is_none()
+            && message.body.contains(&fixture.task.mission)
+            && message.body.contains("Aucune réponse n'est requise.")),
+        "notice native : {notification:?}"
+    );
+    assert_eq!(
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .idempotency
+            .count_interrupts_target(&fixture.task.child, unix_timestamp() - 600)
+            .unwrap()
+            .0,
+        0,
+        "aucune admission d'interruption dans guidance_events"
+    );
+    fixture
+        .child_reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(30)))
+        .unwrap();
+    let mut line = String::new();
+    assert!(
+        fixture.child_reader.read_line(&mut line).is_err(),
+        "aucune commande d'interruption supplémentaire : {line}"
+    );
+    assert_eq!(
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .store
+            .get_request(&fixture.task.mission)
+            .unwrap()
+            .unwrap()
+            .state,
+        "cancelled"
+    );
+    assert_eq!(
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&fixture.task.task_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        "working"
+    );
+}

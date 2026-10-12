@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-10-12T05:50:01.718615+00:00",
+  "reason": "rustfmt a suivi les sous-modules ; retour exact aux blobs de départ prouvés, aucun changement métier",
+  "files": [
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "before_sha256": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+      "formatted_sha256": "714eea4eb5c2a8990893c1beb8660febae706c96d5e993bc6678e61b3eb48f36",
+      "rustfmt_reproduction_exact": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "before_sha256": "dd7fa5ed8699c89f86986ad57dad84fe8f9dd6e11e035cd0d54e6be56470421a",
+      "formatted_sha256": "6ee99112ac368783f4cdec70e907c6a0967f90724596e1058b341e5df6b61cd6",
+      "rustfmt_reproduction_exact": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_lineage.rs",
+      "before_sha256": "d8a3e06d3d59aead88f485a19436ecd648691785dd07a072214eea827f20fe5f",
+      "formatted_sha256": "dbbb1c41b2a07412ec88f92174efad5fdea635b06a2f9d3cec62981785d6ce0b",
+      "rustfmt_reproduction_exact": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "before_sha256": "59bb085fedfce68179007bc08df2aa9e101ffdcd9fe989df342c3796445d831c",
+      "formatted_sha256": "f29fb5b5a6bbc8e9bd5c86ae0c4a6af552efd2b622c329488d802ea9cfb7593d",
+      "rustfmt_reproduction_exact": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "before_sha256": "df7c9bdab3ffc4de038ddd4558ee5a69fd118866b29c71c6232d0e4450a027db",
+      "formatted_sha256": "5c9084e144e9b33d74e4ec0a450a4ad06e97c5ed878f987c74beacb9f7c8175c",
+      "rustfmt_reproduction_exact": true
+    }
+  ],
+  "daemon_sha256": "a11310b737d1ac186309a57f306babe3146ec8af7f57a921bc6adf6b398c3c3c",
+  "tests_not_repeated_for_format_only_restore": true
+}

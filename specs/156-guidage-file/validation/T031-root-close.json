@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-10-12T05:33:06.883230+00:00",
+  "T031": "validated_complete_assigned_diff_and_root_document_review",
+  "base": "be7957ee00d3801a2cc127e2cd2bd2c8da8c4c4c",
+  "tasks_sha256": "51ca315a8a0a379cb997cb4f919e996be82b273617de8898f42772a3111bf0f2",
+  "tasks_complete": 31,
+  "diff_sha256": "0c8ae236fa2926b9c30a3e9a4309a67920131cbbd8575e9d59a7992fb6ce7d79",
+  "new_files_included": [
+    "crates/bridget-daemon/src/guidance.rs",
+    "crates/bridget-daemon/tests/guidance156_e2e.rs",
+    "docs/decisions/156-guidage-et-lecture-de-file.md",
+    "specs/156-guidage-file/adversarial-review-claude.md",
+    "specs/156-guidage-file/implementation.md"
+  ],
+  "test_receipts_separate_from_code_diff": true,
+  "review_receipts": [
+    "T031-daemon-review.md",
+    "T031-daemon-readmanifest.json",
+    "T031-other-rust-review.md",
+    "T031-other-rust-readmanifest.json"
+  ],
+  "converge_status": "not_yet_run",
+  "pipeline_status": "In Progress"
+}

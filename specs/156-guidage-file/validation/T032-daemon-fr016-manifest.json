@@ -1,0 +1,11 @@
+{
+  "base_sha256": "0dfd46715aa3b1440f85b046c791e05f750753cbc26ad864c334d248a1ffedbd",
+  "candidate_sha256": "1a99f9033ed068b509d929cde9332af616aa9cea91b4df7e861b16dc644953ab",
+  "patch_sha256": "7b26b3a32b3c9b94b0e365ba443a7c438af9816d29721fe7896431e51d212f7f",
+  "added_lines": 191,
+  "removed_lines": 50,
+  "early_helper_calls": 5,
+  "wt_unchanged": true,
+  "test_suffix_unchanged": true,
+  "prepared_at": "2026-10-12T05:42:01.807439+00:00"
+}

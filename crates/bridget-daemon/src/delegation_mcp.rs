@@ -168,7 +168,11 @@ pub(crate) fn execute(
             keep_alive_secs: match args.get("keep_alive_secs") {
                 None => None,
                 Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
-                _ => return Err(ClientError::InvalidParams("keep_alive_secs invalide".into())),
+                _ => {
+                    return Err(ClientError::InvalidParams(
+                        "keep_alive_secs invalide".into(),
+                    ));
+                }
             },
             brief: args.get("brief").cloned(),
         },
@@ -258,7 +262,16 @@ pub(crate) fn execute(
                 message: result["code"].as_str().unwrap_or("refused").to_string(),
             })
         }
-        DaemonToWrapper::NativeDelegationResult { result } => Ok(result),
+        DaemonToWrapper::NativeDelegationResult { mut result } => {
+            if name == "bridget_capabilities" {
+                result["guidance"] = json!({
+                    "intents":["queue","steer","interrupt"],
+                    "interrupt_cooldown_secs":30,"interrupt_cap_per_10min":3,
+                    "queue_tool":true
+                });
+            }
+            Ok(result)
+        }
         other => unexpected_response(other),
     }
 }
@@ -269,8 +282,10 @@ mod tests {
 
     #[test]
     fn native154_mcp_workspace_schema_ferme_et_champs_interdits() {
-        let delegate = crate::mcp::tools().into_iter()
-            .find(|tool| tool["name"] == "bridget_delegate").unwrap();
+        let delegate = crate::mcp::tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_delegate")
+            .unwrap();
         let workspace = &delegate["inputSchema"]["properties"]["workspace"];
         let variants = workspace["oneOf"].as_array().unwrap();
         assert_eq!(variants.len(), 2);
@@ -285,22 +300,36 @@ mod tests {
         assert_eq!(variants[0]["properties"]["strategy"]["const"], "shared");
         assert_eq!(variants[1]["properties"]["strategy"]["const"], "worktree");
         let identity = ResolvedIdentity {
-            name: "owner".into(), instance_id: "instance".into(), delegated_origin: None,
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
         };
         let base = json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp"});
         for forbidden in ["start_from_origin", "push", "merge", "cleanup"] {
             let mut args = base.clone();
             args["workspace"] = json!({"strategy":"worktree"});
             args["workspace"][forbidden] = json!(true);
-            assert!(matches!(execute(&identity, "bridget_delegate", &args, Path::new("/missing")), Err(ClientError::InvalidParams(_))));
+            assert!(matches!(
+                execute(&identity, "bridget_delegate", &args, Path::new("/missing")),
+                Err(ClientError::InvalidParams(_))
+            ));
             args = base.clone();
             args[forbidden] = json!(true);
-            assert!(matches!(execute(&identity, "bridget_delegate", &args, Path::new("/missing")), Err(ClientError::InvalidParams(_))));
+            assert!(matches!(
+                execute(&identity, "bridget_delegate", &args, Path::new("/missing")),
+                Err(ClientError::InvalidParams(_))
+            ));
         }
-        for valid in [json!({"strategy":"shared"}), json!({"strategy":"worktree","base_ref":"main","branch":"bridget/task"})] {
+        for valid in [
+            json!({"strategy":"shared"}),
+            json!({"strategy":"worktree","base_ref":"main","branch":"bridget/task"}),
+        ] {
             let mut args = base.clone();
             args["workspace"] = valid;
-            assert!(!matches!(execute(&identity, "bridget_delegate", &args, Path::new("/missing")), Err(ClientError::InvalidParams(_))));
+            assert!(!matches!(
+                execute(&identity, "bridget_delegate", &args, Path::new("/missing")),
+                Err(ClientError::InvalidParams(_))
+            ));
         }
     }
 
@@ -412,28 +441,57 @@ mod tests {
 
     #[test]
     fn native150_delai_schema_liste_blanche_et_forme() {
-        let delegate = crate::mcp::tools().into_iter().find(|tool| tool["name"] == "bridget_delegate").unwrap();
+        let delegate = crate::mcp::tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_delegate")
+            .unwrap();
         let property = &delegate["inputSchema"]["properties"]["reply_timeout"];
         assert_eq!(property["type"], "integer");
-        assert_eq!((property["minimum"].as_u64(), property["maximum"].as_u64()), (Some(60), Some(86_400)));
-        assert!(!delegate["inputSchema"]["required"].as_array().unwrap().iter().any(|key| key == "reply_timeout"));
-        let identity = ResolvedIdentity { name: "owner".into(), instance_id: "instance".into(), delegated_origin: None };
+        assert_eq!(
+            (property["minimum"].as_u64(), property["maximum"].as_u64()),
+            (Some(60), Some(86_400))
+        );
+        assert!(
+            !delegate["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|key| key == "reply_timeout")
+        );
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
         let base = |extra: Value| {
-            let mut args = json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp"});
-            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let mut args =
+                json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp"});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             args
         };
         // Forme invalide : refusée avant toute connexion. Les bornes restent au daemon.
         for invalide in [json!("abc"), json!(-5), json!(60.5), json!(true)] {
             assert!(matches!(
-                execute(&identity, "bridget_delegate", &base(json!({"reply_timeout": invalide})), Path::new("/missing")),
+                execute(
+                    &identity,
+                    "bridget_delegate",
+                    &base(json!({"reply_timeout": invalide})),
+                    Path::new("/missing")
+                ),
                 Err(ClientError::InvalidParams(_))
             ));
         }
         // Forme valide : le champ passe la liste blanche, l'échec vient de la connexion.
         for valide in [json!(120), json!(null)] {
             assert!(!matches!(
-                execute(&identity, "bridget_delegate", &base(json!({"reply_timeout": valide})), Path::new("/missing")),
+                execute(
+                    &identity,
+                    "bridget_delegate",
+                    &base(json!({"reply_timeout": valide})),
+                    Path::new("/missing")
+                ),
                 Err(ClientError::InvalidParams(_))
             ));
         }

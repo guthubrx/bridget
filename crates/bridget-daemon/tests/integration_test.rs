@@ -41,7 +41,7 @@ fn test_two_agents_communicate() {
     sender.send(WrapperToDaemon::Send(request.clone()));
     ack(&mut sender, &request.id);
     let received = match recipient.receive() {
-        DaemonToWrapper::Deliver(message) => message,
+        DaemonToWrapper::Deliver { message, .. } => message,
         other => panic!("remise attendue : {other:?}"),
     };
     assert_eq!(received.id, request.id);
@@ -108,7 +108,10 @@ fn test_only_sender_can_cancel_request() {
     request.reply = true;
     sender.send(WrapperToDaemon::Send(request.clone()));
     ack(&mut sender, &request.id);
-    assert!(matches!(recipient.receive(), DaemonToWrapper::Deliver(_)));
+    assert!(matches!(
+        recipient.receive(),
+        DaemonToWrapper::Deliver { message: _, .. }
+    ));
     // Même usurper le sender ne doit pas autoriser la connexion étrangère.
     for claimed_sender in [MATRIX_AGENT, ACTOR] {
         intruder.send(WrapperToDaemon::CancelRequest {
@@ -156,7 +159,7 @@ fn test_request_cancellation_stops_reminders() {
     sender.send(WrapperToDaemon::Send(request.clone()));
     ack(&mut sender, &request.id);
     assert!(
-        matches!(recipient.receive(), DaemonToWrapper::Deliver(message) if message.id == request.id)
+        matches!(recipient.receive(), DaemonToWrapper::Deliver { message, .. } if message.id == request.id)
     );
     sender.send(WrapperToDaemon::CancelRequest {
         id: request.id.clone(),
@@ -176,14 +179,17 @@ fn test_request_cancellation_stops_reminders() {
     sender.send(WrapperToDaemon::Send(sentinel.clone()));
     ack(&mut sender, &sentinel.id);
     assert!(
-        matches!(recipient.receive(), DaemonToWrapper::Deliver(message) if message.id == sentinel.id)
+        matches!(recipient.receive(), DaemonToWrapper::Deliver { message, .. } if message.id == sentinel.id)
     );
     sender
         .reader
         .get_ref()
         .set_read_timeout(Some(Duration::from_secs(12)))
         .unwrap();
-    assert!(matches!(sender.receive(), DaemonToWrapper::Deliver(_)));
+    assert!(matches!(
+        sender.receive(),
+        DaemonToWrapper::Deliver { message: _, .. }
+    ));
     let states = request_states(&root);
     assert_eq!(
         states.iter().find(|r| r.id == request.id).unwrap().state,
@@ -252,7 +258,7 @@ fn test_unknown_registry_type_completes_a_tracked_exchange() {
     sender.send(WrapperToDaemon::Send(request.clone()));
     ack(&mut sender, &request.id);
     let returned = match sender.receive() {
-        DaemonToWrapper::Deliver(message) => message,
+        DaemonToWrapper::Deliver { message, .. } => message,
         other => panic!("réponse du wrapper réel attendue : {other:?}"),
     };
     assert_eq!(returned.in_reply_to.as_deref(), Some(request.id.as_str()));
@@ -355,6 +361,7 @@ fn redelivery_idempotente_apres_reconnexion_n_injecte_qu_un_prompt() {
         expires_at: i64::MAX,
         message,
         execution: None,
+        mid_turn_ok: None,
     };
     let exact = encode(&delivery).unwrap();
     writeln!(writer, "{exact}").unwrap();

@@ -207,6 +207,8 @@ pub enum ClientCapability {
     SendIdempotent,
     Lookup,
     ExecutionControlV1,
+    /// Lecture de file filtrée par les droits ; aucune mutation implicite.
+    QueueListV1,
     ProjectRoundPolicyV1,
     /// Lecture et mutation de l'état de contrôle du référent, lecture et
     /// résolution de la boîte de réception. La façade MCP ne la demande jamais.
@@ -258,6 +260,7 @@ pub enum ExecutionControlRefusal {
     MessageRequired,
     CrossProjectReasonRequired,
     InvalidCrossProjectReason,
+    NotPermitted,
 }
 
 /// Issue publique immédiate d'une commande de contrôle.
@@ -2011,9 +2014,17 @@ pub struct SpawnOwnership {
 pub enum WorkspaceRequest {
     Shared {},
     Worktree {
-        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
         base_ref: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
         branch: Option<String>,
     },
 }
@@ -2110,7 +2121,11 @@ pub enum NativeDelegationRequest {
         /// Délai de réponse de la mission en secondes ; absent = 3600 (session 150).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply_timeout: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
         workspace: Option<WorkspaceRequest>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         keep_alive_secs: Option<u64>,
@@ -2295,7 +2310,9 @@ impl IdentityCredential {
     pub fn new(value: String) -> Self {
         Self(value)
     }
-    pub fn expose_for_attestation(&self) -> &str { &self.0 }
+    pub fn expose_for_attestation(&self) -> &str {
+        &self.0
+    }
 }
 
 impl std::fmt::Debug for IdentityCredential {
@@ -3008,6 +3025,10 @@ pub enum WrapperToDaemon {
     },
     DirectoryScoped {
         scope: CommunicationDirectoryScope,
+    },
+    /// Lecture seule156, réservée au Client qui négocie QueueListV1.
+    QueueList {
+        target: String,
     },
     /// Session 102 : opération sur un fil, réservée à une identité attestée.
     ThreadRequest {
@@ -3902,6 +3923,12 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    /// Projection publique156 bornée à200 par le daemon ; aucune file privée.
+    QueueListResult {
+        entries: Vec<serde_json::Value>,
+        /// null hors fil T3 : la clé reste présente.
+        queue_bound: Option<u32>,
+    },
     ChildRequestAnswer {
         answer: ChildRequestAnswer,
     },
@@ -4233,6 +4260,13 @@ pub enum DaemonToWrapper {
         message: BridgetMessage,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         execution: Option<ExecutionDeliveryContext>,
+        /// Fait calculé par le daemon ; absent ne permet aucune injection.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        mid_turn_ok: Option<bool>,
     },
     /// Souscription du daemon vers le wrapper lecteur du journal.
     Subscribe {
@@ -4306,7 +4340,17 @@ pub enum DaemonToWrapper {
         credential: Option<IdentityCredential>,
     },
     /// Livrer un message à l'agent.
-    Deliver(BridgetMessage),
+    Deliver {
+        #[serde(flatten)]
+        message: BridgetMessage,
+        /// Omission : octets historiques à plat, autorisation absente.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        mid_turn_ok: Option<bool>,
+    },
     /// Livrer un travail dont l'exécution durable a déjà été admise.
     ///
     /// Les wrappers historiques continuent de recevoir Deliver. Cette
@@ -4322,6 +4366,13 @@ pub enum DaemonToWrapper {
     CancelDelivery {
         id: String,
         reason: String,
+        /// Aucun interrupt implicite si le fait du daemon est absent.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        interrupt_active: Option<bool>,
     },
     /// Acquittement d'un envoi.
     Ack {
@@ -5444,15 +5495,84 @@ mod tests {
         );
     }
 
+    // T003 : oracles JSON compilables AVANT les nouveaux variants/champs.
+    // Les octets155 sont des constantes indépendantes de l'implémentation156.
+    #[test]
+    fn guidance156_protocol_trames_historiques_byte_identiques() {
+        for wire in [
+            r#"{"type":"Deliver","id":"m","from":"a","to":"b","body":"x","reply":false,"hops":4,"from_declared":false}"#,
+            r#"{"type":"DeliverIdempotent","delivery_id":"d","recipient_instance_id":"i","delivery_generation":1,"expires_at":1900000000,"message":{"id":"m","from":"a","to":"b","body":"x","reply":false,"hops":4,"from_declared":false}}"#,
+            r#"{"type":"CancelDelivery","id":"m","reason":"cancelled"}"#,
+        ] {
+            let frame: DaemonToWrapper = decode(wire).unwrap();
+            assert_eq!(
+                encode(&frame).unwrap(),
+                wire,
+                "omission des flags156 : mêmes octets155"
+            );
+        }
+    }
+
+    #[test]
+    fn guidance156_protocol_queue_et_refus_allers_retours() {
+        let capability: ClientCapability =
+            decode(r#""queue_list_v1""#).expect("capacité156 fermée connue");
+        assert_eq!(encode(&capability).unwrap(), r#""queue_list_v1""#);
+        let refusal: ExecutionControlRefusal =
+            decode(r#""not_permitted""#).expect("refus156 fermé connu");
+        assert_eq!(encode(&refusal).unwrap(), r#""not_permitted""#);
+        let wire = r#"{"type":"QueueList","target":"codex-1"}"#;
+        let request: WrapperToDaemon = decode(wire).expect("lecture de file156");
+        assert_eq!(encode(&request).unwrap(), wire);
+        for queue_bound in [serde_json::json!(64), serde_json::Value::Null] {
+            let wire = serde_json::json!({"type":"QueueListResult","entries":[{
+                "message_id":"m","from":"a","intent":"steer","reply":false,"age_secs":12,
+                "preview":"travail cité","position":1,"state":"pending_or_injecting"
+            }],"queue_bound":queue_bound});
+            let response: DaemonToWrapper = decode(&wire.to_string()).expect("résultat de file156");
+            assert_eq!(
+                serde_json::to_value(&response).unwrap(),
+                wire,
+                "queue_bound null reste explicite"
+            );
+            assert!(!response.allowed_for_attach());
+        }
+    }
+
+    #[test]
+    fn guidance156_protocol_flags_allers_retours() {
+        for allowed in [false, true] {
+            for wire in [
+                serde_json::json!({"type":"Deliver","id":"m","from":"a","to":"b","body":"x",
+                    "reply":false,"hops":4,"from_declared":false,"mid_turn_ok":allowed}),
+                serde_json::json!({"type":"DeliverIdempotent","delivery_id":"d","recipient_instance_id":"i",
+                    "delivery_generation":1,"expires_at":1900000000,
+                    "message":{"id":"m","from":"a","to":"b","body":"x","reply":false,"hops":4,"from_declared":false},
+                    "mid_turn_ok":allowed}),
+                serde_json::json!({"type":"CancelDelivery","id":"m","reason":"cancelled","interrupt_active":allowed}),
+            ] {
+                let frame: DaemonToWrapper = decode(&wire.to_string()).unwrap();
+                assert_eq!(
+                    serde_json::to_value(frame).unwrap(),
+                    wire,
+                    "un flag156 explicite doit survivre au décodage"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_encode_decode_deliver() {
         let msg = BridgetMessage::new("claude-1", "codex-1", "hello");
-        let dtw = DaemonToWrapper::Deliver(msg.clone());
+        let dtw = DaemonToWrapper::Deliver {
+            message: msg.clone(),
+            mid_turn_ok: None,
+        };
         let json = encode(&dtw).unwrap();
         assert!(json.contains("\"type\":\"Deliver\""));
         let decoded: DaemonToWrapper = decode(&json).unwrap();
         match decoded {
-            DaemonToWrapper::Deliver(m) => {
+            DaemonToWrapper::Deliver { message: m, .. } => {
                 assert_eq!(m.from, "claude-1");
                 assert_eq!(m.body, "hello");
             }
@@ -5469,6 +5589,7 @@ mod tests {
             delivery_generation: 7,
             expires_at: 1_900_000_000,
             message,
+            mid_turn_ok: None,
             execution: Some(ExecutionDeliveryContext {
                 execution_id: "execution-079".to_string(),
                 generation: 2,
@@ -5523,10 +5644,11 @@ mod tests {
         let cancel = DaemonToWrapper::CancelDelivery {
             id: "message-1".to_string(),
             reason: "échéance".to_string(),
+            interrupt_active: None,
         };
         assert!(matches!(
             decode(&encode(&cancel).unwrap()).unwrap(),
-            DaemonToWrapper::CancelDelivery { id, reason } if id == "message-1" && reason == "échéance"
+            DaemonToWrapper::CancelDelivery { id, reason, .. } if id == "message-1" && reason == "échéance"
         ));
         let rejected = WrapperToDaemon::DeliveryRejected {
             id: "message-1".to_string(),
@@ -6781,7 +6903,13 @@ mod tests {
                 .attach_refusal()
                 .is_none()
         );
-        assert!(!DaemonToWrapper::Deliver(BridgetMessage::new("a", "b", "x")).allowed_for_attach());
+        assert!(
+            !DaemonToWrapper::Deliver {
+                message: BridgetMessage::new("a", "b", "x"),
+                mid_turn_ok: None
+            }
+            .allowed_for_attach()
+        );
     }
 
     #[test]
@@ -8086,7 +8214,12 @@ mod spec104_search_contract_tests {
         let wire = r#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120,"keep_alive_secs":600,"brief":{"objective":"objectif","summary":"résultat"}}"#.as_bytes();
         let request: NativeDelegationRequest = serde_json::from_slice(wire).unwrap();
         assert_eq!(serde_json::to_vec(&request).unwrap(), wire.to_vec());
-        assert!(serde_json::to_value(request).unwrap().get("workspace").is_none());
+        assert!(
+            serde_json::to_value(request)
+                .unwrap()
+                .get("workspace")
+                .is_none()
+        );
     }
 
     #[test]
@@ -8102,9 +8235,12 @@ mod spec104_search_contract_tests {
         ] {
             let mut wire = base.clone();
             wire["workspace"] = workspace;
-            let request: NativeDelegationRequest = serde_json::from_value(wire.clone())
-                .expect("stratégie workspace valide");
-            assert_eq!(serde_json::to_value(request).unwrap()["workspace"], wire["workspace"]);
+            let request: NativeDelegationRequest =
+                serde_json::from_value(wire.clone()).expect("stratégie workspace valide");
+            assert_eq!(
+                serde_json::to_value(request).unwrap()["workspace"],
+                wire["workspace"]
+            );
         }
         for workspace in [
             serde_json::json!({"strategy":"worktree","unknown":true}),
@@ -8118,7 +8254,8 @@ mod spec104_search_contract_tests {
             wire["workspace"] = workspace;
             assert!(
                 serde_json::from_value::<NativeDelegationRequest>(wire.clone()).is_err(),
-                "workspace doit être fermé : {}", wire["workspace"]
+                "workspace doit être fermé : {}",
+                wire["workspace"]
             );
         }
     }
@@ -8130,12 +8267,18 @@ mod spec104_search_contract_tests {
         ).unwrap();
         let mut shared_wire = serde_json::to_value(&absent).unwrap();
         shared_wire["workspace"] = serde_json::json!({"strategy":"shared"});
-        let shared: NativeDelegationRequest = serde_json::from_value(shared_wire)
-            .expect("partage explicite valide");
+        let shared: NativeDelegationRequest =
+            serde_json::from_value(shared_wire).expect("partage explicite valide");
         let canonical = serde_json::to_vec(&shared).unwrap();
         assert_ne!(canonical, serde_json::to_vec(&absent).unwrap());
-        assert_eq!(serde_json::from_slice::<NativeDelegationRequest>(&canonical).unwrap(), shared);
-        assert_eq!(serde_json::to_value(shared).unwrap()["workspace"], serde_json::json!({"strategy":"shared"}));
+        assert_eq!(
+            serde_json::from_slice::<NativeDelegationRequest>(&canonical).unwrap(),
+            shared
+        );
+        assert_eq!(
+            serde_json::to_value(shared).unwrap()["workspace"],
+            serde_json::json!({"strategy":"shared"})
+        );
     }
 
     #[test]

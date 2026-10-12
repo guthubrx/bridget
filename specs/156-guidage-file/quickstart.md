@@ -1,7 +1,7 @@
 # Vérification rapide - Session156
 
-Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+Après livraison155 et création par root, toutes les commandes partent du worktree
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/156-guidage-file`.
 
 ## Environnement de test (obligatoire)
 
@@ -9,9 +9,9 @@ Toutes les commandes partent du worktree
 umask 077
 R=$(mktemp -d /tmp/b.XXXX); mkdir -m 700 $R/ns
 env -i HOME=$HOME TMPDIR=$R BRIDGET_HOME=$R/ns \
-  PATH=~/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+  CARGO_BUILD_JOBS=2 PATH=~/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin \
   perl -e 'alarm 1800; exec @ARGV' -- \
-  cargo test -p bridget-daemon --features test-support <filtre> -- --test-threads=4
+  nice -n 10 cargo test -p bridget-daemon --features test-support <filtre> -- --test-threads=2
 ```
 
 Tests du crate transport : même environnement, `cargo test -p bridget-transport <filtre>`.
@@ -34,11 +34,22 @@ Une modification de texte injecté ou de trame exige aussi tous les tests
 10. Bout en bout : `cargo test -p bridget-daemon --features test-support --test guidance156_e2e`.
 11. Non-régression : filtres `spec_087`, `native148`, `native149`, `native150`, `t3code`, `mcp::`.
 
-## Recette manuelle (après relance décidée par l'utilisateur)
+## Recette manuelle après activation Bridget autorisée
 
-Ne pas relancer les services dans cette session. Après relance :
+Aucun service n’est relancé pendant la préparation documentaire. La série
+152–160 autorise build signé, installation et activation Bridget après validation,
+avec zéro mission native non terminale, puis nettoyage. T3 reste sans relance
+explicite. Aucune nouvelle permission n’est nécessaire. Après cette activation,
+les commandes ci-dessous viennent d’un parent attesté dans Bridget ;
+un terminal nu est refusé identity_unattested. Steer avec --reply est refusé
+invalid_intent. Aucun from=humain ne vaut preuve. Après relance :
 
 ```sh
 bridget send --to <enfant> --intent steer "corrige X"
 bridget queue --target <enfant>
 ```
+
+Étendre seulement les scénarios existants : échéance steer agent sans interrupt,
+timeout humain validé, UI attestée/systèmes internes sur les deux trames, refus
+tardifs non comptés, FIFO. QueueList exclut Send historique et files internes.
+Aucun test ni commande de recette exécuté dans la préparationR1.

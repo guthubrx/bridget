@@ -1,7 +1,9 @@
 # Contrat - Guidage, interruption et lecture de file 156
 
-Compatible avec les contrats 148, 149 et 150. Un appel sans nouveau champ produit
-les mêmes octets canoniques et le même comportement qu'avant.
+Compatible avec les contrats 148, 149 et 150. Un envoi ordinaire légitime sans
+nouveau champ conserve ses octets canoniques. FR-009 retire les privilèges des
+provenances forgées ; FR-022 restreint le guidage implicite des pairs et clients
+nus. Les producteurs humains attestés et systèmes internes sont conservés.
 
 ## `bridget_send` - champ ajouté
 
@@ -32,10 +34,10 @@ l'état actuel de la cible. Autre intention sous la même clé :
 
 | Code | Quand | Mémorisé |
 |---|---|---|
-| `invalid_intent` | valeur inconnue | non (aucune clé réservée) |
+| `invalid_intent` | valeur inconnue ou steer+reply=true | non (aucune clé réservée) |
 | `intent_not_permitted` (motif : `not_parent`, `cross_project`, `self_target`, `identity_unattested`) | appelant sans droit | oui, par `reject_idempotent_send` |
 | `referent_paused` | `steer`/`interrupt` d'un agent pendant la pause | oui |
-| `mission_active` | `interrupt` d'un enfant avec tâche native active | oui |
+| `mission_active` | interrupt agent vers enfant en mission ; humain explicite exempt | oui |
 | `interrupt_rate_limited` (`retry_after_secs`) | 1 par 30 s par couple, 3 par 10 min par cible | oui |
 | `steer_unavailable` | fil T3 dont le fournisseur n'a pas de guidage natif prouvé | rapporté par le pont comme remise rejetée |
 
@@ -46,8 +48,17 @@ de tout refus de `SendIdempotent`). Sur `Send` historique, chaque refus est un
 
 Ordre : `invalid_intent`, identité attestée, neutralisation de l'origine,
 réservation (rejeu : `envelope_mismatch` ou résultat mémorisé),
-`intent_not_permitted`, `referent_paused`, `mission_active`,
-`interrupt_rate_limited`, garde de projet existante, remise.
+garde de projet existante, `intent_not_permitted`, `referent_paused`,
+`mission_active`, `interrupt_rate_limited`, acceptation de la remise.
+Sur SendIdempotent, inscrire admitted dans begin_send_delivery_with_guidance,
+la transaction existante qui admet
+remise, suivi, lien et journal. Sur historique/control/cancel, l’audit accepté
+est durable avant émission physique. Un INSERT échoué interdit le contrôle.
+Un crash après admission et avant émission peut consommer le rythme sans effet
+physique ; ce choix est conservateur. Un refus tardif n’est pas compté ;
+l’effet fournisseur reste unconfirmed.
+
+Pour ControlExecution, reserve_control_command conserve canon et rejeu AVANT la garde. La garde d’une commande neuve précède mark_control_dispatched, le comptage et l’émission ; le rejeu conserve sa réponse existante.
 
 ## Chemins couverts par la même garde
 
@@ -67,11 +78,19 @@ processus hostile du même compte qui forge des trames brutes est hors modèle
 
 ## Guidage implicite du pont T3 (changement visible)
 
-La trame `DeliverIdempotent` gagne `mid_turn_ok` (booléen optionnel, calculé par
-le daemon à chaque construction de la trame). Le pont ne remet un message en
-cours de tour (`deliveryIntent: "steer"`, session 129) que si `mid_turn_ok` est
-vrai. Expéditeurs autorisés : humain attaché, parent de la cible, enfant de la
-cible. Les pairs attendent la fin du tour. Absence de la valeur : attente.
+DeliverIdempotent ET Deliver historique portent mid_turn_ok optionnel calculé
+au daemon à chaque envoi/reprise. Sans le champ, forme historique compatible ;
+valeur absente au pont nouveau : attente. Avec vrai, garder les critères groupable
+existants. Sources admises : attach, UI prouvée par credential/instance primaire
+réservée type ui, systèmes internes, parent/enfant. Pairs/clients nus attendent.
+Le rôle Client UI reste inchangé ; aucun from=humain ou origin client ne fait
+preuve. Ne jamais fabriquer origin=Human pour obtenir ce flag.
+La remise immédiate utilise la connexion source réelle. À la récupération, from ne permet jamais d’emprunter une route UI ou humaine ; sans preuve UI persistée, la remise attend normalement. Pour les agents UUID, recalculer les liens depuis les faits actuels.
+
+Aucun steer agent non consommé ne déclenche automatiquement turn/interrupt,
+même avec une deadline fournie. Le timeout humain validé et l'échéance propre
+du tour principal restent. Interrupt conserve la FIFO : un message plus ancien
+peut porter le prochain tour.
 
 ## `bridget_cancel` : retrait et interruption
 
@@ -94,7 +113,11 @@ Réponse :
 | `entries[]` | au plus 200 ; `message_id`, `from`, `intent`, `reply`, `age_secs`, `preview` (120 caractères), `position`, `state: "pending_or_injecting"` |
 | `queue_bound` | 64 pour un fil T3, `null` sinon |
 
-Visibilité : voir `research.md` R5. Preuve enfant refusée. Refus :
+Périmètre : seulement send_deliveries idempotent en phase dispatching ; aucun
+Send historique ni file interne de transport.
+
+Visibilité : destinataire, parent, Attach et UI Client attestée voient toute
+la projection ; autres appelants : leurs propres messages. Preuve enfant refusée. Refus :
 `intent_not_permitted` n'existe pas ici (la réponse est filtrée) ;
 `target_unavailable` si la cible est inconnue.
 
@@ -111,7 +134,11 @@ Visibilité : voir `research.md` R5. Preuve enfant refusée. Refus :
 
 ## Protocole daemon
 
-- Capacité client `QueueListV1`. Sans elle, `QueueList` est refusée `CapabilityNotNegotiated`.
+- Capacité `QueueListV1`. Sans elle, `QueueList` est refusée `CapabilityNotNegotiated`.
+- Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1]. Son
+  rôle reste Attach, sans identité agent/conn_names ni autres capacités. L’UI
+  Client attestée peut lire toute la projection sans changer de rôle ou obtenir
+  une autorité de contrôle explicite.
 - `QueueList { target }` (client vers daemon) et `QueueListResult { entries, queue_bound }`.
 - Aucune trame daemon vers wrapper n'est ajoutée.
 - Les trames sont classées dans la matrice exhaustive de `daemon.rs` (aucun `_`).
@@ -120,5 +147,23 @@ Visibilité : voir `research.md` R5. Preuve enfant refusée. Refus :
 ## Pont T3
 
 Aucun changement de forme de la projection Lineage. Le pont pose
-`deliveryIntent: "steer"` (fournisseurs Claude et Cursor seulement) ou
+`deliveryIntent: "steer"` (Claude seul, activeSteering natif prouvé) ou
 `"restart"` (`interrupt`).
+
+Cursor n’a pas activeSteering natif dans le bundle installé149 ; son support
+SteeringByInterruptRestart peut convertir steer en interrupt_restart. Son
+steer est donc refusé steer_unavailable et sa remise implicite pendant un tour
+attend, même avec mid_turn_ok=true. Aucun repli interrupt ni bypass du rythme.
+La remise Claude requiert aussi la garde de provenance et le flag ; cela ne
+change pas le transport Codex natif. Ces changements visibles ferment un repli
+non sûr dans T012/T021/T029 existants, sans nouveau scénario ou permission.
+
+## Limite de compatibilité REST/V1 du pont T3
+
+La voie REST/V1 Client.dispatch ignore l’ancien booléen et ne sait pas exprimer
+deliveryIntent. Elle refuse donc localement toute intention explicite avant
+émission : steer_unavailable pour steer, motif de capacité explicite pour
+interrupt, avec les erreurs/report_discard existants. L’envoi ordinaire None
+reste inchangé. Le paquet installé149 est V2 : le trajet de production visé
+n’est pas changé par cette fermeture V1. Aucun protocole, API, type ou nom
+d’oracle supplémentaire ; T012 étend seulement les cas déjà prévus.

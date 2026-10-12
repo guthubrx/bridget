@@ -907,13 +907,13 @@ impl Transport for CodexAppServerTransport {
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
         let human_message = message.origin == Some(MessageOrigin::Human);
         let has_active_turn = queue.active.is_some();
-        // Un message humain doit toujours obtenir son propre tour. Le piloter
+        // Un message humain ordinaire doit obtenir son propre tour. Le piloter
         // dans un tour en cours mélange sa réponse à celle du message actif :
         // l'utilisateur voit alors son envoi mais jamais sa réponse dédiée.
         // Le pilotage reste réservé au contrôle explicite.
         let steering_requested = message.intent == Some(MessageIntent::SteerCurrent);
         let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart)
-            || (human_message && has_active_turn);
+            || (human_message && has_active_turn && !steering_requested);
         if self.interactive_socket.is_some() && (steering_requested || interrupt_requested) {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -1809,6 +1809,12 @@ fn earliest_unconfirmed_steer_deadline(
     accepted
         .iter()
         .chain(state.steer.iter())
+        // Human est normalisé par le daemon avant la remise. Le nom de
+        // l'émetteur et une deadline fournie ne valent aucune autorité.
+        .filter(|message| {
+            message.origin == Some(MessageOrigin::Human)
+                && message.intent == Some(MessageIntent::SteerCurrent)
+        })
         .filter_map(|message| {
             message
                 .deadline_at
@@ -6900,16 +6906,50 @@ for line in sys.stdin:
             thread::sleep(Duration::from_millis(20));
         }
 
+        let ready = Instant::now() + Duration::from_secs(2);
+        while !transport.queue.0.lock().unwrap().steering_open {
+            assert!(Instant::now() < ready, "le tour n'a pas ouvert le guidage");
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Même un nom humain et une échéance fournie ne valident pas
+        // l'origine : ce steer agent ne doit jamais interrompre le tour.
+        let mut agent = message("deadline-agent");
+        agent.id = "codex-deadline-agent".into();
+        agent.from = "humain".into();
+        agent.intent = Some(MessageIntent::SteerCurrent);
+        agent.deadline_at = Some(0);
+        transport
+            .deliver(&agent)
+            .expect("steer agent avec échéance fournie");
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut steer_agent = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            steer_agent |= contenu.lines().any(|line| {
+                line.contains("\"method\":\"turn/steer\"") && line.contains("codex-deadline-agent")
+            });
+            assert!(
+                !contenu.contains("\"method\":\"turn/interrupt\""),
+                "une échéance de steer agent ne doit pas interrompre le tour: {contenu}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            steer_agent,
+            "le steer agent n'a pas atteint le faux fournisseur"
+        );
+
         let mut humain = message("ack-sans-consommation-humain");
         humain.id = "codex-ack-sans-consommation-humain".to_string();
         humain.from = "humain".to_string();
+        humain.origin = Some(MessageOrigin::Human);
         humain.intent = Some(MessageIntent::SteerCurrent);
         humain.deadline_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("horloge")
                 .as_secs()
-                + 30,
+                + 2,
         );
         transport.deliver(&humain).expect("livraison humaine");
 
@@ -6918,7 +6958,14 @@ for line in sys.stdin:
         let mut prompt_humain = false;
         while Instant::now() < deadline {
             let contenu = fs::read_to_string(&trace).unwrap_or_default();
-            steer_observe |= contenu.contains("\"method\":\"turn/steer\"");
+            steer_observe |= contenu.lines().any(|line| {
+                line.contains("\"method\":\"turn/steer\"")
+                    && line.contains("codex-ack-sans-consommation-humain")
+            });
+            assert!(
+                !contenu.contains("\"method\":\"turn/interrupt\""),
+                "le steer humain explicite attend son échéance avant le repli: {contenu}"
+            );
             for event in transport.drain_events() {
                 prompt_humain |= matches!(
                     event.kind,
@@ -6939,8 +6986,23 @@ for line in sys.stdin:
                     if message_id == "codex-ack-sans-consommation-humain"
             );
         }
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut fallback = false;
+        while Instant::now() < deadline {
+            fallback = fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/interrupt\"");
+            if fallback {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
         transport.stop();
 
+        assert!(
+            fallback,
+            "le steer humain validé non consommé garde son repli sur échéance"
+        );
         assert!(steer_observe, "turn/steer attendu");
         assert!(
             !prompt_humain,

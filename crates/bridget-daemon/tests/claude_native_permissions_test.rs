@@ -218,7 +218,11 @@ fn run_mission_with(
         writeln!(
             writer,
             "{}",
-            encode(&DaemonToWrapper::Deliver(mission)).unwrap()
+            encode(&DaemonToWrapper::Deliver {
+                message: mission,
+                mid_turn_ok: None
+            })
+            .unwrap()
         )
         .unwrap();
         writer.flush().unwrap();
