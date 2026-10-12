@@ -1,0 +1,6 @@
+{
+  "at": "2026-10-12T13:22:04.428192+00:00",
+  "rc": 0,
+  "stdout": "",
+  "stderr": "[build Bridget] cache supprim\u00e9 : 0.30 Gio dans /Users/moi/.cache/bridget-build-158B.7ctiu4v3/release\n[build Bridget] Nettoyage : 0.30 Gio de caches ; 39.67 Gio restants (tailles logiques, clones APFS compris)\n[build Bridget] budget d\u00e9pass\u00e9 : caches prot\u00e9g\u00e9s conserv\u00e9s, aucune suppression forc\u00e9e\n"
+}

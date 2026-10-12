@@ -1,0 +1,10 @@
+{
+  "source_commit": "e52a96240b6168bf4466712e1bda8852b4ecb43f",
+  "build_id": "e52a96240b61",
+  "stage": "/Users/moi/.cache/bridget-build-158B.7ctiu4v3",
+  "exit_code": 0,
+  "duration_seconds": 221.74,
+  "log_sha256": "ffe4f2060e20f8c009239f44f45c83faed8e60279f9d59f71dff29607402ed9b",
+  "binary_sha256": "cfb77a6552e97b28fd092ecbd73e82fbfcaa59694264b354fe593cb63e64018c",
+  "signature_verified": true
+}

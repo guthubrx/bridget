@@ -5,7 +5,7 @@
 
 Spec: 158-reveils-controle
 Titre: Vue globale, arrêt global et portées MCP (158a) ; réveils et rejeu (158b, spec seule)
-Statut: Implémentée pour 158A et 158B (US5–US7), livraison B en cours ; US8 reportée
+Statut: Livrée pour 158A et 158B (US5–US7) ; US8 reportée
 Priorité: P1 (158a), P2 (158b)
 Tâches: 158a générées (22) ; 158b à générer après livraison de 158a
 Tests: définis en tasks.md (filtres `control158_*`, `mcp158_*`)
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-158-reveils-controle` (worktree isolé158 ; ancien worktree150 historique).
 **Created**: 2026-10-11
-**Status**: Implémentée pour les lots A et B ; livraison B en cours
+**Status**: Livrée pour les lots A et B ; US8 reportée
 **Priority**: P1
 **Dependencies**: SPEC-150 à 157 ; ADR 027, ADR 011
 

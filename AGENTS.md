@@ -1,4 +1,6 @@
 <!-- SPECKIT START -->
+Session158B livrée et nettoyée le 2026-10-12 : 23/23 tâches B, 45/45 A+B. Sources e52a96240b6168bf4466712e1bda8852b4ecb43f intégrées et poussées github/main. Binaire signé build e52a96240b61 installé et actif : daemon20530/pont20607 depuis15:21:38/41CEST. T3 PID60116/60228 inchangés. FULL2456PASS/12FAIL/74ignored historique conservée ; derniers replays affectés4PASS ; aucun GREEN global. Audit A99,95 partiel7,9%,0C/0H/0M/1LOW ; validateurRC0. P3 CONVERGED et complément maintenu. WT/branche158B retirés, preuves466membres SHA vérifiées, rollback158A conservé. US8/HTTP reportés. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/livraison158B.md.
+
 158A livrée et activée le 2026-10-12 : 22/22, sources80b434079361 intégrées et poussées github/main. Binaire signé installé, daemon53200/pont53329 actifs ; T3 inchangé. WT/branche158A retirés. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/livraison158A.md. 158B puis159/160 restent à traiter ; les checkpoints ci-dessous sont historiques.
 
 Session157 livrée et nettoyée le 2026-10-12 : 26/26 tâches, CONVERGED passage2.

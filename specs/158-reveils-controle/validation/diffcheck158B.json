@@ -1,0 +1,15 @@
+{
+  "rc": 0,
+  "command": [
+    "git",
+    "-C",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle",
+    "diff",
+    "--cached",
+    "--check",
+    "--",
+    ".",
+    ":(exclude)specs/158-reveils-controle/validation/diff-158B.patch"
+  ],
+  "excluded": "Canonical unified patch only: blank context lines necessarily contain one space. SHA preserved; all source/docs checked."
+}

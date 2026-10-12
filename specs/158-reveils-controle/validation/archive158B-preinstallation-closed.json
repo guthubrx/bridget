@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-12T13:23:08.382175+00:00",
+  "archive": "/Users/moi/.cache/bridget-delivery158B-preparation-20261012/proofs158B-preinstallation-closed.tgz",
+  "sha256": "e2b355e9d70ac774e4edf3cd56619bcf20e00023aac79ca71cfe4db2c3bbe935",
+  "bytes": 2989918,
+  "members": 466,
+  "logical_source_bytes": 15556417,
+  "manifest": "/Users/moi/.cache/bridget-delivery158B-preparation-20261012/proofs158B-preinstallation-closed-members.json",
+  "manifest_sha256": "9ddf07e5cf349fe5212a8f2c416d3ac26dd6397660d5fc4a819df281c6a2a56e",
+  "extraction": "/Users/moi/.cache/bridget-delivery158B-preparation-20261012/verify158B-closed.tnfi0ufa",
+  "all_members_extracted_and_sha256_verified": true,
+  "all_member_sources_unchanged_after_extraction": true,
+  "validation_and_audit_entire_current_trees_match_manifest": true,
+  "cycles_log_both_copies_included": true,
+  "ignored_memory_four_files_included": true,
+  "parent_source_commit": "e52a96240b6168bf4466712e1bda8852b4ecb43f",
+  "parent_source_commit_provenance": "ROOT message; archive does not attest runtime activation",
+  "excluded_files_count": 81,
+  "prior_archive_preserved": "/Users/moi/.cache/bridget-delivery158B-preparation-20261012/proofs158B-preinstallation.tgz",
+  "build_install_activation_receipts_excluded_later_separate_archive": true,
+  "WT_Git_Cargo_service_mutations": false
+}
