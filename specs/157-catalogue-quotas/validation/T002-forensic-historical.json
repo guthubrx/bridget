@@ -1,0 +1,155 @@
+{
+  "task": "SPEC157 T002",
+  "status": "préparation en lecture seule ; incident non confirmé",
+  "prepared_at": "2026-10-12T06:09:19.463146+00:00",
+  "conclusion": "Scénario de code. Aucun fait réel corrélé à l’incident du 2026-10-11 trouvé dans les emplacements ciblés. Ne pas déclarer launch_context absent : aucun fait de cet incident n’a été observé.",
+  "read_only_database": {
+    "path": "/Users/moi/.cache/bridget-core/bridget.db",
+    "uri": "file:/Users/moi/.cache/bridget-core/bridget.db?mode=ro",
+    "query_only": true,
+    "consistent_snapshot": "BEGIN sans écriture",
+    "namespace_configuration": "/Users/moi/Library/LaunchAgents/com.bridget.daemon.plist",
+    "namespace_matches_database": true,
+    "runtime_process_namespace_verified": false,
+    "window": {
+      "timezone": "Europe/Paris",
+      "local_day": "2026-10-11",
+      "start_utc_epoch": 1791669600,
+      "end_utc_epoch_exclusive": 1791756000
+    },
+    "counts": {
+      "incident_permission_source_unavailable_refusals": 0,
+      "native_delegations": 0
+    },
+    "schema_columns": {
+      "native_delegations": [
+        "task_id",
+        "owner_instance",
+        "request_id",
+        "canonical",
+        "payload"
+      ],
+      "native_delegation_refusals": [
+        "owner",
+        "request_id",
+        "canonical",
+        "code",
+        "refused_at"
+      ]
+    },
+    "payload_keys_observed": [],
+    "permission_snapshot_keys_observed": []
+  },
+  "real_incident_fact": {
+    "found": false,
+    "incident_correlated": false,
+    "fact_keys": null,
+    "provider_policy_keys": null,
+    "launch_context_present": null,
+    "reason": "Aucune délégation native persistée et aucun refus ciblé dans la fenêtre. Les faits reçus sont conservés dans native_permission_facts, un HashMap de l’état daemon ; ils sont retirés à la déconnexion."
+  },
+  "source_evidence": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "lines": [
+        985,
+        3431,
+        3573,
+        17018,
+        17022
+      ],
+      "observation": "Faits stockés en mémoire puis retirés ; ces lignes ne constituent pas un fait runtime de l’incident."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation.rs",
+      "lines": [
+        290,
+        300,
+        302
+      ],
+      "observation": "Refus durables : canonical/code/date, sans copie du fait provider. Une délégation acceptée peut porter permission_snapshot."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs",
+      "lines": [
+        503,
+        504,
+        505
+      ],
+      "observation": "Claude vers Codex exige launch_context et vérifie les sources ; code seul insuffisant pour distinguer les causes."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/native_permissions.rs",
+      "lines": [
+        75,
+        85
+      ],
+      "observation": "launch_context reste une clé optionnelle du schéma Claude."
+    }
+  ],
+  "executed_queries": {
+    "incident_refusals": "SELECT count(*) FROM native_delegation_refusals WHERE code=? AND refused_at>=? AND refused_at<?",
+    "native_task_count": "SELECT count(*) FROM native_delegations",
+    "payload_keys": "SELECT DISTINCT j.key FROM native_delegations d,json_each(d.payload) j WHERE json_valid(d.payload) ORDER BY j.key",
+    "snapshot_keys": "SELECT DISTINCT j.key FROM native_delegations d,json_each(d.payload,'$.permission_snapshot') j WHERE json_valid(d.payload) AND json_type(d.payload,'$.permission_snapshot')='object' ORDER BY j.key"
+  },
+  "query_parameters": {
+    "incident_refusals": [
+      "permission_source_unavailable",
+      1791669600,
+      1791756000
+    ]
+  },
+  "root_follow_up_not_executed": {
+    "condition": "Seulement si ROOT connaît le task_id exact et une base historique corrélée à l’incident. Remplacer le paramètre lié, ouvrir uniquement en mode=ro et query_only. Aucun SELECT payload ni json_extract de valeur du fait.",
+    "policy_keys_sql": "SELECT j.key FROM native_delegations d,json_each(d.payload,'$.permission_snapshot.parent.provider_policy') j WHERE d.task_id=? AND json_valid(d.payload) ORDER BY j.key",
+    "fact_keys_sql": "SELECT j.key FROM native_delegations d,json_each(d.payload,'$.permission_snapshot.parent') j WHERE d.task_id=? AND json_valid(d.payload) ORDER BY j.key",
+    "presence_sql": "SELECT json_type(payload,'$.permission_snapshot.parent.provider_policy.launch_context') IS NOT NULL FROM native_delegations WHERE task_id=? AND json_type(payload,'$.permission_snapshot.parent.provider_policy')='object'",
+    "correlation_required": "Le task_id doit venir d’un reçu de l’incident, pas d’un autre fait Claude. Un refus non admis peut n’avoir aucune tâche/snapshot."
+  },
+  "sources": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "e4b467b44d7b5b8f9278fb5f6f566ef55b29614c674aa9bc837bc7a909ee39e3"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "01336553b359e82c6231d8ff8aa18575a9f818bd4043f15a040b89384012660a"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/environment.rs",
+      "sha256": "3e15747a52a154d26f6bf665dbe66b3e2079c0dfe44202b26b3af855506a5a78"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permission_observer.rs",
+      "sha256": "75dbb7b1965de96d4c7c63ad395d381b00aa909cd3cce0f29731070e2b2cfc33"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/native_permissions.rs",
+      "sha256": "0d5c3ee52a5cc152fd51cdb047c85b4e54f335744f31d98593fd4ec5b87c8cf3"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/research.md",
+      "sha256": "5668967e48195442a3338b5b497fbaade2fa7dcb7ddecf255b20d696838b0911"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/tasks.md",
+      "sha256": "6d575d0a34aa591daf2392409b97278a3a31cd3ada74f1da10d79eccefb328e6"
+    },
+    {
+      "file": "/Users/moi/Library/LaunchAgents/com.bridget.daemon.plist",
+      "sha256": "66c03f5a55a8fba6d2785bf7e1d33de229961c42fabfa051e45ef8b2124cf308"
+    }
+  ],
+  "limits": [
+    "Le fichier LaunchAgent prouve le namespace configuré ; aucune inspection du processus actif ni du service.",
+    "L’absence dans la base actuelle ne prouve pas que le fait n’a jamais existé : état en mémoire, rétention, redémarrage ou autre namespace historique possibles.",
+    "Les reçus identite-durable149.md et livraison153.md ont été recherchés uniquement sur les motifs incident/date/launch_context ; aucun fait corrélé repéré.",
+    "Aucune trace complète, mission, valeur de fait, secret ou copie de log collecté. Aucun fournisseur appelé.",
+    "Aucun cochage T002, aucune écriture de validation dans le projet. ROOT produira le reçu WT157 après livraison156."
+  ]
+}

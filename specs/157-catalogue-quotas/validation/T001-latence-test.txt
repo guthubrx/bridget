@@ -1,0 +1,86 @@
+/// T001/T012 — même catalogue privé avant et après la session 157.
+/// Cinq définitions Claude et leurs cinq variantes de découverte font dix entrées.
+/// Aucun tick ni lancement : la mesure porte sur le gestionnaire du catalogue.
+#[test]
+#[ignore = "banc T001/T012 : exécution explicite dans un namespace privé"]
+fn native157_catalogue_latence() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("lat157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    let template = st.registry.get("claude-child").unwrap();
+    let definition = json!({
+        "command": template.command,
+        "args": template.args,
+        "protocol": template.protocol,
+        "forbidden_env": template.forbidden_env,
+        "pass_env": template.pass_env,
+        "claude_config_dir": template.claude_config_dir,
+        "permissions": template.permissions,
+        "capabilities": {
+            "execution_paths": ["claude_stream_json"],
+            "models": {"custom/model": {"efforts": ["high"]}}
+        }
+    });
+    // from_json ajoute quatre défauts et les variantes project-discovery.
+    // Cinq sources privées donnent exactement dix entrées, sans CLI réelle.
+    let sources = vec!["codex", "claude", "cursor", "gemini", "native157-01"];
+    let mut names: Vec<String> = sources.iter().map(|name| (*name).to_owned()).collect();
+    names.extend(sources.iter().map(|name| format!("project-discovery-{name}")));
+    names.sort_unstable();
+    let agents: serde_json::Map<String, Value> = sources
+        .iter()
+        .map(|name| ((*name).to_owned(), definition.clone()))
+        .collect();
+    let registry = serde_json::to_string(&json!({"agents": agents})).unwrap();
+    let registry_path = root.join("catalogue157.json");
+    bridget_transport::fsutil::write_private_file_atomic(&registry_path, registry.as_bytes())
+        .unwrap();
+    st.registry = AgentRegistry::from_json(&registry, &registry_path).unwrap();
+    insert_fact(
+        &mut st,
+        codex_fact(cwd.to_str().unwrap(), json!({"type": "dangerFullAccess"}), "never"),
+        None,
+    );
+
+    let mut elapsed_ns = Vec::with_capacity(50);
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st)
+            .unwrap();
+        let elapsed: u64 = start.elapsed().as_nanos().try_into().unwrap();
+        elapsed_ns.push(elapsed);
+        // Les validations sont hors de la fenêtre chronométrée.
+        let providers = catalogue["providers"].as_array().unwrap();
+        let mut actual: Vec<&str> = providers
+            .iter()
+            .map(|provider| provider["agent_type"].as_str().unwrap())
+            .collect();
+        actual.sort_unstable();
+        assert_eq!(actual, names);
+        for provider in providers {
+            assert_eq!(provider["protocol"], "claude_stream_json");
+        }
+    }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    let mut sorted = elapsed_ns.clone();
+    sorted.sort_unstable();
+    // Médiane des deux valeurs centrales ; p95 au rang supérieur ceil(0,95 × 50).
+    let median_ns = (sorted[24] as f64 + sorted[25] as f64) / 2.0;
+    let p95_ns = sorted[47];
+    println!(
+        "native157_catalogue_latence {}",
+        json!({
+            "providers": 10,
+            "samples": elapsed_ns.len(),
+            "median_ns": median_ns,
+            "p95_ns": p95_ns,
+            "elapsed_ns": elapsed_ns,
+            "measurement": "handle_locked_catalogue",
+            "warmup_calls": 0,
+            "fixture": "native149_codex_full_never_5_claude_plus_5_discovery",
+            "p95_method": "nearest_rank_48_of_50"
+        })
+    );
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}

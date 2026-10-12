@@ -1,0 +1,610 @@
+{
+  "$schema": "audit-code-v14/aggregated-findings",
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T08:21:44.976414+00:00",
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+    "audit_mode": "fix",
+    "audit_grid": "all",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "score_global": "A",
+    "numeric_global": 99.4545,
+    "release_blocked": false,
+    "scores": {
+      "security": "A",
+      "llm_security": "A",
+      "supply_chain": "A",
+      "observability": "A",
+      "reliability": "A",
+      "tests": "A",
+      "performance": "A",
+      "complexity": "A",
+      "quality": "A",
+      "architecture": "A",
+      "ai_hygiene": "A",
+      "duplication": "A",
+      "minimalism": "A",
+      "ux": "N/A"
+    },
+    "repository": {
+      "files_count": 287,
+      "all_files_discovered": 2599,
+      "languages": [
+        "python",
+        "rust",
+        "typescript"
+      ],
+      "language_files": {
+        "rust": 212,
+        "python": 56,
+        "typescript": 19
+      },
+      "frameworks": [
+        "Rust2024/std",
+        "serde/serde_json",
+        "rusqlite bundled",
+        "MCP/socketUnix",
+        "protocoles natifs providers"
+      ],
+      "type": "cli-daemon-mcp-native-providers",
+      "has_ui": false,
+      "ui_scope": "Aucun fichiertsx/jsx/vue observé dans l’inventaire ; T3 externe horsscope.",
+      "has_llm_integration": true,
+      "llm_evidence": "provider_limits imports RateLimitSource ; préflight/registre de fournisseurs natifs dans le delta",
+      "db_type": "sqlite",
+      "db_evidence": "Cargo.toml workspace.dependencies.rusqlite",
+      "ci_system": "none_detected",
+      "container": false,
+      "workspace_members": [
+        "crates/bridget-core",
+        "crates/bridget-transport",
+        "crates/bridget-daemon"
+      ]
+    },
+    "cycle": 1,
+    "source_status": "Historical two MEDIUM observations preserved; fixed status confirmed by final readonly auditors, not baseline-suppressed"
+  },
+  "execution_metrics": {
+    "files_scanned": 23,
+    "files_total": 29,
+    "lines_analyzed": 3622,
+    "lines_total": 81930,
+    "coverage_estimate_percent": 4.4208,
+    "source_union_ranges": {
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          978,
+          993
+        ],
+        [
+          3439,
+          3451
+        ],
+        [
+          7078,
+          7148
+        ],
+        [
+          16086,
+          16111
+        ],
+        [
+          19593,
+          19626
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation.rs": [
+        [
+          65,
+          115
+        ],
+        [
+          182,
+          207
+        ],
+        [
+          215,
+          271
+        ],
+        [
+          505,
+          541
+        ],
+        [
+          675,
+          731
+        ],
+        [
+          842,
+          1537
+        ],
+        [
+          2601,
+          2626
+        ],
+        [
+          8484,
+          8490
+        ],
+        [
+          8594,
+          8610
+        ],
+        [
+          9398,
+          9404
+        ]
+      ],
+      "crates/bridget-daemon/src/lifecycle.rs": [
+        [
+          65,
+          156
+        ],
+        [
+          226,
+          270
+        ],
+        [
+          360,
+          415
+        ],
+        [
+          550,
+          583
+        ],
+        [
+          765,
+          869
+        ]
+      ],
+      "crates/bridget-daemon/src/native_permissions.rs": [
+        [
+          319,
+          355
+        ],
+        [
+          414,
+          567
+        ]
+      ],
+      "crates/bridget-daemon/src/provider_limits.rs": [
+        [
+          1,
+          289
+        ]
+      ],
+      "crates/bridget-daemon/src/registry.rs": [
+        [
+          306,
+          429
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          2103,
+          2122
+        ],
+        [
+          2143,
+          2176
+        ],
+        [
+          8190,
+          8196
+        ],
+        [
+          8369,
+          8387
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation.rs": [
+        [
+          158,
+          213
+        ],
+        [
+          974,
+          978
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_mcp.rs": [
+        [
+          63,
+          168
+        ],
+        [
+          270,
+          310
+        ],
+        [
+          313,
+          415
+        ],
+        [
+          630,
+          678
+        ]
+      ],
+      "docs/decisions/157-catalogue-quotas-remplacement.md": [
+        [
+          1,
+          110
+        ]
+      ],
+      "specs/157-catalogue-quotas/reuse-audit.md": [
+        [
+          106,
+          123
+        ]
+      ],
+      "specs/157-catalogue-quotas/contracts/delegation157.md": [
+        [
+          1,
+          110
+        ],
+        [
+          118,
+          150
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": [
+        [
+          3880,
+          3910
+        ],
+        [
+          4294,
+          4431
+        ],
+        [
+          4464,
+          4507
+        ],
+        [
+          4682,
+          4792
+        ]
+      ],
+      "specs/157-catalogue-quotas/data-model.md": [
+        [
+          1,
+          105
+        ]
+      ],
+      "crates/bridget-daemon/src/lib.rs": [
+        [
+          38,
+          51
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": [
+        [
+          35,
+          62
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_lineage_tests.rs": [
+        [
+          30,
+          75
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": [
+        [
+          410,
+          431
+        ],
+        [
+          470,
+          562
+        ]
+      ],
+      "crates/bridget-daemon/tests/guidance156_e2e.rs": [
+        [
+          324,
+          340
+        ]
+      ],
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+        [
+          442,
+          458
+        ]
+      ],
+      "docs/delegation-native.md": [
+        [
+          30,
+          105
+        ]
+      ],
+      "skills/bridget/SKILL.md": [
+        [
+          16,
+          51
+        ]
+      ],
+      "skills/bridget/references/commandes.md": [
+        [
+          158,
+          213
+        ]
+      ]
+    },
+    "excluded_read_records": [
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_complexite.json",
+        "file": "crates/bridget-daemon/src/provider_limits.rs",
+        "sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_complexite.json",
+        "file": "specs/157-catalogue-quotas/validation/mesure-catalogue.md",
+        "sha256": "8aa16e4a1294a16274805d47ee5359db64597cbe4820e1311f2affdf0c5b2c1e",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_complexite.json",
+        "file": "specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+        "sha256": "db59f6b1081de446d5291f467421ed491dabb76d8c7699f17af2439b058e3ef9",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_duplication.json",
+        "file": "specs/157-catalogue-quotas/validation/diff-157.patch",
+        "sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_duplication.json",
+        "file": "specs/157-catalogue-quotas/implementation.md",
+        "sha256": "676f80a5f23404eab00084e8f2f990f28ea54ca737bef633bdfc6137be335659",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_duplication.json",
+        "file": "specs/157-catalogue-quotas/validation/converge157.md",
+        "sha256": "0f93541b97671eb09c401c0c64c57f64d2e515bd732bebf24a22c007ca6f09f4",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_duplication.json",
+        "file": "specs/157-catalogue-quotas/validation/tests-157.md",
+        "sha256": "22e87553704aad99f1c185b794b0ed82506c36244b5c2eb1877f77d0a6ccc6f7",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_minimalisme.json",
+        "file": "specs/157-catalogue-quotas/validation/diff-157.patch",
+        "sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_minimalisme.json",
+        "file": "specs/157-catalogue-quotas/implementation.md",
+        "sha256": "676f80a5f23404eab00084e8f2f990f28ea54ca737bef633bdfc6137be335659",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_minimalisme.json",
+        "file": "specs/157-catalogue-quotas/validation/converge157.md",
+        "sha256": "0f93541b97671eb09c401c0c64c57f64d2e515bd732bebf24a22c007ca6f09f4",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_minimalisme.json",
+        "file": "specs/157-catalogue-quotas/validation/tests-157.md",
+        "sha256": "22e87553704aad99f1c185b794b0ed82506c36244b5c2eb1877f77d0a6ccc6f7",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_performance.json",
+        "file": "crates/bridget-daemon/src/provider_limits.rs",
+        "sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_performance.json",
+        "file": "specs/157-catalogue-quotas/validation/mesure-catalogue.md",
+        "sha256": "8aa16e4a1294a16274805d47ee5359db64597cbe4820e1311f2affdf0c5b2c1e",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_performance.json",
+        "file": "specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+        "sha256": "db59f6b1081de446d5291f467421ed491dabb76d8c7699f17af2439b058e3ef9",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_qualite.json",
+        "file": "specs/157-catalogue-quotas/validation/diff-157.patch",
+        "sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_qualite.json",
+        "file": "specs/157-catalogue-quotas/implementation.md",
+        "sha256": "676f80a5f23404eab00084e8f2f990f28ea54ca737bef633bdfc6137be335659",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_qualite.json",
+        "file": "specs/157-catalogue-quotas/validation/converge157.md",
+        "sha256": "0f93541b97671eb09c401c0c64c57f64d2e515bd732bebf24a22c007ca6f09f4",
+        "reason": "outside C1 authority or different source hash"
+      },
+      {
+        "report": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_qualite.json",
+        "file": "specs/157-catalogue-quotas/validation/tests-157.md",
+        "sha256": "22e87553704aad99f1c185b794b0ed82506c36244b5c2eb1877f77d0a6ccc6f7",
+        "reason": "outside C1 authority or different source hash"
+      }
+    ],
+    "input_reports": [
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_complexite.json",
+        "sha256": "a5a0341b18d95e56f8a1cc6dcee87f310be502d5c0b734a6115a7f62479b8bd8"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_duplication.json",
+        "sha256": "b588586c1fac1a8fba06d6d072468b2bca2cc7374768cf1f3eb8f5c49125be34"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_minimalisme.json",
+        "sha256": "9c90607f44fe39fab04ec950f60a51674be1d9fe137610b1492f390ed9253446"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_performance.json",
+        "sha256": "867c09628b471bd57a06267b3f51361c92b1d010a9ea095fc966d1e2cdc432c8"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_qualite.json",
+        "sha256": "e1fe72af4ad5fc3e698fbda2c4f5f65e0157eb3e3db29833f32455577aa53ec6"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_securite.json",
+        "sha256": "dace61f507500043efb3b46b8fc921bf6b9115fd63481651b9b73883f68baf3a"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-1/findings_tests.json",
+        "sha256": "816cebdb3a6217700d3ce588cbcf650ce3f728ddd54c01ad19660b19aa5bc257"
+      }
+    ],
+    "tools_used": [
+      "manual source ranges by auditors",
+      "fingerprint.py --batch"
+    ],
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "12"
+    ],
+    "warnings": [
+      "Cycle1 historique ; deux constats MEDIUM observés avant correctionsROOT. Ce fichier ne revendique pas leur résolution finale.",
+      "Couverture calculée par union des plages compatibles avec les empreintes C1 ; SHA divergents et lectures hors29fichiers exclus.",
+      "Les103hunks C1 ne sont pas les105hunks R3/R4. Le scoring final aura une autorité distincte et les lecturesdelta fraîches.",
+      "Baseline de suppressions absente ; aucune suppression appliquée.",
+      "FULL unique : huit échecs legacy persistent ; aucun GREEN global, authentification fournisseur ou runtime157 attesté."
+    ]
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 0,
+    "total": 2,
+    "by_category": {
+      "reliability": 1,
+      "performance": 1
+    }
+  },
+  "findings": [
+    {
+      "id": "REL-001",
+      "category": "reliability",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "line": 39,
+      "title": "Un fait périmé ne remplace pas l’ancien rejet de la même fenêtre",
+      "description": "Le record supprime d’abord les anciennes fenêtres déjà périmées. Si le nouveau fait de la même clé a une heure de retour passée, il revient sans retirer une ancienne fenêtre encore future. La lecture quota conserve alors cet ancien rejet et peut refuser ou substituer une cible à tort, malgré le nouveau fait reçu. Lecture du snapshot initial ; le correctif ROOT annoncé après cette lecture sera validé seulement au scoring frais.",
+      "evidence": "        if fact.resets_at.is_some_and(|at| at <= observed_at) {\n            return;\n        }",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Séquence causale non exécutée par cet agent : record(\"claude\", fenêtre five_hour rejetée avec resets_at=500, observed_at=90), puis record de la même fenêtre avec resets_at=100, observed_at=110. La purge conserve l’ancien500 ; le return39 ne le remplace pas. quota(\"claude\",110) reste exhausted=true avec retour500.",
+      "impact": "Refus provider_quota_exhausted erroné, ou remplacement explicite induit par une ancienne limite ; aucun gain de droits ou effet de contrôle supplémentaire démontré.",
+      "path_type": "hot",
+      "remediation": "Retirer windows.remove(&fact.window) dans le bras du nouveau fait périmé, avant return ; garder la purge des autres fenêtres, la borne8 et l’ordre des règles. Ce correctif est désormais annoncé appliqué par ROOT, hors captureC1.",
+      "remediation_code": "if fact.resets_at.is_some_and(|at| at <= observed_at) {\n    windows.remove(&fact.window);\n    return;\n}",
+      "verification": "Étendre uniquement native157_limits_fenetre_perimee (T004) avec une ancienne limite future et un nouveau fait périmé de la même clé ; quota doit devenir None pour cette fenêtre. ROOT annonce un RED0PASS/1FAIL puis correctif ; GREEN en cours au dernier message. Aucun run ici, aucun scénario nommé neuf.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "fingerprint": "c6aefc300085",
+      "status": "fixed",
+      "fixed_at": "2026-10-12T08:27:06.675248+00:00",
+      "fixed_at_basis": "Timestamp of final auditor confirmation aggregation; not claimed correction execution time",
+      "resolution_confirmation": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-scoring/findings_tests.json"
+    },
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "line": 345,
+      "title": "Complexité absente sur pin_delegation_model devenu visible au crate",
+      "description": "La visibilité pub(crate) rend cette méthode accessible au résolveur partagé du catalogue. Elle parcourt et copie les arguments puis valide les capacités, sans annotation de complexité dans le snapshot initial. Le module04 exige cette annotation pour une fonction publique non triviale. ROOT a depuis ajouté une annotation ; la vérification de résolution appartient au cycle-scoring.",
+      "evidence": "    pub(crate) fn pin_delegation_model(mut self,agent_type:&str,model:&str,effort:Option<&str>)->Result<Self,String> {\n        let definition = self\n            .agents\n            .get_mut(agent_type)\n            .ok_or(\"provider_unavailable\")?;\n        let mut args = Vec::new();\n        let mut index = 0;",
+      "exploitability": "N/A",
+      "impact": "Dette documentaire du coût de parcours et de copie. Aucune régression de latence démontrée.",
+      "path_type": "hot",
+      "remediation": "Ajouter une annotation qui distingue recherche du type et volume des arguments copiés ; aucune modification du comportement. ROOT a fourni cette correction documentaire après lecture.",
+      "verification": "Relecture de la signature et du parcours352–420 puis comparaison avec la version annotée au scoring ; aucun nouveau test.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "fingerprint": "dec2c28bab3d",
+      "recommendation_metric": "Présence et exactitude de l’annotation ; aucun gain de runtime revendiqué.",
+      "expected_gain": "Lisibilité du coût, pas de réduction mesurée.",
+      "rollback": "Retirer seulement le commentaire en cas d’annotation incorrecte.",
+      "cycle1_status": "observed_on_initial_snapshot_root_doc_fix_pending_scoring",
+      "status": "fixed",
+      "fixed_at": "2026-10-12T08:27:06.675248+00:00",
+      "fixed_at_basis": "Timestamp of final auditor confirmation aggregation; not claimed correction execution time",
+      "resolution_confirmation": "/Users/moi/.cache/bridget-audit157-20261012-r1/cycle-scoring/findings_complexite.json"
+    }
+  ],
+  "suppressed": [],
+  "positive_findings": [
+    "crates/bridget-daemon/src/provider_limits.rs:30 — record/quota parcourent au plus huit fenêtres par type ; purge en écriture et éviction déterministe à la neuvième.",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs:1130 — La recherche de repli s’arrête au premier candidat recevable ; demande initiale plus trois replis maximum. Le contrôle quadratique de doublons porte sur trois noms maximum.",
+    "crates/bridget-daemon/src/native_permissions.rs:464 — Le lecteur partagé conserve des lectures uniquement dans la fermeture locale. Trois postures utilisent les branches communes, sans cache durable de droits.",
+    "Diff lifecycle.rs2076–2196 : retrait des contrôles inline et réemploi du préflight commun ; aucun verdict miroir ajouté.",
+    "native_permissions.rs457–543 et diff2329–2387 : les branches de politique restent communes entre l’entrée fraîche et le lecteurR8.",
+    "Constructeurs fallback vide/substitutionNone : raccords de compatibilité ; validations MCP/daemon : deux frontières de confiance, pas de nouvelle factorisation imposée.",
+    "provider_limits.rs27–89 : types de faits existants, huit fenêtres par type, aucune table ; consommateurs daemon7085/verdict977/catalogue1473 relus.",
+    "reuse-audit.md121–123 justifie les wrappersR8/SC007 et les trois raccords privés de tests ayant plusieurs consommateurs réels.",
+    "native_delegation.rs1130–1225 et test4294–4431 : quatre candidats au plus ; même candidat/digest passé aux trois étapes, pas de nouvel outil/API de test.",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs:916 — Catalogue : un résolveur local par entrée réemploie préflight et lectures de politique pour trois postures ; admission crée une fermeture fraîche.",
+    "specs/157-catalogue-quotas/validation/mesure-catalogue.json:1 — Le reçu privé SC007 établit médiane23.623ms/p95 25.244ms et ratios0.588/0.591 sur cinquante appels, sans conclusion de production.",
+    "crates/bridget-daemon/src/daemon.rs:7134 — Le raccord quota écrit un fait en mémoire après la mise à jour de Presence ; aucun appel fournisseur ni I/O ajouté à cette écriture.",
+    "lifecycle.rs102–133 centralise les refus typés et propage build_environment ; consommateurs réels245/371 relus.",
+    "native_delegation.rs1056–1062 garde le canon/rejeu avant les gardes mutables ;1306–1366 persiste request effective/substitution avec le canon original.",
+    "protocol.rs2106–2114 ferme FallbackTarget ;delegation.rs190–192 conserve le défautNone des anciens payloads.",
+    "native_delegation1025–1032 et1146–1189 : listefallback bornée, ordre explicite, demande canonique distincte de cible effective ; aucun droit fourni par fallback.",
+    "native_permissions472–540 : validation parent, mapping fermé et réduction discovery conservés ; absence de source/confinement ferme le verdict.",
+    "lifecycle112–127 : capacités/observation/facturation/protocole/env/binaire contrôlés avant réservation ; erreurs propagées.",
+    "provider_limits97–289 : source réelle de limites, dates/bornes explicites, statutCodex global distinct des fenêtres et éviction lexicale ; limite constatéeREL-001 conservée.",
+    "lifecycle769–869 : binaires réels privés/absents, facturation/env/protocole, zéro réservation après refus et définition épinglée en reprise.",
+    "MCP334–409 et quota630–678 : socket privée réelle, refus de formes avant connexion, absencefallback byte-identique et détailquota transmis."
+  ],
+  "roadmap": {
+    "immediate": [],
+    "short_term": [],
+    "medium_term": [],
+    "long_term": []
+  },
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/audits/baseline.json",
+    "exists": false,
+    "read_only": true
+  }
+}

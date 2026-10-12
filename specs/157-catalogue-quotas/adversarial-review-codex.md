@@ -76,3 +76,17 @@ Résilience visé : reste à 4 (note de 152), le 5 est reporté à la 160.
 - Le nom `agent_type` des présences pour les trois sources de quota (T013).
 - Le coût du catalogue avec le 3e calcul de politique (T001, T012).
 - Pas de ronde 3 de contre-revue sur les artefacts réduits.
+
+## Revue157-r1 préparatoire du 2026-10-12
+
+Verdict reçu : APPROVE_WITH_CHANGES. M1 trois passes sans cible propagée,
+M2 gardes workspace hors verdict et M3 détail perdu dans Err ont été vérifiés
+sur MAIN c24f6e3a. L’affirmation du reviewer «155 fusionnée» est corrigée :
+T000155 seul est livré, pas la feature155. Les propositions sont documentaires,
+à appliquer au GO157 après155/156, sans nouveau type de refus ou scénario.
+Choix retenus : candidat épinglé, Commit sans resélection, gardes d’options,
+code:JSON via failure, information quota non bloquante, éviction9 déterministe,
+unknown seul non probant et SC007. Aucun Analyze ou code157 frais validé.
+Le reviewer n’a pas relu Analyze/reuse/quickstart/checklist ni le code155/156.
+La proposition optionnelle discovery sans cwd n’est pas adoptée comme garantie
+avant revalidation du contexte : cwd reste requis/autorisé à l’admission.

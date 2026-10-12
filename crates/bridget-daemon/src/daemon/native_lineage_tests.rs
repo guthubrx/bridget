@@ -39,6 +39,7 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
 /// que journal_directory accepte de résoudre sessions/<child>.
 fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::Task {
     crate::delegation::Task {
+        substitution: None,
         task_id: task_id.into(),
         root_owner_agent_id: String::new(),
         parent_task_id: None,
@@ -50,6 +51,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         origin_owner_instance: format!("inst-{owner}"),
         parent_execution_id: None,
         request: bridget_transport::protocol::NativeDelegationRequest::Delegate {
+            fallback: Vec::new(),
             request_id: format!("req-{task_id}"),
             agent_type: "fixture".into(),
             model: "fixture-model".into(),

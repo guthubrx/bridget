@@ -1,18 +1,23 @@
 # Vérification rapide - Session157
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas`.
 Aucun test n'appelle un vrai fournisseur. Les faits de quota sont synthétiques.
 
 ## Environnement de test (obligatoire)
 
 ```sh
 umask 077
-R=$(mktemp -d /tmp/b.XXXX); mkdir -m 700 $R/ns
-env -i HOME=$HOME TMPDIR=$R BRIDGET_HOME=$R/ns \
-  PATH=~/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin \
-  perl -e 'alarm 1800; exec @ARGV' -- \
-  cargo test -p bridget-daemon --features test-support <filtre> -- --test-threads=4
+spec157_root=$(mktemp -d /private/tmp/b.XXXXXX)
+mkdir -m700 "$spec157_root/ns" "$spec157_root/home" "$spec157_root/tmp"
+env -i HOME="$spec157_root/home" TMPDIR="$spec157_root/tmp" \
+  BRIDGET_HOME="$spec157_root/ns" BRIDGET_SOCKET="$spec157_root/ns/bridget.sock" \
+  CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup \
+  PATH=/opt/homebrew/anaconda3/bin:/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+  CARGO_BUILD_JOBS=2 BRIDGET_BUILD_CACHE_GIB=40 \
+  CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target \
+  /usr/bin/nice -n10 python3 scripts/build.py cargo test --locked --offline \
+  -p bridget-daemon --features test-support <filtre> -- --test-threads=2
 ```
 
 Suite complète avant clôture : même environnement,
@@ -29,3 +34,6 @@ Suite complète avant clôture : même environnement,
 7. Mesure du catalogue : test ignoré par défaut `native157_catalogue_latence`
    (`-- --ignored --nocapture`), 10 fournisseurs de test, valeurs consignées dans
    `specs/157-catalogue-quotas/validation/`.
+
+Une seule commande Cargo à la fois. FULL unique à T025 ; reprises ciblées après
+correction. Ne pas lancer une deuxième suite complète pour les mêmes sources.

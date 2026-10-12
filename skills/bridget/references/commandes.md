@@ -1,7 +1,7 @@
-# Commandes Bridget et accès 094–156
+# Commandes Bridget et accès 094–157
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
-réponse liée de base. Elle décrit les contrats jusqu’à156 ; elle ne prouve
+réponse liée de base. Elle décrit les contrats jusqu’à157 ; elle ne prouve
 ni que le binaire installé correspond à cette version, ni qu'un serveur MCP déjà
 ouvert a rechargé son catalogue.
 
@@ -157,6 +157,51 @@ le tour continue. L’ancien comportement reste chargé dans un ancien wrapper
 jusqu’à sa relance. Aucun cancel/reorder/promote de file n’est ajouté en156.
 Le cadre ADR011/027 ne couvre pas un processus hostile du même compte qui forge
 Attach ou lit les preuves privées. La provenance UI/système doit être attestée.
+
+## Catalogue et remplacement157
+
+Le catalogue garde ses clés existantes. Les booléens discovery/inherit/development
+viennent du verdict commun. Ajouts d’entrée : can_run, constraints[{code,message}],
+quota. Racine : checks={binary:true,quota:"observed",auth:false},
+verdict_context={cwd:racine attestée ou null,fact_scope:"session"},
+features={fallback:true,fallback_max:3}. Vérifier la version réellement chargée.
+Aucun appel fournisseur ni contrôle d’authentification. La garantie vise les
+codes de famille verdict à parent/posture/fait de session/cwd/état égaux.
+SameProject sans racine rend catalogue faux/cwd:null ; une admission autorisée
+avec un dossier concret reste possible et conserve ses propres gardes.
+
+Quota vaut null sans fait. Sinon :windows[{window,used_percent,resets_at,
+exhausted}], exhausted, limit_reached, resets_at, observed_at. Inconnus : null.
+Épuisement par fenêtre seulement, retour futur et rejected Claude ou >=100 %
+utilisé toute source. Un statut global Codex ne nomme pas de fenêtre ; la seule
+contrainte admise si can_run est l’information provider_limit_reached_window_unknown.
+Mémoire volatile, huit fenêtres/type, survit à la présence ; pas de quota partagé
+entre types du même compte. Faits périmés ignorés, aucun horaire inventé.
+
+bridget_delegate ajoute seulement fallback facultatif : 1 à 3 objets fermés
+{agent_type,model,effort?}, distincts et différents de la cible. Ordre conservé.
+La cible initiale ne déclenche remplacement que pour command_missing,
+billing_guard, env_unfit, unsupported_capability, negotiation_failed,
+permission_source_unavailable, permission_mapping_unavailable,
+provider_confinement_unavailable ou provider_quota_exhausted. model_unavailable,
+effort_unavailable, settings_revision_changed, droits du parent et gardes
+workspace154/child_requests155/reviewer ne sont pas remplaçables pour cette cible.
+Tout refus d’un candidat explicite va dans tried avant le candidat suivant.
+
+Ordre par cible : type/modèle/effort, préflight, politique, options154/155, quota.
+Substitution={requested,selected,reason,tried}, ou null, est rendue par delegate,
+status et rejeu. La cible effective est persistée dans request ; canonical garde
+l’appel original. Le même request_id ne recalcule pas la sélection. En worktree,
+Probe choisit une définition épinglée ; Reserve/Commit la gardent. Commit refuse
+sans resélection si ses gardes changent ; diagnostics154/options conservés.
+
+command_missing/billing_guard/env_unfit/unsupported_capability sont refusés plus
+tôt, avant tâche. provider_quota_exhausted expose detail.resets_at ;
+fallback_exhausted expose detail.tried. Ces deux refus ne créent pas de tâche
+et gardent la clé libre. Le MCP rend code puis JSON de detail. Sans fallback,
+pas de remplacement et octets canoniques anciens. Aucune CLI ni outil nouveau,
+bascule en mission ou attente quota157 ; reprise reportée160. Ne pas modifier
+permissions, reviewer ou liste de rejeu pour contourner un refus.
 
 ## Catalogue MCP Bridget fermé
 

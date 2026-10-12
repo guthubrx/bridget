@@ -16,6 +16,34 @@ envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
 ## Trouver puis envoyer
 
+### Lire le verdict avant de déléguer (157)
+
+Le catalogue chargé ajoute can_run, constraints et quota par fournisseur ;
+checks:{binary:true,quota:"observed",auth:false}, verdict_context:{cwd ou null,
+fact_scope:"session"} et features:{fallback:true,fallback_max:3} à la racine.
+Il ne vérifie pas l’authentification et n’appelle aucun fournisseur. La garantie
+catalogue/admission vise la famille verdict, au même parent/posture, fait de
+session, cwd et état. Si la politique SameProject n’a pas de racine, cwd:null et
+catalogue faux n’interdisent pas une admission autorisée dans un projet concret.
+Les autres gardes de l’appel continuent de s’appliquer.
+
+Quota est observé, jamais deviné : retour futur et rejected Claude ou >=100 %
+utilisé par fenêtre. Le statut Codex global peut être atteint sans fenêtre
+épuisée ; la contrainte provider_limit_reached_window_unknown reste informative.
+Sans fait : null. Mémoire de huit fenêtres/type, survivant à la présence mais
+volatile au redémarrage. Les horaires passés n’interdisent pas l’admission.
+
+Fournir fallback seulement pour autoriser explicitement 1 à 3 alternatives
+{agent_type,model,effort?}, sans doublon/cible identique/entrée vide. La première
+valide est choisie sans gain de droits. Modèle/effort, droits du parent,
+reviewer155 et incompatibilités workspace154/child_requests155 de la cible
+initiale ne sont pas contournés. Probe épingle une cible ; Commit la revalide
+sans resélection. Substitution durable rend requested/selected/reason/tried ;
+request effectif et canonical original restent distincts. Un rejeu garde la
+liste et la substitution exactes. Aucune bascule après admission ou reprise
+quota157 ; report160. La référence des commandes précise les motifs fermés,
+refus précoces, detail.resets_at/detail.tried et la limite auth:false.
+
 ### Déléguer une nouvelle mission
 
 Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts

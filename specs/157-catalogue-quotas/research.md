@@ -25,10 +25,12 @@ déplace.
   fournit. C'est l'hypothèse la plus simple et elle explique le constat.
 - **Deux causes possibles pour le même code** (contre-revue 157, objection 7) :
   (a) `launch_context` absent du fait Claude (`:254`) ; (b) `launch_context`
-  présent mais `recheck_context` (`:229`) ou `claude_inputs_without_rules`
-  (`:255`, fermeture `unavailable` définie en `:185`) échoue parce que la source
-  est illisible, a changé ou contient des règles. Le code rendu est le même.
-  `settings_revision_changed` est aussi possible (`:12`).
+  présent mais `claude_inputs_without_rules` appelle `read_json_source` sur une
+  source illisible lors du passage Claude vers Codex. Le refus est
+  `permission_source_unavailable`. Une source contenant des règles peut aussi
+  rendre ce code. La relecture `recheck_context` de Claude vers Claude produit
+  `settings_revision_changed` si la source change ou devient illisible. Ce
+  dernier code reste distinct et non remplaçable.
 - **Conclusion** : dans les deux cas, le catalogue ne passe pas par la même
   fonction que l'admission. `inherit_refusal` contenait déjà le bon code. La
   correction est un verdict unique (R2), pas un patch de `discovery`. Le
@@ -133,9 +135,12 @@ déplace.
 - `failure(code)` rend `{"status":"refused","code":...}` (`:34`). Le pont MCP
   garde seulement `result["code"]` (`delegation_mcp.rs:86-92`). Le détail
   (heure de retour, essais) serait perdu.
-- **Décision** : `failure_with_detail(code, detail)` et message MCP
-  `code` suivi du JSON de `detail` quand il existe. Le détail n'existe que pour
-  `provider_quota_exhausted` et `fallback_exhausted`. Test de contrat.
+- **Décision révisée** : garder Err(String) enrichi code:JSON (message/detail).
+  Le failure existant décode ce porteur ; le catalogue lit le diagnostic sans
+  recalculer les droits, le pont rend code puis detail. Les listes utilisent
+  le code canonique. Aucun type/helper supplémentaire. Codes nus, brief et
+  workspace compatibles ; quota/fallback restent hors record_refusal durable.
+  Les tests de contrat T016/T017 déjà prévus portent ces formes.
 
 ## R6 - Remplacement
 
@@ -192,7 +197,7 @@ déplace.
   Le catalogue l'appelle déjà 2 fois par fournisseur. Le verdict `discovery` en
   ajoute une troisième.
 - **Décision** : mesurer avant (T001) et après (T012) sur 10 fournisseurs de test.
-  Si le rapport dépasse 2 (SC-008), calculer chaque politique une seule fois par
+  Si le rapport dépasse 2 (SC-007), calculer chaque politique une seule fois par
   fournisseur et dériver les trois postures d'un même contexte capturé. Pas
   d'optimisation avant la mesure.
 

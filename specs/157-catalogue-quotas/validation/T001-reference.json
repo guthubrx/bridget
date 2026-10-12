@@ -1,0 +1,8 @@
+{
+  "median_ms": 40.2010625,
+  "p95_ms": 42.698417,
+  "test_sha256": "d3d183cfa0d0ef07ea900194bbe38b2bbf96145521ad02f7d94e13099b93c373",
+  "baseline_pass": 177,
+  "ignored": 1,
+  "production_unchanged": true
+}

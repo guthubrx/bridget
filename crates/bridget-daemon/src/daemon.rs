@@ -982,6 +982,8 @@ impl Drop for FixtureRoot {
 }
 
 struct DaemonState {
+    /// Quotas observés, volatils et bornés par type de fournisseur.
+    provider_limits: crate::provider_limits::ProviderLimits,
     /// Suivis de consultation : aucune observation, mission ou donnée durable.
     human_thread_watches: HashMap<String, HumanThreadWatch>,
     lineage_watches: HashMap<String, native_lineage::Watch>,
@@ -3443,6 +3445,7 @@ impl DaemonState {
             unix_now_secs().max(0) as u64,
         )?;
         Ok(DaemonState {
+            provider_limits: Default::default(),
             human_thread_watches: HashMap::new(),
             lineage_watches: HashMap::new(),
             lineage_journals: HashMap::new(),
@@ -7077,6 +7080,8 @@ fn handle_served_model(agent: &str, model: String, state: &mut DaemonState) -> D
 /// Enregistre un fait de limite fournisseur sans changer l'état de l'agent.
 /// Les champs sont validés comme les valeurs runtime : ils resteront affichés
 /// dans `who`, donc aucun contrôle ni valeur démesurée ne traverse la frontière.
+/// Mémoire partagée : coût ajouté O(log t+B), t types du registre, B chaînes copiées,
+/// avec 8 fenêtres au plus ; aucune I/O et aucun appel fournisseur.
 fn handle_rate_limit(
     agent: &str,
     window: String,
@@ -7117,17 +7122,20 @@ fn handle_rate_limit(
         };
     };
     // Upsert par fenêtre : un fait five_hour ne doit pas effacer seven_day.
-    presence.rate_limits.insert(
-        window.clone(),
-        bridget_transport::protocol::RateLimitFact {
-            window,
-            status,
-            resets_at,
-            used_percent,
-        },
-    );
+    let agent_type = presence.agent_type.clone();
+    let fact = bridget_transport::protocol::RateLimitFact {
+        window: window.clone(),
+        status,
+        resets_at,
+        used_percent,
+    };
+    presence.rate_limits.insert(window, fact.clone());
     presence.touch_capacity();
     log::debug!("limite de '{}' mise à jour par {}", presence.name, source);
+    // Dernier usage de presence ci-dessus : la mémoire partagée ne garde pas son emprunt.
+    state
+        .provider_limits
+        .record(&agent_type, fact, source, unix_timestamp());
     DaemonToWrapper::Ack {
         project_warnings: Vec::new(),
         id: "rate-limit".to_string(),

@@ -415,14 +415,14 @@ fn native154_partage_discovery_termine_et_statut_compatibles150() {
     let task = task154(&fixture, &first);
     assert!(first.get("workspace").is_none());
     assert!(first.get("shared_writers").is_none());
-    // Oracle complet 150 : toutes ses clés, sans projection qui masquerait une
+    // Oracle complet 150, étendu par 157 : toutes ses clés, sans projection qui masquerait une
     // différence de contrat. Les valeurs variables viennent de la tâche réelle.
     let expected = json!({"version":1,"task_id":task.task_id,"status":"queued", "child_agent_id":task.child,
         "message_id":task.mission,"agent_type":"native-test","model":"custom/model","effort":"high", "cwd":task.cwd,
         "posture":"development","mission_deadline_at":null,"round":1,"idle_deadline_at":null,"continuable":false,
         "result":null,"error":null,"work_state":"working","summary":null,"summary_truncated":false,"result_bytes":null,
-        "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0,"pending_requests":[],"recent_requests":[]});
-    assert_eq!(first, expected, "contrat courant 150 complété par 152/153");
+        "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0,"pending_requests":[],"recent_requests":[],"substitution":null});
+    assert_eq!(first, expected, "contrat courant 150 complété par 152/153/157");
     assert_eq!(serde_json::to_vec(&first).unwrap(), serde_json::to_vec(&expected).unwrap());
     let mut expected_status = expected.clone();
     expected_status["status"] = json!(task.state);
@@ -472,9 +472,17 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
     assert_eq!(plan.listed_paths.len(), 31);
     let request = request154(&fixture.root, "last32", Some(json!({"strategy":"worktree","branch":"bridget/last154"})));
     let id = Uuid::new_v4().to_string();
+    let (selected, raw, substitution) = {
+        let mut st = fixture.state.lock().unwrap();
+        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Probe).unwrap() {
+            WorkspaceAdmission::Probe(_, selected, raw, substitution) => (selected, raw, substitution),
+            _ => panic!("sonde réelle avant réservation attendue"),
+        }
+    };
     let (reserved, claim) = {
         let mut st = fixture.state.lock().unwrap();
-        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Reserve { plan:&plan, task_id:&id }).unwrap() {
+        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Reserve { plan:&plan, task_id:&id,
+                selection:(&selected, &raw, substitution.as_ref()) }).unwrap() {
             WorkspaceAdmission::Reserved { task, claim } => (task, claim),
             _ => panic!("réservation de la 32e place attendue"),
         }
@@ -486,7 +494,8 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
     let record = crate::workspace_git::create(&plan, &reserved.task_id).unwrap();
     let view = {
         let mut st = fixture.state.lock().unwrap();
-        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Commit { plan:&plan, task_id:&id, record:&record }).unwrap() {
+        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Commit { plan:&plan, task_id:&id, record:&record,
+                selection:(&selected, &raw, substitution.as_ref()) }).unwrap() {
             WorkspaceAdmission::View(view) => view,
             _ => panic!("la propre réservation ne se compte pas deux fois"),
         }
@@ -529,9 +538,17 @@ fn native154_creation_reservation_liberee_sur_panique() {
     let plan = crate::workspace_git::preflight(&fixture.root, None, None).unwrap();
     let request = request154(&fixture.root, "panic-key", Some(json!({"strategy":"worktree"})));
     let id = Uuid::new_v4().to_string();
+    let (selected, raw, substitution) = {
+        let mut st = fixture.state.lock().unwrap();
+        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Probe).unwrap() {
+            WorkspaceAdmission::Probe(_, selected, raw, substitution) => (selected, raw, substitution),
+            _ => panic!("sonde réelle avant réservation attendue"),
+        }
+    };
     let claim = {
         let mut st = fixture.state.lock().unwrap();
-        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Reserve { plan:&plan, task_id:&id }).unwrap() {
+        match admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Reserve { plan:&plan, task_id:&id,
+                selection:(&selected, &raw, substitution.as_ref()) }).unwrap() {
             WorkspaceAdmission::Reserved { claim, .. } => claim,
             _ => panic!("réservation attendue"),
         }

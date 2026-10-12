@@ -1,0 +1,432 @@
+{
+  "state": "SOURCE_READINESS_REVALIDATED_TARGETED_ONLY",
+  "date": "2026-10-12T06:44:01.921408+00:00",
+  "source_base": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+  "delivered_metadata_base": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+  "head_at_start": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+  "head_at_end": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+  "scope": "Revalidationréemploi157/M1M2M3 sur155156livrées, pasimplémentation niAnalyze157.",
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "51905c9443f3a47ede4799b176827039192ab20c583f6cf2b2fb9d1e40ccf99b",
+      "ranges": [
+        [
+          60,
+          106
+        ],
+        [
+          153,
+          180
+        ],
+        [
+          284,
+          331
+        ],
+        [
+          425,
+          459
+        ],
+        [
+          522,
+          590
+        ],
+        [
+          590,
+          646
+        ],
+        [
+          646,
+          718
+        ],
+        [
+          817,
+          859
+        ],
+        [
+          859,
+          1088
+        ],
+        [
+          1080,
+          1143
+        ],
+        [
+          1140,
+          1180
+        ],
+        [
+          1180,
+          1249
+        ],
+        [
+          1250,
+          1325
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs",
+      "sha256": "a6a2c2383689a29b398c1833eb5d3bfdd5f32bd48ee16500157fe5efd0f0f985",
+      "ranges": [
+        [
+          145,
+          259
+        ],
+        [
+          330,
+          484
+        ],
+        [
+          530,
+          623
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "01336553b359e82c6231d8ff8aa18575a9f818bd4043f15a040b89384012660a",
+      "ranges": [
+        [
+          636,
+          677
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "4bd59788f4742ab3737d9092bbb996660e198ab36309a8c4ba7b1fb1c4164192",
+      "ranges": [
+        [
+          250,
+          277
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "a11310b737d1ac186309a57f306babe3146ec8af7f57a921bc6adf6b398c3c3c",
+      "ranges": [
+        [
+          840,
+          870
+        ],
+        [
+          7080,
+          7160
+        ],
+        [
+          19230,
+          19250
+        ],
+        [
+          19555,
+          19610
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+      "ranges": [
+        [
+          254,
+          272
+        ],
+        [
+          319,
+          351
+        ],
+        [
+          409,
+          440
+        ],
+        [
+          456,
+          545
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/protocol.rs",
+      "sha256": "b360cf27dd54fbce93e08de4075e2925e4524ae111f16b39edbc7a352b838bc1",
+      "ranges": [
+        [
+          2095,
+          2155
+        ],
+        [
+          3710,
+          3755
+        ],
+        [
+          5065,
+          5087
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/registry.rs",
+      "sha256": "ab898f159b54b3001fd95904e23570aae472d8e867c46fe9f1fc4124c9520d91",
+      "ranges": [
+        [
+          314,
+          374
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lib.rs",
+      "sha256": "674cb14f46c88c91102aab6a6e74f9b41916c5ae22438286fb248bf6f5886aad",
+      "ranges": [
+        [
+          1,
+          66
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/service_limits.rs",
+      "sha256": "d62aee2c357bacf6e4d6bf10b4c75e5ca8b33d9a408833ac3f38c02b9e86f394",
+      "ranges": [
+        [
+          1,
+          49
+        ]
+      ],
+      "matches_source_commit": "cf498755dc871b51eb8c0add5f8a882d67651d2a",
+      "matches_metadata_commit": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "read_at_utc": "2026-10-12T06:44:01.921408+00:00",
+      "reading": "plages ciblées fraîches, pas fichier intégral sauf lib/service_limits"
+    }
+  ],
+  "context_documents": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/reuse-audit.md",
+      "sha256": "672aa107c157a5650ff4e6c79385c58b909085a4edf778b52bf0d1c715a7b290",
+      "ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "semantic_source": false,
+      "limit": "GatePASS2026-10-11 historique ; pas recertifié11/11 par cette lecture."
+    }
+  ],
+  "historical_inputs_sha256": {
+    "review.json": "1962fbc2b5097e55bd6d4ff3cdbc823768824d2f9434469a412bad73aff37178",
+    "verification-review.json": "9b9b5b7412c0a72055a741b3016090716329a4c5ffb3e94b10bdf9e0f95c9144",
+    "candidate-docs.patch": "cd6dd0c5a36aa60fcb2bddded3eaa67c41b2a9394e2326e9682904a79be730cb",
+    "reponse-review.md": "eab0eda71bce1a206901bd3524d0b26659ee985680cacfb937b6a977749b5208"
+  },
+  "candidate_root_documents_equal_pre_candidate_at_read": {
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/spec.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/plan.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/tasks.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/research.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/data-model.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/contracts/delegation157.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/adversarial-review-codex.md": true
+  },
+  "candidate_status": "ROOT confirme applicationdupatchhistorique dansWT157aprèslivraison156 ; le présentlecteur nechange ni relit sesdocsactualisés.",
+  "objections": [
+    {
+      "id": "M1",
+      "state": "CONFIRMED_REQUIREMENT_FOR157_NOT_BUG155156",
+      "proofs": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:655",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:668",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:681",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:817",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:822",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:866",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1069",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1166"
+      ],
+      "observed": "Probe(PathBuf) ne transporte pas de cible/définition ; les trois appels relisent request original. Commit refait child_policy dans le childcwd réel puis for_inherited_delegation. Réservation contient déjà Task.definition/request ; canonical stocké séparément au insert1214.",
+      "minimal_arbitration": "Conserver sélection uniqueProbe et cible/définition épinglées versReserve/Commit comme candidatT018 reçu. Commit revalide ce candidat, son contexte parent et le cwd enfant réel, refuse sans nouvelle sélection. Réemployer WorkspaceAdmission/Task et la cible résolueT008 déjà prévue ; aucun nouveau mécanisme de sélection ou test autonome.",
+      "test_boundary": "Extension du scénario de stabilité déjà prévuT017/T018 ; aucun test créé/exécuté ici."
+    },
+    {
+      "id": "M2",
+      "state": "CONFIRMED_WITH155_GUARDS_FRESH",
+      "proofs": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:899",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:948",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:959",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:972",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:991",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1002",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1038",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1057",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1299",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1312"
+      ],
+      "observed": "forward exige protocole enfantcodex_app_server (948–956) ET parentCodex validé avec approvals_reviewer=user (959–970). Workspace exigeDevelopment et interdit héritageClaude→Claude worktree (1038–1044). Commit garde chemins/limites et recalculepolitique1061–1075. keep_alive/brief/délai sont validés avant le choix/rejeu ; Task garde child_requests et snapshot.",
+      "minimal_arbitration": "Conserver contraintescible workspace/child_requests dans verdict du candidat aprèspolitique et avantquota, nonremplaçables pourcible demandée ; candidat listé incompatible peut être noté tried. Séparer ce cas du refusparent : parentattestation/reviewer/cwd/révocation/projet indisponible ne devient jamais un tried substituable. Les options immuables ne sont pas réécrites par le fallback.",
+      "catalogue_limit": "child_requests_supported (1312) annonce seulement le protocole cible, pas éligibilitéparent ni admission. Worktree/inherit actuel ne constitue pas le futur can_run157 partagé."
+    },
+    {
+      "id": "M3",
+      "state": "CONFIRMED_PORTER_MISSING",
+      "proofs": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:74",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:579",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:619",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:687",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1228",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation_mcp.rs:259",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation.rs:644",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:478",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:504",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:319",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:340",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:419"
+      ],
+      "observed": "failure gère code nu, brief_invalid:message et workspace_*:message ; aucun detailJSON. MCP ne conserve que result.code. record_refusal mémorise uniquementcwd/model/effort/type. Commit requalifie déjà ses erreurs enworkspace_path_unsafe ouworkspace_create_failed avec chemin/branche.",
+      "minimal_arbitration": "Le code:JSON viaErr(String) accepté reste minimal : étendre failure seulement, conserver anciennesformes, message/detail et comparaison surcode canonique ; pontT016 renddetail sans helper/type neuf. Ne pas perdre wrapperCommit154/chemin/branche. quota/fallback restent horsliste record_refusal.",
+      "cause_limit": "Absence launch_context produitpermission_source_unavailable478/504 ; lecture/config/CLI indisponible peut donner même code via capture_context319–351. recheck_context414–429 retournesettings_revision_changed : ne pas réétiqueter ce code. Diagnostic au point de refus, sans recalcul des droits. Aucun incident/runtimeR1-7 prouvé."
+    }
+  ],
+  "reuse_decisions": [
+    {
+      "item": "launch_preflight",
+      "decision": "EXTRACTION_EXISTANTE_A_REALISER",
+      "proof": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:209",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:218",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:341",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:357",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:359",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:370",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:387",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lifecycle.rs:400"
+      ],
+      "limit": "Symbolelaunch_preflight absent. Les contrôles existent dans deuxchemins ; build_environment ignoré par ifletOk220 avantréservation, propagé387 après. Réemploi/extraction prévueT005 ; pas nouvelle sondeauth/fournisseur."
+    },
+    {
+      "item": "type_model_effort_policy",
+      "decision": "REUTILISER_REGISTRY_CHILD_POLICY",
+      "proof": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/registry.rs:314",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/registry.rs:335",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:456",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:524"
+      ],
+      "limit": "for_inherited valide modèle/effort APRÈS child_policy au caller1002–1014 actuel ; ordre157type/modèle/effort avantmotifremplaçable reste une exigenceàimplémenter, pas un acquis155156."
+    },
+    {
+      "item": "provider_limits",
+      "decision": "MODULE_PREVU_JUSTIFIE_PAR_ABSENCE_EQUIVALENT",
+      "proof": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:861",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:7080",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:7120",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/protocol.rs:3735",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/protocol.rs:5070",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/lib.rs:1"
+      ],
+      "limit": "rgprovider_limits/launch_preflight sansrésultat danssourcesdaemon/transport etaucunfichierprovider_limits. Presence possèdeBTreeMap fenêtre avecRateLimitFact ; neconserve ni source niobserved_at et disparaîtavecla présence. Les3sourcesfermées déjàexistantes sontréemployables ; les4usages module157 demeurentplanifiés. service_limits traiteRLIMIT_NOFILE, pasquota fournisseur."
+    },
+    {
+      "item": "canonical_request_replay",
+      "decision": "REUTILISER_SEPARATION_EXISTANTE",
+      "proof": [
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:913",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:916",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1166",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1214",
+        "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation.rs:636"
+      ],
+      "limit": "Rejeu avantpause/politique ; requesteffectif futur doit préservercanonicaloriginal etoptionsimmuables. Aucunfallbackimplémenté dansle Delegate actuelT2109–2145."
+    }
+  ],
+  "reference_corrections_only": [
+    {
+      "old": "c24f6e3a/T000155 seul,155156 futures ; statements append commun du candidate-docs.patch",
+      "new": "Lecture des sources155156 cf498755dc871b51eb8c0add5f8a882d67651d2a, identiques à main livré8b5b313694cf05eabfe6a86a970b96f03b015f49. WT157 ROOT créé aprèslivraison156 : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas. Ces anciennes phrases restenthistoriques ; aucune Analyze/code157 frais acquis."
+    },
+    {
+      "old": "Chemins native_/Users… malformés cache/reponse-review.md7/11/15",
+      "new": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs ; M1646–692/817–826/866–879/1069–1075/1166–1170 ; M2899–903/948–970/1038–1044/1304–1316 ; M374–82/577–581/618–620/687–689."
+    },
+    {
+      "old": "child_policy206 ; record_refusal339 ; MCP221 ; RateLimitFact4843 ; handle_rate_limit6600 ; Presence566",
+      "new": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/native_permissions.rs:456–526 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation.rs:636–663 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/delegation_mcp.rs:259–273 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/protocol.rs:5070–5077 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs:7080–7135 /861."
+    },
+    {
+      "old": "reuse-audit.md42–43 PASS ancien et failure_with_detail",
+      "new": "Requalifier legate11/11 historique et sa dated2026-10-11 ; conserver mémoirevolatileprévue avec source/observed_at enplus duRateLimitFact existant ; mettrefailure/code:JSON unique seloncandidateT015, jamais nouveaufailure_with_detail."
+    },
+    {
+      "old": "Gardeschild_requests aprèsfuturelivraison155 / candidatlisté refusé danstried",
+      "new": "Distinguer child_requests_unsupported de cible et child_requests_reviewer_unsupported duparent attesté. Le secondet tousrefusparent restent nonremplaçables pourTOUSlescandidats ; nepasélargirfallback."
+    },
+    {
+      "old": "Cataloguecwd null interprétécommeadmissionDiscovery sanscwd",
+      "new": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs:1319 peutrendrecwd_root=null pourSameProject, maisadmissiondoittoujours canonicaliser/autoriser cwd972–996 ou425–454. Aucunedispensede garde cwd déduite."
+    }
+  ],
+  "source_guard": {
+    "files": 10,
+    "all_match_source_and_metadata_commits": true,
+    "all_reader_hashes_equal_before_after": true,
+    "checked_at_utc": "2026-10-12T06:44:01.921408+00:00"
+  },
+  "execution": {
+    "tests": 0,
+    "cargo": 0,
+    "build": 0,
+    "provider": 0,
+    "services": 0,
+    "git_mutations": 0,
+    "source_doc_edits": 0,
+    "subagents": 0,
+    "new_tools": 0
+  },
+  "limitations": [
+    "Lecturesciblées10sources ; grandsfichiers nonlusentièrement. Gate11/11historique nonrecertifiéglobalement.",
+    "AucunincidentR1-7runtimeprouvé ; politiquesfournisseur,configréelle etlatence nonsondées.",
+    "AucuneAnalyze157/implémentation157/baselineT001latence fraîchevalidée ici. Les26IDs ettestsplanifiés ne sontnimodifiésni exécutés.",
+    "Sourcecf498755 a étérelue ; maindevient8b5metadata pendantlecture, sourceciblée byte-identique auxdeuxcommits.",
+    "Deuxrecherchesinitiales ontvisé descheminsregistry/presence inexistants ; ellesontétérecentrées surregistrydaemon etPresence daemon. Aucunecitationde ceschemins invalides.",
+    "Cachehistoriquecandidates/reviews préservé ;ROOTseulactualiseartefactsprojet etanalyseaprèslivraison156."
+  ]
+}

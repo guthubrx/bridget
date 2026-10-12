@@ -1,0 +1,17 @@
+{
+  "baseline_count": 178,
+  "final_count": 185,
+  "missing": [],
+  "extra_tests": [
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_auto_review_refuse",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_forward_codex",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_forward_non_supporte",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_guardian_subagent_refuse",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_octets_canoniques_inchanges",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_politique_enfant_inchangee",
+    "daemon::native_delegation::native_delegation_permissions149_tests::native155_admission_rejeu_autre_valeur_envelope_mismatch"
+  ],
+  "previous_green_to_red": [],
+  "result": "PASS",
+  "intentional_oracle_migration": "SameProject sans racine : catalogue faux/cwd null selon157, admissions projet concret conserv\u00e9es ; us1-verdict157.md"
+}

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-12T06:44:42.262601+00:00",
+  "task": "T002",
+  "real_incident_fact_found": false,
+  "launch_context_present": null,
+  "conclusion": "scénario de code",
+  "database_mode": "ro,query_only,BEGIN/rollback",
+  "current_native_delegation_count": 0,
+  "incident_refusal_count": 0,
+  "historical_source_receipt_sha256": "7ee88fbc85dd2d92a5b191daebc4c1c906d285cf8956d895e7e10a5f69a6acad",
+  "runtime_namespace_attested_by_activation156_status": "/Users/moi/.cache/bridget-core/bridget.db",
+  "limits": "Zéro ligne dans la base actuelle ne prouve pas l'absence historique du fait. Faits parent volatiles ; aucun autre fait Claude ne confirme cet incident. Aucune valeur de mission, fait ou secret consultée."
+}

@@ -342,7 +342,9 @@ impl AgentRegistry {
         Self{agents:BTreeMap::from([(agent_type.into(),definition)]),source:self.source.clone()}.pin_delegation_model(agent_type,model,effort)
     }
 
-    fn pin_delegation_model(mut self,agent_type:&str,model:&str,effort:Option<&str>)->Result<Self,String> {
+    /// O(log n+B+C) en temps et O(B) en mémoire : n types du registre, B octets
+    /// des arguments/modèle/effort, C coût de validation des capacités déclarées.
+    pub(crate) fn pin_delegation_model(mut self,agent_type:&str,model:&str,effort:Option<&str>)->Result<Self,String> {
         let definition = self
             .agents
             .get_mut(agent_type)

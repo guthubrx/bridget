@@ -1,0 +1,232 @@
+{
+  "module": "06",
+  "scope_sha256": "5350417b65e35111515f03c871be0221a38b57b527d8cda3e7012b7b807b9c6f",
+  "review_kind": "cycle1_fresh",
+  "findings": [
+    {
+      "id": "REL-001",
+      "category": "reliability",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "line": 39,
+      "title": "Un fait périmé ne remplace pas l’ancien rejet de la même fenêtre",
+      "description": "Le record supprime d’abord les anciennes fenêtres déjà périmées. Si le nouveau fait de la même clé a une heure de retour passée, il revient sans retirer une ancienne fenêtre encore future. La lecture quota conserve alors cet ancien rejet et peut refuser ou substituer une cible à tort, malgré le nouveau fait reçu. Lecture du snapshot initial ; le correctif ROOT annoncé après cette lecture sera validé seulement au scoring frais.",
+      "evidence": "        if fact.resets_at.is_some_and(|at| at <= observed_at) {\n            return;\n        }",
+      "exploitability": "CONFIRMED",
+      "exploitation_scenario": "Séquence causale non exécutée par cet agent : record(\"claude\", fenêtre five_hour rejetée avec resets_at=500, observed_at=90), puis record de la même fenêtre avec resets_at=100, observed_at=110. La purge conserve l’ancien500 ; le return39 ne le remplace pas. quota(\"claude\",110) reste exhausted=true avec retour500.",
+      "impact": "Refus provider_quota_exhausted erroné, ou remplacement explicite induit par une ancienne limite ; aucun gain de droits ou effet de contrôle supplémentaire démontré.",
+      "path_type": "hot",
+      "remediation": "Retirer windows.remove(&fact.window) dans le bras du nouveau fait périmé, avant return ; garder la purge des autres fenêtres, la borne8 et l’ordre des règles. Ce correctif est désormais annoncé appliqué par ROOT, hors captureC1.",
+      "remediation_code": "if fact.resets_at.is_some_and(|at| at <= observed_at) {\n    windows.remove(&fact.window);\n    return;\n}",
+      "verification": "Étendre uniquement native157_limits_fenetre_perimee (T004) avec une ancienne limite future et un nouveau fait périmé de la même clé ; quota doit devenir None pour cette fenêtre. ROOT annonce un RED0PASS/1FAIL puis correctif ; GREEN en cours au dernier message. Aucun run ici, aucun scénario nommé neuf.",
+      "effort": "XS",
+      "regression_risk": "LOW"
+    }
+  ],
+  "positive_findings": [
+    "provider_limits97–289 : source réelle de limites, dates/bornes explicites, statutCodex global distinct des fenêtres et éviction lexicale ; limite constatéeREL-001 conservée.",
+    "lifecycle769–869 : binaires réels privés/absents, facturation/env/protocole, zéro réservation après refus et définition épinglée en reprise.",
+    "MCP334–409 et quota630–678 : socket privée réelle, refus de formes avant connexion, absencefallback byte-identique et détailquota transmis."
+  ],
+  "warnings": [
+    "Scope autoritatif29fichiers/16Rust/13docs,103hunks ; validation/implementation/audits exclus du dénominateur.",
+    "Les inventaires et Converge/T026 ne donnent aucun crédit à ces lectures fraîches ciblées.",
+    "Correction ROOT provider_limits commencée après les lectures initiales : les SHA read_manifest désignent la capture C1, pas le fichier corrigé courant. Scoring devra relire une nouvelle capture.",
+    "Aucun test/Cargo/build/scanner/benchmark/service/DB/provider exécuté par cet agent.",
+    "Tests de fixtures et preuves ROOT distingués de modèles réels ; pas de GREEN global après FULL unique.",
+    "Authentification/historique secrets/dépendances anciennes et grandes zones hors plages non auditées globalement.",
+    "Mêmefenêtre future→nouveau faitpérimé non couvert par l’ancien oracle T004 ; constat causal et correction ROOT postérieure, pas une absence de couverture théorique.",
+    "Ni toutes les migrations historiques, ni les grands harnessE2E, ni toutes les branches d’arrêt/reprise n’ont été relus dans cette borne."
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592",
+      "ranges": [
+        [
+          1,
+          289
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": false,
+      "note": "Lecture terminée sur code figé initial avant correction ROOT08:13 ; hash de capture, pas revendication du hash corrigé."
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "ranges": [
+        [
+          99,
+          134
+        ],
+        [
+          239,
+          256
+        ],
+        [
+          360,
+          385
+        ],
+        [
+          765,
+          869
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": "SHA verification end below",
+      "note": "Lecture fraîche des seules plages ; sorties tronquées hors plages non créditées."
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+      "ranges": [
+        [
+          676,
+          724
+        ],
+        [
+          987,
+          1392
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": "SHA verification end below",
+      "note": "Lecture fraîche des seules plages ; sorties tronquées hors plages non créditées."
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+      "ranges": [
+        [
+          4464,
+          4507
+        ],
+        [
+          4682,
+          4792
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": "SHA verification end below",
+      "note": "Lecture fraîche des seules plages ; sorties tronquées hors plages non créditées."
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "ranges": [
+        [
+          315,
+          410
+        ],
+        [
+          630,
+          678
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": "SHA verification end below",
+      "note": "Lecture fraîche des seules plages ; sorties tronquées hors plages non créditées."
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365",
+      "ranges": [
+        [
+          8369,
+          8387
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": "SHA verification end below",
+      "note": "Lecture fraîche des seules plages ; sorties tronquées hors plages non créditées."
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+      "ranges": [
+        [
+          158,
+          213
+        ],
+        [
+          974,
+          978
+        ]
+      ],
+      "read_mode": "fresh_cycle1_snapshot",
+      "read_at_utc": "2026-10-12T08:18:14.187914+00:00",
+      "current_hash_claim": "SHA verification end below",
+      "note": "Lecture fraîche des seules plages ; sorties tronquées hors plages non créditées."
+    }
+  ],
+  "checklists": {
+    "framework": "Rust cargo tests existants détectés par sources cfg(test)/tests ; aucune exécution.",
+    "oracles": "quota/expiry/borne8, préflight erreurs, listefallback/rejeu/substitution, compatibilitéserde et MCP ; plages listées seules.",
+    "reliability": "Probe→Reserve→Commit même sélection ; canonicaloriginal/requêteeffective, clocksquotaobserved et erreurpreflight propagée.",
+    "migration": "Pas de nouvelle tableSQL quota ; champTask.substitution serde(default). Anciennes migrations horsdelta non revues globalement.",
+    "coverage_and_mutation": "non mesurées, aucune proposition d’outil ou nouveau scénario.",
+    "known_issue": "REL-001, T004existante à renforcer parROOT."
+  },
+  "proofs_attribution": {
+    "FULL": "ROOT :2396PASS Cargo/9FAIL/74ignored +3PASS enfants séparés ; huit modes hérités156, oracle154 rejoué1PASS distinct.",
+    "native157": "ROOT :44PASS ; aucun total reconstruit par cet agent.",
+    "Converge": "ROOT CONVERGED passage1,26/26 ; reçu utilisé comme contexte, pas comme lectureaudit.",
+    "correction_post_C1": "ROOT annonce08:13 remove(fact.window), RED0/1 ; GREEN en cours au dernier message. Aucun verdict fixed dans C1."
+  },
+  "execution_metrics": {
+    "tests_executed": 0,
+    "scanners_executed": 0,
+    "coverage_percent": null,
+    "mutation_score": null,
+    "files_read": 7,
+    "lines_read_unique": 1309,
+    "hunks_total": 103,
+    "hunks_fully_read": 18,
+    "hunks_partially_read": 7,
+    "hunk_lines_read": 969,
+    "hunk_lines_total": 3198,
+    "semantic_hunk_line_coverage_percent": 30.3,
+    "whole_files_read": [
+      "crates/bridget-daemon/src/provider_limits.rs"
+    ],
+    "hunk_coverage_not_test_coverage": true
+  },
+  "source_boundary": {
+    "initial_authority_manifest": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/manifest157-final.json",
+    "sha256": "507c530bcb2d42b3b6f992dac7f3afe838e30ab2fc4692b1009e64d896600268",
+    "initial_patch": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/diff-157.patch",
+    "patch_sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+    "initial_scope_hashes_verified_before_read": true,
+    "post_read_current_deltas": [
+      {
+        "file": "crates/bridget-daemon/src/provider_limits.rs",
+        "snapshot_sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592",
+        "current_sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12"
+      },
+      {
+        "file": "crates/bridget-daemon/src/registry.rs",
+        "snapshot_sha256": "27656caa32399b62e41a39edf57f0e2ad7f91bf2a5bcf9cdfdbb9c13e815ccdd",
+        "current_sha256": "a8dd13d2709ef0585c78962cb715bcd79b75092ebac1e856d7d0acee7a0fae24"
+      },
+      {
+        "file": "docs/delegation-native.md",
+        "snapshot_sha256": "2698ae8a7119bebd255dec630687609f425b1885e720775494d8dbb1c559eaa9",
+        "current_sha256": "7db518abe316ce41f4a39ade33391d9054e8e879cbdfebf05dcfa1c42d1f0ccb"
+      },
+      {
+        "file": "specs/157-catalogue-quotas/spec.md",
+        "snapshot_sha256": "85c0aa3bd421452784f73de9ee6c5cae5a9dbeb8827eb31f562c96ec34e50f73",
+        "current_sha256": "67b4fdca7da6de300b139d67a6fa14f025b823bead1e0adaa212c6f9d5df00f7"
+      }
+    ],
+    "root_fix_after_original_reads": true,
+    "claim_current_sources_unchanged": false
+  }
+}

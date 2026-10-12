@@ -453,7 +453,22 @@ fn claude_inputs_without_rules(context:&Value)->Result<bool,String>{
     Ok(true)
 }
 
+/// Admission fraîche : aucun résultat de lecture ne survit à cet appel.
 pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefinition,cwd:&Path,source:&SourceEnvironment,posture:Option<SpawnPosture>)->Result<(Value,SpawnPosture),String>{
+    child_policy_reader(parent,definition,cwd,source)(posture)
+}
+
+/// R8 : un lecteur lié aux mêmes parent/définition/cwd/env pour une seule entrée.
+/// O(B+3P), B octets des sources lus une fois, P politique dérivée par posture.
+/// Chaque posture exécute les branches communes ; un refus inherit ne ferme pas discovery.
+pub(crate) fn child_policy_reader<'a>(
+    parent: &'a ProviderPermissions, definition: &'a AgentDefinition,
+    cwd: &'a Path, source: &'a SourceEnvironment,
+) -> impl FnMut(Option<SpawnPosture>) -> Result<(Value,SpawnPosture),String> + 'a {
+    let mut captured: Option<Result<Value,String>> = None;
+    let mut rechecked: Option<Result<(),String>> = None;
+    let mut without_rules: Option<Result<bool,String>> = None;
+    move |posture| {
     bridget_transport::protocol::validate_permissions(parent,parent.source=="provider_turn")?;
     let mut policy=parent.provider_policy.clone();
     let readonly=posture==Some(SpawnPosture::Discovery);
@@ -471,12 +486,12 @@ pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefiniti
             let read=readonly||inherited_readonly;
             if !read&&policy["sandbox_policy"]["type"]!="dangerFullAccess"{return Err("provider_confinement_unavailable".into())}
             if !read&&policy["approval_policy"]!="never"{return Err("permission_mapping_unavailable".into())}
-            policy=json!({"kind":"claude","permission_mode":if read{"plan"}else{"bypassPermissions"},"tools":{"type":"preset","preset":"claude_code"},"permission_callback":{"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"},"settings_sources":"provider_default","launch_context":capture_context(definition,cwd,source)?});
+            policy=json!({"kind":"claude","permission_mode":if read{"plan"}else{"bypassPermissions"},"tools":{"type":"preset","preset":"claude_code"},"permission_callback":{"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"},"settings_sources":"provider_default","launch_context":captured.get_or_insert_with(|| capture_context(definition,cwd,source)).clone()?});
             if read{policy["tools"]=json!(["Read","Glob","Grep"]);policy["disallowed_tools"]=json!(["Bash","Edit","Write","NotebookEdit","WebFetch","WebSearch"]);}
         },
         ("claude_stream_json","claude_stream_json")=>{
             let context=policy.get("launch_context").ok_or("permission_source_unavailable")?;
-            recheck_context(context,definition,cwd,source)?;
+            rechecked.get_or_insert_with(|| recheck_context(context,definition,cwd,source)).clone()?;
             if Path::new(&parent.cwd)!=cwd{return Err("permission_mapping_unavailable".into())}
             if !readonly && policy["permission_callback"]["kind"]=="t3_runtime" && policy["permission_callback"]["tool_approval"]=="allow"
                 && !policy["permission_mode"].as_str().is_some_and(|m|matches!(m,"bypassPermissions"|"auto")){
@@ -502,7 +517,7 @@ pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefiniti
         },
         ("claude_stream_json","codex_app_server")=>{
             let context=policy.get("launch_context").ok_or("permission_source_unavailable")?;
-            if !claude_inputs_without_rules(context)?||policy["disallowed_tools"].as_array().is_some_and(|a|!a.is_empty()){
+            if !without_rules.get_or_insert_with(|| claude_inputs_without_rules(context)).clone()?||policy["disallowed_tools"].as_array().is_some_and(|a|!a.is_empty()){
                 return Err("permission_mapping_unavailable".into())
             }
             let tools=&policy["tools"];
@@ -524,6 +539,7 @@ pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefiniti
     let effective=if readonly||policy["sandbox_policy"]["type"]=="readOnly"||policy["permission_mode"]=="plan"||only_read_tools{SpawnPosture::Discovery}else{SpawnPosture::Development};
     if posture==Some(SpawnPosture::Development)&&effective==SpawnPosture::Discovery{return Err("permission_not_inherited".into())}
     Ok((policy,effective))
+    }
 }
 
 pub(crate) fn apply_child_arguments(protocol:&str,policy:&Value,args:&mut Vec<String>)->Result<(),String>{

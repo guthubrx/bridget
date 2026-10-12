@@ -1,0 +1,461 @@
+{
+  "audit_meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T08:23:21.298133+00:00",
+    "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+    "scope_description": "Spec157 catalogue/quotas/fallback/remplacement ; sources Rust du delta et documents157",
+    "scope_mode": "diff",
+    "spec": "157",
+    "mode": "M",
+    "grid": "all",
+    "audit_mode": "fix",
+    "session_id": "session-2026-10-12-spec-157-01",
+    "session_dir": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/audits/2026-10-12/session-2026-10-12-spec-157-01",
+    "preparation_only": false,
+    "stage": "cycle-scoring-R4-final",
+    "diff": {
+      "base": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "head": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+      "files_count": 29,
+      "rust_files_count": 16,
+      "scope_inventory": "/Users/moi/.cache/bridget-audit157-20261012-r1/scope-files.json",
+      "patch": "/Users/moi/.cache/bridget-plan157-20261012-r1/final-source-capture-r4/diff-157.patch",
+      "sha256": "04356ee81aa97264cd7337abe5d69ebba5b695501de3d5d8323fb12c0ead6deb"
+    }
+  },
+  "repo": {
+    "files_count": 287,
+    "all_files_discovered": 2599,
+    "languages": [
+      "python",
+      "rust",
+      "typescript"
+    ],
+    "language_files": {
+      "rust": 212,
+      "python": 56,
+      "typescript": 19
+    },
+    "frameworks": [
+      "Rust2024/std",
+      "serde/serde_json",
+      "rusqlite bundled",
+      "MCP/socketUnix",
+      "protocoles natifs providers"
+    ],
+    "type": "cli-daemon-mcp-native-providers",
+    "has_ui": false,
+    "ui_scope": "Aucun fichiertsx/jsx/vue observé dans l’inventaire ; T3 externe horsscope.",
+    "has_llm_integration": true,
+    "llm_evidence": "provider_limits imports RateLimitSource ; préflight/registre de fournisseurs natifs dans le delta",
+    "db_type": "sqlite",
+    "db_evidence": "Cargo.toml workspace.dependencies.rusqlite",
+    "ci_system": "none_detected",
+    "container": false,
+    "workspace_members": [
+      "crates/bridget-core",
+      "crates/bridget-transport",
+      "crates/bridget-daemon"
+    ]
+  },
+  "sampling": null,
+  "sampling_policy": "Inventaire globalM287sources ; scopeDiff entier prévu, aucune lecture thématique ni échantillonnage lancé.",
+  "hot_paths": [
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs:30",
+      "line": 30,
+      "symbol_line": "pub(crate) fn record(",
+      "trigger": "Mémoire des limites observées et éviction bornée",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    },
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs:59",
+      "line": 59,
+      "symbol_line": "pub(crate) fn quota(&self, agent_type: &str, now: i64) -> Option<Quota> {",
+      "trigger": "Projection fournisseur sans sondage",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    },
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs:895",
+      "line": 895,
+      "symbol_line": "fn resolve_target(",
+      "trigger": "Verdict commun catalogue/admission",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    },
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs:102",
+      "line": 102,
+      "symbol_line": "pub(crate) fn launch_preflight(",
+      "trigger": "Préflight partagé spawn/restart",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    },
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs:1401",
+      "line": 1401,
+      "symbol_line": "fn handle_locked_with_project(",
+      "trigger": "Catalogue/Delegate/Continue et choix épinglé",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    },
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon.rs:7085",
+      "line": 7085,
+      "symbol_line": "fn handle_rate_limit(",
+      "trigger": "Réception des faits du fournisseur",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    },
+    {
+      "type": "source_context_locator",
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs:2601",
+      "line": 2601,
+      "symbol_line": "pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {",
+      "trigger": "Reprise et remplacement selon causes admises",
+      "semantic_audit": false,
+      "confidence": "Symbole localisé dans le code présent ; fréquence/latence non mesurées."
+    }
+  ],
+  "threat_model": {
+    "assets": [
+      "Droits complets hérités et identité propriétaire/enfant",
+      "Intégrité des choix fournisseur/modèle et du candidat épinglé",
+      "Quotas observés et causes durables de reprise",
+      "Missions/résultats/ACK/gardes153 et workspace154/demandes155"
+    ],
+    "attackers": [
+      {
+        "type": "agent/client local",
+        "surface": "requête fournisseur/posture/fallback ou faitquota falsifié",
+        "risk": "À évaluer pendant module03, pas verdict préparatoire."
+      }
+    ],
+    "surfaces": [
+      "MCP/socket NativeDelegation/catalogue/Continue",
+      "Préflight registre et sources de permissions149",
+      "Faits de limites issus des transports",
+      "Reprise/remplacement natif et persistanceTask/SQLite"
+    ],
+    "trust_boundaries": [
+      "Fait de fournisseur observé distinct de déclarationclient",
+      "Politique complète héritée et instance courante attestée",
+      "Candidat épinglé après Reserve, revérification au Commit sans resélection"
+    ],
+    "limits": [
+      "Parent/runtime mêmesUID : modèle existant à relire en module03 ; aucune nouvelle isolation proposée.",
+      "Localisations préparatoires seules ; aucun test réel/modelle/T3/DB consulté."
+    ]
+  },
+  "slos": {
+    "defined": true,
+    "kind": "critère de succès relatif déjà spécifié, pas SLOproduction mesuré",
+    "evidence": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/spec.md:273",
+    "criterion": "SC007 : catalogue10fournisseurs, temps au plus2×référenceT001/T012",
+    "measured_by_this_preparation": false,
+    "proposed": null
+  },
+  "modules_actifs": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12"
+  ],
+  "thematic_modules": [
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "12"
+  ],
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/audits/baseline.json",
+    "exists": false,
+    "read_only": true,
+    "sha256": null,
+    "suppressed_count": 0
+  },
+  "discovery": {
+    "global_inventory_method": "rg --files --hidden, exclusions build/caches/worktrees/audits",
+    "changed_plus_new_files_inventory": true,
+    "new_rust_files": [
+      "crates/bridget-daemon/src/provider_limits.rs"
+    ],
+    "semantic_audit_executed": false,
+    "global_inventory_as_of": "Préparation07:52UTC,287sources réelles ; réutilisation documentaire de découverte, pas lectureaudit."
+  },
+  "execution_metrics": {
+    "files_scanned": 0,
+    "lines_analyzed": 0,
+    "semantic_coverage_percent": 0,
+    "tests_executed": 0,
+    "scanners_executed": 0,
+    "phases_prepared": [
+      "00",
+      "01",
+      "02",
+      "11"
+    ],
+    "phases_completed_thematic": [],
+    "warnings": [
+      "Capture finale29fichiers autoritatifs ; ancieninventaire préparatoire40 supersédé.",
+      "DiffR2 à25/26 puis metadata spec/tasks26/26 ; sourcesidentiques.",
+      "Coverage0 au niveau configuration ; ne donne aucun crédit sémantique aux inventaires.",
+      "ROOT seul tests ; FULL2396CargoPASS/9FAIL/74ignored +3enfants séparés. Oracle154replay1PASS distinct ;8échecs hérités. PasGREENglobal."
+    ]
+  },
+  "protocol_sources_loaded": {
+    "orchestrateur.md": "b6893be5d288cfa82911afe1af3d0058a62a6d3881c08c5a26e89b50251dccdc",
+    "00-parametres.md": "0cc510e8467258c6c34684604da4079b3bec980f10d41a059eddf416340c8d4e",
+    "01-anti-hallucination.md": "8cebedd870489c551fbce7c7b045aa7359aa247b0eefea4c85ebdf7832d12552",
+    "02-decouverte.md": "90b5f7a16b4715e8bcb6f15c90e642aff3435b23ec04a090a9e1cfb2dc175f8e",
+    "11-regles-or.md": "c65a5eeeefad14d5dff9a173dd809fe626970e2e701f102358982391315f55a5"
+  },
+  "configuration_effective": {
+    "AUDIT_SCOPE": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+    "AUDIT_ROOT_PATH": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+    "SCOPE_MODE": "diff",
+    "DIFF_BASE": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+    "AUDIT_MODE": "fix",
+    "AUDIT_GRID": "all",
+    "MODULES_ACTIFS": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "MAX_CYCLES": 1,
+    "MAX_FIXES_PER_CYCLE": 10,
+    "MAX_RETRY_PER_FINDING": 2,
+    "AUTO_COMMIT": false,
+    "SKIP_HOOKS": false,
+    "SAMPLING_THRESHOLD": 500,
+    "SAMPLING_DAYS": 90,
+    "SAMPLING_KEYWORDS": [
+      "auth",
+      "login",
+      "crypto",
+      "password",
+      "secret",
+      "token",
+      "payment",
+      "admin",
+      "upload",
+      "exec"
+    ],
+    "MIN_SAMPLE_SIZE": 50,
+    "SESSION_DIR": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/audits/2026-10-12/session-2026-10-12-spec-157-01",
+    "OUTPUT_FORMATS": [
+      "json",
+      "md"
+    ],
+    "GENERATE_DASHBOARD": false,
+    "INCLUDE_EVIDENCE_SNIPPETS": true,
+    "BASELINE_PATH": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/audits/baseline.json",
+    "SEVERITY_DEFAULTS": {
+      "CRITICAL": {
+        "sla_hours": 24,
+        "block_release": true
+      },
+      "HIGH": {
+        "sla_hours": 168,
+        "block_release": true
+      },
+      "MEDIUM": {
+        "sla_hours": 720,
+        "block_release": false
+      },
+      "LOW": {
+        "sla_hours": null,
+        "block_release": false
+      }
+    },
+    "DUPLICATION_THRESHOLDS": {
+      "global_warn_pct": 5.0,
+      "global_crit_pct": 10.0,
+      "block_warn_lines": 100,
+      "block_crit_lines": 200
+    },
+    "COMPLEXITY_THRESHOLDS": {
+      "function_warn": 15,
+      "function_crit": 25,
+      "function_max_lines": 50
+    },
+    "PERF_BUDGETS": {
+      "lcp_ms": 2500,
+      "inp_ms": 200,
+      "cls": 0.1,
+      "bundle_initial_kb": 200,
+      "bundle_total_kb": 1000
+    },
+    "MODE_PARALLELISME": "auto",
+    "MODELE_SUBAGENTS": "inherit",
+    "MAX_FINDINGS_PER_DOMAIN": 50,
+    "EXCLUDE_PATHS": [
+      "node_modules/**",
+      ".venv/**",
+      "dist/**",
+      "build/**",
+      "__pycache__/**",
+      ".git/**",
+      "vendor/**",
+      ".next/**",
+      "target/**",
+      "*.min.js",
+      "*.bundle.js",
+      "coverage/**",
+      ".audit-sessions/**",
+      "audits/**",
+      ".worktrees/**",
+      "cache/**",
+      ".cache/**",
+      "**/cache/**",
+      "**/.cache/**",
+      "*.log",
+      "*.jsonl",
+      "*.patch",
+      "specs/157-catalogue-quotas/validation/*.json"
+    ],
+    "EXCLUDE_LANGUAGES": [],
+    "THEMATIC_MODULES": [
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "12"
+    ],
+    "FINAL_PASS": {
+      "directory": "cycle-scoring",
+      "mode": "readonly",
+      "same_seven_modules": true,
+      "new_fix_cycle": false
+    },
+    "PREPARATION_DIR": "/Users/moi/.cache/bridget-audit157-20261012-r1",
+    "ORCHESTRATION_OVERRIDES": {
+      "authority": "ROOT cycle-scoring03/06 après clôture C1 ; cache seulement.",
+      "repo_clean": "Candidat isolé non committé autorisé ; préparation, empreintes à rafraîchir après Converge.",
+      "commit_owner_phase": "ROOT seul Git/livraison ; AUTO_COMMIT=false.",
+      "validation_owner": "ROOT seul Cargo/tests/services/DB ; aucun test, scanner, build ou benchmark de cette préparation.",
+      "source_capture_stage": "R4 final après correction ROOT : cycle-scoring03/06 lecture ciblée ; C1 figé historique.",
+      "model_choice": "Héritage natif ; aucun agent/model lancé. Routage final à confirmer par ROOT.",
+      "scope_resolution": "29fichiers/16Rust/13docs/105hunks ; validation/implementation/audits horsdénominateur.",
+      "SLO": "SC007 existant seulement ; pas de nouveau SLO absolu proposé.",
+      "routing": "ROOT + deux auditeurs de modules distincts ; aucun sous-agent lancé ici."
+    }
+  },
+  "scope_source_hashes_final": {
+    "crates/bridget-daemon/src/daemon.rs": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+    "crates/bridget-daemon/src/delegation.rs": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+    "crates/bridget-daemon/src/lib.rs": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+    "crates/bridget-daemon/src/lifecycle.rs": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+    "crates/bridget-daemon/src/native_permissions.rs": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+    "crates/bridget-daemon/src/provider_limits.rs": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+    "crates/bridget-daemon/src/registry.rs": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+    "crates/bridget-daemon/tests/guidance156_e2e.rs": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+    "crates/bridget-transport/src/protocol.rs": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365"
+  },
+  "converge_gate": {
+    "status": "CONVERGED",
+    "passage": 1,
+    "tasks_complete": 26,
+    "tasks_total": 26,
+    "proofs": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/converge157.md",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/converge157.json"
+    ],
+    "distinct_GO": "ROOT audit157 cycle1"
+  },
+  "requires_refresh_after_converge_or_change": false,
+  "output_contract": {
+    "schema_source": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/10-output-schema.md",
+    "read_manifest_required_for_semantic_reviews": true,
+    "findings_score_grade_not_generated_in_preparation": true
+  },
+  "metadata_sha256": {
+    "configuration": "6d4c7280bc0df638e3538a84e336418d6c9401feaa7b1930e9d7d55bdb519b44",
+    "scope_inventory": "816818188859dc0cb334093f01c589ea0e10eab1ca1eb9051c9272ab15fef2bf"
+  },
+  "scope_semantic_hashes": {
+    "crates/bridget-daemon/src/daemon.rs": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+    "crates/bridget-daemon/src/delegation.rs": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+    "crates/bridget-daemon/src/lib.rs": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+    "crates/bridget-daemon/src/lifecycle.rs": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+    "crates/bridget-daemon/src/native_permissions.rs": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+    "crates/bridget-daemon/src/provider_limits.rs": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+    "crates/bridget-daemon/src/registry.rs": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+    "crates/bridget-daemon/tests/guidance156_e2e.rs": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+    "crates/bridget-transport/src/protocol.rs": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365",
+    "docs/decisions/157-catalogue-quotas-remplacement.md": "de51a9cba0cac8e0ddbb2076485c9be7220b858f94ecc050cf5ed7149d5fc9f6",
+    "docs/delegation-native.md": "7db518abe316ce41f4a39ade33391d9054e8e879cbdfebf05dcfa1c42d1f0ccb",
+    "skills/bridget/SKILL.md": "9b542c7c6c992bc59af79c474410a0da68e08c693efba0a3cf600a7e3ae6875a",
+    "skills/bridget/references/commandes.md": "b0cde86906d69b110302d7afc6eb1dcafb087dee822ec16ea6a304a70342d66d",
+    "specs/157-catalogue-quotas/adversarial-review-codex.md": "1616d5e5f9cd56a0eca2317fb20662643c1a53c83c1c425785c24e686fae52f6",
+    "specs/157-catalogue-quotas/contracts/delegation157.md": "0f02c092f13870d07a834f548476d4e70f63366adbb8d032bf1b76c7c95e024f",
+    "specs/157-catalogue-quotas/data-model.md": "55f38286b486cddc3e1cce784581c57325b115fe1b0e5f46e5277b9f68d7c04f",
+    "specs/157-catalogue-quotas/plan.md": "f9c2d44e55780d03f823334bab26f947627e6384e2c3a2c41b8ed266fc58fbd7",
+    "specs/157-catalogue-quotas/quickstart.md": "a8e942f48755555ffcb9c1ce25a49ae500093da72c9b137303a7cf89c5bde323",
+    "specs/157-catalogue-quotas/research.md": "49c677388f6035e1268d6e5fd10e6c34b5a9a86093bbcb629c9c321e4360ad10",
+    "specs/157-catalogue-quotas/reuse-audit.md": "179a75b67c93456f7b9b353183e18f7f9906db20a6a0be27c1d5b25b37b26a80",
+    "specs/157-catalogue-quotas/spec.md": "67b4fdca7da6de300b139d67a6fa14f025b823bead1e0adaa212c6f9d5df00f7",
+    "specs/157-catalogue-quotas/tasks.md": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe"
+  },
+  "capture_reuse": {
+    "authority_manifest": "/Users/moi/.cache/bridget-plan157-20261012-r1/final-source-capture-r4/manifest.json",
+    "sha256": "c5ad46729a2db7d9b5b2e0a4eed6cc5039d61d58fad634967a18ab0faf070d00",
+    "history": "R2capture25/26, metadata26/26 ; R3quota+test/docs ; R4deuxcommentairesregistry ; aucun nouveauFULL",
+    "old_C1_scope_sha256": "5350417b65e35111515f03c871be0221a38b57b527d8cda3e7012b7b807b9c6f"
+  },
+  "source_guard_closed_stable": true,
+  "source_guard_closed_at_utc": "2026-10-12T08:07:55.428612+00:00"
+}

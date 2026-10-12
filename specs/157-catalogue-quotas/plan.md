@@ -1,8 +1,8 @@
 # Plan - Session157 catalogue fiable, quotas, remplacement
 
 **Spec** : `specs/157-catalogue-quotas/spec.md`
-**Branche** : `session-150-socle-delegation` (worktree unique, sessions 150 à 158 en séquence)
-**Worktree** : `.worktrees/150-socle-delegation`
+**Branche** : `session-157-catalogue-quotas`
+**Worktree** : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas`
 **Date** : 2026-10-11
 
 ## Résumé
@@ -34,8 +34,9 @@ La reprise sur limite d'usage est sortie de la 157 (session future 160, R7 et
 | `crates/bridget-daemon/src/provider_limits.rs` (nouveau, environ 80 lignes) | mémoire des limites, règle d'épuisement, lecture `quota` |
 | `crates/bridget-daemon/src/lib.rs` | déclaration du module |
 | `crates/bridget-daemon/src/daemon.rs` | champ `provider_limits` de `DaemonState`, écriture dans `handle_rate_limit` |
+| `crates/bridget-daemon/src/registry.rs` | réemploi de pin_delegation_model avant préflight pour vérifier le modèle demandé ; visibilité pub(crate), aucun nouveau helper |
 | `crates/bridget-daemon/src/lifecycle.rs` | extraction de `launch_preflight` depuis `submit_spawn` ET `prepare_spawn_parts` (erreur d'environnement propagée), exposition du code de `refusal_record` |
-| `crates/bridget-daemon/src/daemon/native_delegation.rs` | `resolve_target`, catalogue réécrit sur le verdict, quota, boucle de remplacement, `failure_with_detail` |
+| `crates/bridget-daemon/src/daemon/native_delegation.rs` | `resolve_target`, catalogue réécrit sur le verdict, quota, boucle de remplacement, extension du `failure` existant (code:JSON) |
 | `crates/bridget-daemon/src/delegation.rs` | champ `substitution` |
 | `crates/bridget-daemon/src/delegation_mcp.rs` | schéma `fallback`, message de refus avec détail, description du catalogue |
 | tests des mêmes modules, `native_delegation_permissions149_tests.rs` | tests `native157_*`, mise à jour du test qui fige les clés du catalogue |
@@ -55,10 +56,14 @@ logique pure à un fichier de 26 000 lignes (`daemon.rs`).
   lancement et l'admission ne peuvent pas diverger.
 - **D-C** Mémoire de limites volatile par type d'agent (R4). Pas de table SQL :
   les sources republient. Dette notée.
-- **D-D** Refus avec détail porté par `Ok(refus_avec_détail)` au même niveau que
-  `failure` (R5). Aucun changement du type d'erreur interne.
+- **D-D** Garder Err(String), avec porteur code:JSON (message/detail).
+  Étendre le seul failure existant pour ces préfixes. Codes nus et formats
+  brief/workspace conservés ; listes comparées sur le code canonique, pas le
+  JSON. Aucun nouveau type, helper ni failure_with_detail.
 - **D-E** Le remplacement réécrit la cible dans `record.request` et garde
-  l'enveloppe d'origine dans `canonical` (R6). Aucun code aval ne change.
+  l'enveloppe d'origine dans `canonical` (R6). En worktree, Probe choisit une seule cible et sa définition épinglée ;
+  Reserve et Commit la consomment. Commit revalide ce même candidat sans
+  resélection, avec gardes de chemin et diagnostics154 conservés.
 - **D-G** Pas de mesure d'optimisation avant la mesure de référence (Art. XXII,
   R8).
 - **D-H** Ordre fixe par candidat : type, modèle, effort, puis préflight,
@@ -77,7 +82,7 @@ logique pure à un fichier de 26 000 lignes (`daemon.rs`).
 | VII ADR | OK | ADR 157 prévue (T024) |
 | VIII Forensic | OK | cause du constat lue dans le code, test rouge avant correction (T007), fait réel de l'incident cherché (T002) |
 | XV Test-before-next | Adapté | pas de commit automatique ; chaque tâche testée avant d'être cochée |
-| XVI Worktree | OK | worktree 150 partagé, exécution séquentielle |
+| XVI Worktree | OK | worktree157 dédié, exécution séquentielle dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas |
 | XVIII Complexité | OK | voir ci-dessous |
 | XIX Minimalisme | OK | voir ci-dessous |
 | XX Vertus LLM | OK | voir ci-dessous |
@@ -118,7 +123,7 @@ critères de succès.
 | Niveau | Contenu |
 |---|---|
 | Rouge d'abord | incident du 2026-10-11 (catalogue vrai, admission refuse), binaire absent crée une tâche, quota épuisé admis |
-| Unitaire | règle d'épuisement (table), mémoire (clé, péremption, bornes), préflight, `failure_with_detail`, sérialisation sans nouveau champ |
+| Unitaire | règle d'épuisement (table), mémoire (clé, péremption, bornes), préflight, extension du `failure` existant (code:JSON), sérialisation sans nouveau champ |
 | Matrice | parent (Claude sans `launch_context`, Claude avec, Claude avec source illisible, Codex, aucun fait) × cible (claude, codex, glm, codex-pro) × posture (3) : catalogue égal admission à contexte égal ; cas hors garantie documentés (fait limité à une demande, sous-répertoire, binaire changé) |
 | Remplacement | ordre, motifs permis et interdits, `model_unavailable` jamais remplacé, rejeu, doublons, 3 candidats au plus, `fallback_exhausted` |
 | Non-régression | filtres `native148`, `native149`, `native150`, `delegation149`, `spec_087` |
@@ -140,5 +145,36 @@ critères de succès.
 
 ## Livraison
 
-Code sur disque dans le worktree, sans commit automatique ni relance de
-service. Diff cumulé enregistré dans `validation/diff-157.patch`.
+Livraison Git, binaire signé installé, activation Bridget et nettoyage autorisés
+à chaque spec. T3 reste ouvert. Diff cumulé enregistré dans `validation/diff-157.patch`.
+
+## Précisions retenues de la revue157-r1 — appliquées au GO157
+
+GO157 le2026-10-12 après livraison et activation155/156. Base source156
+cf498755dc871b51eb8c0add5f8a882d67651d2a, base Git avec clôture documentaire
+8b5b313694cf05eabfe6a86a970b96f03b015f49. Les références150/1f2c661d
+restent des preuves historiques ; les fonctions sont revalidées sur cette base.
+
+Le verdict conserve l’ordre type/modèle/effort, préflight, politique, gardes
+liées aux options de l’appel, quota. Workspace et, après livraison155,
+child_requests sont non remplaçables pour la cible demandée ; un candidat
+explicitement listé refusé est noté dans tried. Aucun gain de droits ni
+contournement des gardes du parent. En worktree, sélection unique en Probe,
+candidat et définition épinglés transmis à Reserve puis Commit. Commit
+revalide ce même candidat dans le dossier enfant réel ; si une garde échoue,
+refuser sans nouvelle sélection et conserver les diagnostics de chemin154.
+Les options immuables et canonical original restent distincts de request effectif.
+
+Quota : huit fenêtres ; purger les passées avant l’écriture. Une neuvième clé
+évince le plus petit observed_at, égalité départagée par clé lexicale.
+unknown du hook n’est pas une preuve seul ; pourcentage>=100 avec retour
+futur épuise toute source. provider_limit_reached_window_unknown est l’unique
+contrainte informative possible si can_run, hors famille verdict et jamais
+rendue comme refus d’admission. Aucun nouveau champ public.
+
+Refus enrichi : Err(String) sous forme code:JSON contenant message/detail.
+Étendre le seul failure existant ; les comparaisons de listes portent sur
+le code canonique. JSON non conforme : refus fermé, aucune valeur inventée.
+Les anciens codes nus et préfixes restent compatibles. Aucun nouveau type,
+helper, framework, table, outil, ID ou scénario autonome. Les tests prévus
+T004/T016/T017/T018 couvrent ces précisions. Les26 tâches restent ouvertes.

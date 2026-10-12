@@ -1,0 +1,1718 @@
+{
+  "audit_version": "v14.0",
+  "timestamp": "2026-10-12T08:23:21.298133+00:00",
+  "preparation_only": false,
+  "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+  "spec_scope": "157-catalogue-quotas",
+  "diff_base": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+  "diff_head": "8b5b313694cf05eabfe6a86a970b96f03b015f49",
+  "diff_source": "/Users/moi/.cache/bridget-plan157-20261012-r1/final-source-capture-r4/diff-157.patch",
+  "diff_source_sha256": "04356ee81aa97264cd7337abe5d69ebba5b695501de3d5d8323fb12c0ead6deb",
+  "files_total": 29,
+  "rust_files_count": 16,
+  "documentation_files_count": 13,
+  "patch_files_count": 29,
+  "patch_hunks_count": 105,
+  "files": [
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon.rs",
+      "kind": "production",
+      "sha256": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+      "bytes": 1538466,
+      "lines": 39168,
+      "hunks": [
+        {
+          "old_start": 982,
+          "old_count": 6,
+          "new_start": 982,
+          "new_count": 8,
+          "context": "impl Drop for FixtureRoot {",
+          "sha256": "eaf6233b88955509d88da7516483d3348f7b7a3c3ec6b517c403af5bac62cb8c"
+        },
+        {
+          "old_start": 3443,
+          "old_count": 6,
+          "new_start": 3445,
+          "new_count": 7,
+          "context": "impl DaemonState {",
+          "sha256": "aa93d14404ffa964e2d89f99187fe461c6ac0122cc96105faa01649faa50ed0c"
+        },
+        {
+          "old_start": 7077,
+          "old_count": 6,
+          "new_start": 7080,
+          "new_count": 8,
+          "context": "fn handle_served_model(agent: &str, model: String, state: &mut DaemonState) -> D",
+          "sha256": "d3ea9085d38aed058857220709fe476ddd3756eea1d6e493b784cf0b26053b7b"
+        },
+        {
+          "old_start": 7117,
+          "old_count": 17,
+          "new_start": 7122,
+          "new_count": 20,
+          "context": "fn handle_rate_limit(",
+          "sha256": "2b15cf509a541576c752a8ac06603b41e60eadcb30c7fe807b78308f5e531501"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "kind": "production",
+      "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+      "bytes": 485292,
+      "lines": 10577,
+      "hunks": [
+        {
+          "old_start": 78,
+          "old_count": 6,
+          "new_start": 78,
+          "new_count": 35,
+          "context": "fn failure(code: &str) -> Value {",
+          "sha256": "d0728072440afa856e57fdec8135881c5977abd4523a6c6a11582fee60419503"
+        },
+        {
+          "old_start": 228,
+          "old_count": 6,
+          "new_start": 257,
+          "new_count": 7,
+          "context": "fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {",
+          "sha256": "2f583f89a1ae6a240a9a4ce6378e798748bc15183bb7030affbb552d2e898ead"
+        },
+        {
+          "old_start": 649,
+          "old_count": 12,
+          "new_start": 679,
+          "new_count": 12,
+          "context": "fn delegate_worktree(",
+          "sha256": "a9f30cb4878661b099d07538db83f34ce22bce1c436eddabebc64cefab1adfb0"
+        },
+        {
+          "old_start": 665,
+          "old_count": 7,
+          "new_start": 695,
+          "new_count": 8,
+          "context": "fn delegate_worktree(",
+          "sha256": "148df8f30da53ccf160f59fb1c60cebab0f10e8776b8c6f8ac1e9e4473e6b26c"
+        },
+        {
+          "old_start": 679,
+          "old_count": 7,
+          "new_start": 710,
+          "new_count": 8,
+          "context": "fn delegate_worktree(",
+          "sha256": "c14794a9e2690868521914398c7756951e220630258bd4a61b92df9921a67184"
+        },
+        {
+          "old_start": 815,
+          "old_count": 13,
+          "new_start": 847,
+          "new_count": 15,
+          "context": "fn wait_tasks(",
+          "sha256": "944e852e47b5c421e714af6ae84751a85b37ebc00714d6037810cca670e22210"
+        },
+        {
+          "old_start": 854,
+          "old_count": 6,
+          "new_start": 888,
+          "new_count": 102,
+          "context": "fn workspace_limit(st: &DaemonState, plan: &crate::workspace_git::WorkspacePrefl",
+          "sha256": "4caa5a19acfe97cc0d22d6b31af52594d5016bbd97077501d5e8ce7bb76c659d"
+        },
+        {
+          "old_start": 864,
+          "old_count": 6,
+          "new_start": 994,
+          "new_count": 7,
+          "context": "fn admit_delegate(",
+          "sha256": "7519ea2124024ac031425857de066696c0010dded2361ac37702e8016361b4c2"
+        },
+        {
+          "old_start": 888,
+          "old_count": 6,
+          "new_start": 1019,
+          "new_count": 18,
+          "context": "fn admit_delegate(",
+          "sha256": "99e2930e68394efd557729313c251c4b614af17aa21c8c7b33e9a511d65e5508"
+        },
+        {
+          "old_start": 945,
+          "old_count": 16,
+          "new_start": 1088,
+          "new_count": 6,
+          "context": "fn admit_delegate(",
+          "sha256": "514173174afd97f8fe946b6e89353f1d19568d5ccc43f844f93fb781c59e1ab8"
+        },
+        {
+          "old_start": 994,
+          "old_count": 57,
+          "new_start": 1127,
+          "new_count": 74,
+          "context": "fn admit_delegate(",
+          "sha256": "83901b676d3e2fab613bc6d4121d1053599f9992c43bfccf748c0d13df858ed8"
+        },
+        {
+          "old_start": 1066,
+          "old_count": 12,
+          "new_start": 1216,
+          "new_count": 13,
+          "context": "fn admit_delegate(",
+          "sha256": "01fa102e36dcb924a228425e25d11c290ed82a6da9f67762e22d1aec033fa41c"
+        },
+        {
+          "old_start": 1153,
+          "old_count": 6,
+          "new_start": 1304,
+          "new_count": 7,
+          "context": "fn admit_delegate(",
+          "sha256": "419dd1e41ee307ae41025f4710284d0cee46acf1c33c72d13069ea993096f47b"
+        },
+        {
+          "old_start": 1163,
+          "old_count": 7,
+          "new_start": 1315,
+          "new_count": 7,
+          "context": "fn admit_delegate(",
+          "sha256": "485e3fe4e5cae8d0d521e3973cb7e0eb779ac98091179bc53293f946b822be1a"
+        },
+        {
+          "old_start": 1230,
+          "old_count": 7,
+          "new_start": 1382,
+          "new_count": 7,
+          "context": "fn admit_delegate(",
+          "sha256": "b475213e58b8a1a309efd1327e1540c68d6d3d73dfb3140d3282d028abdde91f"
+        },
+        {
+          "old_start": 1293,
+          "old_count": 30,
+          "new_start": 1445,
+          "new_count": 79,
+          "context": "fn handle_locked_with_project(",
+          "sha256": "e5bdf1f2cb6c2cf699f1615207d951354326707aaca644e9ce123bbea242ecd4"
+        },
+        {
+          "old_start": 8283,
+          "old_count": 6,
+          "new_start": 8484,
+          "new_count": 7,
+          "context": "mod tests {",
+          "sha256": "278e6c36a7dd2b3df6bd40484300ced31bee38e725ce30f505558bc1c4d3bdd8"
+        },
+        {
+          "old_start": 8392,
+          "old_count": 13,
+          "new_start": 8594,
+          "new_count": 17,
+          "context": "mod tests {",
+          "sha256": "1012318f3e373a5b7c00d03898ecb5ffceca2714b68cbfecf268eefaf98652b5"
+        },
+        {
+          "old_start": 9192,
+          "old_count": 6,
+          "new_start": 9398,
+          "new_count": 7,
+          "context": "mod tests {",
+          "sha256": "f7b2486b2b7e90d24a49c4464b16f89420df8e291ca6663bd1828c542dd73709"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "kind": "test",
+      "sha256": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+      "bytes": 210042,
+      "lines": 4792,
+      "hunks": [
+        {
+          "old_start": 166,
+          "old_count": 6,
+          "new_start": 166,
+          "new_count": 7,
+          "context": "fn fixture_entries(catalogue: &Value) -> Vec<&Value> {",
+          "sha256": "35c1aa27ac4a98f5326baf319f4aae5a989fca5c7687f36b68956c0d55a8cc50"
+        },
+        {
+          "old_start": 552,
+          "old_count": 6,
+          "new_start": 553,
+          "new_count": 93,
+          "context": "fn native155_denyenv_absent_et_heritage_forward_retire() {",
+          "sha256": "eed3d641c7318bbbdbe83497e3c5d92b6f5c871f31941bb5467753f41715f185"
+        },
+        {
+          "old_start": 575,
+          "old_count": 11,
+          "new_start": 663,
+          "new_count": 13,
+          "context": "fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {",
+          "sha256": "0028b5f05d9031d2f8b2e50817c7b5fec465b921d2ab5d3cade4f477d6aad706"
+        },
+        {
+          "old_start": 589,
+          "old_count": 6,
+          "new_start": 679,
+          "new_count": 7,
+          "context": "fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {",
+          "sha256": "c69185eed2b038e4a11f9e5e6c3f874dacfa7911e7e1f8fec864ddf22610aedf"
+        },
+        {
+          "old_start": 719,
+          "old_count": 6,
+          "new_start": 810,
+          "new_count": 7,
+          "context": "fn native149_un_fait_d_autre_demande_ne_donne_aucun_droit() {",
+          "sha256": "a6126eb02dd6871ef1803ed24fb166f65696ed8d0c8461479a1768bbd09d28bd"
+        },
+        {
+          "old_start": 3781,
+          "old_count": 3,
+          "new_start": 3873,
+          "new_count": 920,
+          "context": "fn native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur",
+          "sha256": "1818b27e862f469205ce23fe31f4e955bdf57c2e83cefbea1a9f4ac8ed3a1d46"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "kind": "test",
+      "sha256": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+      "bytes": 41556,
+      "lines": 1018,
+      "hunks": [
+        {
+          "old_start": 39,
+          "old_count": 6,
+          "new_start": 39,
+          "new_count": 7,
+          "context": "fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {",
+          "sha256": "680b02fd2608d839a9a1a2df048c19055c05e575c453b10da18ddf737b9f4938"
+        },
+        {
+          "old_start": 50,
+          "old_count": 6,
+          "new_start": 51,
+          "new_count": 7,
+          "context": "fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T",
+          "sha256": "65c79843415dc0fdf725844bdae96b2880b29139386636ea89aa57bb585b9c04"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "kind": "test",
+      "sha256": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+      "bytes": 66489,
+      "lines": 1116,
+      "hunks": [
+        {
+          "old_start": 415,
+          "old_count": 14,
+          "new_start": 415,
+          "new_count": 14,
+          "context": "fn native154_partage_discovery_termine_et_statut_compatibles150() {",
+          "sha256": "1f3d796944ea2871bc3f63d5fb6e133da8034fa9844d7d7a83af3ec6c54b0713"
+        },
+        {
+          "old_start": 472,
+          "old_count": 9,
+          "new_start": 472,
+          "new_count": 17,
+          "context": "fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {",
+          "sha256": "eecdee4b7c8443cb5eec99ab5f49113924d045e45d016248717a4382d1d1d82c"
+        },
+        {
+          "old_start": 486,
+          "old_count": 7,
+          "new_start": 494,
+          "new_count": 8,
+          "context": "fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {",
+          "sha256": "dbb1f00aca7f0f47af8285de4863fb5fd624e0e679eef3e944545dfcd541f207"
+        },
+        {
+          "old_start": 529,
+          "old_count": 9,
+          "new_start": 538,
+          "new_count": 17,
+          "context": "fn native154_creation_reservation_liberee_sur_panique() {",
+          "sha256": "c5c0d54d2c2e177e2d66cbd48d1b84ed12fae6526a676bcfca3d892b7ba5b6bd"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation.rs",
+      "kind": "production",
+      "sha256": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+      "bytes": 69899,
+      "lines": 1641,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_count": 5,
+          "new_start": 1,
+          "new_count": 5,
+          "context": "",
+          "sha256": "86e651acd0b668511513c500a99f6908ec224186f349619222f028ed117699e6"
+        },
+        {
+          "old_start": 158,
+          "old_count": 6,
+          "new_start": 158,
+          "new_count": 17,
+          "context": "pub(crate) struct WorkspaceRecord {",
+          "sha256": "f97810f339509ccc8e2a08d03bc065557c9f651340efd9893f9ace776baae62e"
+        },
+        {
+          "old_start": 178,
+          "old_count": 6,
+          "new_start": 189,
+          "new_count": 8,
+          "context": "pub(crate) struct Task {",
+          "sha256": "2936028de3ff4e7054cce3157dfe1a6dd5267864326e00ee7dfeec72c3cf0622"
+        },
+        {
+          "old_start": 957,
+          "old_count": 6,
+          "new_start": 970,
+          "new_count": 13,
+          "context": "mod tests {",
+          "sha256": "ff296626dc66fd511c4ca6fe1b57ea561caf42316640b8b0098b71461e7838c3"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "kind": "test",
+      "sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+      "bytes": 76195,
+      "lines": 1698,
+      "hunks": [
+        {
+          "old_start": 33,
+          "old_count": 6,
+          "new_start": 33,
+          "new_count": 7,
+          "context": "fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {",
+          "sha256": "a52a128644305f88b52b717058c158bc2c0a17882126ab6b187ae6bf6d4724d6"
+        },
+        {
+          "old_start": 60,
+          "old_count": 6,
+          "new_start": 61,
+          "new_count": 7,
+          "context": "fn task(",
+          "sha256": "16d4772ebf1c9086abb419ee24e65c497289cb93f03363526281c2e5528e945e"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+      "kind": "production",
+      "sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "bytes": 37139,
+      "lines": 678,
+      "hunks": [
+        {
+          "old_start": 5,
+          "old_count": 7,
+          "new_start": 5,
+          "new_count": 7,
+          "context": "use crate::communication::client::{",
+          "sha256": "9a258d95e1c002bef78a368944cacc23f65856740a4e7ec1c2762908d2111941"
+        },
+        {
+          "old_start": 70,
+          "old_count": 8,
+          "new_start": 70,
+          "new_count": 8,
+          "context": "pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {",
+          "sha256": "13d5063dcb522bb205533a25708cade027b0ea76fe4169d06b9a25d3e3b8b9df"
+        },
+        {
+          "old_start": 105,
+          "old_count": 6,
+          "new_start": 105,
+          "new_count": 7,
+          "context": "pub(crate) fn execute(",
+          "sha256": "515e3e5d3144dcd00a9b3efab7f511c9cf3768336cbbe6670a8c92a50cdca800"
+        },
+        {
+          "old_start": 128,
+          "old_count": 6,
+          "new_start": 129,
+          "new_count": 31,
+          "context": "pub(crate) fn execute(",
+          "sha256": "f0b4de3b43ea7bed4207ab92e707715db788063b51e956682adbc057e8874cba"
+        },
+        {
+          "old_start": 259,
+          "old_count": 7,
+          "new_start": 285,
+          "new_count": 10,
+          "context": "pub(crate) fn execute(",
+          "sha256": "5b26d68b2db6b120dbddb0ff40712bba547a7339e24983d03b09be277341264c"
+        },
+        {
+          "old_start": 280,
+          "old_count": 6,
+          "new_start": 309,
+          "new_count": 105,
+          "context": "pub(crate) fn execute(",
+          "sha256": "efb10d38d5f15c2583aa00ec3e64b8b45844da57ddcb45427046da360f316474"
+        },
+        {
+          "old_start": 496,
+          "old_count": 4,
+          "new_start": 624,
+          "new_count": 55,
+          "context": "mod tests {",
+          "sha256": "11d9bf2a9174274aa3a19812d5935bb3acc222253131d58cc8afad028b2ccdbd"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lib.rs",
+      "kind": "production",
+      "sha256": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+      "bytes": 1591,
+      "lines": 67,
+      "hunks": [
+        {
+          "old_start": 44,
+          "old_count": 6,
+          "new_start": 44,
+          "new_count": 7,
+          "context": "mod native_permission_observer;",
+          "sha256": "eb83d6c54f52e2c8d760c118e0d924f51b0366df81e21e599485d1c38bd9cd46"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+      "kind": "production",
+      "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "bytes": 61810,
+      "lines": 1592,
+      "hunks": [
+        {
+          "old_start": 96,
+          "old_count": 6,
+          "new_start": 96,
+          "new_count": 43,
+          "context": "fn validate_provider_observation(",
+          "sha256": "e8968eee10e7b2ee3286c6211915e0c34fd65f39208f377373c394b69a3197cc"
+        },
+        {
+          "old_start": 202,
+          "old_count": 29,
+          "new_start": 239,
+          "new_count": 13,
+          "context": "fn submit_spawn_with_policy(",
+          "sha256": "d104f4f822267493273758bafd0f0c8d0c2e6ad3eedb18bfc9f378f3773fcc85"
+        },
+        {
+          "old_start": 347,
+          "old_count": 6,
+          "new_start": 368,
+          "new_count": 7,
+          "context": "fn prepare_spawn_parts(",
+          "sha256": "a0fa6e89058d2ba6d23b12d444a52b19d42ef14ff27e22bee12efa7e34f33d28"
+        },
+        {
+          "old_start": 354,
+          "old_count": 30,
+          "new_start": 376,
+          "new_count": 6,
+          "context": "fn prepare_spawn_parts(",
+          "sha256": "eb58f9df7321917532b0a590d6c321febe462b651e095aceeb414479c2c7160d"
+        },
+        {
+          "old_start": 397,
+          "old_count": 12,
+          "new_start": 395,
+          "new_count": 6,
+          "context": "fn prepare_spawn_parts(",
+          "sha256": "a2c6fa822732df9ea1bc05ce82ce8c62dc66d86beeda8aebda4b8a9cb9554da1"
+        },
+        {
+          "old_start": 558,
+          "old_count": 7,
+          "new_start": 550,
+          "new_count": 7,
+          "context": "fn command_exists(command: &str, env: &SourceEnvironment) -> bool {",
+          "sha256": "1d5f6a0c764c7a5f9b8a9b72c8ea67e75db71cf417d090ecf996306298d860a5"
+        },
+        {
+          "old_start": 773,
+          "old_count": 6,
+          "new_start": 765,
+          "new_count": 110,
+          "context": "mod tests {",
+          "sha256": "ebf25ecb1307c4e12b4657cefffaa1cc88541f6e63c04e005d54ea1601ffd4d2"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/native_permissions.rs",
+      "kind": "production",
+      "sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "bytes": 35337,
+      "lines": 629,
+      "hunks": [
+        {
+          "old_start": 453,
+          "old_count": 7,
+          "new_start": 453,
+          "new_count": 22,
+          "context": "fn claude_inputs_without_rules(context:&Value)->Result<bool,String>{",
+          "sha256": "898650f4b9ac7e53b130160d28d119426356c70f3746a137bea2596460f66bef"
+        },
+        {
+          "old_start": 471,
+          "old_count": 12,
+          "new_start": 486,
+          "new_count": 12,
+          "context": "pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefiniti",
+          "sha256": "eb13cc974e3e9fa37fcf1a76d316fc4eea3a41ab82c11304929fc17c30a45eb3"
+        },
+        {
+          "old_start": 502,
+          "old_count": 7,
+          "new_start": 517,
+          "new_count": 7,
+          "context": "pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefiniti",
+          "sha256": "2d69510b88a4de6249edd3aa643ba430ca67e32820c85ff7189e6a891bf4b82a"
+        },
+        {
+          "old_start": 524,
+          "old_count": 6,
+          "new_start": 539,
+          "new_count": 7,
+          "context": "pub(crate) fn child_policy(parent:&ProviderPermissions,definition:&AgentDefiniti",
+          "sha256": "0d3a4b0350f9ea197d68ffbb38a74cfa9ff8e8e184ab2f38009b0a1f74bbd237"
+        }
+      ]
+    },
+    {
+      "scope_origin": "new_file",
+      "status": "untracked_new",
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+      "kind": "production",
+      "sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "bytes": 14432,
+      "lines": 301,
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_count": 0,
+          "new_start": 1,
+          "new_count": 301,
+          "context": "",
+          "sha256": "65c48e3e9a03d4b8c20da352582bb2ba71de85ba299d4fa4fb5d46aefa330d0b"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/registry.rs",
+      "kind": "production",
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "bytes": 86807,
+      "lines": 2257,
+      "hunks": [
+        {
+          "old_start": 342,
+          "old_count": 7,
+          "new_start": 342,
+          "new_count": 9,
+          "context": "impl AgentRegistry {",
+          "sha256": "1422198b6879396351492c988e3ef0a5c79f722a767a56bbfe47db373be2c2df"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "kind": "test",
+      "sha256": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+      "bytes": 39003,
+      "lines": 1045,
+      "hunks": [
+        {
+          "old_start": 324,
+          "old_count": 6,
+          "new_start": 324,
+          "new_count": 7,
+          "context": "impl Drop for Fixture {",
+          "sha256": "c8aa541ec85cd84ceeaa431b222453c7221b919cfaa730e61ca927986ec4cf05"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "kind": "test",
+      "sha256": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+      "bytes": 92230,
+      "lines": 2339,
+      "hunks": [
+        {
+          "old_start": 442,
+          "old_count": 6,
+          "new_start": 442,
+          "new_count": 7,
+          "context": "impl Drop for Fixture {",
+          "sha256": "c33ba676ee79588c8bdb0349f0a90fe4dd3f69fc4bb7dc37bf6a35b49642a14e"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+      "kind": "production",
+      "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365",
+      "bytes": 312998,
+      "lines": 8417,
+      "hunks": [
+        {
+          "old_start": 2103,
+          "old_count": 6,
+          "new_start": 2103,
+          "new_count": 16,
+          "context": "pub struct ChildRequestAnswer {",
+          "sha256": "9a466f5e16d120ab6bda449b097b27c7bd2e3a1624bed7f16da7d7e2f88056a2"
+        },
+        {
+          "old_start": 2143,
+          "old_count": 6,
+          "new_start": 2153,
+          "new_count": 8,
+          "context": "pub enum NativeDelegationRequest {",
+          "sha256": "0e39d481556a348535ea51c708a39113b5723a731c7d40f7e03086eac619c1bb"
+        },
+        {
+          "old_start": 8178,
+          "old_count": 6,
+          "new_start": 8190,
+          "new_count": 7,
+          "context": "mod spec104_search_contract_tests {",
+          "sha256": "9b0dac6f961bea0d3e76c64f120846dc67c2f8983c4ff105aa558e28410937ec"
+        },
+        {
+          "old_start": 8357,
+          "old_count": 6,
+          "new_start": 8370,
+          "new_count": 13,
+          "context": "mod spec104_search_contract_tests {",
+          "sha256": "27fdd647c05e55d0bbc4d72832b967daf397d58855ebdda4423fd77b857f8ae0"
+        }
+      ]
+    },
+    {
+      "scope_origin": "new_file",
+      "status": "untracked_new",
+      "file": "docs/decisions/157-catalogue-quotas-remplacement.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/docs/decisions/157-catalogue-quotas-remplacement.md",
+      "kind": "documentation",
+      "sha256": "de51a9cba0cac8e0ddbb2076485c9be7220b858f94ecc050cf5ed7149d5fc9f6",
+      "bytes": 7178,
+      "lines": 110,
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_count": 0,
+          "new_start": 1,
+          "new_count": 110,
+          "context": "",
+          "sha256": "4ac1ed1e586481be44eea9257ac63bcfd8886e62a73aeddcf964de9d63ef5a2e"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "docs/delegation-native.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/docs/delegation-native.md",
+      "kind": "documentation",
+      "sha256": "7db518abe316ce41f4a39ade33391d9054e8e879cbdfebf05dcfa1c42d1f0ccb",
+      "bytes": 51357,
+      "lines": 858,
+      "hunks": [
+        {
+          "old_start": 30,
+          "old_count": 7,
+          "new_start": 30,
+          "new_count": 82,
+          "context": "du parent (voir plus bas).",
+          "sha256": "5719e19beced61a4a0ec4749157bac23a15da0d3fdde643f3b72c252e19fb8f2"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "skills/bridget/SKILL.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/skills/bridget/SKILL.md",
+      "kind": "documentation",
+      "sha256": "9b542c7c6c992bc59af79c474410a0da68e08c693efba0a3cf600a7e3ae6875a",
+      "bytes": 61326,
+      "lines": 928,
+      "hunks": [
+        {
+          "old_start": 16,
+          "old_count": 6,
+          "new_start": 16,
+          "new_count": 34,
+          "context": "envoyer un message. Une panne de connexion n'autorise pas une autre route.",
+          "sha256": "bac063d32fd7957fbf8b21662ec5d8cca7b3071834ed3ac20d6207d55c846068"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "skills/bridget/references/commandes.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/skills/bridget/references/commandes.md",
+      "kind": "documentation",
+      "sha256": "b0cde86906d69b110302d7afc6eb1dcafb087dee822ec16ea6a304a70342d66d",
+      "bytes": 89048,
+      "lines": 1320,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_count": 7,
+          "new_start": 1,
+          "new_count": 7,
+          "context": "",
+          "sha256": "0a447aee5cfbb07ef0dead4a9a8fc8a0e1d467f7337efcd180c8b69b2c4f17c0"
+        },
+        {
+          "old_start": 158,
+          "old_count": 6,
+          "new_start": 158,
+          "new_count": 51,
+          "context": "jusqu’à sa relance. Aucun cancel/reorder/promote de file n’est ajouté en15",
+          "sha256": "65cbe2ccf3a6772d83346716b0ac7696a893c120e6a83bac3634452d8cb2573d"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/adversarial-review-codex.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/adversarial-review-codex.md",
+      "kind": "documentation",
+      "sha256": "1616d5e5f9cd56a0eca2317fb20662643c1a53c83c1c425785c24e686fae52f6",
+      "bytes": 9601,
+      "lines": 92,
+      "hunks": [
+        {
+          "old_start": 76,
+          "old_count": 3,
+          "new_start": 76,
+          "new_count": 17,
+          "context": "Résilience visé : reste à 4 (note de 152), le 5 est reporté à la 160.",
+          "sha256": "eeabb53cfda26fd9f993199ef2e62b423d7cf42744d6c97b165ab636af4adfb2"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/contracts/delegation157.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/contracts/delegation157.md",
+      "kind": "documentation",
+      "sha256": "0f02c092f13870d07a834f548476d4e70f63366adbb8d032bf1b76c7c95e024f",
+      "bytes": 7920,
+      "lines": 150,
+      "hunks": [
+        {
+          "old_start": 19,
+          "old_count": 7,
+          "new_start": 19,
+          "new_count": 7,
+          "context": "Clés ajoutées :",
+          "sha256": "88d38575549247fcab34228566af0cda3e058c5c90f74bb628ccfe85aed37b47"
+        },
+        {
+          "old_start": 36,
+          "old_count": 7,
+          "new_start": 36,
+          "new_count": 7,
+          "context": "Clés ajoutées à la racine :",
+          "sha256": "52360e2c1c19a384c8949393c20fd03bce8f9d54cc0560bb5c7a249e5ebf15e6"
+        },
+        {
+          "old_start": 83,
+          "old_count": 13,
+          "new_start": 83,
+          "new_count": 17,
+          "context": "Refus qui entrent dans la cohérence catalogue et admission :",
+          "sha256": "916760cf178d63d477c4ab681a331eadabae40370d76d346617fba6573c8ab6e"
+        },
+        {
+          "old_start": 113,
+          "old_count": 3,
+          "new_start": 117,
+          "new_count": 34,
+          "context": "Sans `fallback` : le refus de la cible demandée est rendu tel quel. Avec",
+          "sha256": "692ce3cf3a717532e554b761945ab6009f339f3358c14f33a69f85c98044f463"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/data-model.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/data-model.md",
+      "kind": "documentation",
+      "sha256": "55f38286b486cddc3e1cce784581c57325b115fe1b0e5f46e5277b9f68d7c04f",
+      "bytes": 5109,
+      "lines": 105,
+      "hunks": [
+        {
+          "old_start": 19,
+          "old_count": 7,
+          "new_start": 19,
+          "new_count": 7,
+          "context": "Seen { fact: RateLimitFact, source: RateLimitSource, observed_at: i64 }",
+          "sha256": "a65fdf8b8bb2de54e32f472449f41e2341fde972021232662a87bd655f78db6b"
+        },
+        {
+          "old_start": 28,
+          "old_count": 7,
+          "new_start": 28,
+          "new_count": 8,
+          "context": "Quota { windows: Vec<{window, used_percent, resets_at, status, exhausted}>,",
+          "sha256": "0d6f721941a6a83f8ce4949adc743452f9783467d90d0da83b5c08e76c0cfff9"
+        },
+        {
+          "old_start": 71,
+          "old_count": 3,
+          "new_start": 72,
+          "new_count": 34,
+          "context": "un remplacement.",
+          "sha256": "c192f9d02e455233b9b0322f8461a48359d16f46761ce017ff3d955207d1fae0"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/plan.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/plan.md",
+      "kind": "documentation",
+      "sha256": "f9c2d44e55780d03f823334bab26f947627e6384e2c3a2c41b8ed266fc58fbd7",
+      "bytes": 10826,
+      "lines": 180,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_count": 8,
+          "new_start": 1,
+          "new_count": 8,
+          "context": "",
+          "sha256": "0614189af4996ae649601e21c23df382b3160d3ad998c3fd447f08099a11ca6e"
+        },
+        {
+          "old_start": 34,
+          "old_count": 8,
+          "new_start": 34,
+          "new_count": 9,
+          "context": "La reprise sur limite d'usage est sortie de la 157 (session future 160, R7 et",
+          "sha256": "3bd95bd2ade5a81f487d9e4f6dd5ae370f4c538fb95a035f978758b132726b4d"
+        },
+        {
+          "old_start": 55,
+          "old_count": 10,
+          "new_start": 56,
+          "new_count": 14,
+          "context": "logique pure à un fichier de 26 000 lignes (`daemon.rs`).",
+          "sha256": "f22760a174dee1c9f11543ff8a6f1d3a28663fdccb408a83def6fba4be0e3469"
+        },
+        {
+          "old_start": 77,
+          "old_count": 7,
+          "new_start": 82,
+          "new_count": 7,
+          "context": "logique pure à un fichier de 26 000 lignes (`daemon.rs`).",
+          "sha256": "3a2a8eff90ee381ac4b4b681a869a03f3cf949f1ac5be30bfc895151f2af2bf4"
+        },
+        {
+          "old_start": 118,
+          "old_count": 7,
+          "new_start": 123,
+          "new_count": 7,
+          "context": "critères de succès.",
+          "sha256": "ec08e9963733bc921103c64e1b425537b041bbf07c826b1efaf01d223db415b7"
+        },
+        {
+          "old_start": 140,
+          "old_count": 5,
+          "new_start": 145,
+          "new_count": 36,
+          "context": "critères de succès.",
+          "sha256": "ceb189d71527083284a92f08c504b4978de6e1732d2a7428c380625ca7fa762e"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/quickstart.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/quickstart.md",
+      "kind": "documentation",
+      "sha256": "a8e942f48755555ffcb9c1ce25a49ae500093da72c9b137303a7cf89c5bde323",
+      "bytes": 1992,
+      "lines": 39,
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_count": 18,
+          "new_start": 1,
+          "new_count": 23,
+          "context": "",
+          "sha256": "e0ef8f1734e3954b8c64fb14fff8efd84bba50b09415b0a3cd28d16fb4980d66"
+        },
+        {
+          "old_start": 29,
+          "old_count": 3,
+          "new_start": 34,
+          "new_count": 6,
+          "context": "Suite complète avant clôture : même environnement,",
+          "sha256": "1b118261008114deef4f9ec14faa9565206a093b089ca8b10b68bfb5a4bd7687"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/research.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/research.md",
+      "kind": "documentation",
+      "sha256": "49c677388f6035e1268d6e5fd10e6c34b5a9a86093bbcb629c9c321e4360ad10",
+      "bytes": 14200,
+      "lines": 224,
+      "hunks": [
+        {
+          "old_start": 25,
+          "old_count": 10,
+          "new_start": 25,
+          "new_count": 12,
+          "context": "déplace.",
+          "sha256": "85186234fc0ea7de0ba49d034b2d0c32a28f2c6b3097e6441e246206cceb0b33"
+        },
+        {
+          "old_start": 133,
+          "old_count": 9,
+          "new_start": 135,
+          "new_count": 12,
+          "context": "déplace.",
+          "sha256": "6509c4bfd01d218d4737786a06c8633928d1e2ac1f40dfbc1130328325c1b97a"
+        },
+        {
+          "old_start": 192,
+          "old_count": 7,
+          "new_start": 197,
+          "new_count": 7,
+          "context": "déplace.",
+          "sha256": "bb6f1cd295fc122c97282cf97dd34ad7406980ca4f0ee16443de237071b86c20"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/reuse-audit.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/reuse-audit.md",
+      "kind": "documentation",
+      "sha256": "179a75b67c93456f7b9b353183e18f7f9906db20a6a0be27c1d5b25b37b26a80",
+      "bytes": 8412,
+      "lines": 123,
+      "hunks": [
+        {
+          "old_start": 3,
+          "old_count": 8,
+          "new_start": 3,
+          "new_count": 8,
+          "context": "",
+          "sha256": "8b4ffb48c5db580421cef2ec45a696e3e079ad51ff14581e557554939a439ef7"
+        },
+        {
+          "old_start": 40,
+          "old_count": 7,
+          "new_start": 40,
+          "new_count": 7,
+          "context": "justifié par 4 usages. Aucune duplication évidente.",
+          "sha256": "cc283a4ce5082fe380cb67161e13a5b8f699f5e62b4d5ee4994359f5025c9024"
+        },
+        {
+          "old_start": 57,
+          "old_count": 7,
+          "new_start": 57,
+          "new_count": 7,
+          "context": "justifié par 4 usages. Aucune duplication évidente.",
+          "sha256": "a7fa03ccd19a24198f2993cb473d11fd6ab0949b7ecd28061426b3421e678e22"
+        },
+        {
+          "old_start": 106,
+          "old_count": 3,
+          "new_start": 106,
+          "new_count": 18,
+          "context": "justifié par 4 usages. Aucune duplication évidente.",
+          "sha256": "929232c5b8ccc281396d26e74e1e432939972f2ab0ebd062584d6b762be46a65"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/spec.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/spec.md",
+      "kind": "documentation",
+      "sha256": "67b4fdca7da6de300b139d67a6fa14f025b823bead1e0adaa212c6f9d5df00f7",
+      "bytes": 23896,
+      "lines": 400,
+      "hunks": [
+        {
+          "old_start": 5,
+          "old_count": 13,
+          "new_start": 5,
+          "new_count": 13,
+          "context": "",
+          "sha256": "e6b0ae214fa213cc1f5103c4f36d73c3a909592683cc5ffbc0c24dc2d110433e"
+        },
+        {
+          "old_start": 21,
+          "old_count": 7,
+          "new_start": 21,
+          "new_count": 7,
+          "context": "Fichiers:",
+          "sha256": "6652cff41730b9569d94646854beaf979bb033e4097592211967a2917b6966cb"
+        },
+        {
+          "old_start": 211,
+          "old_count": 7,
+          "new_start": 211,
+          "new_count": 8,
+          "context": "catalogue sont additifs.",
+          "sha256": "b28182cb27a787d495694fddf1bc1fa7c73137e2f27a23a125af58d6f2ad3f44"
+        },
+        {
+          "old_start": 221,
+          "old_count": 7,
+          "new_start": 222,
+          "new_count": 7,
+          "context": "catalogue sont additifs.",
+          "sha256": "f936b10212c1dc8521f96d4e50f0047a571a8f8fa546da5c66a0a5e5aa0aa5e2"
+        },
+        {
+          "old_start": 235,
+          "old_count": 7,
+          "new_start": 236,
+          "new_count": 8,
+          "context": "catalogue sont additifs.",
+          "sha256": "e444e15529c1199d1ecbb75ac404db8610e9a3935b2f1d50e44ef067123abdc5"
+        },
+        {
+          "old_start": 295,
+          "old_count": 8,
+          "new_start": 297,
+          "new_count": 8,
+          "context": "catalogue sont additifs.",
+          "sha256": "6509a96c21e1fa0f5f520ca92036318ee7e864c1559d16cd377d552f465a14eb"
+        },
+        {
+          "old_start": 359,
+          "old_count": 3,
+          "new_start": 361,
+          "new_count": 40,
+          "context": "doit pas réutiliser `suspended_at` ni `resume_attempts` de 152 (pause et panne)",
+          "sha256": "d0fadb8d983ce611db019a210b7b428e2baa65e124bdca30ad25995ed9cf1446"
+        }
+      ]
+    },
+    {
+      "scope_origin": "tracked_delta",
+      "status": "tracked_modified",
+      "file": "specs/157-catalogue-quotas/tasks.md",
+      "absolute_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/tasks.md",
+      "kind": "documentation",
+      "sha256": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe",
+      "bytes": 14581,
+      "lines": 95,
+      "hunks": [
+        {
+          "old_start": 3,
+          "old_count": 7,
+          "new_start": 3,
+          "new_count": 7,
+          "context": "",
+          "sha256": "b0b8813c887ad838b6c9cda05bcf8b87e234a88147c9701769c97a1cd8652514"
+        },
+        {
+          "old_start": 16,
+          "old_count": 57,
+          "new_start": 16,
+          "new_count": 57,
+          "context": "les déplace.",
+          "sha256": "8e4960a5741282a03e9fadd630d37563f4707cc3dbdd3a1fe2dcd4b2e0fa062b"
+        }
+      ]
+    }
+  ],
+  "excluded": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/implementation.md",
+      "relative": "specs/157-catalogue-quotas/implementation.md",
+      "sha256": "676f80a5f23404eab00084e8f2f990f28ea54ca737bef633bdfc6137be335659",
+      "bytes": 10779,
+      "lines": 59,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "implementation_report_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T001-baseline157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T001-baseline157.json",
+      "sha256": "b66d90f61936fa3a3c39306c182a5a08f9bb4806972e0479efc62fc47b25f18b",
+      "bytes": 54833,
+      "lines": 515,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T001-latence-before-measurement.json",
+      "relative": "specs/157-catalogue-quotas/validation/T001-latence-before-measurement.json",
+      "sha256": "87fa9740d10a14e6f8d2443cec55d5f409db92fa01bc78912713f99c7fb387bb",
+      "bytes": 985,
+      "lines": 62,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T001-latence-test.txt",
+      "relative": "specs/157-catalogue-quotas/validation/T001-latence-test.txt",
+      "sha256": "d3d183cfa0d0ef07ea900194bbe38b2bbf96145521ad02f7d94e13099b93c373",
+      "bytes": 3851,
+      "lines": 86,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T001-latence157-before-r2.json",
+      "relative": "specs/157-catalogue-quotas/validation/T001-latence157-before-r2.json",
+      "sha256": "36189a20538063a211d89918ea6a800f59141e7b1da01a9136ff2a16662030d4",
+      "bytes": 54494,
+      "lines": 482,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T001-latence157-before.json",
+      "relative": "specs/157-catalogue-quotas/validation/T001-latence157-before.json",
+      "sha256": "03f125ba45bad696b15c6342a2e05270bb891ff5de120f254f39e9ffa1cc4284",
+      "bytes": 54492,
+      "lines": 482,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T001-reference.json",
+      "relative": "specs/157-catalogue-quotas/validation/T001-reference.json",
+      "sha256": "743a989f6a2de5c66f0a3b7073bc98a86ec84c459e1793e0a803aec65fb326ce",
+      "bytes": 210,
+      "lines": 8,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T002-forensic-historical.json",
+      "relative": "specs/157-catalogue-quotas/validation/T002-forensic-historical.json",
+      "sha256": "7ee88fbc85dd2d92a5b191daebc4c1c906d285cf8956d895e7e10a5f69a6acad",
+      "bytes": 7425,
+      "lines": 155,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T002-forensic-root.json",
+      "relative": "specs/157-catalogue-quotas/validation/T002-forensic-root.json",
+      "sha256": "2ed9af72b570a23b05a6f96bcbde5ba14f2c6a75c5b003c55304fc8eaf337b06",
+      "bytes": 723,
+      "lines": 13,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T003-T006-green157-daemon.json",
+      "relative": "specs/157-catalogue-quotas/validation/T003-T006-green157-daemon.json",
+      "sha256": "e156a12160d7d870fc033fce72243a9dd3255edecef0d2600e2992b9612d2562",
+      "bytes": 54656,
+      "lines": 483,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T003-green157-transport.json",
+      "relative": "specs/157-catalogue-quotas/validation/T003-green157-transport.json",
+      "sha256": "c65701fb8a1c2cee6bc4e4f41918e78b04fc1c1467ff37baa85dd3d93b18da4e",
+      "bytes": 54569,
+      "lines": 479,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T004-T005-red157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T004-T005-red157.json",
+      "sha256": "505f8a136cec4c652379cf0133b87e5028a9799de75c132fceb95c9c5a036ce5",
+      "bytes": 55303,
+      "lines": 493,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T007-T010-red157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T007-T010-red157.json",
+      "sha256": "474ca20c49cc333c441216cccf2d1ea4a7c48892c7dce6771effd37f7d9f59fc",
+      "bytes": 55691,
+      "lines": 492,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T007-T011-green157-r2-cibles.json",
+      "relative": "specs/157-catalogue-quotas/validation/T007-T011-green157-r2-cibles.json",
+      "sha256": "d69e2c3985d4367b03cb702e84c53136631ec7574075be60a0d27c649733f4b1",
+      "bytes": 54800,
+      "lines": 484,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T007-T011-green157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T007-T011-green157.json",
+      "sha256": "5cc8a3c47d16b94dd416cf27160d1e40a0c6bb203c5cc27f4608cf0d7a64e07c",
+      "bytes": 54929,
+      "lines": 489,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T012-T015-green157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T012-T015-green157.json",
+      "sha256": "ec8cdbe4af7ac8d85780e862aace1a3d15caa802651b3237bac88ecf2c467f38",
+      "bytes": 54670,
+      "lines": 484,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T012-latence157-after-r2.json",
+      "relative": "specs/157-catalogue-quotas/validation/T012-latence157-after-r2.json",
+      "sha256": "36e9468a4583d206a0b124a8b14fde1ec04e8f5cde3178f1496c79e8e94ffdd7",
+      "bytes": 54731,
+      "lines": 484,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T012-latence157-after.json",
+      "relative": "specs/157-catalogue-quotas/validation/T012-latence157-after.json",
+      "sha256": "43b09e012ac905683258cfb998be872166ebeb7d8f5837acbb244b87ab0fdfb6",
+      "bytes": 54726,
+      "lines": 484,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T013-red157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T013-red157.json",
+      "sha256": "9639cc59b6b782940e26aec04e71693882ec81313c76101d78f4e6588071fef5",
+      "bytes": 55257,
+      "lines": 488,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T016-T020-red157-T014-historique.json",
+      "relative": "specs/157-catalogue-quotas/validation/T016-T020-red157-T014-historique.json",
+      "sha256": "0806c0986d288843ee7d0ea3ee2103bd7b31fb7ca6359ea19da1c800b3b7c213",
+      "bytes": 54999,
+      "lines": 488,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T017-T021-green157-replay154-concurrence.json",
+      "relative": "specs/157-catalogue-quotas/validation/T017-T021-green157-replay154-concurrence.json",
+      "sha256": "0682ca6b4e8d5a0572ea4bd8f07f76dee4256f6626ed79dfb9be7177d7c603be",
+      "bytes": 54741,
+      "lines": 482,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T017-T021-green157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T017-T021-green157.json",
+      "sha256": "e4f26824f7051b59027ae70d51278d209219d5fec79a529b99bf03cd7c5d41db",
+      "bytes": 54807,
+      "lines": 486,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T017-red157-T016-T020-green.json",
+      "relative": "specs/157-catalogue-quotas/validation/T017-red157-T016-T020-green.json",
+      "sha256": "083600c2471e7fbeb869b9ab3e1ee452bd9546aa881ed30f0eeaebfa2c50687e",
+      "bytes": 55920,
+      "lines": 494,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T022-baseline157-final.json",
+      "relative": "specs/157-catalogue-quotas/validation/T022-baseline157-final.json",
+      "sha256": "138cfa4651f4e79f05b37eebdf80a93d2e3c094d274d860514fa3ee53e15201d",
+      "bytes": 55112,
+      "lines": 518,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T022-comparison.json",
+      "relative": "specs/157-catalogue-quotas/validation/T022-comparison.json",
+      "sha256": "4d5f37cabbe46e039b0240bf9039c60930458213895ed1dc2e9fbd3d074656f9",
+      "bytes": 1129,
+      "lines": 17,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json",
+      "relative": "specs/157-catalogue-quotas/validation/T025-full157-once.json",
+      "sha256": "442d5b063c06fd01697bf32dfc5631356ebb053088c02b06ed2f0bedc1fa398c",
+      "bytes": 60894,
+      "lines": 1071,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-replay154-compat157.json",
+      "relative": "specs/157-catalogue-quotas/validation/T025-replay154-compat157.json",
+      "sha256": "74fd117b4e4c09da91b34fdb2935b93a3e45b7efa931b2e0103356639552ee52",
+      "bytes": 54692,
+      "lines": 481,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/analyze157-fresh.json",
+      "relative": "specs/157-catalogue-quotas/validation/analyze157-fresh.json",
+      "sha256": "e88033f20d59b006f36cbb00863d9654bf9548d60eeb68f5e0f00665522e07f9",
+      "bytes": 20955,
+      "lines": 664,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/analyze157-fresh.md",
+      "relative": "specs/157-catalogue-quotas/validation/analyze157-fresh.md",
+      "sha256": "17026b2863680a3ddafdcd7e1eac61a64724a20dfc13e2413bca014a62345de1",
+      "bytes": 9218,
+      "lines": 103,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/analyze157-root-go.json",
+      "relative": "specs/157-catalogue-quotas/validation/analyze157-root-go.json",
+      "sha256": "265fe24e6fc3774279e843065fba83ce5f360531e7dd090c4e4d5873d3ad4dbf",
+      "bytes": 1467,
+      "lines": 34,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/baseline.md",
+      "relative": "specs/157-catalogue-quotas/validation/baseline.md",
+      "sha256": "e70542c762a7fb6882c70f761b2d236b71e0d5b9ecd06c7fab4568291076ab0e",
+      "bytes": 921,
+      "lines": 12,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/fondations157.md",
+      "relative": "specs/157-catalogue-quotas/validation/fondations157.md",
+      "sha256": "cf0808db083461087857a555aa540a0106fba67e2bc5462815f058a8a3c04dc5",
+      "bytes": 881,
+      "lines": 7,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/forensic.md",
+      "relative": "specs/157-catalogue-quotas/validation/forensic.md",
+      "sha256": "d969856871338733b0e70a68eaa35825d4c867a562ecb887912822f9f2369850",
+      "bytes": 1065,
+      "lines": 9,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+      "relative": "specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+      "sha256": "db59f6b1081de446d5291f467421ed491dabb76d8c7699f17af2439b058e3ef9",
+      "bytes": 2605,
+      "lines": 135,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/mesure-catalogue.md",
+      "relative": "specs/157-catalogue-quotas/validation/mesure-catalogue.md",
+      "sha256": "8aa16e4a1294a16274805d47ee5359db64597cbe4820e1311f2affdf0c5b2c1e",
+      "bytes": 574,
+      "lines": 7,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/quotas157.md",
+      "relative": "specs/157-catalogue-quotas/validation/quotas157.md",
+      "sha256": "7f9bef7369a7cdc6fb387a0850464d6073d572efa80dd1f34828da13ebb3f307",
+      "bytes": 1542,
+      "lines": 11,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/readiness157-after156.json",
+      "relative": "specs/157-catalogue-quotas/validation/readiness157-after156.json",
+      "sha256": "9de506e51b9d3b00a7e2b7cf3ab76c35453b29181e091f7e24560e5ea5fb7654",
+      "bytes": 23223,
+      "lines": 432,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/readiness157-after156.md",
+      "relative": "specs/157-catalogue-quotas/validation/readiness157-after156.md",
+      "sha256": "2e04b4a7e3a1ac175f85a8767c7ce86e7347f4c625f59a6ba413bb30be2e73e6",
+      "bytes": 8282,
+      "lines": 51,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/remplacement157.md",
+      "relative": "specs/157-catalogue-quotas/validation/remplacement157.md",
+      "sha256": "222e87c3e83b41ff927e6c720c50894553040903dec1b7f01433049dde104ec6",
+      "bytes": 1757,
+      "lines": 11,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/tests-157.md",
+      "relative": "specs/157-catalogue-quotas/validation/tests-157.md",
+      "sha256": "22e87553704aad99f1c185b794b0ed82506c36244b5c2eb1877f77d0a6ccc6f7",
+      "bytes": 13816,
+      "lines": 81,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/us1-verdict157.md",
+      "relative": "specs/157-catalogue-quotas/validation/us1-verdict157.md",
+      "sha256": "b1989381b04112534dbf93ee64ccda8c396897bc12ba52368f1bbbad2e2b81f5",
+      "bytes": 1195,
+      "lines": 10,
+      "status": "untracked_new",
+      "included_in_code_diff": false,
+      "exclusion_reason": "validation_receipt_excluded_to_avoid_recursive_diff",
+      "stage_class": "selected_proof_only"
+    }
+  ],
+  "inventory_is_semantic_coverage": false,
+  "files_scanned": 0,
+  "lines_analyzed": 0,
+  "semantic_coverage_percent": 0,
+  "coverage_basis": "Les inventaires/hashes ne sont pas des lectures ; les modules enregistreront leurs propres plages.",
+  "source_hashes_final": {
+    "crates/bridget-daemon/src/daemon.rs": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+    "crates/bridget-daemon/src/delegation.rs": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+    "crates/bridget-daemon/src/lib.rs": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+    "crates/bridget-daemon/src/lifecycle.rs": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+    "crates/bridget-daemon/src/native_permissions.rs": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+    "crates/bridget-daemon/src/provider_limits.rs": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+    "crates/bridget-daemon/src/registry.rs": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+    "crates/bridget-daemon/tests/guidance156_e2e.rs": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+    "crates/bridget-transport/src/protocol.rs": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365"
+  },
+  "scope_semantic_hashes": {
+    "crates/bridget-daemon/src/daemon.rs": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+    "crates/bridget-daemon/src/delegation.rs": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+    "crates/bridget-daemon/src/lib.rs": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+    "crates/bridget-daemon/src/lifecycle.rs": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+    "crates/bridget-daemon/src/native_permissions.rs": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+    "crates/bridget-daemon/src/provider_limits.rs": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+    "crates/bridget-daemon/src/registry.rs": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+    "crates/bridget-daemon/tests/guidance156_e2e.rs": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+    "crates/bridget-transport/src/protocol.rs": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365",
+    "docs/decisions/157-catalogue-quotas-remplacement.md": "de51a9cba0cac8e0ddbb2076485c9be7220b858f94ecc050cf5ed7149d5fc9f6",
+    "docs/delegation-native.md": "7db518abe316ce41f4a39ade33391d9054e8e879cbdfebf05dcfa1c42d1f0ccb",
+    "skills/bridget/SKILL.md": "9b542c7c6c992bc59af79c474410a0da68e08c693efba0a3cf600a7e3ae6875a",
+    "skills/bridget/references/commandes.md": "b0cde86906d69b110302d7afc6eb1dcafb087dee822ec16ea6a304a70342d66d",
+    "specs/157-catalogue-quotas/adversarial-review-codex.md": "1616d5e5f9cd56a0eca2317fb20662643c1a53c83c1c425785c24e686fae52f6",
+    "specs/157-catalogue-quotas/contracts/delegation157.md": "0f02c092f13870d07a834f548476d4e70f63366adbb8d032bf1b76c7c95e024f",
+    "specs/157-catalogue-quotas/data-model.md": "55f38286b486cddc3e1cce784581c57325b115fe1b0e5f46e5277b9f68d7c04f",
+    "specs/157-catalogue-quotas/plan.md": "f9c2d44e55780d03f823334bab26f947627e6384e2c3a2c41b8ed266fc58fbd7",
+    "specs/157-catalogue-quotas/quickstart.md": "a8e942f48755555ffcb9c1ce25a49ae500093da72c9b137303a7cf89c5bde323",
+    "specs/157-catalogue-quotas/research.md": "49c677388f6035e1268d6e5fd10e6c34b5a9a86093bbcb629c9c321e4360ad10",
+    "specs/157-catalogue-quotas/reuse-audit.md": "179a75b67c93456f7b9b353183e18f7f9906db20a6a0be27c1d5b25b37b26a80",
+    "specs/157-catalogue-quotas/spec.md": "67b4fdca7da6de300b139d67a6fa14f025b823bead1e0adaa212c6f9d5df00f7",
+    "specs/157-catalogue-quotas/tasks.md": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe"
+  },
+  "snapshot_stable_during_capture": true,
+  "authority_manifest": "/Users/moi/.cache/bridget-plan157-20261012-r1/final-source-capture-r4/manifest.json",
+  "authority_manifest_sha256": "c5ad46729a2db7d9b5b2e0a4eed6cc5039d61d58fad634967a18ab0faf070d00",
+  "metadata_boundary": "R4 final26/26 ; R2/C1 historiques, R3 correctifquota et docs, R4 deuxcommentairesregistry seulement.",
+  "metadata_delta_since_r2": []
+}

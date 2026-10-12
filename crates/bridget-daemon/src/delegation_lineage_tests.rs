@@ -33,6 +33,7 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
 
 fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        fallback: Vec::new(),
         request_id: request_id.into(),
         agent_type: "fixture".into(),
         model: "fixture-model".into(),
@@ -60,6 +61,7 @@ fn task(
     created_at: i64,
 ) -> Task {
     Task {
+        substitution: None,
         task_id: task_id.into(),
         root_owner_agent_id: String::new(),
         parent_task_id: None,

@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-10-12T06:55:41.588631+00:00",
+  "gate": "GO",
+  "critical": 0,
+  "high": 0,
+  "findings_corrected": {
+    "I1": true,
+    "U1": true,
+    "I2": true,
+    "I3": true
+  },
+  "relecture": "ROOT unique apr\u00e8s corrections documentaires ; aucune preuve de code157",
+  "input_report_sha256": "e88033f20d59b006f36cbb00863d9654bf9548d60eeb68f5e0f00665522e07f9",
+  "prerequisite_script_rc": 127,
+  "fallback": "feature et artefacts v\u00e9rifi\u00e9s manuellement ; aucun nouvel outil",
+  "tasks_total": 26,
+  "tasks_checked": 2,
+  "coverage": {
+    "FR": 20,
+    "SC": 7,
+    "US": 4
+  },
+  "sha256_after": {
+    "spec.md": "e6c5a8c0c6a3bbb9e616e32c29a96a2f96d49472270ffb4411772207011b5052",
+    "plan.md": "03e630221a1a5379368660d47756f1a8c4b3636380dc003a2c1a7e602f8df3e1",
+    "tasks.md": "f16fa85519f1d7e059c9797b231524a9958eb92f53f22c1035343b396923ce03",
+    "research.md": "49c677388f6035e1268d6e5fd10e6c34b5a9a86093bbcb629c9c321e4360ad10",
+    "reuse-audit.md": "1fe2a2efad4bc9768aaa53f6887411eada4a233247e8ac0c83c2ee2c7a40a1c8",
+    "data-model.md": "55f38286b486cddc3e1cce784581c57325b115fe1b0e5f46e5277b9f68d7c04f",
+    "quickstart.md": "a8e942f48755555ffcb9c1ce25a49ae500093da72c9b137303a7cf89c5bde323",
+    "contracts/delegation157.md": "0f02c092f13870d07a834f548476d4e70f63366adbb8d032bf1b76c7c95e024f"
+  },
+  "post_go_doc_correction": "data-model Quota.windows : status supprim\u00e9 pour respecter les quatre cl\u00e9s du contratR1"
+}

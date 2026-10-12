@@ -1,0 +1,1507 @@
+{
+  "feature": "157-catalogue-quotas",
+  "phase": "Converge",
+  "pass": 1,
+  "created_at": "2026-10-12T08:01:48.024559+00:00",
+  "verdict": "CONVERGED",
+  "requirements": {
+    "FR": 20,
+    "SC": 7,
+    "US": 4,
+    "mapped": 31,
+    "missing": 0
+  },
+  "findings": [],
+  "findings_counts": {
+    "CRITICAL": 0,
+    "HIGH": 0,
+    "MEDIUM": 0,
+    "LOW": 0
+  },
+  "added_tasks": 0,
+  "tasks": {
+    "done": 26,
+    "total": 26,
+    "before_sha256": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe",
+    "after_sha256": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe",
+    "byte_identical": true
+  },
+  "implementation_status": "Implemented",
+  "pipeline_status": "In Progress",
+  "method": {
+    "skill": "/Users/moi/.agents/skills/my-specify-all/SKILL.md",
+    "primitive_available": false,
+    "primitive_evidence": "Catalogue outils :aucune primitive speckit-converge ; SKILL.md absent aux trois emplacements contrôlés. Fallback manuel Phase6 appliqué.",
+    "source_read_scope": "PatchR1 intégral3628lignes29fichiers +delta final oracle154411–431 ; module provider_limits entier289lignes. Lecture fraîche core/checklist puis verdict895–1540/failure74–110/taskview244–273/préflight102–136/quotas25–90/handler7085–7143. Pas tous les corps historiques inchangés. ; handle488–670 relu, Catalogue hors drives/tick.",
+    "no_tests_executed": true,
+    "no_project_writes": true
+  },
+  "input_hashes": {
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/spec.md": "85c0aa3bd421452784f73de9ee6c5cae5a9dbeb8827eb31f562c96ec34e50f73",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/plan.md": "f9c2d44e55780d03f823334bab26f947627e6384e2c3a2c41b8ed266fc58fbd7",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/tasks.md": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/checklists/requirements.md": "8bd7fa7c2360c2d01969ce87812983a7b8e18bad6605ec845241ec1b64c77036",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/implementation.md": "676f80a5f23404eab00084e8f2f990f28ea54ca737bef633bdfc6137be335659",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/tests-157.md": "22e87553704aad99f1c185b794b0ed82506c36244b5c2eb1877f77d0a6ccc6f7",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/manifest157-final.json": "507c530bcb2d42b3b6f992dac7f3afe838e30ab2fc4692b1009e64d896600268",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/diff-157.patch": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972"
+  },
+  "source_snapshot": {
+    "crates/bridget-daemon/src/daemon.rs": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+    "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+    "crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+    "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+    "crates/bridget-daemon/src/delegation.rs": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+    "crates/bridget-daemon/src/delegation_lineage_tests.rs": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+    "crates/bridget-daemon/src/delegation_mcp.rs": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+    "crates/bridget-daemon/src/lib.rs": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+    "crates/bridget-daemon/src/lifecycle.rs": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+    "crates/bridget-daemon/src/native_permissions.rs": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+    "crates/bridget-daemon/src/provider_limits.rs": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592",
+    "crates/bridget-daemon/src/registry.rs": "27656caa32399b62e41a39edf57f0e2ad7f91bf2a5bcf9cdfdbb9c13e815ccdd",
+    "crates/bridget-daemon/tests/guidance156_e2e.rs": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+    "crates/bridget-daemon/tests/native_delegation_e2e.rs": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+    "crates/bridget-transport/src/protocol.rs": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365",
+    "docs/decisions/157-catalogue-quotas-remplacement.md": "de51a9cba0cac8e0ddbb2076485c9be7220b858f94ecc050cf5ed7149d5fc9f6",
+    "docs/delegation-native.md": "2698ae8a7119bebd255dec630687609f425b1885e720775494d8dbb1c559eaa9",
+    "skills/bridget/SKILL.md": "9b542c7c6c992bc59af79c474410a0da68e08c693efba0a3cf600a7e3ae6875a",
+    "skills/bridget/references/commandes.md": "b0cde86906d69b110302d7afc6eb1dcafb087dee822ec16ea6a304a70342d66d",
+    "specs/157-catalogue-quotas/adversarial-review-codex.md": "1616d5e5f9cd56a0eca2317fb20662643c1a53c83c1c425785c24e686fae52f6",
+    "specs/157-catalogue-quotas/contracts/delegation157.md": "0f02c092f13870d07a834f548476d4e70f63366adbb8d032bf1b76c7c95e024f",
+    "specs/157-catalogue-quotas/data-model.md": "55f38286b486cddc3e1cce784581c57325b115fe1b0e5f46e5277b9f68d7c04f",
+    "specs/157-catalogue-quotas/plan.md": "f9c2d44e55780d03f823334bab26f947627e6384e2c3a2c41b8ed266fc58fbd7",
+    "specs/157-catalogue-quotas/quickstart.md": "a8e942f48755555ffcb9c1ce25a49ae500093da72c9b137303a7cf89c5bde323",
+    "specs/157-catalogue-quotas/research.md": "49c677388f6035e1268d6e5fd10e6c34b5a9a86093bbcb629c9c321e4360ad10",
+    "specs/157-catalogue-quotas/reuse-audit.md": "179a75b67c93456f7b9b353183e18f7f9906db20a6a0be27c1d5b25b37b26a80",
+    "specs/157-catalogue-quotas/spec.md": "85c0aa3bd421452784f73de9ee6c5cae5a9dbeb8827eb31f562c96ec34e50f73",
+    "specs/157-catalogue-quotas/tasks.md": "2925739339c692ef00d246290ece47273085a8d74665b8481e19c0da9e4704fe"
+  },
+  "capture": {
+    "manifest": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/manifest157-final.json",
+    "manifest_sha256": "507c530bcb2d42b3b6f992dac7f3afe838e30ab2fc4692b1009e64d896600268",
+    "diff": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/diff-157.patch",
+    "diff_sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+    "hunks": 103,
+    "files": 29,
+    "lines": 3653,
+    "metadata_delta": [
+      "spec.md statut26/26",
+      "tasks.md seul cochageT026 aprèscapture"
+    ]
+  },
+  "matrix": [
+    {
+      "id": "FR-001",
+      "scope": "Verdict commun",
+      "tasks": [
+        "T008",
+        "T009"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 910,
+          "reason": "resolve_target appelle le même corps target_resolver que les trois postures du catalogue",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1461,
+          "reason": "Un préparateur local par entrée",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3968,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_matrice",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-002",
+      "scope": "Contexte borné et booléens",
+      "tasks": [
+        "T007",
+        "T009"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1446,
+          "reason": "Fait non limité à une demande et racine déclarée",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1469,
+          "reason": "Trois postures issues du verdict",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3968,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_matrice",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4028,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_hors_contexte_fait_limite_a_une_demande",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4047,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_hors_contexte_sous_repertoire",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4071,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_hors_contexte_binaire_retire_entre_deux_appels",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "SameProject sans racine : cwd:null/catalogue faux, admission concrète non supprimée.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-003",
+      "scope": "can_run et contraintes françaises",
+      "tasks": [
+        "T009",
+        "T011"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1472,
+          "reason": "OR des postures ; diagnostics dédupliqués",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1484,
+          "reason": "Messages français",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3908,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_t3_claude_sans_launch_context_vers_codex",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4116,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_preflight_catalogue_binaire_absent",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-004",
+      "scope": "Préflight complet avant tâche",
+      "tasks": [
+        "T005",
+        "T008",
+        "T010"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 102,
+          "reason": "Type/capacités/observation/facturation/protocole/env/binaire",
+          "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 245,
+          "reason": "Réemploi submit_spawn",
+          "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 371,
+          "reason": "Réemploi prepare_spawn_parts",
+          "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 954,
+          "reason": "Préflight épinglé avant insertion1366",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 769,
+          "name": "lifecycle::tests::native157_preflight_binaire_absent",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 787,
+          "name": "lifecycle::tests::native157_preflight_cle_api_interdite_binaire_present",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 806,
+          "name": "lifecycle::tests::native157_preflight_home_absent_binaire_present",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 824,
+          "name": "lifecycle::tests::native157_preflight_protocole_non_gere",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 846,
+          "name": "lifecycle::tests::native157_preflight_definition_epinglee",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4093,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_preflight_admission_binaire_absent_sans_tache",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-005",
+      "scope": "Checks explicites",
+      "tasks": [
+        "T009",
+        "T011"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1520,
+          "reason": "binary:true/quota:observed/auth:false",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3908,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_t3_claude_sans_launch_context_vers_codex",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "Aucune authentification fournisseur vérifiée.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-006",
+      "scope": "Catalogue pur et disponible pendant pause",
+      "tasks": [
+        "T009"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1445,
+          "reason": "Branche de lecture, sans garde autonome ni insertion",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 59,
+          "reason": "quota lecture seule",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 613,
+          "reason": "handle_with_fact : drives seulement Delegate/Cancel ; Catalogue ne déclenche pas tick",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 10160,
+          "name": "daemon::native_delegation::tests::native150_pause_statut_et_annulation_disponibles",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T022-baseline157-final.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3968,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_matrice",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "Absence de mutation/fournisseur vérifiée statiquement ; sockets de fixture restent sans émission.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-007",
+      "scope": "Mémoire par type/fenêtre/source/temps",
+      "tasks": [
+        "T004",
+        "T013",
+        "T014"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon.rs",
+          "line": 7125,
+          "reason": "agent_type depuis présence, record au point7138",
+          "sha256": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 30,
+          "reason": "Upsert avec source et observed_at",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4241,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_survit_fin_presence",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4264,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_nom_enregistre_par_les_trois_sources",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 215,
+          "name": "provider_limits::tests::native157_limits_cle_agent_type",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "Volatile au redémarrage ; pas de quota partagé entre types.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-008",
+      "scope": "Épuisement par fenêtre uniquement",
+      "tasks": [
+        "T004",
+        "T013"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 71,
+          "reason": "Retour futur et rejected Claude ou>=100%",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1475,
+          "reason": "Information Codex globale non bloquante",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 97,
+          "name": "provider_limits::tests::native157_limits_regle_epuisement",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 135,
+          "name": "provider_limits::tests::native157_limits_statut_codex_global",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-009",
+      "scope": "Projection quota et null",
+      "tasks": [
+        "T004",
+        "T015"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 77,
+          "reason": "Retour max des seules fenêtres épuisées",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 81,
+          "reason": "Projection des faits sans valeur inventée",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1517,
+          "reason": "quota dans entrée",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 191,
+          "name": "provider_limits::tests::native157_limits_fenetres_independantes",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4224,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_inconnu_null",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-010",
+      "scope": "Refus quota et clé libre",
+      "tasks": [
+        "T013",
+        "T015",
+        "T016"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 977,
+          "reason": "Quota vérifié avant Task",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 94,
+          "reason": "failure conserve resets_at",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4162,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_admission_refuse_avec_resets_at",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 630,
+          "name": "delegation_mcp::tests::native157_quota_detail_visible_cote_mcp",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-011",
+      "scope": "Péremption lecture et écriture",
+      "tasks": [
+        "T004",
+        "T013"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 38,
+          "reason": "Purge avant upsert",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 68,
+          "reason": "Ignore reset<=now en lecture",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 165,
+          "name": "provider_limits::tests::native157_limits_fenetre_perimee",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4199,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_perime_ignore",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-012",
+      "scope": "Liste fermée bornée et canonique",
+      "tasks": [
+        "T003",
+        "T017",
+        "T020"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 2157,
+          "reason": "fallback sérialisé seulement si présent",
+          "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1025,
+          "reason": "Validation bornée avant canonique",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 132,
+          "reason": "Frontière MCP fermée avant connexion",
+          "sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4634,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_validation_liste_fermee",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 334,
+          "name": "delegation_mcp::tests::native157_fallback_mcp_formes_et_canonique",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4754,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_rejeu_autre_liste_envelope_mismatch",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-013",
+      "scope": "Neuf motifs remplaçables fermés",
+      "tasks": [
+        "T017",
+        "T018"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1164,
+          "reason": "Liste initiale FR013 exacte",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4435,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_motifs_remplacables_fr013",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4550,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_droits_parent_jamais_remplaces",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-014",
+      "scope": "Ordre/type/modèle/effort/droits",
+      "tasks": [
+        "T008",
+        "T017",
+        "T018"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 934,
+          "reason": "Type/modèle/effort avant préflight/politique/options/quota",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1150,
+          "reason": "Candidats ordonnés, premier succès",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1133,
+          "reason": "Candidat épinglé Reserve/Commit",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4487,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_modele_effort_type_avant_indisponibilite",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4662,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_aucune_elevation_des_droits",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4326,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_premier_puis_second_candidat_valide",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-015",
+      "scope": "Substitution et cible effective durables",
+      "tasks": [
+        "T006",
+        "T018",
+        "T021"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1180,
+          "reason": "Trace requested/selected/reason/tried",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1307,
+          "reason": "Payload Task et request effectif",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 260,
+          "reason": "Projection commune réponse/status",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4326,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_premier_puis_second_candidat_valide",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4773,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_projection_lineage_cible_effective",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-016",
+      "scope": "Épuisement liste et codes anciens",
+      "tasks": [
+        "T015",
+        "T017",
+        "T019"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1177,
+          "reason": "fallback_exhausted avec tried",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1164,
+          "reason": "Sans liste : refus initial exact",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4682,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_epuise_liste_les_essais",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4704,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_epuise_sans_tache_cle_libre",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4613,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_sans_liste_codes_historiques",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-017",
+      "scope": "Rejeu stable sans verdict",
+      "tasks": [
+        "T018",
+        "T021"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1057,
+          "reason": "Rejeu avant garde/verdict, canonical original",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1366,
+          "reason": "Insertion canonical distinct du request effectif",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4727,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_rejeu_meme_substitution",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4754,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_rejeu_autre_liste_envelope_mismatch",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-018",
+      "scope": "Aucune substitution après admission",
+      "tasks": [
+        "T018",
+        "T021"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1146,
+          "reason": "Seule sélection Shared/Probe initiale",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1220,
+          "reason": "Commit revalide sans parcours fallback",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1307,
+          "reason": "Sélection figée dans Task",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4727,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_rejeu_meme_substitution",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4326,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_premier_puis_second_candidat_valide",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "Contrôle statique du diff/tick : aucun ajout de sélection en mission ; reprise quota reportée160.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-019",
+      "scope": "Octets anciens sans fallback",
+      "tasks": [
+        "T003",
+        "T006",
+        "T020",
+        "T022"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 2156,
+          "reason": "skip Vec::is_empty",
+          "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation.rs",
+          "line": 192,
+          "reason": "substitution default None compatible payload150",
+          "sha256": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 8374,
+          "name": "protocol::spec104_search_contract_tests::native157_protocole_delegate_sans_fallback_garde_octets150",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T003-green157-transport.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation.rs",
+          "line": 974,
+          "name": "delegation::tests::native157_stockage_payload150_sans_substitution",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 334,
+          "name": "delegation_mcp::tests::native157_fallback_mcp_formes_et_canonique",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "La vue ajoute substitution:null ; l’oracle154 exact est corrigé et passe séparément.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "FR-020",
+      "scope": "Documentation/features",
+      "tasks": [
+        "T011",
+        "T020",
+        "T023",
+        "T024"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1520,
+          "reason": "Features fallback:true/max3",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/docs/delegation-native.md",
+          "line": 35,
+          "reason": "Contrat/documentation157",
+          "sha256": "2698ae8a7119bebd255dec630687609f425b1885e720775494d8dbb1c559eaa9"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/skills/bridget/SKILL.md",
+          "line": 19,
+          "reason": "Mode emploi157",
+          "sha256": "9b542c7c6c992bc59af79c474410a0da68e08c693efba0a3cf600a7e3ae6875a"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/skills/bridget/references/commandes.md",
+          "line": 161,
+          "reason": "Référence157",
+          "sha256": "b0cde86906d69b110302d7afc6eb1dcafb087dee822ec16ea6a304a70342d66d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 313,
+          "name": "delegation_mcp::tests::native157_fallback_mcp_schema_ferme",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "ADR Accepté et six exigences160 copiées ; pas de revendication de livraison.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-001",
+      "scope": "Matrice60 cellules sans contradiction",
+      "tasks": [
+        "T007",
+        "T009"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 910,
+          "reason": "resolve_target appelle le même corps target_resolver que les trois postures du catalogue",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1446,
+          "reason": "Fait non limité à une demande et racine déclarée",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3968,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_matrice",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-002",
+      "scope": "Deux causes reproduites RED→GREEN",
+      "tasks": [
+        "T007",
+        "T009"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 910,
+          "reason": "resolve_target appelle le même corps target_resolver que les trois postures du catalogue",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1472,
+          "reason": "OR des postures ; diagnostics dédupliqués",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3908,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_t3_claude_sans_launch_context_vers_codex",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3935,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_launch_context_present_source_illisible",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-003",
+      "scope": "Binaire absent zéro tâche/refus",
+      "tasks": [
+        "T005",
+        "T010"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 102,
+          "reason": "Type/capacités/observation/facturation/protocole/env/binaire",
+          "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4093,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_preflight_admission_binaire_absent_sans_tache",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-004",
+      "scope": "Quota épuisé/périmé/inconnu",
+      "tasks": [
+        "T004",
+        "T013",
+        "T015"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 71,
+          "reason": "Retour futur et rejected Claude ou>=100%",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 77,
+          "reason": "Retour max des seules fenêtres épuisées",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 977,
+          "reason": "Quota vérifié avant Task",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 38,
+          "reason": "Purge avant upsert",
+          "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4162,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_admission_refuse_avec_resets_at",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4199,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_perime_ignore",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4224,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_inconnu_null",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-005",
+      "scope": "Premier choix/substitution/droits",
+      "tasks": [
+        "T017",
+        "T018",
+        "T021"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1164,
+          "reason": "Liste initiale FR013 exacte",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 934,
+          "reason": "Type/modèle/effort avant préflight/politique/options/quota",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1180,
+          "reason": "Trace requested/selected/reason/tried",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4326,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_premier_puis_second_candidat_valide",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4487,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_modele_effort_type_avant_indisponibilite",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4598,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_cible_valide_ignore_liste",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-006",
+      "scope": "Référence177+7guard155 et octets",
+      "tasks": [
+        "T022"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 2156,
+          "reason": "skip Vec::is_empty",
+          "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 8374,
+          "name": "protocol::spec104_search_contract_tests::native157_protocole_delegate_sans_fallback_garde_octets150",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T003-green157-transport.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "SC-007",
+      "scope": "Banc50appels/10cibles ratio<=2",
+      "tasks": [
+        "T001",
+        "T012"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 910,
+          "reason": "resolve_target appelle le même corps target_resolver que les trois postures du catalogue",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 561,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_catalogue_latence",
+          "status_in_full": "ignored",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/mesure-catalogue.json"
+        }
+      ],
+      "limits": "Mesures privées ; médiane40,201→23,623ms/p9542,698→25,244ms ; ratios0,588/0,591.",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "US1",
+      "scope": "Catalogue cohérent et refus précoces",
+      "tasks": [
+        "T007",
+        "T008",
+        "T009",
+        "T010",
+        "T011",
+        "T012"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 910,
+          "reason": "resolve_target appelle le même corps target_resolver que les trois postures du catalogue",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 102,
+          "reason": "Type/capacités/observation/facturation/protocole/env/binaire",
+          "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 3968,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_coherence_matrice",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/lifecycle.rs",
+          "line": 769,
+          "name": "lifecycle::tests::native157_preflight_binaire_absent",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "US2",
+      "scope": "Quotas visibles et respectés",
+      "tasks": [
+        "T013",
+        "T014",
+        "T015",
+        "T016"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon.rs",
+          "line": 7125,
+          "reason": "agent_type depuis présence, record au point7138",
+          "sha256": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 977,
+          "reason": "Quota vérifié avant Task",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4241,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_survit_fin_presence",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4162,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_quota_admission_refuse_avec_resets_at",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "US3",
+      "scope": "Remplacement explicite et signalé",
+      "tasks": [
+        "T017",
+        "T018",
+        "T019",
+        "T020",
+        "T021"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1164,
+          "reason": "Liste initiale FR013 exacte",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1180,
+          "reason": "Trace requested/selected/reason/tried",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1057,
+          "reason": "Rejeu avant garde/verdict, canonical original",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4435,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_motifs_remplacables_fr013",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4326,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_premier_puis_second_candidat_valide",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+          "line": 4727,
+          "name": "daemon::native_delegation::native_delegation_permissions149_tests::native157_fallback_rejeu_meme_substitution",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    },
+    {
+      "id": "US4",
+      "scope": "Compatibilité et documentation",
+      "tasks": [
+        "T022",
+        "T023",
+        "T024",
+        "T025",
+        "T026"
+      ],
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 2156,
+          "reason": "skip Vec::is_empty",
+          "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 1520,
+          "reason": "Features fallback:true/max3",
+          "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d"
+        }
+      ],
+      "tests": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-transport/src/protocol.rs",
+          "line": 8374,
+          "name": "protocol::spec104_search_contract_tests::native157_protocole_delegate_sans_fallback_garde_octets150",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T003-green157-transport.json"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 313,
+          "name": "delegation_mcp::tests::native157_fallback_mcp_schema_ferme",
+          "status_in_full": "ok",
+          "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json"
+        }
+      ],
+      "limits": "",
+      "verdict": "SATISFIED"
+    }
+  ],
+  "test_evidence": {
+    "full_receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-full157-once.json",
+    "full_cargo": {
+      "passed": 2396,
+      "failed": 9,
+      "ignored": 74,
+      "targets": 95,
+      "seconds": 747.24,
+      "rc": 101
+    },
+    "embedded_children_pass_excluded": 3,
+    "native157": {
+      "passed": 44,
+      "failed": 0,
+      "ignored_latency_bench": 1
+    },
+    "baseline_final": {
+      "passed": 184,
+      "failed": 0,
+      "ignored": 1,
+      "composition": "177reference+7guard155"
+    },
+    "oracle154_replay": {
+      "receipt": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/T025-replay154-compat157.json",
+      "passed": 1,
+      "failed": 0,
+      "seconds": 14.28,
+      "rc": 0
+    },
+    "legacy_failures": 8,
+    "global_green": false,
+    "second_full": false,
+    "logs_sha256": {
+      "full": "0a85192a923d137ecc0471306658d170980bb4717c826e23c3cdda92f676191e",
+      "replay": "8775c1d2ad3c3a4f18cfb9e3f7d7c99d7092576c2bfacc8b9b1136fd136fe121"
+    }
+  },
+  "limitations": [
+    "Aucun fournisseur/modèle réel ni authentification vérifiée.",
+    "Quotas synthétiques ; mémoire volatile sans agrégation de compte partagé.",
+    "Cohérence limitée au contexte de session/cwd/état déclaré.",
+    "FULL antérieur à correction test-only oracle154 ; production inchangée, reprise exact1PASS.",
+    "Huit échecs legacy conservés et comparés à156 ; aucune cause nouvelle entièrement diagnostiquée.",
+    "Pas audit final/revue d’implémentation adverse/build/livraison acquis par cette passe.",
+    "Les mentions26tâches ouvertes des append GO sont historiques ; synthèse et tasks courantes26/26."
+  ]
+}

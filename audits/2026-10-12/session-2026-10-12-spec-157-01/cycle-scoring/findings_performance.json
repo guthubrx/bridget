@@ -1,0 +1,305 @@
+{
+  "audit_version": "v14.0",
+  "cycle": "cycle-scoring",
+  "scope_sha256": "5350417b65e35111515f03c871be0221a38b57b527d8cda3e7012b7b807b9c6f",
+  "scope_sha256_note": "Métadonnées C1 distinctes de l’autorité finale R4 ; aucune modification des métadonnées owned par autrui.",
+  "source_manifest_sha256": "c5ad46729a2db7d9b5b2e0a4eed6cc5039d61d58fad634967a18ab0faf070d00",
+  "source_manifest": "/Users/moi/.cache/bridget-plan157-20261012-r1/final-source-capture-r4/manifest.json",
+  "diff_sha256": "04356ee81aa97264cd7337abe5d69ebba5b695501de3d5d8323fb12c0ead6deb",
+  "diff": "/Users/moi/.cache/bridget-plan157-20261012-r1/final-source-capture-r4/diff-157.patch",
+  "started_at_utc": "2026-10-12T08:18:21Z",
+  "finished_at_utc": "2026-10-12T08:23:20.991958+00:00",
+  "findings": [],
+  "warnings": [
+    "Scoring fondé sur une lecture fraîche ciblée de quatre fichiers source, pas sur la copie des lectures C1. Le reste du delta et les wrappers MCP/CLI ne sont pas entièrement relus.",
+    "Deux hunks de diff complets relus ; les hunks couverts seulement par leur plage source actuelle sont comptés séparément, sans prétendre avoir relu leurs lignes supprimées.",
+    "SC007 relu depuis le même reçu privé : cinquante appels, dix entrées, sans échauffement. Le chronométrage du handler déjà verrouillé exclut l’attente du verrou ; aucun p95/p99 de production ou fournisseur réel.",
+    "La fermeture R8 vit une seule entrée et réemploie lectures/préflight ; les politiques, arguments et quota sont encore dérivés ou copiés par posture. Aucun gain au-delà du reçu n’est chiffré.",
+    "La borne mémoire est huit fenêtres par type ; nombre de clés types et taille des chaînes distincts. Aucun producteur de types illimités ni défaut mémoire exploitable prouvé.",
+    "Aucun test, Cargo, banc, scanner, build, service, DB ou fournisseur exécuté. UI hors périmètre ; aucun GREEN global déduit.",
+    "R4 autoritatif vérifié : seul registry diffère du R3, commentaire +C. Hunk R4 relu après capture ; les vingt-huit autres SHA sont inchangés. Les lectures R3 restent datées et distinctes de la lecture du complément R4."
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+      "ranges": [
+        [
+          886,
+          1005
+        ],
+        [
+          1017,
+          1036
+        ],
+        [
+          1110,
+          1200
+        ],
+        [
+          1440,
+          1537
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:19:59Z",
+      "snapshot": "R3_scoring_fresh",
+      "role": "source",
+      "hunks_read": [],
+      "source_context_hunks": [
+        [
+          888,
+          989
+        ],
+        [
+          994,
+          1000
+        ],
+        [
+          1019,
+          1036
+        ],
+        [
+          1127,
+          1200
+        ],
+        [
+          1445,
+          1523
+        ]
+      ],
+      "compatible_with_R4_hash": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "ranges": [
+        [
+          456,
+          545
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:19:59Z",
+      "snapshot": "R3_scoring_fresh",
+      "role": "source",
+      "hunks_read": [],
+      "source_context_hunks": [
+        [
+          486,
+          497
+        ],
+        [
+          517,
+          523
+        ],
+        [
+          539,
+          545
+        ]
+      ],
+      "compatible_with_R4_hash": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "ranges": [
+        [
+          1,
+          301
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:19:59Z",
+      "snapshot": "R3_scoring_fresh",
+      "role": "source",
+      "hunks_read": [
+        {
+          "patch_range": [
+            3285,
+            3586
+          ]
+        }
+      ],
+      "source_context_hunks": [
+        [
+          1,
+          301
+        ]
+      ],
+      "compatible_with_R4_hash": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "a8dd13d2709ef0585c78962cb715bcd79b75092ebac1e856d7d0acee7a0fae24",
+      "ranges": [
+        [
+          334,
+          435
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:19:59Z",
+      "snapshot": "R3_scoring_fresh",
+      "role": "source",
+      "hunks_read": [
+        {
+          "patch_range": [
+            2392,
+            2402
+          ]
+        }
+      ],
+      "source_context_hunks": [
+        [
+          342,
+          350
+        ]
+      ],
+      "compatible_with_R4_hash": false
+    },
+    {
+      "file": "specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+      "sha256": "db59f6b1081de446d5291f467421ed491dabb76d8c7699f17af2439b058e3ef9",
+      "ranges": [
+        [
+          1,
+          135
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:19:59Z",
+      "snapshot": "R3_scoring_fresh",
+      "role": "measurement_receipt_context",
+      "hunks_read": [],
+      "source_context_hunks": [],
+      "compatible_with_R4_hash": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "ranges": [
+        [
+          343,
+          435
+        ],
+        [
+          552,
+          626
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:20:36Z",
+      "snapshot": "root_authorized_annotation_followup_after_R3",
+      "hunks_read": [],
+      "note": "Commentaire +C et corps relus ; SHA compatible au R4 final. La lecture complète du corps a précédé de dix secondes la capture R4.",
+      "compatible_with_R4_hash": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "ranges": [
+        [
+          342,
+          350
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:22:38Z",
+      "snapshot": "R4_final_annotation_hunk",
+      "compatible_with_R4_hash": true,
+      "hunks_read": [
+        {
+          "patch_range": [
+            2392,
+            2402
+          ]
+        }
+      ]
+    }
+  ],
+  "coverage": {
+    "scope_files": 29,
+    "scope_rust_files": 16,
+    "scope_hunks": 105,
+    "fresh_source_files_read": 4,
+    "fresh_source_files_fraction": "4/29",
+    "complete_diff_hunks_read": 2,
+    "complete_diff_hunks_fraction": "2/105",
+    "source_hunks_with_full_new_side_read": 10,
+    "source_context_hunks_note": "Lecture de la plage actuelle entière ; retrait ancien non crédité comme lecture complète de diff.",
+    "patch_line_ranges_read": [
+      [
+        2392,
+        2405
+      ],
+      [
+        3280,
+        3587
+      ]
+    ],
+    "patch_lines_read": 322,
+    "patch_lines_total": 3702,
+    "historical_cycle1_credit": false,
+    "partial_read": true,
+    "complete_diff_hunks_note": "provider_limits R3 identique au R4 ; registry hunk relu R4. Deux hunks distincts, pas trois par double comptage."
+  },
+  "resolved_findings": [
+    {
+      "id": "PERF-001",
+      "status": "RESOLVED",
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "line": 345,
+      "sha256": "83f77b7bd3a9c20164accb11c4f1620ca7eea2d61fcdf430860f587becbd935b",
+      "reason": "Annotation présente et précise O(log n+B+C), O(B) mémoire ; C comprend la validation des capacités observée lignes554–622.",
+      "evidence": "    /// O(log n+B+C) en temps et O(B) en mémoire : n types du registre, B octets\n    /// des arguments/modèle/effort, C coût de validation des capacités déclarées.\n    pub(crate) fn pin_delegation_model(mut self,agent_type:&str,model:&str,effort:Option<&str>)->Result<Self,String> {",
+      "cycle1_preserved": true
+    }
+  ],
+  "end_hash_differences": [],
+  "metrics": {
+    "source": "specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+    "source_sha256": "db59f6b1081de446d5291f467421ed491dabb76d8c7699f17af2439b058e3ef9",
+    "samples": 50,
+    "providers": 10,
+    "warmup": 0,
+    "measurement": "handle_locked_catalogue",
+    "median_before_ms": 40.2010625,
+    "median_after_ms": 23.622875,
+    "p95_before_ms": 42.698417,
+    "p95_after_ms": 25.2435,
+    "median_ratio": 0.5876181755146397,
+    "p95_ratio": 0.5912045872801327,
+    "p95_method": "nearest_rank_48_of_50",
+    "criterion": "SC007 ratio <=2",
+    "result": "PASS",
+    "new_measurement_performed": false,
+    "real_provider_or_production": false
+  },
+  "module": "08",
+  "positives": [
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "line": 939,
+      "description": "Lectures coûteuses/préflight réemployés par fermeture locale au catalogue ; admission recrée un résolveur, quota vérifié après les options."
+    },
+    {
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "line": 468,
+      "description": "Capture et recheck paresseux au plus une fois par entrée ; branches de postures communes et indépendantes, sans cache durable de droits."
+    },
+    {
+      "file": "specs/157-catalogue-quotas/validation/mesure-catalogue.json",
+      "line": 127,
+      "description": "SC007 privé sous le seuil2 : ratios médiane0.588 et p95 0.591. Le reçu précise dix entrées et cinquante appels, aucun fournisseur réel."
+    }
+  ],
+  "previous_source_manifest_sha256": "14533417d199f5eda15ca2f50ae7827089c9e5466a3a37bc3be043ee156c4224",
+  "previous_diff_sha256": "7a926e32ddd62d47fbaa785e3977bdbba85e46a182b23501e4ac8d35cd52594e",
+  "R4_diff_ranges_read": [
+    [
+      2392,
+      2405
+    ]
+  ]
+}

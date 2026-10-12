@@ -1,0 +1,98 @@
+{
+  "grade": "A",
+  "date": "2026-10-12",
+  "spec": "157",
+  "scope": "Diff SPEC157 R4 : 29 fichiers, 16 Rust et 13 documents ; sept modules finaux, lectures source partielles",
+  "coverage_percent": 4.4095,
+  "justification": "Zéro constat actif final ; deux constats moyens historiques corrigés et confirmés. Score fondé sur 3614/81959 lignes source et 64/105 postimages de hunks. Il ne certifie pas tout le daemon.",
+  "numeric_global": 100.0,
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 3
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 2
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0,
+      "weight": 1
+    },
+    "ux": {
+      "grade": "N/A",
+      "findings_count": 0
+    }
+  },
+  "source_manifest_sha256": "c5ad46729a2db7d9b5b2e0a4eed6cc5039d61d58fad634967a18ab0faf070d00",
+  "source_union_lines": 3614,
+  "source_total_lines": 81959,
+  "postimage_hunks_read": 64,
+  "postimage_hunks_total": 105
+}

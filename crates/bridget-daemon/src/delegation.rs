@@ -1,5 +1,5 @@
 //! Saga native durable. Les identités et effets appartiennent au daemon.
-use bridget_transport::protocol::{NativeDelegationRequest, ResolvedAgentDefinition, SpawnPosture};
+use bridget_transport::protocol::{FallbackTarget, NativeDelegationRequest, ResolvedAgentDefinition, SpawnPosture};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -158,6 +158,17 @@ pub(crate) struct WorkspaceRecord {
     pub dirty: Option<bool>,
 }
 
+/// Trace durable de la sélection, distincte de l'enveloppe canonique originale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Substitution {
+    pub requested: FallbackTarget,
+    pub selected: FallbackTarget,
+    pub reason: String,
+    /// Objets {agent_type, model, code} produits par l'admission, sans DTO neuf.
+    pub tried: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
@@ -177,6 +188,8 @@ pub(crate) struct Task {
     #[serde(default)]
     pub parent_execution_id: Option<String>,
     pub request: NativeDelegationRequest,
+    #[serde(default)]
+    pub substitution: Option<Substitution>,
     #[serde(default)]
     pub child_requests: Option<String>,
     #[serde(default)]
@@ -955,6 +968,13 @@ mod tests {
             inbox_item_id: None,
             inbox_settled: false,
         }
+    }
+
+    #[test]
+    fn native157_stockage_payload150_sans_substitution() {
+        // La fixture relit le JSON150 original, sans champ substitution.
+        let task = legacy_task151();
+        assert!(task.substitution.is_none());
     }
 
     #[test]

@@ -2103,6 +2103,16 @@ pub struct ChildRequestAnswer {
     pub outcome: String,
 }
 
+/// Candidat explicite de remplacement à l'admission ; ne porte aucun droit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FallbackTarget {
+    pub agent_type: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
 /// Aucun champ d'identité parent n'est accepté dans une demande de mission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -2143,6 +2153,8 @@ pub enum NativeDelegationRequest {
             deserialize_with = "deserialize_present_optional"
         )]
         child_requests: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fallback: Vec<FallbackTarget>,
     },
     Respond {
         task_id: String,
@@ -8178,6 +8190,7 @@ mod spec104_search_contract_tests {
             keep_alive_secs: None,
             brief: None,
             child_requests: None,
+            fallback: Vec::new(),
         };
         let expected = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
         assert_eq!(serde_json::to_vec(&request).unwrap(), expected.to_vec());
@@ -8355,6 +8368,13 @@ mod spec104_search_contract_tests {
         ).unwrap();
         let value: serde_json::Value = serde_json::from_str(&encode(&report).unwrap()).unwrap();
         assert_eq!(value["features"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn native157_protocole_delegate_sans_fallback_garde_octets150() {
+        let wire = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120}"#;
+        let request: NativeDelegationRequest = serde_json::from_slice(wire).unwrap();
+        assert_eq!(serde_json::to_vec(&request).unwrap(), wire);
     }
 
     #[test]

@@ -19,7 +19,7 @@ Seen { fact: RateLimitFact, source: RateLimitSource, observed_at: i64 }
   dont l'heure de retour est passée.
 
 ```
-Quota { windows: Vec<{window, used_percent, resets_at, status, exhausted}>,
+Quota { windows: Vec<{window, used_percent, resets_at, exhausted}>,
         exhausted: bool, limit_reached: bool, resets_at: Option<i64>, observed_at: i64 }
 ```
 
@@ -28,7 +28,8 @@ Quota { windows: Vec<{window, used_percent, resets_at, status, exhausted}>,
 `available` (global, recopié sur les deux fenêtres) ne rend aucune fenêtre
 épuisée : il lève `limit_reached`. `Quota.exhausted` = une fenêtre au moins.
 `Quota.resets_at` = le plus tardif des retours des fenêtres épuisées. Le
-statut `unknown` du hook statusline ne compte jamais.
+statut `unknown` du hook ne prouve rien seul ; used_percent >= 100 et
+retour futur épuise, toute source, statusline comprise.
 
 ## Tâche native (`delegation.rs`, struct `Task`, payload JSON)
 
@@ -71,3 +72,34 @@ un remplacement.
 ## Entrée du catalogue (additif)
 
 Voir `contracts/delegation157.md`.
+
+## Précisions retenues de la revue157-r1 — appliquées au GO157
+
+GO157 le2026-10-12 après livraison et activation155/156. Base source156
+cf498755dc871b51eb8c0add5f8a882d67651d2a, base Git avec clôture documentaire
+8b5b313694cf05eabfe6a86a970b96f03b015f49. Les références150/1f2c661d
+restent des preuves historiques ; les fonctions sont revalidées sur cette base.
+
+Le verdict conserve l’ordre type/modèle/effort, préflight, politique, gardes
+liées aux options de l’appel, quota. Workspace et, après livraison155,
+child_requests sont non remplaçables pour la cible demandée ; un candidat
+explicitement listé refusé est noté dans tried. Aucun gain de droits ni
+contournement des gardes du parent. En worktree, sélection unique en Probe,
+candidat et définition épinglés transmis à Reserve puis Commit. Commit
+revalide ce même candidat dans le dossier enfant réel ; si une garde échoue,
+refuser sans nouvelle sélection et conserver les diagnostics de chemin154.
+Les options immuables et canonical original restent distincts de request effectif.
+
+Quota : huit fenêtres ; purger les passées avant l’écriture. Une neuvième clé
+évince le plus petit observed_at, égalité départagée par clé lexicale.
+unknown du hook n’est pas une preuve seul ; pourcentage>=100 avec retour
+futur épuise toute source. provider_limit_reached_window_unknown est l’unique
+contrainte informative possible si can_run, hors famille verdict et jamais
+rendue comme refus d’admission. Aucun nouveau champ public.
+
+Refus enrichi : Err(String) sous forme code:JSON contenant message/detail.
+Étendre le seul failure existant ; les comparaisons de listes portent sur
+le code canonique. JSON non conforme : refus fermé, aucune valeur inventée.
+Les anciens codes nus et préfixes restent compatibles. Aucun nouveau type,
+helper, framework, table, outil, ID ou scénario autonome. Les tests prévus
+T004/T016/T017/T018 couvrent ces précisions. Les26 tâches restent ouvertes.

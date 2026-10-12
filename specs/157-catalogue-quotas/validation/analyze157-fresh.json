@@ -1,0 +1,664 @@
+{
+  "feature": "157-catalogue-quotas",
+  "workspace": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas",
+  "created_at": "2026-10-12T06:50:30.515356+00:00",
+  "verdict": "GO_ZERO_CRITICAL_WITH_REMAINING_DOCUMENTARY_FINDINGS",
+  "counts": {
+    "CRITICAL": 0,
+    "HIGH": 0,
+    "MEDIUM": 2,
+    "LOW": 2
+  },
+  "prerequisites": {
+    "explicit_feature": "157-catalogue-quotas",
+    "root_executed_script_rc": 127,
+    "script_absent_verified": true,
+    "fallback": "manual explicit feature and artifact presence; no repeated command",
+    "required_core_present": true,
+    "extensions_exists": false,
+    "requirements_checklist": {
+      "checked": 16,
+      "unchecked": 0
+    }
+  },
+  "task_counts": {
+    "total": 26,
+    "checked": 0,
+    "unchecked": 26
+  },
+  "sources": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/spec.md",
+      "sha256": "e6c5a8c0c6a3bbb9e616e32c29a96a2f96d49472270ffb4411772207011b5052",
+      "lines": 392,
+      "read_ranges": [
+        [
+          1,
+          392
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/plan.md",
+      "sha256": "2a6711e0bfa34af134c0781fefb32128308f5d8802b3b4cad3f8beb9042a9750",
+      "lines": 179,
+      "read_ranges": [
+        [
+          1,
+          179
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/tasks.md",
+      "sha256": "818eac957e5a9b9660145ce81e3a604acc2df3401460f6a7261d346f84de0bc4",
+      "lines": 95,
+      "read_ranges": [
+        [
+          1,
+          95
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/research.md",
+      "sha256": "dacc5ed7409c17244f974492b7c7562ccad0eaccdba6d31befc2a8eea9bdc71a",
+      "lines": 222,
+      "read_ranges": [
+        [
+          1,
+          222
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/reuse-audit.md",
+      "sha256": "fc132b148298e3e7c1dc3e1624bc713f79bdf26b107634f2e7c843ea798aac16",
+      "lines": 108,
+      "read_ranges": [
+        [
+          1,
+          108
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/quickstart.md",
+      "sha256": "a8e942f48755555ffcb9c1ce25a49ae500093da72c9b137303a7cf89c5bde323",
+      "lines": 39,
+      "read_ranges": [
+        [
+          1,
+          39
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/data-model.md",
+      "sha256": "932a19aaa283dd6c57769be7398f5fb2f1f3f4c6380d018bf3f18ef97234254c",
+      "lines": 105,
+      "read_ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/contracts/delegation157.md",
+      "sha256": "8f1503b5a38e959f5ce03feabbad10e5978a6bf13f7735b7a2dcd4585c8b45a9",
+      "lines": 150,
+      "read_ranges": [
+        [
+          1,
+          150
+        ]
+      ],
+      "read_kind": "artifact_full"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+      "read_ranges": [
+        [
+          257,
+          319
+        ],
+        [
+          409,
+          515
+        ]
+      ],
+      "read_kind": "targeted_primary_code_only",
+      "whole_file_read": false
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/.specify/memory/constitution.md",
+      "sha256": "5488b1f49f4ee846371969a4d5ada35c79b2f657402415487a3ae81ff4466c76",
+      "lines": 20,
+      "read_kind": "authority_or_skill_full"
+    },
+    {
+      "path": "/Users/moi/.speckit/constitution.md",
+      "sha256": "0258b90dc1402f6d20881d2766b16552f269742d4f91f9b127b1e752b633fb3f",
+      "lines": 694,
+      "read_kind": "authority_or_skill_full"
+    },
+    {
+      "path": "/Users/moi/.agents/skills/speckit-analyze/SKILL.md",
+      "sha256": "d4e5dbd78ca7437ae6dc46e503ad3729f10f8df1f4be5c1e1270b01ce90985b3",
+      "lines": 267,
+      "read_kind": "authority_or_skill_full"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-plan157-20261012-r1/review.json",
+      "sha256": "1962fbc2b5097e55bd6d4ff3cdbc823768824d2f9434469a412bad73aff37178",
+      "read_kind": "attributed_review_or_root_forensic_artifact"
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/forensic.md",
+      "sha256": "d969856871338733b0e70a68eaa35825d4c867a562ecb887912822f9f2369850",
+      "read_kind": "attributed_review_or_root_forensic_artifact"
+    }
+  ],
+  "artifact_hashes_unchanged_during_read": true,
+  "coverage": [
+    {
+      "key": "FR-001",
+      "has_task": true,
+      "tasks": [
+        "T005",
+        "T007",
+        "T008",
+        "T009"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-002",
+      "has_task": true,
+      "tasks": [
+        "T007",
+        "T008",
+        "T009"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-003",
+      "has_task": true,
+      "tasks": [
+        "T007",
+        "T009",
+        "T011"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-004",
+      "has_task": true,
+      "tasks": [
+        "T005",
+        "T010"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-005",
+      "has_task": true,
+      "tasks": [
+        "T009",
+        "T011"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-006",
+      "has_task": true,
+      "tasks": [
+        "T009",
+        "T022",
+        "T026"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-007",
+      "has_task": true,
+      "tasks": [
+        "T004",
+        "T013",
+        "T014"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-008",
+      "has_task": true,
+      "tasks": [
+        "T004",
+        "T013",
+        "T015"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-009",
+      "has_task": true,
+      "tasks": [
+        "T004",
+        "T009",
+        "T013",
+        "T015"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-010",
+      "has_task": true,
+      "tasks": [
+        "T013",
+        "T015",
+        "T016"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-011",
+      "has_task": true,
+      "tasks": [
+        "T004",
+        "T013"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-012",
+      "has_task": true,
+      "tasks": [
+        "T003",
+        "T017",
+        "T020"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-013",
+      "has_task": true,
+      "tasks": [
+        "T017",
+        "T018",
+        "T019"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-014",
+      "has_task": true,
+      "tasks": [
+        "T005",
+        "T008",
+        "T017",
+        "T018"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-015",
+      "has_task": true,
+      "tasks": [
+        "T006",
+        "T018",
+        "T021"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-016",
+      "has_task": true,
+      "tasks": [
+        "T015",
+        "T016",
+        "T019"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-017",
+      "has_task": true,
+      "tasks": [
+        "T021"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-018",
+      "has_task": true,
+      "tasks": [
+        "T018",
+        "T021",
+        "T024"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-019",
+      "has_task": true,
+      "tasks": [
+        "T003",
+        "T006",
+        "T022"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "FR-020",
+      "has_task": true,
+      "tasks": [
+        "T011",
+        "T020",
+        "T023",
+        "T024"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-001",
+      "has_task": true,
+      "tasks": [
+        "T007",
+        "T008",
+        "T009"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-002",
+      "has_task": true,
+      "tasks": [
+        "T002",
+        "T007",
+        "T009"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-003",
+      "has_task": true,
+      "tasks": [
+        "T005",
+        "T010"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-004",
+      "has_task": true,
+      "tasks": [
+        "T004",
+        "T013",
+        "T015",
+        "T016"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-005",
+      "has_task": true,
+      "tasks": [
+        "T017",
+        "T018",
+        "T019",
+        "T021"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-006",
+      "has_task": true,
+      "tasks": [
+        "T001",
+        "T022",
+        "T025"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "SC-007",
+      "has_task": true,
+      "tasks": [
+        "T001",
+        "T012"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "US1",
+      "has_task": true,
+      "tasks": [
+        "T002",
+        "T005",
+        "T007",
+        "T008",
+        "T009",
+        "T010",
+        "T011",
+        "T012"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "US2",
+      "has_task": true,
+      "tasks": [
+        "T004",
+        "T013",
+        "T014",
+        "T015",
+        "T016"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "US3",
+      "has_task": true,
+      "tasks": [
+        "T003",
+        "T006",
+        "T017",
+        "T018",
+        "T019",
+        "T020",
+        "T021"
+      ],
+      "mapping": "semantic plus explicit task references"
+    },
+    {
+      "key": "US4",
+      "has_task": true,
+      "tasks": [
+        "T001",
+        "T022",
+        "T023",
+        "T024",
+        "T025",
+        "T026"
+      ],
+      "mapping": "semantic plus explicit task references"
+    }
+  ],
+  "metrics": {
+    "FR": 20,
+    "SC_buildable": 7,
+    "US": 4,
+    "tasks": 26,
+    "requirements_total": 27,
+    "requirement_coverage_percent": 100,
+    "unmapped_tasks": 0,
+    "critical_issues": 0,
+    "ambiguity_or_underspecification": 1,
+    "semantic_duplication": 0,
+    "source_or_metadata_inconsistencies": 3,
+    "article_XIX_XX_active_issues": 0
+  },
+  "findings": [
+    {
+      "id": "I1",
+      "category": "source_anchor_inconsistency",
+      "severity": "MEDIUM",
+      "locations": [
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/tasks.md",
+          "line_start": 35,
+          "line_end": 35,
+          "sha256": "818eac957e5a9b9660145ce81e3a604acc2df3401460f6a7261d346f84de0bc4"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/research.md",
+          "line_start": 26,
+          "line_end": 31,
+          "sha256": "dacc5ed7409c17244f974492b7c7562ccad0eaccdba6d31befc2a8eea9bdc71a"
+        }
+      ],
+      "evidence": {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/src/native_permissions.rs",
+        "sha256": "96b6c021d1f7ead6d7f6ba698f17975d09a8ecdb6ca3ad6bbba70d7908171cd3",
+        "ranges": [
+          [
+            257,
+            307
+          ],
+          [
+            414,
+            453
+          ],
+          [
+            503,
+            506
+          ]
+        ],
+        "observed": "recheck_context maps capture errors to settings_revision_changed; Claude→Codex calls claude_inputs_without_rules; read_json_source maps unavailable/read/JSON failures to permission_source_unavailable"
+      },
+      "summary": "T007 attribue le second refus permission_source_unavailable à recheck_context, alors que ce chemin retourne settings_revision_changed et concerne Claude→Claude.",
+      "required_correction": "Dans le scénario T007 source illisible déjà prévu, citer claude_inputs_without_rules/read_json_source pour Claude→Codex. Adapter seulement l’ancre et le montage de cette cause. Conserver settings_revision_changed tel quel, non remplaçable. Ne modifier aucune production pour satisfaire l’ancienne ancre.",
+      "new_test_scenario_required": false
+    },
+    {
+      "id": "U1",
+      "category": "underspecified_nullable_context",
+      "severity": "MEDIUM",
+      "locations": [
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/contracts/delegation157.md",
+          "line_start": 39,
+          "line_end": 48,
+          "sha256": "8f1503b5a38e959f5ce03feabbad10e5978a6bf13f7735b7a2dcd4585c8b45a9"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/spec.md",
+          "line_start": 169,
+          "line_end": 173,
+          "sha256": "e6c5a8c0c6a3bbb9e616e32c29a96a2f96d49472270ffb4411772207011b5052"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/tasks.md",
+          "line_start": 35,
+          "line_end": 35,
+          "sha256": "818eac957e5a9b9660145ce81e3a604acc2df3401460f6a7261d346f84de0bc4"
+        }
+      ],
+      "summary": "Le contrat fixe verdict_context.cwd à cwd_root sans définir la valeur quand aucune racine de fait/permission n’existe ; T007 inclut précisément un parent sans fait.",
+      "required_correction": "Préciser cwd:null lorsque cwd_root est absent, sans racine inventée ni extension de droits. Les booléens continuent de venir du verdict réel. Réutiliser le cas aucun fait de la matrice T007 ; aucune tâche ou scénario autonome nouveau.",
+      "evidence_scope": "Contract shape and declared no-fact matrix; no runtime discovery permission inferred.",
+      "new_test_scenario_required": false
+    },
+    {
+      "id": "I2",
+      "category": "stale_current_worktree_statement",
+      "severity": "LOW",
+      "locations": [
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/plan.md",
+          "line_start": 84,
+          "line_end": 84,
+          "sha256": "2a6711e0bfa34af134c0781fefb32128308f5d8802b3b4cad3f8beb9042a9750"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/plan.md",
+          "line_start": 5,
+          "line_end": 5,
+          "sha256": "2a6711e0bfa34af134c0781fefb32128308f5d8802b3b4cad3f8beb9042a9750"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/plan.md",
+          "line_start": 152,
+          "line_end": 155,
+          "sha256": "2a6711e0bfa34af134c0781fefb32128308f5d8802b3b4cad3f8beb9042a9750"
+        }
+      ],
+      "summary": "La ligne de contrôle XVI dit encore worktree150 partagé, alors que le GO et l’en-tête désignent le worktree157 dédié.",
+      "required_correction": "Remplacer seulement la justification de XVI par worktree157 dédié, exécution séquentielle. Aucun changement architectural."
+    },
+    {
+      "id": "I3",
+      "category": "unlinked_fresh_provenance_claim",
+      "severity": "LOW",
+      "locations": [
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/reuse-audit.md",
+          "line_start": 5,
+          "line_end": 6,
+          "sha256": "fc132b148298e3e7c1dc3e1624bc713f79bdf26b107634f2e7c843ea798aac16"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/reuse-audit.md",
+          "line_start": 73,
+          "line_end": 85,
+          "sha256": "fc132b148298e3e7c1dc3e1624bc713f79bdf26b107634f2e7c843ea798aac16"
+        },
+        {
+          "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/reuse-audit.md",
+          "line_start": 96,
+          "line_end": 108,
+          "sha256": "fc132b148298e3e7c1dc3e1624bc713f79bdf26b107634f2e7c843ea798aac16"
+        }
+      ],
+      "summary": "La date annonce une réattestation ciblée2026-10-12 ci-dessous, mais le document contient uniquement les preuves historiques et aucun bloc/pointeur de cette réattestation.",
+      "required_correction": "Relier la preuve GO déjà disponible ou supprimer la mention ci-dessous pour garder la portée historique exacte. Ne créditer aucun audit frais absent et ne lancer aucun nouvel outil/collecte."
+    }
+  ],
+  "constitution": {
+    "critical_conflicts": [],
+    "article_XV_user_override": "Persistent authorized scope: Rust tests planned only; one full suite then targeted replays; per-spec delivery; no pnpm/tsc/frontend work or legacy out-of-scope corrections; no mandatory one-commit-per-checkbox imposed.",
+    "article_XVI": "Actual workspace157 is dedicated; stale table row I2 is documentary only.",
+    "article_XVIII": "Provider memory O(log n) with8 windows/type; quota/candidate loop bounded4; catalogue O(p)3policy projections, before/after50calls on10providers and x2 ceiling(T001/T012).",
+    "article_XIX": "provider_limits already required by T004/spec;3 real paths write/catalogue/admission. No additional module/table/CLI/API/framework requested. resolve_target and launch_preflight reuse planned local responsibilities. Approx10 duplicated catalogue lines targeted for removal; estimate unverified before implementation.",
+    "article_XX": "Sources/context/latency limits declared; T026 full diff and six responsibility answers; tests/status never inferred from document analysis.",
+    "minimalism_estimate": "~10 existing duplicate catalogue lines planned removable; no new suppressible implementation lines can be proven in a pre-code analysis."
+  },
+  "root_forensic": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/forensic.md",
+    "sha256": "d969856871338733b0e70a68eaa35825d4c867a562ecb887912822f9f2369850",
+    "result": "No real correlated incident fact; launch_context unknown; code scenario only",
+    "runtime_checked_by_this_reader": false
+  },
+  "limits": [
+    "No implementation157 tested; no Cargo/test/provider/model/service or Git write executed.",
+    "No complete fresh source-code audit; only native_permissions scoped regions read for I1.",
+    "R1 code review retained as historical conditional evidence; not a new independent runtime proof.",
+    "No project artifact changed, no checkbox changed, no new test/tool/scenario proposed.",
+    "No corrective permission question: ROOT already holds explicit authorization; report gives exact minimal edits only."
+  ],
+  "next_actions": [
+    "ROOT may proceed under gate zeroCritical and apply four scoped documentary corrections already authorized.",
+    "Preserve 26 task IDs and existing test scenario names; do not alter production to satisfy obsolete source anchors.",
+    "Continue planned T001–T026; no additional full suite, test or tool."
+  ]
+}

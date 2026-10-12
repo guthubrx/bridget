@@ -5,13 +5,13 @@
 
 Spec: 157-catalogue-quotas
 Titre: Catalogue fiable, quotas visibles et remplacement explicite
-Statut: Spécifiée
+Statut: Implemented (26/26 ; Converge, revue, audit et livraison à exécuter)
 Priorité: P1
-Tâches: à exécuter (26 tâches générées, 0 faite)
-Tests: à écrire en rouge d'abord (voir tasks.md)
+Tâches: 26/26 validées
+Tests: 44 tests native157 PASS dans FULL ; 2396PASS/9FAIL/74ignored Cargo ; oracle154 corrigé/rejoué1PASS ; huit échecs hérités conservés ; aucun succès global
 
 Résumé:
-- Contexte: `bridget_capabilities` annonce des capacités que `bridget_delegate` refuse ensuite pour le même appelant (constat du 2026-10-11 : `discovery: true` pour `codex-pro`, refus `permission_source_unavailable` depuis un fil T3 Claude). Le catalogue ne dit ni si le binaire existe, ni quel quota reste. Si un fournisseur est indisponible, le parent n'a aucun moyen sûr de demander une alternative.
+- Contexte: `bridget_capabilities` annonce des capacités que `bridget_delegate` refuse ensuite pour le même appelant (scénario de code associé au signalement du2026-10-11 : `discovery: true` pour `codex-pro`, puis refus `permission_source_unavailable` depuis un fil T3 Claude ; aucun fait runtime corrélé retrouvé). Le catalogue ne dit ni si le binaire existe, ni quel quota reste. Si un fournisseur est indisponible, le parent n'a aucun moyen sûr de demander une alternative.
 - Objectif: un catalogue qui dit la vérité pour CET appelant, des quotas visibles et respectés à l'admission, et un remplacement de fournisseur demandé par le parent, jamais silencieux. La reprise sur limite d'usage est reportée à la session 160 (voir plus bas).
 - Dépendances: SPEC-148, SPEC-149, SPEC-150 (livrée). Aucune dépendance de 152 : la reprise sur quota est reportée en 160.
 
@@ -21,7 +21,7 @@ Fichiers:
 - tasks.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-150-socle-delegation` (exécution séquentielle dans le worktree unique, sans commit automatique, décision 150b)
+**Feature Branch**: `session-157-catalogue-quotas`
 **Created**: 2026-10-11
 **Status**: Spécifiée
 **Priority**: P1
@@ -211,7 +211,8 @@ catalogue sont additifs.
   `detail.resets_at` quand le quota de la cible effective est épuisé. Aucune
   tâche n'est créée. La clé de rejeu reste libre.
 - **FR-011** : Un fait dont l'heure de retour est passée est ignoré à la lecture
-  et retiré à l'écriture.
+  et retiré à l'écriture. Une nouvelle observation passée retire l'ancien fait
+  de la même fenêtre ; elle ne retire aucune autre fenêtre encore valable.
 
 **Remplacement**
 
@@ -221,7 +222,7 @@ catalogue sont additifs.
   `invalid_request`.
 - **FR-013** : Le remplacement ne se déclenche que pour les motifs de la liste
   fermée « indisponibilité » : `command_missing`, `billing_guard`, `env_unfit`,
-  `unsupported_capability`, `permission_source_unavailable`,
+  `unsupported_capability`, `negotiation_failed`, `permission_source_unavailable`,
   `permission_mapping_unavailable`, `provider_confinement_unavailable`,
   `provider_quota_exhausted`. `model_unavailable`, `effort_unavailable` et tout
   refus de droits du parent ne déclenchent jamais de remplacement.
@@ -235,7 +236,8 @@ catalogue sont additifs.
 - **FR-015** : La substitution est signalée dans la réponse de l'admission, dans
   `bridget_task_status` et dans la tâche durable : `substitution` avec
   `requested`, `selected`, `reason` et `tried`. La tâche porte la cible
-  effective dans `agent_type`, `model` et `effort`.
+  effective dans `agent_type`, `model` et `effort`. La clé `substitution` est
+  toujours présente dans les réponses ; elle vaut `null` sans remplacement.
 - **FR-016** : Avec `fallback` et aucun candidat valide, le refus est
   `fallback_exhausted` avec `detail.tried` (code par candidat). Sans `fallback`,
   les codes de refus restent ceux d'avant.
@@ -295,8 +297,8 @@ catalogue sont additifs.
   indisponibilité. Le contrat 148 le dit (`model_unavailable` sans substitution).
 - Les tests suivent la règle du projet : `umask 077`, environnement privé,
   racine temporaire courte (voir `quickstart.md`).
-- La livraison suit les sessions 147 à 150 : fichiers sur disque, sans relance
-  automatique des services.
+- Livraison autorisée : commit, fusion, push vérifié, binaire signé installé,
+  activation Bridget après zéro mission native active, nettoyage. T3 reste ouvert.
 
 ## Questions pour l'utilisateur
 
@@ -359,3 +361,40 @@ doit pas réutiliser `suspended_at` ni `resume_attempts` de 152 (pause et panne)
 un redémarrage pendant l'attente ne doit pas reconstruire l'enfant avant l'heure
 de retour ; paramètre d'appel `resume_on_limit` opt-in (défaut `false`), 6 h
 d'attente au plus.
+
+## Précisions retenues de la revue157-r1 — appliquées au GO157
+
+GO157 le2026-10-12 après livraison et activation155/156. Base source156
+cf498755dc871b51eb8c0add5f8a882d67651d2a, base Git avec clôture documentaire
+8b5b313694cf05eabfe6a86a970b96f03b015f49. Les références150/1f2c661d
+restent des preuves historiques ; les fonctions sont revalidées sur cette base.
+
+Le verdict conserve l’ordre type/modèle/effort, préflight, politique, gardes
+liées aux options de l’appel, quota. Workspace et, après livraison155,
+child_requests sont non remplaçables pour la cible demandée ; un candidat
+explicitement listé refusé est noté dans tried. Aucun gain de droits ni
+contournement des gardes du parent. En worktree, sélection unique en Probe,
+candidat et définition épinglés transmis à Reserve puis Commit. Commit
+revalide ce même candidat dans le dossier enfant réel ; si une garde échoue,
+refuser sans nouvelle sélection et conserver les diagnostics de chemin154.
+Les options immuables et canonical original restent distincts de request effectif.
+
+Quota : huit fenêtres ; purger les passées avant l’écriture. Une neuvième clé
+évince le plus petit observed_at, égalité départagée par clé lexicale.
+unknown du hook n’est pas une preuve seul ; pourcentage>=100 avec retour
+futur épuise toute source. provider_limit_reached_window_unknown est l’unique
+contrainte informative possible si can_run, hors famille verdict et jamais
+rendue comme refus d’admission. Aucun nouveau champ public.
+
+Limites de lecture : le catalogue lit l'horloge lors du verdict, puis lors
+de la projection du quota. Au bord exact d'une échéance, ces deux lectures
+peuvent différer ; l'admission recontrôle le quota. Le préflight partagé
+s'exécute aussi avant le contrôle du cwd des lancements existants. Si le cwd
+et l'environnement sont invalides ensemble, env_unfit peut précéder cwd_gone.
+
+Refus enrichi : Err(String) sous forme code:JSON contenant message/detail.
+Étendre le seul failure existant ; les comparaisons de listes portent sur
+le code canonique. JSON non conforme : refus fermé, aucune valeur inventée.
+Les anciens codes nus et préfixes restent compatibles. Aucun nouveau type,
+helper, framework, table, outil, ID ou scénario autonome. Les tests prévus
+T004/T016/T017/T018 couvrent ces précisions. Les26 tâches restent ouvertes.

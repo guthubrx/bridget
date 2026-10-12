@@ -442,6 +442,7 @@ impl Drop for Fixture {
 }
 fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        fallback: Vec::new(),
         request_id: key.into(),
         agent_type: "fake-glm".into(),
         model: "glm5.3".into(),

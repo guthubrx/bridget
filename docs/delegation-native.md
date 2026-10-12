@@ -30,7 +30,82 @@ du parent (voir plus bas).
 Le nom d'instance T3 `claude_glm` n'est pas un type du registre Bridget.
 Cet exemple ne prouve pas que ce profil existe dans tous les registres.
 Un profil absent, un modèle différent ou un effort non déclaré produit un refus.
-Bridget ne remplace jamais la cible demandée par une autre.
+Sans fallback explicite, Bridget ne remplace pas la cible demandée.
+
+### Catalogue, quotas et remplacement explicite (157)
+
+Vérifier le catalogue effectivement chargé. Cette documentation ne prouve pas
+l’activation du binaire ni une disponibilité d’authentification chez le fournisseur.
+
+| Champ | Lecture |
+|---|---|
+| `can_run` | Au moins une posture passe le verdict pour ce parent. |
+| `constraints` | Codes et messages français ; vide si can_run, sauf l’information non bloquante provider_limit_reached_window_unknown. |
+| `quota` | Fenêtres observées, ou null si rien n’est connu. |
+| `checks` | binary:true, quota:"observed", auth:false. |
+| `verdict_context` | cwd égal à la racine attestée, ou null, et fact_scope:"session". |
+| `features` | fallback:true et fallback_max:3. |
+
+discovery/inherit/development proviennent du même verdict que l’admission.
+La garantie porte sur la famille fermée de refus du contrat, avec le même parent,
+la même posture, un fait de session non limité à une demande, le même dossier
+et un état inchangé. Un autre cwd, un fait scoped à request_id, un binaire
+retiré ou un quota changé sortent de cette garantie. L’admission reste l’autorité.
+Pour un parent SameProject sans racine, cwd:null et les booléens du catalogue
+restent faux ; cela ne retire pas une admission que ses gardes autorisent dans
+un projet concret. Aucune racine ni aucun droit n’est inventé. Le catalogue
+reste une lecture disponible pendant la pause ; il n’appelle aucun fournisseur.
+Au bord exact d'une échéance de quota, le verdict et sa projection peuvent
+lire deux instants distincts. L'admission recontrôle le quota.
+
+Quota rend windows[{window,used_percent,resets_at,exhausted}], exhausted,
+limit_reached, resets_at et observed_at. Les pourcentages/heures inconnus sont
+null. Une fenêtre n’est épuisée qu’avec retour futur et preuve propre : rejected
+Claude stream-json, ou au moins 100 % utilisé, toute source. Un statut Codex
+global atteint ne désigne aucune fenêtre : limit_reached peut être vrai sans
+exhausted. Le retour global est le plus tardif des fenêtres réellement épuisées.
+Les faits passés sont ignorés ; la mémoire garde huit fenêtres par agent_type,
+survit à la disparition de sa présence, mais pas au redémarrage du daemon.
+Des fournisseurs du même compte n’ont pas de quota partagé dans cette projection.
+
+Fallback est facultatif : 1 à 3 objets fermés {agent_type,model,effort?}, ordonnés,
+sans entrée vide, doublon ou cible identique à la demande. Le parent choisit
+les alternatives ; Bridget ne crée ni droit ni accord humain supplémentaire.
+Pour chaque cible : type/modèle/effort, préflight, politique héritée, gardes
+workspace154/child_requests155, puis quota. Modèle/effort invalides ne sont jamais
+masqués par un motif remplaçable de la cible demandée. Les droits du parent,
+reviewer155, pause, dossier et rétention gardent leurs règles existantes.
+
+Le remplacement commence seulement sur les neuf motifs FR013 : command_missing,
+billing_guard, env_unfit, unsupported_capability, negotiation_failed,
+permission_source_unavailable, permission_mapping_unavailable,
+provider_confinement_unavailable, provider_quota_exhausted. settings_revision_changed,
+refus de droits, workspace incompatible et child_requests incompatible de la
+cible demandée ne déclenchent pas de remplacement. Pour un candidat listé,
+un refus est conservé dans tried et l’admission passe au suivant.
+
+La réponse et bridget_task_status rendent toujours la clé substitution :
+{requested,selected,reason,tried}, ou null sans remplacement. Cet ajout concerne
+la réponse ; les octets canoniques d'une demande sans fallback restent inchangés.
+La tâche porte la cible effective ; son canonical garde
+la demande originale et sa liste. Rejouer garde exactement cette substitution,
+sans recalculer un quota ni sélectionner à nouveau. En worktree, Probe choisit
+une seule cible/définition épinglée ; Reserve et Commit la consomment. Commit
+revalide cette cible dans le dossier enfant réel et refuse sans resélection.
+Les diagnostics154 et options immuables restent conservés.
+
+Préflight refuse plus tôt command_missing/billing_guard/env_unfit/
+unsupported_capability, avant création de tâche. Provider_quota_exhausted rend
+detail.resets_at ; fallback_exhausted rend detail.tried si toutes les cibles
+échouent. Aucune tâche ni consommation de clé pour ces deux refus. Le MCP rend
+code suivi du JSON de detail. Sans fallback, les codes restent ceux du contrat,
+avec les refus précoces annoncés. Aucun remplacement après admission ni reprise
+sur quota en157 ; la reprise est reportée en160. checks.auth:false reste explicite.
+Le préflight partagé passe avant le contrôle du cwd des lancements existants.
+Si le cwd et l'environnement sont invalides ensemble, env_unfit peut donc
+précéder cwd_gone.
+
+
 
 Le reçu conserve `task_id`, les références de l'enfant et de la mission.
 Si la réponse se perd, reprendre les mêmes arguments avec le même `request_id`.

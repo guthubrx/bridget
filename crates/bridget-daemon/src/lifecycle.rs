@@ -96,6 +96,43 @@ fn validate_provider_observation(
     Ok(())
 }
 
+/// Préflight157 commun sur la définition épinglée et l'environnement capturé.
+/// O(t+C+B+P+E log e) : t types (liste en cas de refus), C capacités/arguments, B binaire observé,
+/// P entrées PATH, E variables déclarées, e variables source. Aucun cwd ni spawn.
+pub(crate) fn launch_preflight(
+    registry: &AgentRegistry,
+    agent_type: &str,
+    source: &SourceEnvironment,
+) -> Result<(), SpawnRefusal> {
+    let definition = registry.get(agent_type).map_err(|_| SpawnRefusal::UnknownType {
+        requested_type: agent_type.to_string(),
+        known_types: registry.known_types(),
+        registry: registry.source().display().to_string(),
+    })?;
+    validate_launch_capabilities(agent_type, definition)?;
+    validate_provider_observation(agent_type, definition)?;
+    if let Some(variable) = forbidden_environment_variable(
+        definition,
+        allow_api_key_value(source.get("BRIDGET_ALLOW_API_KEY").and_then(|value| value.to_str())),
+        |variable| source.contains_key(variable),
+    ) {
+        return Err(SpawnRefusal::BillingGuard { variable });
+    }
+    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json" | "codex_app_server") {
+        return Err(SpawnRefusal::NegotiationFailed {
+            detail: format!("le protocole '{}' n'utilise pas une session gérée", definition.protocol),
+        });
+    }
+    let env = build_environment(definition, source)?;
+    if !command_exists(&definition.command, &env) {
+        return Err(SpawnRefusal::CommandMissing {
+            command: definition.command.clone(),
+            registry: registry.source().display().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Les deux machines d'un ordre de lancement : celle dont le système de
 /// fichiers est réellement interrogé, et celle qui a demandé.
 ///
@@ -202,28 +239,12 @@ fn submit_spawn_with_policy(
             crate::recovery_trace::non_persistent_spawn_warning(name)
         );
     }
-    // Une capacité absente est une propriété du registre déclaratif, pas une
-    // issue de la saga. Pour une commande neuve, elle est donc refusée avant
-    // toute réservation durable et, a fortiori, avant toute création de
-    // processus. Une commande connue conserve son rejeu figé ci-dessous.
+    // La définition est épinglée par le caller. Une commande connue garde son rejeu
+    // avant les gardes mutables ; une commande neuve refuse tout défaut de lancement.
     if !supervisor.knows_command(&order.command_id)
-        && let Ok(definition) = registry.get(&order.agent_type)
-        && let Err(reason) = validate_launch_capabilities(&order.agent_type, definition)
-            .and_then(|_| validate_provider_observation(&order.agent_type, definition))
+        && let Err(reason) = launch_preflight(registry, &order.agent_type, source)
     {
         return Ok(SpawnDecision::Rejected(reason));
-    }
-    // L'exécutable est toujours vérifié sur l'hôte : aucun chemin alternatif
-    // ne peut désormais désactiver cette garde avant réservation.
-    if !supervisor.knows_command(&order.command_id)
-        && let Ok(definition) = registry.get(&order.agent_type)
-        && let Ok(env) = build_environment(definition, source)
-        && !command_exists(&definition.command, &env)
-    {
-        return Ok(SpawnDecision::Rejected(SpawnRefusal::CommandMissing {
-            command: definition.command.clone(),
-            registry: registry.source().display().to_string(),
-        }));
     }
     let submission = if relaunch {
         supervisor.request_relaunch(order, now)?
@@ -347,6 +368,7 @@ fn prepare_spawn_parts(
     hosts: &SpawnHosts,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     reject_removed_project(lease.project.as_ref())?;
+    launch_preflight(registry, agent_type, source)?;
     let definition = registry
         .get(agent_type)
         .map_err(|_| SpawnRefusal::UnknownType {
@@ -354,30 +376,6 @@ fn prepare_spawn_parts(
             known_types: registry.known_types(),
             registry: registry.source().display().to_string(),
         })?;
-    validate_launch_capabilities(agent_type, definition)?;
-    validate_provider_observation(agent_type, definition)?;
-    if let Some(variable) = forbidden_environment_variable(
-        definition,
-        allow_api_key_value(
-            source
-                .get("BRIDGET_ALLOW_API_KEY")
-                .and_then(|value| value.to_str()),
-        ),
-        |variable| source.contains_key(variable),
-    ) {
-        return Err(SpawnRefusal::BillingGuard { variable });
-    }
-    if !matches!(
-        definition.protocol.as_str(),
-        "acp" | "claude_stream_json" | "codex_app_server"
-    ) {
-        return Err(SpawnRefusal::NegotiationFailed {
-            detail: format!(
-                "le protocole '{}' n'utilise pas une session gérée",
-                definition.protocol
-            ),
-        });
-    }
     if !cwd.is_dir() {
         return Err(SpawnRefusal::CwdGone {
             searched_on: hosts.searched_on.clone(),
@@ -396,12 +394,6 @@ fn prepare_spawn_parts(
             "BRIDGET_PROVIDER_RELAUNCH_MAX".to_string(),
             OsString::from(max),
         );
-    }
-    if !command_exists(&definition.command, &env) {
-        return Err(SpawnRefusal::CommandMissing {
-            command: definition.command.clone(),
-            registry: registry.source().display().to_string(),
-        });
     }
     Ok(PreparedSpawn {
         lease,
@@ -558,7 +550,7 @@ fn command_exists(command: &str, env: &SourceEnvironment) -> bool {
         })
 }
 
-fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
+pub(crate) fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
     let category = match reason {
         SpawnRefusal::UnknownType { .. } => "unknown_type",
         SpawnRefusal::CommandMissing { .. } => "command_missing",
@@ -771,6 +763,110 @@ mod tests {
             SpawnDecision::Rejected(reason) => reason,
             other => panic!("refus attendu, obtenu: {other:?}"),
         }
+    }
+
+    #[test]
+    fn native157_preflight_binaire_absent() {
+        let root = root("native157-missing");
+        let supervisor = supervisor(&root, 1);
+        let command = root.join("binaire-absent157");
+        let registry = registry(command.to_str().unwrap(), "acp", &[]);
+        let env = source(&root);
+        let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
+        assert_eq!(refusal_record(&refusal).0, "command_missing");
+        assert!(matches!(refusal, SpawnRefusal::CommandMissing { ref command, .. } if command.ends_with("binaire-absent157")));
+        let request = order(&root, "native157-missing", "89000000-0000-4000-8000-000000000701");
+        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert_eq!(refusal_record(&refusal).0, "command_missing");
+        assert!(!supervisor.knows_command(&request.command_id), "refus avant réservation");
+        assert_eq!(supervisor.active_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native157_preflight_cle_api_interdite_binaire_present() {
+        let root = root("native157-billing");
+        let supervisor = supervisor(&root, 1);
+        let registry = registry("/bin/sh", "acp", &["OPENAI_API_KEY"]);
+        let mut env = source(&root);
+        env.insert("OPENAI_API_KEY".into(), OsString::from("fixture-interdite157"));
+        assert!(command_exists("/bin/sh", &env), "binaire réellement présent");
+        let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
+        assert_eq!(refusal_record(&refusal).0, "billing_guard");
+        assert!(matches!(refusal, SpawnRefusal::BillingGuard { ref variable } if variable == "OPENAI_API_KEY"));
+        let request = order(&root, "native157-billing", "89000000-0000-4000-8000-000000000702");
+        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert_eq!(refusal_record(&refusal).0, "billing_guard");
+        assert!(!supervisor.knows_command(&request.command_id), "refus avant réservation");
+        assert_eq!(supervisor.active_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native157_preflight_home_absent_binaire_present() {
+        let root = root("native157-home");
+        let supervisor = supervisor(&root, 1);
+        let registry = registry("/bin/sh", "acp", &[]);
+        let mut env = source(&root); env.remove("HOME");
+        assert!(command_exists("/bin/sh", &env), "binaire réellement présent sans HOME");
+        let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
+        assert_eq!(refusal_record(&refusal).0, "env_unfit");
+        assert!(matches!(refusal, SpawnRefusal::EnvUnfit { ref detail } if detail.contains("HOME absent")));
+        let request = order(&root, "native157-home", "89000000-0000-4000-8000-000000000703");
+        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert_eq!(refusal_record(&refusal).0, "env_unfit");
+        assert!(!supervisor.knows_command(&request.command_id), "erreur environnement propagée avant réservation");
+        assert_eq!(supervisor.active_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native157_preflight_protocole_non_gere() {
+        let root = root("native157-protocol");
+        let supervisor = supervisor(&root, 1);
+        // Capacité déclarée valide : le refus vise le protocole non géré, pas sa capacité absente.
+        let registry = AgentRegistry::from_json(&serde_json::json!({"agents":{"fixture":{
+            "command":"/bin/sh", "protocol":"tmux", "forbidden_env":[],
+            "capabilities":{"execution_paths":["tmux"]}
+        }}}).to_string(), "/tmp/native157-protocol.json").unwrap();
+        assert!(validate_launch_capabilities("fixture", registry.get("fixture").unwrap()).is_ok());
+        let env = source(&root);
+        let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
+        assert_eq!(refusal_record(&refusal).0, "negotiation_failed");
+        assert!(matches!(refusal, SpawnRefusal::NegotiationFailed { ref detail } if detail.contains("tmux")));
+        let request = order(&root, "native157-protocol", "89000000-0000-4000-8000-000000000704");
+        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert_eq!(refusal_record(&refusal).0, "negotiation_failed");
+        assert!(!supervisor.knows_command(&request.command_id));
+        assert_eq!(supervisor.active_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native157_preflight_definition_epinglee() {
+        let root = root("native157-pinned");
+        let supervisor = supervisor(&root, 1);
+        let original = registry("/bin/sh", "acp", &[]);
+        let resolved = original.resolved_definition("fixture").unwrap();
+        let pinned = AgentRegistry::from_resolved("fixture", &resolved).unwrap();
+        let changed = registry("/commande-mutante-absente157", "acp", &[]);
+        let env = source(&root);
+        assert!(launch_preflight(&pinned, "fixture", &env).is_ok());
+        assert_eq!(refusal_record(&launch_preflight(&changed, "fixture", &env).unwrap_err()).0, "command_missing");
+        let request = order(&root, "native157-pinned", "89000000-0000-4000-8000-000000000705");
+        let prepared = match submit_spawn(&supervisor, &pinned, &env, &request, NOW, false, &hosts_fixture()).unwrap() {
+            SpawnDecision::Ready(prepared) => prepared,
+            other => panic!("définition figée lançable attendue : {other:?}"),
+        };
+        assert_eq!(prepared.command, "/bin/sh");
+        assert_eq!(*prepared.resolved_definition, resolved);
+        let recovered = prepare_recovery(&env, RecoveryCandidate {
+            lease: prepared.lease, agent_type: prepared.agent_type, cwd: prepared.cwd,
+            resolved_definition: Some(*prepared.resolved_definition), runtime_execution: None,
+        }).unwrap();
+        assert_eq!(recovered.command, "/bin/sh");
+        assert_eq!(*recovered.resolved_definition, resolved);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

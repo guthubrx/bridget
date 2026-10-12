@@ -166,6 +166,7 @@ fn fixture_entries(catalogue: &Value) -> Vec<&Value> {
 
 pub(super) fn delegate_request(agent_type: &str, request_id: &str, cwd: &str, posture: Option<SpawnPosture>) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        fallback: Vec::new(),
         request_id: request_id.into(),
         agent_type: agent_type.into(),
         model: "custom/model".into(),
@@ -552,6 +553,93 @@ fn native155_denyenv_absent_et_heritage_forward_retire() {
     }
 }
 
+/// T001/T012 — même catalogue privé avant et après la session 157.
+/// Cinq définitions Claude et leurs cinq variantes de découverte font dix entrées.
+/// Aucun tick ni lancement : la mesure porte sur le gestionnaire du catalogue.
+#[test]
+#[ignore = "banc T001/T012 : exécution explicite dans un namespace privé"]
+fn native157_catalogue_latence() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("lat157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    let template = st.registry.get("claude-child").unwrap();
+    let definition = json!({
+        "command": template.command,
+        "args": template.args,
+        "protocol": template.protocol,
+        "forbidden_env": template.forbidden_env,
+        "pass_env": template.pass_env,
+        "claude_config_dir": template.claude_config_dir,
+        "permissions": template.permissions,
+        "capabilities": {
+            "execution_paths": ["claude_stream_json"],
+            "models": {"custom/model": {"efforts": ["high"]}}
+        }
+    });
+    // from_json ajoute quatre défauts et les variantes project-discovery.
+    // Cinq sources privées donnent exactement dix entrées, sans CLI réelle.
+    let sources = vec!["codex", "claude", "cursor", "gemini", "native157-01"];
+    let mut names: Vec<String> = sources.iter().map(|name| (*name).to_owned()).collect();
+    names.extend(sources.iter().map(|name| format!("project-discovery-{name}")));
+    names.sort_unstable();
+    let agents: serde_json::Map<String, Value> = sources
+        .iter()
+        .map(|name| ((*name).to_owned(), definition.clone()))
+        .collect();
+    let registry = serde_json::to_string(&json!({"agents": agents})).unwrap();
+    let registry_path = root.join("catalogue157.json");
+    bridget_transport::fsutil::write_private_file_atomic(&registry_path, registry.as_bytes())
+        .unwrap();
+    st.registry = AgentRegistry::from_json(&registry, &registry_path).unwrap();
+    insert_fact(
+        &mut st,
+        codex_fact(cwd.to_str().unwrap(), json!({"type": "dangerFullAccess"}), "never"),
+        None,
+    );
+
+    let mut elapsed_ns = Vec::with_capacity(50);
+    for _ in 0..50 {
+        let start = std::time::Instant::now();
+        let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st)
+            .unwrap();
+        let elapsed: u64 = start.elapsed().as_nanos().try_into().unwrap();
+        elapsed_ns.push(elapsed);
+        // Les validations sont hors de la fenêtre chronométrée.
+        let providers = catalogue["providers"].as_array().unwrap();
+        let mut actual: Vec<&str> = providers
+            .iter()
+            .map(|provider| provider["agent_type"].as_str().unwrap())
+            .collect();
+        actual.sort_unstable();
+        assert_eq!(actual, names);
+        for provider in providers {
+            assert_eq!(provider["protocol"], "claude_stream_json");
+        }
+    }
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    let mut sorted = elapsed_ns.clone();
+    sorted.sort_unstable();
+    // Médiane des deux valeurs centrales ; p95 au rang supérieur ceil(0,95 × 50).
+    let median_ns = (sorted[24] as f64 + sorted[25] as f64) / 2.0;
+    let p95_ns = sorted[47];
+    println!(
+        "native157_catalogue_latence {}",
+        json!({
+            "providers": 10,
+            "samples": elapsed_ns.len(),
+            "median_ns": median_ns,
+            "p95_ns": p95_ns,
+            "elapsed_ns": elapsed_ns,
+            "measurement": "handle_locked_catalogue",
+            "warmup_calls": 0,
+            "fixture": "native149_codex_full_never_5_claude_plus_5_discovery",
+            "p95_method": "nearest_rank_48_of_50"
+        })
+    );
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
 #[test]
 fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
     let (mut st, config, _rx) = fixture("catalogue-full");
@@ -575,11 +663,13 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
         clés,
         [
             "brief_max_bytes",
+            "checks",
             "child_request_human_window_secs",
             "child_request_parent_window_secs",
             "child_requests_default",
             "cwd_root",
             "cwd_scope",
+            "features",
             "keep_alive_max_secs",
             "keep_alive_min_secs",
             "max_children",
@@ -589,6 +679,7 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
             "mission_reply_max_secs",
             "mission_reply_min_secs",
             "providers",
+            "verdict_context",
             "version",
             "wait_timeout_default_secs",
             "wait_timeout_max_secs",
@@ -719,6 +810,7 @@ fn native149_un_fait_d_autre_demande_ne_donne_aucun_droit() {
 
 fn tache_enregistree(definition: bridget_transport::protocol::ResolvedAgentDefinition) -> crate::delegation::Task {
     crate::delegation::Task {
+        substitution: None,
         task_id: Uuid::new_v4().to_string(),
         root_owner_agent_id: "racine-149".into(),
         parent_task_id: None,
@@ -3780,4 +3872,921 @@ fn native149_o4_restart_identities_refuse_toute_incoherence_saga_flotte_marqueur
     );
     let _ = fs::remove_dir_all(&racine);
     let _ = fs::remove_file(&config.db_path);
+}
+
+
+/// T007 : quatre alias hermétiques. Réemploi de la fixture 149 dans six tests ;
+/// aucune politique ni résultat d'admission n'est calculé par ce helper.
+fn native157_registre_coherence(st: &mut DaemonState) {
+    let claude = st.registry.get("claude-child").unwrap();
+    let claude = json!({
+        "command": claude.command, "args": claude.args,
+        "protocol": "claude_stream_json", "forbidden_env": claude.forbidden_env,
+        "pass_env": claude.pass_env, "claude_config_dir": claude.claude_config_dir,
+        "permissions": claude.permissions,
+        "capabilities": {"execution_paths": ["claude_stream_json"],
+            "models": {"custom/model": {"efforts": ["high"]}}}
+    });
+    let codex = st.registry.get("native-test").unwrap();
+    let codex = json!({
+        "command": codex.command, "args": codex.args,
+        "protocol": "codex_app_server", "forbidden_env": codex.forbidden_env,
+        "pass_env": codex.pass_env, "permissions": codex.permissions,
+        "capabilities": {"execution_paths": ["codex_app_server"],
+            "models": {"custom/model": {"efforts": ["high"]}}}
+    });
+    let registry = serde_json::to_string(&json!({"agents": {
+        "claude": claude.clone(), "glm": claude,
+        "codex": codex.clone(), "codex-pro": codex
+    }})).unwrap();
+    let path = st.fixture_root.as_ref().unwrap().0.join("coherence157.json");
+    bridget_transport::fsutil::write_private_file_atomic(&path, registry.as_bytes()).unwrap();
+    st.registry = AgentRegistry::from_json(&registry, path).unwrap();
+}
+
+#[test]
+fn native157_coherence_t3_claude_sans_launch_context_vers_codex() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("c157sans");
+    native157_registre_coherence(&mut st);
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    let mut fact = claude_fact(&root.join("config-149"), &cwd, &st.source_env, "plan");
+    fact.source = "provider_turn".into();
+    fact.provider_policy["permission_callback"]["kind"] = json!("t3_runtime");
+    fact.provider_policy.as_object_mut().unwrap().remove("launch_context");
+    bridget_transport::protocol::validate_permissions(&fact, true).unwrap();
+    insert_fact(&mut st, fact, None);
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "codex-pro").unwrap();
+    let admission = handle_locked("conn-1", delegate_request("codex-pro", "sans157", cwd.to_str().unwrap(), Some(SpawnPosture::Discovery)), &mut st);
+    assert_eq!(admission.unwrap_err(), "permission_source_unavailable");
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(entry["discovery"], false, "catalogue incohérent avec le refus réel : {entry}");
+    assert_eq!(entry["can_run"], false);
+    assert!(entry["constraints"].as_array().unwrap().iter()
+        .any(|constraint| constraint["code"] == "permission_source_unavailable"));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_coherence_launch_context_present_source_illisible() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("c157source");
+    native157_registre_coherence(&mut st);
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    let mut fact = claude_fact(&root.join("config-149"), &cwd, &st.source_env, "plan");
+    let settings = root.join("config-149/settings.json");
+    // Source stable, révision exacte, JSON illisible : pas une mutation après le fait.
+    bridget_transport::fsutil::write_private_file_atomic(&settings, b"{json-invalide157").unwrap();
+    let revision = crate::native_permissions::source_revision(&settings).unwrap();
+    let source = fact.provider_policy["launch_context"]["permission_sources"].as_array_mut().unwrap().iter_mut()
+        .find(|source| source["path"].as_str() == settings.to_str()).unwrap();
+    source["revision"] = json!(revision.clone());
+    bridget_transport::protocol::validate_permissions(&fact, false).unwrap();
+    assert!(fact.provider_policy.get("launch_context").is_some());
+    insert_fact(&mut st, fact, None);
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "codex-pro").unwrap();
+    let admission = handle_locked("conn-1", delegate_request("codex-pro", "source157", cwd.to_str().unwrap(), Some(SpawnPosture::Discovery)), &mut st);
+    assert_eq!(admission.unwrap_err(), "permission_source_unavailable");
+    assert_eq!(crate::native_permissions::source_revision(&settings).unwrap(), revision);
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(entry["discovery"], false, "catalogue incohérent avec la source réelle illisible : {entry}");
+    assert_eq!(entry["can_run"], false);
+    assert!(entry["constraints"].as_array().unwrap().iter()
+        .any(|constraint| constraint["code"] == "permission_source_unavailable"));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_coherence_matrice() {
+    let mut contradictions = Vec::new();
+    let mut contexts = Vec::new();
+    let mut cells = 0;
+    for parent in ["claude-sans", "claude-contexte", "claude-source-illisible", "codex", "aucun-fait"] {
+        for target in ["claude", "codex", "glm", "codex-pro"] {
+            for (key, posture) in [
+                ("inherit", None),
+                ("discovery", Some(SpawnPosture::Discovery)),
+                ("development", Some(SpawnPosture::Development)),
+            ] {
+                // État indépendant : aucune admission précédente ne consomme un slot.
+                let (mut st, config, rx, _reader) = fixture_with_reader("c157mat");
+                native157_registre_coherence(&mut st);
+                let root = st.fixture_root.as_ref().unwrap().0.clone();
+                let cwd = root.join("project-149").canonicalize().unwrap();
+                st.delegation_store.grant("instance-1", &cwd, SpawnPosture::Development, false).unwrap();
+                if parent == "codex" {
+                    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+                } else if parent != "aucun-fait" {
+                    let mut fact = claude_fact(&root.join("config-149"), &cwd, &st.source_env, "plan");
+                    if parent == "claude-sans" {
+                        fact.provider_policy.as_object_mut().unwrap().remove("launch_context");
+                    } else if parent == "claude-source-illisible" {
+                        let settings = root.join("config-149/settings.json");
+                        bridget_transport::fsutil::write_private_file_atomic(&settings, b"{json-invalide157").unwrap();
+                        let revision = crate::native_permissions::source_revision(&settings).unwrap();
+                        let source = fact.provider_policy["launch_context"]["permission_sources"].as_array_mut().unwrap().iter_mut()
+                            .find(|source| source["path"].as_str() == settings.to_str()).unwrap();
+                        source["revision"] = json!(revision);
+                    }
+                    bridget_transport::protocol::validate_permissions(&fact, false).unwrap();
+                    insert_fact(&mut st, fact, None);
+                }
+                let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+                let entry = catalogue["providers"].as_array().unwrap().iter()
+                    .find(|entry| entry["agent_type"] == target).unwrap();
+                let request_id = format!("mat157-{parent}-{target}-{key}");
+                let result = handle_locked("conn-1", delegate_request(target, &request_id, cwd.to_str().unwrap(), posture), &mut st);
+                let allowed = entry[key].as_bool().unwrap();
+                if allowed != result.is_ok() {
+                    contradictions.push(format!("{parent}/{target}/{key}: catalogue={allowed}, admission={result:?}"));
+                }
+                contexts.push((catalogue["verdict_context"].clone(), json!({"cwd":cwd,"fact_scope":"session"})));
+                assert_eq!(st.delegation_store.tasks().unwrap().len(), usize::from(result.is_ok()));
+                assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+                cells += 1;
+                drop(st);
+                let _ = fs::remove_file(&config.db_path);
+            }
+        }
+    }
+    assert_eq!(cells, 60);
+    assert!(contradictions.is_empty(), "{}", contradictions.join("\n"));
+    for (actual, expected) in contexts {
+        assert_eq!(actual, expected, "contexte de verdict explicite");
+    }
+}
+
+#[test]
+fn native157_coherence_hors_contexte_fait_limite_a_une_demande() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("c157scope");
+    native157_registre_coherence(&mut st);
+    let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), Some("scope157"));
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "codex-pro").unwrap();
+    assert_eq!(entry["inherit"], false, "le fait limité à une demande ne définit pas le catalogue");
+    let result = handle_locked("conn-1", delegate_request("codex-pro", "scope157", cwd.to_str().unwrap(), None), &mut st).unwrap();
+    let task = st.delegation_store.get(result["task_id"].as_str().unwrap()).unwrap().unwrap();
+    assert!(task.permission_snapshot.is_some(), "le fait est utilisé pour sa seule demande");
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(catalogue["verdict_context"]["fact_scope"], "session");
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_coherence_hors_contexte_sous_repertoire() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("c157cwd");
+    native157_registre_coherence(&mut st);
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    let child_cwd = cwd.join("sous-repertoire157");
+    fs::create_dir(&child_cwd).unwrap();
+    let fact = claude_fact(&root.join("config-149"), &cwd, &st.source_env, "plan");
+    insert_fact(&mut st, fact, None);
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "claude").unwrap();
+    assert_eq!(entry["inherit"], true);
+    let admission = handle_locked("conn-1", delegate_request("claude", "cwd157", child_cwd.to_str().unwrap(), None), &mut st);
+    // Recapture des permission_sources du sous-répertoire avant la garde cwd.
+    assert_eq!(admission.unwrap_err(), "settings_revision_changed");
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(catalogue["verdict_context"], json!({"cwd":cwd,"fact_scope":"session"}));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_coherence_hors_contexte_binaire_retire_entre_deux_appels() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("c157bin");
+    native157_registre_coherence(&mut st);
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "claude").unwrap();
+    assert_eq!(entry["inherit"], true);
+    fs::remove_file(root.join("bin/claude")).unwrap();
+    let admission = handle_locked("conn-1", delegate_request("claude", "bin157", cwd.to_str().unwrap(), None), &mut st);
+    assert_eq!(admission.unwrap_err(), "command_missing");
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert_eq!(entry["can_run"], true, "catalogue établi avant le retrait du binaire");
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+
+#[test]
+fn native157_preflight_admission_binaire_absent_sans_tache() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("p157admit");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    st.source_env.insert("PATH".into(), root.join("bin").into_os_string());
+    fs::remove_file(root.join("bin/claude")).unwrap();
+    let request = delegate_request("claude-child", "missing157", cwd.to_str().unwrap(), None);
+    assert_eq!(handle_locked("conn-1", request.clone(), &mut st).unwrap_err(), "command_missing");
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    // Le refus ne réserve pas la clé : le même appel est admis après réparation humaine.
+    fs::copy("/bin/echo", root.join("bin/claude")).unwrap();
+    fs::set_permissions(root.join("bin/claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    let accepted = handle_locked("conn-1", request, &mut st).unwrap();
+    assert_eq!(accepted["status"], "queued");
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_preflight_catalogue_binaire_absent() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("p157cat");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    st.source_env.insert("PATH".into(), root.join("bin").into_os_string());
+    fs::remove_file(root.join("bin/claude")).unwrap();
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "claude-child").unwrap();
+    assert_eq!(entry["can_run"], false);
+    assert!(entry["constraints"].as_array().unwrap().iter().any(|item| item["code"] == "command_missing"));
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+
+#[test]
+fn native157_quota_catalogue_epuise() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("q157cat");
+    let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    let now = unix_timestamp();
+    let resets_at = now + 3600;
+    st.provider_limits.record("native-test", bridget_transport::protocol::RateLimitFact {
+        window: "five_hour".into(), status: "rate_limit_reached".into(),
+        resets_at: Some(resets_at), used_percent: Some(100),
+    }, bridget_transport::protocol::RateLimitSource::CodexAppServer, now);
+    assert!(st.provider_limits.quota("native-test", now).unwrap().exhausted);
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "native-test").unwrap();
+    assert_eq!(entry["quota"]["exhausted"], true);
+    assert_eq!(entry["quota"]["resets_at"], resets_at);
+    assert_eq!(entry["can_run"], false);
+    assert!(entry["constraints"].as_array().unwrap().iter()
+        .any(|constraint| constraint["code"] == "provider_quota_exhausted"));
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_quota_admission_refuse_avec_resets_at() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("q157adm");
+    let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    let now = unix_timestamp();
+    let resets_at = now + 3600;
+    st.provider_limits.record("native-test", bridget_transport::protocol::RateLimitFact {
+        window: "five_hour".into(), status: "rate_limit_reached".into(),
+        resets_at: Some(resets_at), used_percent: Some(100),
+    }, bridget_transport::protocol::RateLimitSource::CodexAppServer, now);
+    let request = delegate_request("native-test", "quota157-cle-libre", cwd.to_str().unwrap(), None);
+    let code = handle_locked("conn-1", request.clone(), &mut st).expect_err("quota épuisé : aucun tick ni lancement au RED");
+    // Le même rendu natif que le wrapper public, sans son tick en cas d'admission.
+    let result = failure(&code);
+    assert_eq!(result["status"], "refused");
+    assert_eq!(result["code"], "provider_quota_exhausted");
+    assert_eq!(result["detail"], json!({"resets_at":resets_at}));
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    let refusals: i64 = st.store.connection().query_row(
+        "SELECT count(*) FROM native_delegation_refusals WHERE request_id=?1",
+        ["quota157-cle-libre"], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(refusals, 0, "le quota ne consomme pas la clé idempotente");
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    st.provider_limits.record("native-test", bridget_transport::protocol::RateLimitFact {
+        window: "five_hour".into(), status: "available".into(),
+        resets_at: Some(resets_at), used_percent: Some(0),
+    }, bridget_transport::protocol::RateLimitSource::CodexAppServer, now);
+    let accepted = handle_locked("conn-1", request, &mut st).unwrap();
+    assert!(accepted["task_id"].as_str().is_some());
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_quota_perime_ignore() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("q157old");
+    let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    let now = unix_timestamp();
+    // Le fait était futur à l'écriture, puis son retour est passé à la lecture.
+    st.provider_limits.record("native-test", bridget_transport::protocol::RateLimitFact {
+        window: "five_hour".into(), status: "rate_limit_reached".into(),
+        resets_at: Some(now - 1), used_percent: Some(100),
+    }, bridget_transport::protocol::RateLimitSource::CodexAppServer, now - 100);
+    assert!(st.provider_limits.quota("native-test", now).is_none());
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "native-test").unwrap();
+    let accepted = handle_locked("conn-1", delegate_request("native-test", "quota157-perime", cwd.to_str().unwrap(), None), &mut st).unwrap();
+    assert!(accepted["task_id"].as_str().is_some());
+    assert!(entry.as_object().unwrap().contains_key("quota"), "quota périmé publié comme null explicite");
+    assert_eq!(entry["quota"], Value::Null);
+    assert_eq!(entry["can_run"], true);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_quota_inconnu_null() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("q157null");
+    let cwd = st.fixture_root.as_ref().unwrap().0.join("project-149").canonicalize().unwrap();
+    insert_fact(&mut st, codex_fact(cwd.to_str().unwrap(), json!({"type":"dangerFullAccess"}), "never"), None);
+    assert!(st.provider_limits.quota("native-test", unix_timestamp()).is_none());
+    let catalogue = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+    let entry = catalogue["providers"].as_array().unwrap().iter()
+        .find(|entry| entry["agent_type"] == "native-test").unwrap();
+    assert!(entry.as_object().unwrap().contains_key("quota"), "absence de fait représentée par quota:null");
+    assert_eq!(entry["quota"], Value::Null);
+    assert_eq!(entry["can_run"], true);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_quota_survit_fin_presence() {
+    let (mut st, config, rx, _reader) = fixture_with_reader("q157fin");
+    st.presences.get_mut("instance-1").unwrap().agent_type = "native-test".into();
+    let now = unix_timestamp();
+    let ack = super::super::handle_rate_limit(
+        "89000000-0000-4000-8000-000000000102", "five_hour".into(), "rate_limit_reached".into(),
+        Some(now + 3600), Some(100), bridget_transport::protocol::RateLimitSource::CodexAppServer, &mut st,
+    );
+    assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+    let before = serde_json::to_value(st.provider_limits.quota("native-test", now).expect("le vrai handler enregistre la limite")).unwrap();
+    st.router.unregister_by_conn("conn-1");
+    assert!(st.presences.remove("instance-1").is_some());
+    assert!(st.presences.is_empty());
+    let after = serde_json::to_value(st.provider_limits.quota("native-test", now).unwrap()).unwrap();
+    assert_eq!(after, before, "mémoire quota indépendante de la présence");
+    assert_eq!(after["exhausted"], true);
+    assert_eq!(after["resets_at"], now + 3600);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    drop(st);
+    let _ = fs::remove_file(&config.db_path);
+}
+
+#[test]
+fn native157_quota_nom_enregistre_par_les_trois_sources() {
+    use bridget_transport::protocol::RateLimitSource;
+    for (source, agent_type, status) in [
+        (RateLimitSource::ClaudeStreamJson, "claude-child", "rejected"),
+        (RateLimitSource::CodexAppServer, "native-test", "rate_limit_reached"),
+        (RateLimitSource::ClaudeStatusLine, "claude-child", "unknown"),
+    ] {
+        let (mut st, config, rx, _reader) = fixture_with_reader("q157sources");
+        let presence = st.presences.get_mut("instance-1").unwrap();
+        presence.agent_type = agent_type.into();
+        presence.name = "affichage-quota157".into();
+        let now = unix_timestamp();
+        let ack = super::super::handle_rate_limit(
+            "89000000-0000-4000-8000-000000000102", "five_hour".into(), status.into(),
+            Some(now + 3600), Some(100), source, &mut st,
+        );
+        assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
+        let quota = st.provider_limits.quota(agent_type, unix_timestamp()).expect("nom du registre enregistré par le vrai handler");
+        assert!(quota.exhausted, "{source}");
+        assert_eq!(quota.resets_at, Some(now + 3600));
+        assert_eq!(quota.windows.len(), 1);
+        assert!(quota.observed_at >= now);
+        assert!(quota.observed_at <= unix_timestamp());
+        assert!(st.provider_limits.quota("affichage-quota157", now).is_none());
+        assert!(st.provider_limits.quota("89000000-0000-4000-8000-000000000102", now).is_none());
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(st);
+        let _ = fs::remove_file(&config.db_path);
+    }
+}
+
+
+// Session157 T017/T019/T021 : admission réelle, fixture149, aucun tick/spawn.
+// Ces trois raccords de fixture ont chacun plusieurs consommateurs ci-dessous.
+fn fallback157_definition(command: &str, protocol: &str) -> Value {
+    json!({"command":command,"args":[],"protocol":protocol,"forbidden_env":[],
+        "capabilities":{"execution_paths":[protocol],"models":{"custom/model":{"efforts":["high"]}}}})
+}
+
+fn fallback157_registry(st: &mut DaemonState, target: Value, first: Value) {
+    // Le préflight157 exige un profil privé ; ne modifier que cette fixture.
+    fs::set_permissions(st.fixture_root.as_ref().unwrap().0.join("config-149"),
+        fs::Permissions::from_mode(0o700)).unwrap();
+    st.registry = AgentRegistry::from_json(
+        &json!({"agents":{"fallback157-target":target,"fallback157-first":first,
+            "fallback157-second":fallback157_definition("/bin/sh", "codex_app_server")}}).to_string(),
+        Path::new("/tmp/fallback157-registry.json"),
+    ).unwrap();
+}
+
+fn fallback157_request(cwd: &str, key: &str) -> NativeDelegationRequest {
+    let mut request = delegate_request("fallback157-target", key, cwd, None);
+    if let NativeDelegationRequest::Delegate { fallback, .. } = &mut request {
+        *fallback = vec!["fallback157-first", "fallback157-second"].into_iter().map(|name|
+            bridget_transport::protocol::FallbackTarget {
+                agent_type:name.into(), model:"custom/model".into(), effort:Some("high".into()),
+            }).collect();
+    }
+    request
+}
+
+#[test]
+fn native157_fallback_premier_puis_second_candidat_valide() {
+    for first_missing in [false, true] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("ord157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+        let mut target = fallback157_definition(root.join("absent-target").to_str().unwrap(), "codex_app_server");
+        target["capabilities"]["models"]["requested/model"] = json!({"efforts":["high"]});
+        fallback157_registry(&mut st, target,
+            fallback157_definition(if first_missing { "/missing/fallback157-first" } else { "/bin/sh" }, "codex_app_server"));
+        let mut request = fallback157_request(&cwd, "ordre157");
+        if let NativeDelegationRequest::Delegate { model, fallback, .. } = &mut request {
+            *model = "requested/model".into();
+            for candidate in fallback { candidate.effort = None; }
+        }
+        let response = handle_locked("conn-1", request.clone(), &mut st).unwrap();
+        let selected = if first_missing { "fallback157-second" } else { "fallback157-first" };
+        assert_eq!(response["agent_type"], selected);
+        assert_eq!(response["model"], "custom/model");
+        assert!(response["effort"].is_null());
+        assert_eq!(response["substitution"]["requested"]["model"], "requested/model");
+        assert_eq!(response["substitution"]["requested"]["effort"], "high");
+        assert_eq!(response["substitution"]["selected"]["model"], "custom/model");
+        assert!(response["substitution"]["selected"]["effort"].is_null());
+        assert_eq!(response["substitution"]["requested"]["agent_type"], "fallback157-target");
+        assert_eq!(response["substitution"]["selected"]["agent_type"], selected);
+        assert_eq!(response["substitution"]["reason"], "command_missing");
+        if first_missing {
+            assert!(response["substitution"]["tried"].as_array().unwrap().iter().any(|attempt|
+                attempt["agent_type"] == "fallback157-first" && attempt["code"] == "command_missing"));
+        }
+        let saved = st.delegation_store.get(response["task_id"].as_str().unwrap()).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(saved.substitution.as_ref().unwrap()).unwrap(), response["substitution"]);
+        assert_eq!(st.delegation_store.by_agent_request(&saved.owner, "ordre157",
+            &serde_json::to_vec(&request).unwrap()).unwrap().unwrap().task_id, saved.task_id,
+            "canonical conserve la requête originale et sa liste");
+        if let NativeDelegationRequest::Delegate { agent_type, fallback, .. } = &saved.request {
+            assert_eq!(agent_type, selected);
+            assert!(fallback.is_empty(), "la requête effective ne porte plus la liste originale");
+        } else { panic!("requête de mission attendue"); }
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+    }
+    // Même cas de stabilité T017/T018 : aucune API/hook de test ajouté.
+    // Les vraies passes154 sont séparées uniquement pour invalider leur état.
+    for invalidated_pass in ["reserve", "commit"] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("wt157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let project = root.join("project-149");
+        fs::write(project.join(".gitignore"), b".worktrees/\n").unwrap();
+        fs::write(project.join("mission.txt"), b"fixture157\n").unwrap();
+        for args in [vec!["init", "-b", "main"], vec!["add", "--", ".gitignore", "mission.txt"],
+            vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture157"]] {
+            let output = std::process::Command::new("git").current_dir(&project).args(args).output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        }
+        let cwd = project.to_string_lossy().into_owned();
+        insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+        fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+            fallback157_definition("/bin/sh", "codex_app_server"));
+        let mut request = fallback157_request(&cwd, "worktree-stable157");
+        if let NativeDelegationRequest::Delegate { posture, workspace, .. } = &mut request {
+            *posture = Some(SpawnPosture::Development);
+            *workspace = Some(WorkspaceRequest::Worktree { base_ref:None, branch:None });
+        }
+        let (probed_cwd, selected, raw, substitution) = match
+            admit_delegate("conn-1", &request, None, None, &mut st, WorkspacePass::Probe).unwrap() {
+            WorkspaceAdmission::Probe(cwd, selected, raw, substitution) => (cwd, selected, raw, substitution),
+            _ => panic!("sonde worktree attendue"),
+        };
+        if let NativeDelegationRequest::Delegate { agent_type, fallback, .. } = &selected {
+            assert_eq!(agent_type, "fallback157-first");
+            assert!(fallback.is_empty());
+        } else { panic!("requête effective attendue"); }
+        let plan = crate::workspace_git::preflight(&probed_cwd, None, None).unwrap();
+        let id = Uuid::new_v4().to_string();
+        if invalidated_pass == "reserve" {
+            st.provider_limits.record("fallback157-first", bridget_transport::protocol::RateLimitFact {
+                window:"primary/300m".into(), status:"rejected".into(), resets_at:Some(unix_timestamp() + 3600),
+                used_percent:Some(100) }, bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp());
+            let code = match admit_delegate("conn-1", &request, None, None, &mut st,
+                WorkspacePass::Reserve { plan:&plan, task_id:&id, selection:(&selected, &raw, substitution.as_ref()) }) {
+                Err(code) => code, Ok(_) => panic!("quota atteint après Probe : refus, jamais le second candidat"),
+            };
+            assert_eq!(failure(&code)["code"], "provider_quota_exhausted");
+        } else {
+            let (reserved, claim) = match admit_delegate("conn-1", &request, None, None, &mut st,
+                WorkspacePass::Reserve { plan:&plan, task_id:&id, selection:(&selected, &raw, substitution.as_ref()) }).unwrap() {
+                WorkspaceAdmission::Reserved { task, claim } => (task, claim),
+                _ => panic!("réservation worktree attendue"),
+            };
+            let record = crate::workspace_git::create(&plan, &reserved.task_id).unwrap();
+            st.provider_limits.record("fallback157-first", bridget_transport::protocol::RateLimitFact {
+                window:"primary/300m".into(), status:"rejected".into(), resets_at:Some(unix_timestamp() + 3600),
+                used_percent:Some(100) }, bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp());
+            let code = match admit_delegate("conn-1", &request, None, None, &mut st,
+                WorkspacePass::Commit { plan:&plan, task_id:&id, record:&record,
+                    selection:(&selected, &raw, substitution.as_ref()) }) {
+                Err(code) => code, Ok(_) => panic!("quota atteint après Reserve : refus, jamais le second candidat"),
+            };
+            assert_eq!(failure(&code)["code"], "provider_quota_exhausted");
+            assert!(Path::new(&record.path).is_dir(), "le vrai dossier enfant154 a été utilisé");
+            drop(claim);
+        }
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(st.workspace_work.lock().unwrap().creations.is_empty());
+    }
+}
+
+#[test]
+fn native157_fallback_motifs_remplacables_fr013() {
+    for reason in ["command_missing", "billing_guard", "env_unfit", "unsupported_capability",
+        "negotiation_failed", "permission_source_unavailable", "permission_mapping_unavailable",
+        "provider_confinement_unavailable", "provider_quota_exhausted"] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("mot157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        let mut target = fallback157_definition("/bin/sh", "codex_app_server");
+        let mut parent = codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never");
+        match reason {
+            "command_missing" => target["command"] = json!(root.join("absent-target")),
+            "billing_guard" => {
+                target["forbidden_env"] = json!(["FALLBACK157_BILLING"]);
+                st.source_env.insert("FALLBACK157_BILLING".into(), "fixture-only".into());
+            }
+            "unsupported_capability" => target["capabilities"]["execution_paths"] = json!(["acp"]),
+            "negotiation_failed" => target = fallback157_definition("/bin/sh", "tmux"),
+            "env_unfit" | "permission_source_unavailable" | "permission_mapping_unavailable"
+                | "provider_confinement_unavailable" => {
+                target = fallback157_definition("claude", "claude_stream_json");
+                let profile = root.join("config-149");
+                target["claude_config_dir"] = json!(if reason == "env_unfit" {
+                    root.join("absent-profile")
+                } else { profile.clone() });
+                if reason == "permission_source_unavailable" {
+                    fs::write(profile.join("settings.json"), b"{").unwrap();
+                }
+                if reason == "permission_mapping_unavailable" {
+                    parent.provider_policy["approval_policy"] = json!("on-request");
+                }
+                if reason == "provider_confinement_unavailable" {
+                    parent.provider_policy["sandbox_policy"] = json!({"type":"workspaceWrite",
+                        "writableRoots":[cwd],"networkAccess":false,
+                        "excludeTmpdirEnvVar":false,"excludeSlashTmp":false});
+                }
+            }
+            "provider_quota_exhausted" => st.provider_limits.record("fallback157-target",
+                bridget_transport::protocol::RateLimitFact { window:"primary/300m".into(), status:"rejected".into(),
+                    resets_at:Some(unix_timestamp() + 3600), used_percent:Some(100) },
+                bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp()),
+            _ => unreachable!(),
+        }
+        insert_fact(&mut st, parent, None);
+        fallback157_registry(&mut st, target, fallback157_definition("/bin/sh", "codex_app_server"));
+        let response = handle_locked("conn-1", fallback157_request(&cwd, "motif157"), &mut st).unwrap();
+        assert_eq!(response["agent_type"], "fallback157-first", "{reason}: {response}");
+        assert_eq!(response["substitution"]["reason"], reason);
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn native157_fallback_modele_effort_type_avant_indisponibilite() {
+    for (scenario, expected) in [("model_binary", "model_unavailable"),
+        ("model_policy", "model_unavailable"), ("effort_quota", "effort_unavailable"),
+        ("unknown_type", "agent_type_unknown")] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("val157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        let mut parent = codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never");
+        let mut target = fallback157_definition("/missing/fallback157-target", "codex_app_server");
+        if scenario == "model_policy" {
+            target = fallback157_definition("claude", "claude_stream_json");
+            target["claude_config_dir"] = json!(root.join("config-149"));
+            parent.provider_policy["approval_policy"] = json!("on-request");
+        }
+        insert_fact(&mut st, parent, None);
+        fallback157_registry(&mut st, target, fallback157_definition("/bin/sh", "codex_app_server"));
+        let mut request = fallback157_request(&cwd, "validation157");
+        if let NativeDelegationRequest::Delegate { agent_type, model, effort, .. } = &mut request {
+            match scenario {
+                "model_binary" | "model_policy" => *model = "absent/model".into(),
+                "effort_quota" => { *effort = Some("absent-effort".into()); }
+                "unknown_type" => *agent_type = "absent-fallback157-type".into(),
+                _ => unreachable!(),
+            }
+        }
+        if scenario == "effort_quota" {
+            st.provider_limits.record("fallback157-target", bridget_transport::protocol::RateLimitFact {
+                window:"primary/300m".into(), status:"rejected".into(), resets_at:Some(unix_timestamp() + 3600),
+                used_percent:Some(100) }, bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp());
+        }
+        let response = handle_locked("conn-1", request, &mut st).unwrap_or_else(|code| failure(&code));
+        assert_eq!(response["code"], expected, "{scenario}: {response}");
+        assert!(response.get("substitution").is_none());
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn native157_fallback_ordre_premier_refus_contractuel() {
+    for expected in ["identity_unavailable", "invalid_request", "reply_timeout_out_of_range", "delegation_grant_required"] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("err157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+        fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+            fallback157_definition("/bin/sh", "codex_app_server"));
+        st.delegation_store.grant("instance-1", Path::new(&cwd), SpawnPosture::Development, true).unwrap();
+        let mut request = fallback157_request(&cwd, "precedence157");
+        if let NativeDelegationRequest::Delegate { model, fallback, reply_timeout, .. } = &mut request {
+            *model = "absent/model".into();
+            if expected != "delegation_grant_required" { *reply_timeout = Some(0); }
+            if matches!(expected, "identity_unavailable" | "invalid_request") {
+                fallback[1] = fallback[0].clone();
+            }
+        }
+        if expected == "identity_unavailable" { st.conn_instances.remove("conn-1"); }
+        let response = handle_locked("conn-1", request, &mut st).unwrap_or_else(|code| failure(&code));
+        assert_eq!(response["code"], expected, "le premier refus du contrat gagne : {response}");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn native157_fallback_droits_parent_jamais_remplaces() {
+    for expected in ["permission_not_inherited", "delegation_grant_required", "permission_attestation_unavailable", "child_requests_reviewer_unsupported",
+        "workspace_requires_development", "workspace_inheritance_unavailable", "child_requests_unsupported"] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("par157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        let mut parent = codex_fact(&cwd, json!({"type":"readOnly","networkAccess":false}), "never");
+        let mut target = fallback157_definition("/bin/sh", "codex_app_server");
+        let mut request = fallback157_request(&cwd, "parent157");
+        if expected == "permission_not_inherited" {
+            if let NativeDelegationRequest::Delegate { posture, .. } = &mut request { *posture = Some(SpawnPosture::Development); }
+        } else if expected == "delegation_grant_required" {
+            st.delegation_store.grant("instance-1", Path::new(&cwd), SpawnPosture::Development, true).unwrap();
+        } else if expected == "permission_attestation_unavailable" {
+            // Aucun fait attesté : un candidat de repli ne fabrique pas la preuve du parent.
+        } else if expected == "child_requests_reviewer_unsupported" {
+            parent.provider_policy["approvals_reviewer"] = json!("guardian_subagent");
+            if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request { *child_requests = Some("forward".into()); }
+        } else if expected == "workspace_requires_development" {
+            if let NativeDelegationRequest::Delegate { posture, workspace, .. } = &mut request {
+                *posture = Some(SpawnPosture::Discovery);
+                *workspace = Some(WorkspaceRequest::Worktree { base_ref:None, branch:None });
+            }
+        } else {
+            let profile = root.join("config-149");
+            fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+            target = fallback157_definition("claude", "claude_stream_json");
+            target["claude_config_dir"] = json!(profile);
+            if expected == "workspace_inheritance_unavailable" {
+                parent = claude_fact(&profile, Path::new(&cwd), &st.source_env, "bypassPermissions");
+                if let NativeDelegationRequest::Delegate { posture, workspace, .. } = &mut request {
+                    *posture = Some(SpawnPosture::Development);
+                    *workspace = Some(WorkspaceRequest::Worktree { base_ref:None, branch:None });
+                }
+            } else {
+                parent = codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never");
+                if let NativeDelegationRequest::Delegate { child_requests, .. } = &mut request { *child_requests = Some("forward".into()); }
+            }
+        }
+        if expected != "permission_attestation_unavailable" { insert_fact(&mut st, parent, None); }
+        fallback157_registry(&mut st, target, fallback157_definition("/bin/sh", "codex_app_server"));
+        let response = handle_locked("conn-1", request, &mut st).unwrap_or_else(|code| failure(&code));
+        assert_eq!(response["code"], expected, "{response}");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn native157_fallback_cible_valide_ignore_liste() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("ok157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+    fallback157_registry(&mut st, fallback157_definition("/bin/sh", "codex_app_server"),
+        fallback157_definition("/missing/fallback157-first", "codex_app_server"));
+    let response = handle_locked("conn-1", fallback157_request(&cwd, "valid157"), &mut st).unwrap();
+    assert_eq!(response["agent_type"], "fallback157-target");
+    assert!(response["substitution"].is_null());
+    let task = st.delegation_store.get(response["task_id"].as_str().unwrap()).unwrap().unwrap();
+    assert!(task.substitution.is_none());
+}
+
+#[test]
+fn native157_fallback_sans_liste_codes_historiques() {
+    for expected in ["command_missing", "permission_not_inherited", "model_unavailable"] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("old157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        insert_fact(&mut st, codex_fact(&cwd, json!({"type":"readOnly","networkAccess":false}), "never"), None);
+        fallback157_registry(&mut st,
+            fallback157_definition(if expected == "command_missing" { "/missing/fallback157-target" } else { "/bin/sh" }, "codex_app_server"),
+            fallback157_definition("/bin/sh", "codex_app_server"));
+        let mut request = delegate_request("fallback157-target", "sans157", &cwd, None);
+        if let NativeDelegationRequest::Delegate { posture, model, .. } = &mut request {
+            if expected == "permission_not_inherited" { *posture = Some(SpawnPosture::Development); }
+            if expected == "model_unavailable" { *model = "absent/model".into(); }
+        }
+        let response = handle_locked("conn-1", request, &mut st).unwrap_or_else(|code| failure(&code));
+        assert_eq!(response["code"], expected);
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn native157_fallback_validation_liste_fermee() {
+    for malformed in ["duplicate", "target", "four", "empty"] {
+        let (mut st, _config, _rx, _reader) = fixture_with_reader("lst157");
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let cwd = root.join("project-149").to_string_lossy().into_owned();
+        insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+        fallback157_registry(&mut st, fallback157_definition("/bin/sh", "codex_app_server"),
+            fallback157_definition("/bin/sh", "codex_app_server"));
+        let mut request = fallback157_request(&cwd, "invalid157");
+        if let NativeDelegationRequest::Delegate { fallback, .. } = &mut request {
+            match malformed {
+                "duplicate" => fallback[1] = fallback[0].clone(),
+                "target" => fallback[0].agent_type = "fallback157-target".into(),
+                "four" => { fallback.push(bridget_transport::protocol::FallbackTarget {
+                    agent_type:"third157".into(), model:"custom/model".into(), effort:Some("high".into()) });
+                    fallback.push(bridget_transport::protocol::FallbackTarget {
+                    agent_type:"fourth157".into(), model:"custom/model".into(), effort:Some("high".into()) }); }
+                "empty" => fallback[0].model.clear(),
+                _ => unreachable!(),
+            }
+        }
+        let response = handle_locked("conn-1", request, &mut st).unwrap_or_else(|code| failure(&code));
+        assert_eq!(response["code"], "invalid_request", "{malformed}: {response}");
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn native157_fallback_aucune_elevation_des_droits() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("cap157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"readOnly","networkAccess":false}), "never"), None);
+    let mut first = fallback157_definition("claude", "claude_stream_json");
+    first["claude_config_dir"] = json!(root.join("config-149"));
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"), first);
+    let response = handle_locked("conn-1", fallback157_request(&cwd, "rights157"), &mut st).unwrap();
+    assert_eq!(response["agent_type"], "fallback157-first");
+    let task = st.delegation_store.get(response["task_id"].as_str().unwrap()).unwrap().unwrap();
+    let snapshot = task.permission_snapshot.unwrap();
+    assert_eq!(snapshot.child_policy["permission_mode"], "plan");
+    assert_eq!(snapshot.child_policy["tools"], json!(["Read","Glob","Grep"]));
+    for forbidden in ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"] {
+        assert!(snapshot.child_policy["disallowed_tools"].as_array().unwrap().contains(&json!(forbidden)));
+    }
+}
+
+#[test]
+fn native157_fallback_epuise_liste_les_essais() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("all157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+        fallback157_definition("/missing/fallback157-first", "codex_app_server"));
+    st.provider_limits.record("fallback157-second", bridget_transport::protocol::RateLimitFact {
+        window:"primary/300m".into(), status:"rejected".into(), resets_at:Some(unix_timestamp() + 3600),
+        used_percent:Some(100) }, bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp());
+    let response = handle_locked("conn-1", fallback157_request(&cwd, "exhausted157"), &mut st).unwrap_or_else(|code| failure(&code));
+    assert_eq!(response["code"], "fallback_exhausted");
+    let attempts = response["detail"]["tried"].as_array().unwrap();
+    // Tous les candidats explicitement listés apparaissent dans leur ordre.
+    let candidates: Vec<&Value> = attempts.iter().filter(|item| item["agent_type"] != "fallback157-target").collect();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0], &json!({"agent_type":"fallback157-first","model":"custom/model","code":"command_missing"}));
+    assert_eq!(candidates[1], &json!({"agent_type":"fallback157-second","model":"custom/model","code":"provider_quota_exhausted"}));
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+}
+
+#[test]
+fn native157_fallback_epuise_sans_tache_cle_libre() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("key157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+        fallback157_definition("/missing/fallback157-first", "codex_app_server"));
+    st.provider_limits.record("fallback157-second", bridget_transport::protocol::RateLimitFact {
+        window:"primary/300m".into(), status:"rejected".into(), resets_at:Some(unix_timestamp() + 3600),
+        used_percent:Some(100) }, bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp());
+    let request = fallback157_request(&cwd, "free-key157");
+    let refused = handle_locked("conn-1", request.clone(), &mut st).unwrap_or_else(|code| failure(&code));
+    assert_eq!(refused["code"], "fallback_exhausted");
+    assert!(st.delegation_store.tasks().unwrap().is_empty());
+    // La même clé et la même enveloppe deviennent admissibles après réparation du binaire.
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+        fallback157_definition("/bin/sh", "codex_app_server"));
+    let accepted = handle_locked("conn-1", request, &mut st).unwrap();
+    assert_eq!(accepted["agent_type"], "fallback157-first");
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+}
+
+#[test]
+fn native157_fallback_rejeu_meme_substitution() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("rep157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+        fallback157_definition("/bin/sh", "codex_app_server"));
+    let request = fallback157_request(&cwd, "stable-key157");
+    let first = handle_locked("conn-1", request.clone(), &mut st).unwrap();
+    let id = first["task_id"].as_str().unwrap().to_owned();
+    st.provider_limits.record("fallback157-first", bridget_transport::protocol::RateLimitFact {
+        window:"primary/300m".into(), status:"rejected".into(), resets_at:Some(unix_timestamp() + 3600),
+        used_percent:Some(100) }, bridget_transport::protocol::RateLimitSource::CodexAppServer, unix_timestamp());
+    fallback157_registry(&mut st, fallback157_definition("/bin/sh", "codex_app_server"),
+        fallback157_definition("/missing/fallback157-first", "codex_app_server"));
+    let replay = handle_locked("conn-1", request, &mut st).unwrap();
+    assert_eq!(replay["task_id"], id);
+    assert_eq!(replay["agent_type"], first["agent_type"]);
+    assert_eq!(replay["substitution"], first["substitution"]);
+    let status = handle_locked("conn-1", NativeDelegationRequest::Status { task_id:id.clone() }, &mut st).unwrap();
+    assert_eq!(status["substitution"], first["substitution"]);
+    let stored = st.delegation_store.get(&id).unwrap().unwrap();
+    assert_eq!(serde_json::to_value(stored.substitution.as_ref().unwrap()).unwrap(), first["substitution"]);
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+}
+
+#[test]
+fn native157_fallback_rejeu_autre_liste_envelope_mismatch() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("env157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"),
+        fallback157_definition("/bin/sh", "codex_app_server"));
+    let request = fallback157_request(&cwd, "envelope157");
+    let accepted = handle_locked("conn-1", request.clone(), &mut st).unwrap();
+    let mut changed = request;
+    if let NativeDelegationRequest::Delegate { fallback, .. } = &mut changed { fallback.reverse(); }
+    let refused = handle_locked("conn-1", changed, &mut st).unwrap_or_else(|code| failure(&code));
+    assert_eq!(refused["code"], "envelope_mismatch");
+    let stored = st.delegation_store.get(accepted["task_id"].as_str().unwrap()).unwrap().unwrap();
+    assert_eq!(serde_json::to_value(stored.substitution.as_ref().unwrap()).unwrap(), accepted["substitution"]);
+    assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+}
+
+#[test]
+fn native157_fallback_projection_lineage_cible_effective() {
+    let (mut st, _config, _rx, _reader) = fixture_with_reader("lin157");
+    let root = st.fixture_root.as_ref().unwrap().0.clone();
+    let cwd = root.join("project-149").to_string_lossy().into_owned();
+    insert_fact(&mut st, codex_fact(&cwd, json!({"type":"dangerFullAccess"}), "never"), None);
+    let mut first = fallback157_definition("/bin/sh", "codex_app_server");
+    first["capabilities"]["models"] = json!({"selected/model":{"efforts":["high"]}});
+    fallback157_registry(&mut st, fallback157_definition("/missing/fallback157-target", "codex_app_server"), first);
+    let mut request = fallback157_request(&cwd, "lineage157");
+    if let NativeDelegationRequest::Delegate { fallback, .. } = &mut request { fallback[0].model = "selected/model".into(); }
+    let accepted = handle_locked("conn-1", request, &mut st).unwrap();
+    assert_eq!(accepted["substitution"]["requested"]["model"], "custom/model");
+    let task = st.delegation_store.get(accepted["task_id"].as_str().unwrap()).unwrap().unwrap();
+    let page = st.delegation_store.lineage_page(task.root_owner(), 16, None, |_| false).unwrap();
+    assert_eq!(page["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(page["tasks"][0]["task_id"], task.task_id);
+    assert_eq!(page["tasks"][0]["agent_type"], "fallback157-first");
+    assert_eq!(page["tasks"][0]["model"], "selected/model");
+    assert_eq!(page["tasks"][0]["effort"], "high");
 }

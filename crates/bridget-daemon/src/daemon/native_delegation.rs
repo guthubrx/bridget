@@ -78,6 +78,35 @@ fn failure(code: &str) -> Value {
     if code.starts_with("workspace_") && let Some((code, message)) = code.split_once(':') {
         return json!({"status":"refused","code":code,"message":message.trim()});
     }
+    if let Some((canonical_code, encoded)) = code.split_once(':')
+        && matches!(canonical_code, "provider_quota_exhausted" | "fallback_exhausted")
+    {
+        // Forme fermée : une charge invalide conserve le refus, sans détail inventé.
+        if encoded.len() <= 65536
+            && let Ok(payload) = serde_json::from_str::<Value>(encoded)
+            && let Some(object) = payload.as_object()
+            && object.len() == 2
+            && let Some(message) = object.get("message").and_then(Value::as_str)
+            && !message.is_empty() && message.len() <= 4096
+            && !message.chars().any(bridget_core::is_disallowed_control)
+            && let Some(detail) = object.get("detail").and_then(Value::as_object)
+        {
+            let valid = match canonical_code {
+                "provider_quota_exhausted" => detail.len() == 1
+                    && detail.get("resets_at").is_some_and(|value| value.is_null() || value.as_i64().is_some()),
+                "fallback_exhausted" => detail.len() == 1 && detail.get("tried").and_then(Value::as_array).is_some_and(|tried|
+                    !tried.is_empty() && tried.len() <= 4 && tried.iter().all(|entry|
+                        entry.as_object().is_some_and(|entry| entry.len() == 3
+                            && ["agent_type", "model", "code"].into_iter().all(|key|
+                                entry.get(key).and_then(Value::as_str).is_some_and(|value|
+                                    !value.is_empty() && !value.chars().any(bridget_core::is_disallowed_control)))
+                            && entry["code"].as_str().is_some_and(|value| value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))))),
+                _ => false,
+            };
+            if valid { return json!({"status":"refused","code":canonical_code,"message":message,"detail":detail}); }
+        }
+        return json!({"status":"refused","code":canonical_code});
+    }
     json!({"status":"refused","code":code})
 }
 
@@ -228,6 +257,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "result_bytes":body.map(str::len),
         "detail":(workspace_report_ready(task) && matches!(task.state.as_str(),"result_available"|"failed")).then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
         "mailbox":mailbox});
+    view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
         view["workspace"] = json!({"strategy":workspace.strategy,"state":workspace.state,
             "path":workspace.path,"branch":workspace.branch,"base_commit":workspace.base_commit,
@@ -649,12 +679,12 @@ fn delegate_worktree(
     fact: Option<&bridget_transport::protocol::ProviderPermissions>, thread: Option<&str>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
-    let cwd = {
+    let (cwd, selected_request, selected_definition, substitution) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
         match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Probe)? {
             WorkspaceAdmission::View(view) => return Ok(view),
-            WorkspaceAdmission::Probe(cwd) => cwd,
+            WorkspaceAdmission::Probe(cwd, selected, definition, substitution) => (cwd, selected, definition, substitution),
             _ => unreachable!("sonde avant Git"),
         }
     };
@@ -665,7 +695,8 @@ fn delegate_worktree(
     let (reserved, _claim) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
-        match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Reserve { plan: &plan, task_id: &task_id })? {
+        match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Reserve { plan: &plan, task_id: &task_id,
+                selection: (&selected_request, &selected_definition, substitution.as_ref()) })? {
             WorkspaceAdmission::View(view) => return Ok(view),
             WorkspaceAdmission::Reserved { task, claim } => (task, claim),
             _ => unreachable!("première passe métier"),
@@ -679,7 +710,8 @@ fn delegate_worktree(
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread).and_then(|()|
             admit_delegate(conn, request, project, fact, &mut st,
-                WorkspacePass::Commit { plan: &plan, task_id: &reserved.task_id, record: &record }))
+                WorkspacePass::Commit { plan: &plan, task_id: &reserved.task_id, record: &record,
+                    selection: (&selected_request, &selected_definition, substitution.as_ref()) }))
     };
     match result {
         Ok(WorkspaceAdmission::View(view)) => Ok(view),
@@ -815,13 +847,15 @@ fn wait_tasks(
 enum WorkspacePass<'a> {
     Shared,
     Probe,
-    Reserve { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str },
-    Commit { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str, record: &'a WorkspaceRecord },
+    Reserve { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str,
+        selection: (&'a NativeDelegationRequest, &'a bridget_transport::protocol::ResolvedAgentDefinition, Option<&'a crate::delegation::Substitution>) },
+    Commit { plan: &'a crate::workspace_git::WorkspacePreflight, task_id: &'a str, record: &'a WorkspaceRecord,
+        selection: (&'a NativeDelegationRequest, &'a bridget_transport::protocol::ResolvedAgentDefinition, Option<&'a crate::delegation::Substitution>) },
 }
 
 enum WorkspaceAdmission {
     View(Value),
-    Probe(PathBuf),
+    Probe(PathBuf, NativeDelegationRequest, bridget_transport::protocol::ResolvedAgentDefinition, Option<crate::delegation::Substitution>),
     Reserved { task: Task, claim: WorkspaceClaim },
 }
 
@@ -854,6 +888,102 @@ fn workspace_limit(st: &DaemonState, plan: &crate::workspace_git::WorkspacePrefl
     if paths.len() > 32 || (!created && paths.len() == 32) { Err("workspace_limit".into()) } else { Ok(()) }
 }
 
+/// Verdict partagé catalogue/admission, sans mémoire ni sélection de remplacement.
+/// O(log t + log p + m + C+B+P+E log e) : t types, p quotas fournisseurs,
+/// m efforts, C capacités/arguments, B définitions et sources de droits lues,
+/// P PATH, E variables déclarées, e source ; huit fenêtres de quota au plus.
+fn resolve_target(
+    registry: &AgentRegistry,
+    source: &crate::lifecycle::SourceEnvironment,
+    limits: &crate::provider_limits::ProviderLimits,
+    owner: &str,
+    instance: &str,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    agent_type: &str,
+    model: &str,
+    effort: Option<&str>,
+    cwd: &Path,
+    posture: Option<SpawnPosture>,
+    workspace: Option<&WorkspaceRequest>,
+    child_requests: Option<&str>,
+) -> Result<(AgentRegistry, Option<bridget_transport::protocol::NativePermissionSnapshot>, SpawnPosture), String> {
+    target_resolver(registry,source,limits,owner,instance,fact,agent_type,model,effort,cwd,workspace,child_requests)(posture)
+}
+
+/// R8 : un préparateur commun, lié à une entrée et jeté après ses trois postures.
+/// O(B+3P+3log q) : définition/préflight/lectures une fois, politiques dérivées,
+/// quota relu après les options à chaque verdict ; aucun état partagé ou durable.
+fn target_resolver<'a>(
+    registry: &'a AgentRegistry,
+    source: &'a crate::lifecycle::SourceEnvironment,
+    limits: &'a crate::provider_limits::ProviderLimits,
+    owner: &'a str,
+    instance: &'a str,
+    fact: Option<&'a bridget_transport::protocol::ProviderPermissions>,
+    agent_type: &'a str,
+    model: &'a str,
+    effort: Option<&'a str>,
+    cwd: &'a Path,
+    workspace: Option<&'a WorkspaceRequest>,
+    child_requests: Option<&'a str>,
+) -> impl FnMut(Option<SpawnPosture>) -> Result<(AgentRegistry, Option<bridget_transport::protocol::NativePermissionSnapshot>, SpawnPosture), String> + 'a {
+    let mut prepared: Option<Result<AgentRegistry,String>> = None;
+    let mut policy_reader = fact.zip(registry.get(agent_type).ok())
+        .map(|(parent,target)| crate::native_permissions::child_policy_reader(parent,target,cwd,source));
+    move |posture| {
+    let target = registry.get(agent_type).map_err(|_| "agent_type_unknown")?;
+    let model_capabilities = target.capabilities.models.get(model).ok_or("model_unavailable")?;
+    if effort.is_some_and(|value| !model_capabilities.efforts.iter().any(|item| item == value)) {
+        return Err("effort_unavailable".into());
+    }
+    // Ce résultat ne sert qu'aux postures de cette entrée ; admission = nouveau lecteur.
+    let pinned = prepared.get_or_insert_with(|| {
+        let raw_pinned = AgentRegistry::from_resolved(agent_type, &registry.resolved_definition(agent_type)?)?;
+        let pinned = if matches!(target.protocol.as_str(), "claude_stream_json" | "codex_app_server") {
+            match raw_pinned.clone().pin_delegation_model(agent_type, model, effort) {
+                Ok(pinned) => pinned,
+                Err(error) => {
+                    // Le pin legacy rend Debug ; le préflight conserve le code canonique typé.
+                    return Err(match crate::lifecycle::launch_preflight(&raw_pinned, agent_type, source) {
+                        Err(reason) => crate::lifecycle::refusal_record(&reason).0.to_owned(),
+                        Ok(()) => error,
+                    });
+                }
+            }
+        } else { raw_pinned };
+        crate::lifecycle::launch_preflight(&pinned, agent_type, source)
+            .map_err(|reason| crate::lifecycle::refusal_record(&reason).0.to_owned())?;
+        Ok(pinned)
+    }).as_ref().map_err(|code| code.clone())?.clone();
+    let (scoped, snapshot, effective) = if let Some(fact) = fact {
+        let (policy, effective) = policy_reader.as_mut().ok_or("permission_mapping_unavailable")?(posture)?;
+        let scoped = pinned.for_inherited_delegation(agent_type, model, effort, &policy)?;
+        (scoped, Some(crate::native_permissions::snapshot(owner, instance, fact.clone(), policy, cwd)), effective)
+    } else {
+        if posture != Some(SpawnPosture::Discovery) {
+            return Err("permission_attestation_unavailable".into());
+        }
+        (pinned.for_delegation(agent_type, model, effort, SpawnPosture::Discovery)?, None, SpawnPosture::Discovery)
+    };
+    if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+        if effective != SpawnPosture::Development { return Err("workspace_requires_development".into()); }
+        if fact.is_some_and(|f| f.driver == "claude_stream_json") && target.protocol == "claude_stream_json" {
+            return Err("workspace_inheritance_unavailable".into());
+        }
+    }
+    if child_requests == Some("forward") && target.protocol != "codex_app_server" {
+        return Err("child_requests_unsupported".into());
+    }
+    if let Some(quota) = limits.quota(agent_type, unix_timestamp()) && quota.exhausted {
+        return Err(format!("provider_quota_exhausted:{}", json!({
+            "message":"Le quota du fournisseur est épuisé.",
+            "detail":{"resets_at":quota.resets_at},
+        })));
+    }
+    Ok((scoped, snapshot, effective))
+    }
+}
+
 /// Admission unique : mêmes gardes sur les deux passes métier. Git reste dehors.
 /// O(n+r+B), n <= 4096 tâches, r <= 128 réservations, B octets des politiques.
 fn admit_delegate(
@@ -864,6 +994,7 @@ fn admit_delegate(
 ) -> Result<WorkspaceAdmission, String> {
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
     let NativeDelegationRequest::Delegate {
+        fallback,
         request_id,
         agent_type,
         model,
@@ -886,6 +1017,18 @@ fn admit_delegate(
         || task.trim().is_empty()
         || task.len() > 65536
     {
+        return Err("invalid_request".into());
+    }
+    let requested_target = bridget_transport::protocol::FallbackTarget {
+        agent_type: agent_type.clone(), model: model.clone(), effort: effort.clone(),
+    };
+    if fallback.len() > 3 || fallback.iter().enumerate().any(|(index, candidate)| {
+        candidate.agent_type.trim().is_empty() || candidate.model.trim().is_empty()
+            || candidate.effort.as_deref().is_some_and(|value| value.trim().is_empty())
+            || [&candidate.agent_type, &candidate.model].into_iter().any(|value| value.chars().any(bridget_core::is_disallowed_control))
+            || candidate.effort.as_deref().is_some_and(|value| value.chars().any(bridget_core::is_disallowed_control))
+            || candidate == &requested_target || fallback[..index].contains(candidate)
+    }) {
         return Err("invalid_request".into());
     }
     if reply_timeout.is_some_and(|secs| {
@@ -945,16 +1088,6 @@ fn admit_delegate(
         {
             return Err("workspace_creation_in_progress".into());
         }
-        if child_requests.as_deref() == Some("forward")
-            && st
-                .registry
-                .get(agent_type)
-                .map_err(|_| "agent_type_unknown")?
-                .protocol
-                != "codex_app_server"
-        {
-            return Err("child_requests_unsupported".into());
-        }
         let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
         if child_requests.as_deref() == Some("forward")
             && fact.as_ref().is_none_or(|fact| {
@@ -994,57 +1127,74 @@ fn admit_delegate(
             "native-child",
             None,
         )?;
-        let target = st
-            .registry
-            .get(agent_type)
-            .map_err(|_| "agent_type_unknown")?;
-        let (scoped, permission_snapshot, effective_posture) = if let Some(fact) = fact.clone() {
-            let (policy, effective) = crate::native_permissions::child_policy(
-                &fact,
-                target,
-                &frozen_cwd,
-                &st.source_env,
-                *posture,
-            )?;
-            let scoped = st.registry.for_inherited_delegation(
-                agent_type,
-                model,
-                effort.as_deref(),
-                &policy,
-            )?;
-            (
-                scoped,
-                Some(crate::native_permissions::snapshot(
-                    &owner,
-                    &instance,
-                    fact,
-                    policy,
-                    &frozen_cwd,
-                )),
-                Some(effective),
-            )
-        } else {
-            (
-                st.registry.for_delegation(
-                    agent_type,
-                    model,
-                    effort.as_deref(),
-                    SpawnPosture::Discovery,
-                )?,
-                None,
-                Some(SpawnPosture::Discovery),
-            )
-        };
-        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
-            if effective_posture != Some(SpawnPosture::Development) {
-                return Err("workspace_requires_development".into());
+        // O(1) candidats : quatre au plus. Le rejeu et les gardes du parent précèdent la sélection.
+        // Reserve/Commit revalident le seul candidat épinglé en Probe, jamais le registre courant.
+        let (effective_request, raw_definition, substitution, scoped, permission_snapshot, resolved_posture) = match pass {
+            WorkspacePass::Reserve { selection: (selected, definition, substitution), .. }
+            | WorkspacePass::Commit { selection: (selected, definition, substitution), .. } => {
+                let NativeDelegationRequest::Delegate { agent_type, model, effort, fallback, .. } = selected
+                    else { return Err("invalid_request".into()); };
+                if !fallback.is_empty() { return Err("invalid_request".into()); }
+                let pinned = AgentRegistry::from_resolved(agent_type, definition)?;
+                let (scoped, snapshot, effective) = resolve_target(
+                    &pinned, &st.source_env, &st.provider_limits, &owner, &instance, fact.as_ref(),
+                    agent_type, model, effort.as_deref(), &frozen_cwd, *posture,
+                    workspace.as_ref(), child_requests.as_deref(),
+                )?;
+                (selected.clone(), definition.clone(), substitution.cloned(), scoped, snapshot, effective)
             }
-            if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json")
-                && target.protocol == "claude_stream_json"
-            { return Err("workspace_inheritance_unavailable".into()); }
-        }
+            WorkspacePass::Shared | WorkspacePass::Probe => {
+                let mut selected = None;
+                let mut tried = Vec::new();
+                let mut requested_error = None;
+                for (index, candidate) in std::iter::once(&requested_target).chain(fallback.iter()).enumerate() {
+                    match resolve_target(
+                        &st.registry, &st.source_env, &st.provider_limits, &owner, &instance, fact.as_ref(),
+                        &candidate.agent_type, &candidate.model, candidate.effort.as_deref(), &frozen_cwd, *posture,
+                        workspace.as_ref(), child_requests.as_deref(),
+                    ) {
+                        Ok((scoped, snapshot, effective)) => {
+                            let definition = st.registry.resolved_definition(&candidate.agent_type)?;
+                            selected = Some((candidate.clone(), definition, scoped, snapshot, effective));
+                            break;
+                        }
+                        Err(error) => {
+                            let code = error.split_once(':').map_or(error.as_str(), |(canonical, _)| canonical).to_owned();
+                            if index == 0 {
+                                if fallback.is_empty() || !matches!(code.as_str(),
+                                    "command_missing" | "billing_guard" | "env_unfit" | "unsupported_capability"
+                                    | "negotiation_failed" | "permission_source_unavailable" | "permission_mapping_unavailable"
+                                    | "provider_confinement_unavailable" | "provider_quota_exhausted") {
+                                    return Err(error);
+                                }
+                                requested_error = Some(error);
+                            }
+                            tried.push(json!({"agent_type":candidate.agent_type,"model":candidate.model,"code":code}));
+                        }
+                    }
+                }
+                let Some((candidate, definition, scoped, snapshot, effective)) = selected
+                    else { return Err(format!("fallback_exhausted:{}", json!({
+                        "message":"Aucune cible de remplacement n’est disponible.", "detail":{"tried":tried},
+                    }))); };
+                let substitution = requested_error.as_ref().map(|reason| crate::delegation::Substitution {
+                    requested: requested_target.clone(), selected: candidate.clone(),
+                    reason: reason.split_once(':').map_or(reason.as_str(), |(canonical, _)| canonical).to_owned(),
+                    tried,
+                });
+                let mut effective_request = request.clone();
+                if let NativeDelegationRequest::Delegate { agent_type, model, effort, fallback, .. } = &mut effective_request {
+                    *agent_type = candidate.agent_type; *model = candidate.model; *effort = candidate.effort;
+                    fallback.clear();
+                }
+                (effective_request, definition, substitution, scoped, snapshot, effective)
+            }
+        };
+        let NativeDelegationRequest::Delegate { agent_type, model, effort, .. } = &effective_request
+            else { return Err("invalid_request".into()); };
+        let effective_posture = Some(resolved_posture);
         if matches!(pass, WorkspacePass::Probe) {
-            return Ok(WorkspaceAdmission::Probe(frozen_cwd));
+            return Ok(WorkspaceAdmission::Probe(frozen_cwd, effective_request, raw_definition, substitution));
         }
         let (scoped, permission_snapshot, frozen_cwd) = match pass {
             WorkspacePass::Reserve { plan, .. } => {
@@ -1066,12 +1216,13 @@ fn admit_delegate(
                 { return Err("workspace_path_unsafe: chemin canonique inattendu".into()); }
                 workspace_limit(st, plan, true)?;
                 let fact = fact.ok_or("permission_attestation_unavailable")?;
-                let (policy, effective) = crate::native_permissions::child_policy(
-                    &fact, target, &child, &st.source_env, *posture,
+                let pinned = AgentRegistry::from_resolved(agent_type, &raw_definition)?;
+                let (scoped, snapshot, effective) = resolve_target(
+                    &pinned, &st.source_env, &st.provider_limits, &owner, &instance, Some(&fact),
+                    agent_type, model, effort.as_deref(), &child, *posture,
+                    workspace.as_ref(), child_requests.as_deref(),
                 )?;
                 if Some(effective) != effective_posture { return Err("permission_not_inherited".into()); }
-                let scoped = st.registry.for_inherited_delegation(agent_type, model, effort.as_deref(), &policy)?;
-                let snapshot = Some(crate::native_permissions::snapshot(&owner, &instance, fact, policy, &child));
                 (scoped, snapshot, child)
             }
             WorkspacePass::Shared => (scoped, permission_snapshot, frozen_cwd),
@@ -1153,6 +1304,7 @@ fn admit_delegate(
                 None => (owner.clone(), None),
             };
         let record = Task {
+            substitution,
             task_id: task_id.clone(),
             root_owner_agent_id,
             parent_task_id,
@@ -1163,7 +1315,7 @@ fn admit_delegate(
             owner_instance: instance.clone(),
             origin_owner_instance: instance,
             parent_execution_id: executions.into_iter().next(),
-            request: request.clone(),
+            request: effective_request.clone(),
             child_requests: child_requests.clone(),
             permission_snapshot,
             effective_posture,
@@ -1230,7 +1382,7 @@ fn admit_delegate(
             &receipt_owner,
             request_id,
             &canonical,
-            code,
+            code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical),
             unix_timestamp(),
         )?;
     }
@@ -1293,30 +1445,79 @@ fn handle_locked_with_project(
         NativeDelegationRequest::Catalogue => {
             let permission = root_permission(st, &owner, &instance)?;
             let fact=parent_fact(st,&owner,&instance,None,attested)?;
+            let verdict_cwd = fact.as_ref().map(|f| PathBuf::from(&f.cwd))
+                .or_else(|| permission.as_ref().and_then(ParentPermission::root).map(Path::to_path_buf));
             let entries: Vec<Value> = st.registry.resolved_definitions()?.into_iter()
-                .filter(|(name,_)|!name.starts_with("__"))
+                .filter(|(name,_)| !name.starts_with("__"))
                 .map(|(name,definition)| {
-                    let discovery = st.registry.for_spawn_posture(&name,SpawnPosture::Discovery).is_ok();
-                    let inherited=fact.as_ref().ok_or_else(||"permission_attestation_unavailable".to_string()).and_then(|fact|
-                        crate::native_permissions::child_policy(fact,st.registry.get(&name)?,Path::new(&fact.cwd),&st.source_env,None));
-                    let development=fact.as_ref().ok_or_else(||"permission_attestation_unavailable".to_string()).and_then(|fact|
-                        crate::native_permissions::child_policy(fact,st.registry.get(&name)?,Path::new(&fact.cwd),&st.source_env,Some(SpawnPosture::Development)));
+                    // Modèle déclaré, effort omis : aucune requête ni fait request-scoped inventé.
+                    let model = definition.capabilities.models.keys().next();
+                    let cwd: Result<PathBuf,String> = (|| {
+                        let cwd = verdict_cwd.as_ref().ok_or_else(|| "cwd_unavailable".to_owned())?;
+                        let cwd = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable".to_owned())?;
+                        if !cwd.is_dir() { return Err("cwd_unavailable".to_owned()); }
+                        Ok(cwd)
+                    })();
+                    let mut resolver = cwd.as_ref().ok().zip(model).map(|(cwd,model)|
+                        target_resolver(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
+                            fact.as_ref(),&name,model,None,cwd,None,None));
+                    let mut verdict = |posture| {
+                        cwd.as_ref().map_err(|code| code.clone())?;
+                        let resolver = resolver.as_mut().ok_or("model_unavailable")?;
+                        resolver(posture)
+                    };
+                    let discovery = verdict(Some(SpawnPosture::Discovery));
+                    let inherited = verdict(None);
+                    let development = verdict(Some(SpawnPosture::Development));
+                    let can_run = discovery.is_ok() || inherited.is_ok() || development.is_ok();
+                    let quota = st.provider_limits.quota(&name, unix_timestamp());
+                    let constraints: Vec<Value> = if can_run {
+                        if quota.as_ref().is_some_and(|quota| quota.limit_reached && !quota.exhausted) {
+                            vec![json!({"code":"provider_limit_reached_window_unknown",
+                                "message":"Le fournisseur signale une limite atteinte sans attester une fenêtre épuisée ; le lancement reste permis."})]
+                        } else { Vec::new() }
+                    } else {
+                        let mut codes = HashSet::new();
+                        [&discovery, &inherited, &development].into_iter().filter_map(|result| result.as_ref().err())
+                            .filter(|code| codes.insert(code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned())).map(|code| {
+                                let code = code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical);
+                                let message = match code {
+                                    "provider_quota_exhausted" => "Le quota du fournisseur est épuisé.",
+                                    "command_missing" => "Le binaire du fournisseur est absent ou non exécutable.",
+                                    "billing_guard" => "Une clé API présente est interdite pour ce fournisseur.",
+                                    "env_unfit" => "L’environnement requis pour lancer le fournisseur est incomplet.",
+                                    "unsupported_capability" => "La définition ne déclare pas les capacités de lancement requises.",
+                                    "negotiation_failed" => "Le protocole ne permet pas une session gérée.",
+                                    "permission_source_unavailable" if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json" && f.provider_policy.get("launch_context").is_none()) => "Le contexte de lancement Claude (launch_context) est absent ; ses droits ne peuvent pas être vérifiés.",
+                                    "permission_source_unavailable" => "Une source de droits est absente, illisible ou non vérifiable.",
+                                    "settings_revision_changed" => "Une source de droits a changé depuis son attestation.",
+                                    "permission_mapping_unavailable" => "Les droits du parent ne peuvent pas être traduits pour ce fournisseur.",
+                                    "provider_confinement_unavailable" => "Le fournisseur ne peut pas appliquer le confinement du parent.",
+                                    "permission_not_inherited" => "La posture demandée dépasse les droits du parent.",
+                                    "permission_attestation_unavailable" => "Aucun fait de droits valable pour la session n’est disponible.",
+                                    "cwd_unavailable" => "Aucun dossier racine vérifiable n’est disponible pour ce verdict.",
+                                    "model_unavailable" => "Aucun modèle déclaré ne permet cette sélection.",
+                                    _ => "La cible est refusée par les contrôles de lancement et de droits.",
+                                };
+                                json!({"code":code,"message":message})
+                            }).collect()
+                    };
                     let worktree_refusal = match inherited.as_ref() {
-                        Err(code) => Some(code.clone()),
-                        Ok((_, SpawnPosture::Discovery)) => Some("workspace_requires_development".to_string()),
-                        Ok((_, SpawnPosture::Development)) if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json")
-                            && definition.protocol == "claude_stream_json" => Some("workspace_inheritance_unavailable".to_string()),
+                        Err(code) => Some(code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),
+                        Ok((_, _, SpawnPosture::Discovery)) => Some("workspace_requires_development".to_owned()),
+                        Ok((_, _, SpawnPosture::Development)) if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json")
+                            && definition.protocol == "claude_stream_json" => Some("workspace_inheritance_unavailable".to_owned()),
                         Ok(_) => None,
                     };
                     json!({"agent_type":name,"protocol":definition.protocol,"models":definition.capabilities.models,
                         "child_requests_supported":definition.protocol == "codex_app_server",
                         "worktree":worktree_refusal.is_none(),"worktree_refusal":worktree_refusal,
-                        "inherit":inherited.is_ok(),"inherit_refusal":inherited.err(),
-                        "discovery":discovery && (permission.is_some()||fact.is_some()),"development":development.as_ref().is_ok_and(|(_,p)|*p==SpawnPosture::Development),
-                        "development_refusal":development.err()})
+                        "inherit":inherited.is_ok(),"inherit_refusal":inherited.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),
+                        "discovery":discovery.is_ok(),"development":development.as_ref().is_ok_and(|(_,_,p)| *p==SpawnPosture::Development),
+                        "development_refusal":development.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),"can_run":can_run,"constraints":constraints,"quota":quota})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
+                json!({"version":1,"providers":entries,"features":{"fallback":true,"fallback_max":3},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -8283,6 +8484,7 @@ mod tests {
     }
     fn request(key: &str) -> NativeDelegationRequest {
         NativeDelegationRequest::Delegate {
+            fallback: Vec::new(),
             request_id: key.into(),
             agent_type: "native-test".into(),
             model: "custom/model".into(),
@@ -8392,13 +8594,17 @@ mod tests {
         };
         assert_eq!(catalogue["cwd_scope"], "same_project");
         assert!(catalogue["cwd_root"].is_null());
+        // Contrat157 : aucune racine pour ce verdict ; l'admission reste autorité.
+        // Les admissions repo/worktree ci-dessous prouvent les droits same_project.
+        assert!(catalogue["verdict_context"]["cwd"].is_null());
         assert!(
             catalogue["providers"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|entry| entry["agent_type"] == "native-test"
-                    && entry["discovery"] == true
+                    && entry["discovery"] == false
+                    && entry["can_run"] == false
                     && entry["development"] == false)
         );
         for (key, cwd) in [("repo", &repo), ("worktree", &worktree)] {
@@ -9192,6 +9398,7 @@ mod tests {
             "permission_attestation_unavailable"
         );
         let job = NativeDelegationRequest::Delegate {
+            fallback: Vec::new(),
             request_id: "glm".into(),
             agent_type: "glm-fake".into(),
             model: "glm/custom-exact".into(),

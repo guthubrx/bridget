@@ -1,0 +1,775 @@
+{
+  "module": "07",
+  "scope_sha256": "5350417b65e35111515f03c871be0221a38b57b527d8cda3e7012b7b807b9c6f",
+  "authority_manifest_sha256": "507c530bcb2d42b3b6f992dac7f3afe838e30ab2fc4692b1009e64d896600268",
+  "diff_sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+  "source_capture_timestamp": "2026-10-12T07:55:10.873715+00:00",
+  "generated_at_utc": "2026-10-12T08:16:39.947936+00:00",
+  "cycle_source_status": "historical_explicit_root_deltas_after_reads",
+  "post_read_source_deltas": [
+    {
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "read_sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592",
+      "current_sha256": "6e69c7b5fe6a27c902e38266bc47b2ce879ed58e712739a9fb8099f90e316d12",
+      "status": "ROOT authorised post-read delta; historical cycle1 explicitly preserved."
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "read_sha256": "27656caa32399b62e41a39edf57f0e2ad7f91bf2a5bcf9cdfdbb9c13e815ccdd",
+      "current_sha256": "a8dd13d2709ef0585c78962cb715bcd79b75092ebac1e856d7d0acee7a0fae24",
+      "status": "ROOT authorised post-read delta; historical cycle1 explicitly preserved."
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "read_sha256": "2698ae8a7119bebd255dec630687609f425b1885e720775494d8dbb1c559eaa9",
+      "current_sha256": "7db518abe316ce41f4a39ade33391d9054e8e879cbdfebf05dcfa1c42d1f0ccb",
+      "status": "Post-read delta detected; author attribution not verified by this module. Historical cycle1 preserved."
+    }
+  ],
+  "findings": [],
+  "positive_findings": [
+    "Diff lifecycle.rs2076–2196 : retrait des contrôles inline et réemploi du préflight commun ; aucun verdict miroir ajouté.",
+    "native_permissions.rs457–543 et diff2329–2387 : les branches de politique restent communes entre l’entrée fraîche et le lecteurR8.",
+    "Constructeurs fallback vide/substitutionNone : raccords de compatibilité ; validations MCP/daemon : deux frontières de confiance, pas de nouvelle factorisation imposée."
+  ],
+  "warnings": [
+    "Cycle1 historique explicite après trois empreintes détectées différentes : provider_limits.rs, registry.rs et docs/delegation-native.md. Les deltas ne sont pas couverts par cette lecture ; ROOT les relira pour le scoring final.",
+    "Couverture partielle : les plages sont listées, pas de crédit repris de Converge/implémentation/préparations. Gros fichiers historiques non relus en entier.",
+    "Pas de jscpd, Clippy, rustfmt, scanner, Cargo, test, benchmark, fournisseur, DB ou service exécuté. Aucun taux de duplication ni nombre cyclomatique inventé.",
+    "Longues fonctions lues : admit_delegate989–1390, target_resolver916–985, child_policy_reader464–543, pin_delegation_model345–422. Longueur seule ne prouve pas un défaut nouveau ; contraintes de compatibilité et R8 sont documentées.",
+    "CI/lint global non audité ; ce cycle reste un audit sémantique du diff et des consommateurs relus.",
+    "FULL rapporté par validation/tests-157.md : 2396 PASS Cargo/9 FAIL/74 ignored, trois PASS enfants exclus, huit échecs historiques et oracle154 rejoué1/0 ; aucun GREEN global ni exécution neuve créditée."
+  ],
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "038ce196f2c7f4ed0ef0cb2f0e8882a5d8fd41a90a1032ccfcd333a2079dd04d",
+      "ranges": [
+        [
+          65,
+          115
+        ],
+        [
+          215,
+          271
+        ],
+        [
+          675,
+          731
+        ],
+        [
+          842,
+          1524
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:11.173018+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/provider_limits.rs",
+      "sha256": "c4bf39bdc15ec588a10fa855e203daba9bc56d647c1d8d53b36d81fc09ecf592",
+      "ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:22.750996+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "sha256": "85ecf25a4f8cf6fa46559f31ff20438d1669fbc7a73a673feae36229b12a1478",
+      "ranges": [
+        [
+          98,
+          139
+        ],
+        [
+          226,
+          270
+        ],
+        [
+          365,
+          415
+        ],
+        [
+          550,
+          583
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:56.557599+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "sha256": "c81edca77e1629da7ca899c7898bb3114e37d83fee56a8603ca2eca155974a52",
+      "ranges": [
+        [
+          426,
+          544
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:56.558015+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "27656caa32399b62e41a39edf57f0e2ad7f91bf2a5bcf9cdfdbb9c13e815ccdd",
+      "ranges": [
+        [
+          314,
+          425
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:56.558282+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "0995839a6118274b00c3747253980acd362f08b23ea67273ff37dd42e385568f",
+      "ranges": [
+        [
+          978,
+          993
+        ],
+        [
+          3439,
+          3451
+        ],
+        [
+          7080,
+          7147
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:56.562428+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation.rs",
+      "sha256": "13e41d83a0f4367f4f6eb3437486c4fd822f6a1231568f3d379f2bfbd5706713",
+      "ranges": [
+        [
+          160,
+          195
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:07:56.563133+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "1b4a85f2d251a67c60001b7fdc745f4dd4d02d60261711b15cde1a91aa768b77",
+      "ranges": [
+        [
+          63,
+          168
+        ],
+        [
+          270,
+          305
+        ],
+        [
+          313,
+          415
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:08:12.316488+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "724dc1f932d0f49bc4a2ef3b003cfb2650887b3439b53aff4c1fda58c438e365",
+      "ranges": [
+        [
+          2104,
+          2119
+        ],
+        [
+          2143,
+          2172
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:08:12.317631+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "docs/decisions/157-catalogue-quotas-remplacement.md",
+      "sha256": "de51a9cba0cac8e0ddbb2076485c9be7220b858f94ecc050cf5ed7149d5fc9f6",
+      "ranges": [
+        [
+          1,
+          110
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:08:12.317775+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "specs/157-catalogue-quotas/reuse-audit.md",
+      "sha256": "179a75b67c93456f7b9b353183e18f7f9906db20a6a0be27c1d5b25b37b26a80",
+      "ranges": [
+        [
+          106,
+          123
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:08:12.317868+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "specs/157-catalogue-quotas/contracts/delegation157.md",
+      "sha256": "0f02c092f13870d07a834f548476d4e70f63366adbb8d032bf1b76c7c95e024f",
+      "ranges": [
+        [
+          1,
+          110
+        ],
+        [
+          118,
+          150
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:08:12.317937+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "2d73c6e12a54dc262147cafc31b1639eafdadd6e81c74ecb3ef46b96a5491ee0",
+      "ranges": [
+        [
+          3880,
+          3910
+        ],
+        [
+          4294,
+          4431
+        ],
+        [
+          4730,
+          4792
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:10:00.283859+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "specs/157-catalogue-quotas/validation/diff-157.patch",
+      "sha256": "ec5b959bf531b37087c4f5d7a3d399976566ee9753da27c1936fb1bdbd1d1972",
+      "ranges": [
+        [
+          2076,
+          2196
+        ],
+        [
+          2329,
+          2476
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:17.068418+00:00",
+      "in_authority_scope": false
+    },
+    {
+      "file": "specs/157-catalogue-quotas/data-model.md",
+      "sha256": "55f38286b486cddc3e1cce784581c57325b115fe1b0e5f46e5277b9f68d7c04f",
+      "ranges": [
+        [
+          1,
+          105
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:17.069035+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "sha256": "a801d1ec1ab3e26454a03576fb417c36254bbcc0a73e46a0a46e78e610aadbe7",
+      "ranges": [
+        [
+          38,
+          51
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:17.069166+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "sha256": "c3769035a4c04c65c4cb070f337898277ace0def50bffe931b63eae1f52023b9",
+      "ranges": [
+        [
+          35,
+          62
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.367854+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "sha256": "e2fe09846e5b53a1e134baf994de614618d707635c68613587c78c3a1b425e72",
+      "ranges": [
+        [
+          30,
+          75
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.368435+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "sha256": "015db2e65365e27c9bb7aa6bc6027252fffbe7e0211b0576f8baeac9c73fb587",
+      "ranges": [
+        [
+          410,
+          431
+        ],
+        [
+          470,
+          562
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.368707+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "d13d0d59f90918c6107f306f1ace49ce54a4d90b0c49e309fb819c15016a8f3f",
+      "ranges": [
+        [
+          324,
+          340
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.368866+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "80c5e9f89b066ec549633872c93e07e6d4426a9fd37c8dd2b7d634f3aaf8c4e0",
+      "ranges": [
+        [
+          442,
+          458
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.369137+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "sha256": "2698ae8a7119bebd255dec630687609f425b1885e720775494d8dbb1c559eaa9",
+      "ranges": [
+        [
+          30,
+          105
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.369340+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "sha256": "9b542c7c6c992bc59af79c474410a0da68e08c693efba0a3cf600a7e3ae6875a",
+      "ranges": [
+        [
+          16,
+          51
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.369579+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "sha256": "b0cde86906d69b110302d7afc6eb1dcafb087dee822ec16ea6a304a70342d66d",
+      "ranges": [
+        [
+          158,
+          213
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:11:53.369851+00:00",
+      "in_authority_scope": true
+    },
+    {
+      "file": "specs/157-catalogue-quotas/implementation.md",
+      "sha256": "676f80a5f23404eab00084e8f2f990f28ea54ca737bef633bdfc6137be335659",
+      "ranges": [
+        [
+          1,
+          16
+        ],
+        [
+          44,
+          51
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:13:17.592940+00:00",
+      "in_authority_scope": false
+    },
+    {
+      "file": "specs/157-catalogue-quotas/validation/converge157.md",
+      "sha256": "0f93541b97671eb09c401c0c64c57f64d2e515bd732bebf24a22c007ca6f09f4",
+      "ranges": [
+        [
+          1,
+          18
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:13:17.593392+00:00",
+      "in_authority_scope": false
+    },
+    {
+      "file": "specs/157-catalogue-quotas/validation/tests-157.md",
+      "sha256": "22e87553704aad99f1c185b794b0ed82506c36244b5c2eb1877f77d0a6ccc6f7",
+      "ranges": [
+        [
+          50,
+          61
+        ]
+      ],
+      "read_mode": "fresh_post_fix",
+      "read_at_utc": "2026-10-12T08:13:17.593493+00:00",
+      "in_authority_scope": false
+    }
+  ],
+  "execution_metrics": {
+    "files_total": 29,
+    "files_in_scope_read": 23,
+    "source_lines_read": 2793,
+    "scope_lines_total": 81930,
+    "hunks_total": 103,
+    "hunks_postimage_fully_read": 56,
+    "changed_added_lines_total": 2529,
+    "changed_added_lines_read": 1230,
+    "changed_added_lines_percent": 48.6358,
+    "tests_executed": 0,
+    "scanners_executed": 0,
+    "coverage_basis": "Displayed source ranges only; searches/previous audits uncredited; postimage count does not credit removed lines."
+  },
+  "unread_scope_files": [
+    "specs/157-catalogue-quotas/adversarial-review-codex.md",
+    "specs/157-catalogue-quotas/plan.md",
+    "specs/157-catalogue-quotas/quickstart.md",
+    "specs/157-catalogue-quotas/research.md",
+    "specs/157-catalogue-quotas/spec.md",
+    "specs/157-catalogue-quotas/tasks.md"
+  ],
+  "hunks_postimage_fully_read": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "new_start": 982,
+      "new_end": 989
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "new_start": 3445,
+      "new_end": 3451
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "new_start": 7080,
+      "new_end": 7087
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "new_start": 7122,
+      "new_end": 7141
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 78,
+      "new_end": 112
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 257,
+      "new_end": 263
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 679,
+      "new_end": 690
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 695,
+      "new_end": 702
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 710,
+      "new_end": 717
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 847,
+      "new_end": 861
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 888,
+      "new_end": 989
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 994,
+      "new_end": 1000
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1019,
+      "new_end": 1036
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1088,
+      "new_end": 1093
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1127,
+      "new_end": 1200
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1216,
+      "new_end": 1228
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1304,
+      "new_end": 1310
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1315,
+      "new_end": 1321
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1382,
+      "new_end": 1388
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "new_start": 1445,
+      "new_end": 1523
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "new_start": 39,
+      "new_end": 45
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_lineage_tests.rs",
+      "new_start": 51,
+      "new_end": 57
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "new_start": 415,
+      "new_end": 428
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "new_start": 472,
+      "new_end": 488
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "new_start": 494,
+      "new_end": 501
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "new_start": 538,
+      "new_end": 554
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "new_start": 33,
+      "new_end": 39
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_lineage_tests.rs",
+      "new_start": 61,
+      "new_end": 67
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "new_start": 70,
+      "new_end": 77
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "new_start": 105,
+      "new_end": 111
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "new_start": 129,
+      "new_end": 159
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "new_start": 285,
+      "new_end": 294
+    },
+    {
+      "file": "crates/bridget-daemon/src/lib.rs",
+      "new_start": 44,
+      "new_end": 50
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "new_start": 239,
+      "new_end": 251
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "new_start": 368,
+      "new_end": 374
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "new_start": 376,
+      "new_end": 381
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "new_start": 395,
+      "new_end": 400
+    },
+    {
+      "file": "crates/bridget-daemon/src/lifecycle.rs",
+      "new_start": 550,
+      "new_end": 556
+    },
+    {
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "new_start": 453,
+      "new_end": 474
+    },
+    {
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "new_start": 486,
+      "new_end": 497
+    },
+    {
+      "file": "crates/bridget-daemon/src/native_permissions.rs",
+      "new_start": 517,
+      "new_end": 523
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "new_start": 342,
+      "new_end": 348
+    },
+    {
+      "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "new_start": 324,
+      "new_end": 330
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "new_start": 442,
+      "new_end": 448
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "new_start": 2153,
+      "new_end": 2160
+    },
+    {
+      "file": "docs/delegation-native.md",
+      "new_start": 30,
+      "new_end": 104
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "new_start": 16,
+      "new_end": 49
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "new_start": 158,
+      "new_end": 208
+    },
+    {
+      "file": "specs/157-catalogue-quotas/contracts/delegation157.md",
+      "new_start": 19,
+      "new_end": 25
+    },
+    {
+      "file": "specs/157-catalogue-quotas/contracts/delegation157.md",
+      "new_start": 36,
+      "new_end": 42
+    },
+    {
+      "file": "specs/157-catalogue-quotas/contracts/delegation157.md",
+      "new_start": 83,
+      "new_end": 99
+    },
+    {
+      "file": "specs/157-catalogue-quotas/data-model.md",
+      "new_start": 19,
+      "new_end": 25
+    },
+    {
+      "file": "specs/157-catalogue-quotas/data-model.md",
+      "new_start": 28,
+      "new_end": 35
+    },
+    {
+      "file": "specs/157-catalogue-quotas/data-model.md",
+      "new_start": 72,
+      "new_end": 105
+    },
+    {
+      "file": "specs/157-catalogue-quotas/reuse-audit.md",
+      "new_start": 106,
+      "new_end": 123
+    },
+    {
+      "file": "docs/decisions/157-catalogue-quotas-remplacement.md",
+      "new_start": 1,
+      "new_end": 110
+    }
+  ],
+  "duplication_metrics": {
+    "jscpd_percentage": null,
+    "duplicated_lines": null,
+    "max_block_lines": null,
+    "total_occurrences": null,
+    "method": "Manual semantic comparison; no scanner."
+  }
+}

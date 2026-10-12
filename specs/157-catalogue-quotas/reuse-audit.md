@@ -3,8 +3,8 @@
 ## Decision
 
 Statut: PASS
-Date: 2026-10-11
-Feature dir: /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation/specs/157-catalogue-quotas
+Date: 2026-10-11 (audit historique ; réattestation ciblée du2026-10-12 ci-dessous)
+Feature dir: /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas
 
 Conclusion courte: Le plan réutilise le préflight de `submit_spawn`, les codes de
 `refusal_record`, `child_policy`, les sources de `rate_limits`, l'enveloppe
@@ -40,7 +40,7 @@ justifié par 4 usages. Aucune duplication évidente.
 | Item du plan | Existant proche | Preuve | Decision attendue |
 |---|---|---|---|
 | Mémoire de limites | `Presence.rate_limits` | `daemon.rs:566` | Non réutilisable seul : disparaît avec la présence, sans instant d'observation. Module neuf justifié (research R4) |
-| Détail dans un refus | `failure(code)` | `native_delegation.rs:34` | Étendu par `failure_with_detail`, pas remplacé |
+| Détail dans un refus | `failure(code)` | `native_delegation.rs:34` | Étendre le `failure` existant par code:JSON, sans helper supplémentaire |
 | Sonde d'authentification | aucune | `rg` credential, login, unauthenticated : rien de pertinent | Non créée (question 3) |
 
 ## Duplications evidentes
@@ -57,7 +57,7 @@ justifié par 4 usages. Aucune duplication évidente.
 | `~/.speckit/constitution.md` XIX | minimalisme | un module, pas de table, pas de CLI |
 | `~/.speckit/constitution.md` XXII | mesurer avant d'optimiser | T001 et T012 |
 | mémoire `bridget-tests-umask-077-env-prive` | recette de test | quickstart |
-| `AGENTS.md` (checkpoints 149) | livraison sans relance | aucune relance de service |
+| `AGENTS.md` (checkpoints 149) | checkpoints historiques ; autorisation actuelle152–160 | livraison et activation Bridget, T3 inchangé |
 | contrat 148 | `model_unavailable` sans substitution | `model_unavailable` jamais remplacé |
 
 ## Specs livrees applicables
@@ -106,3 +106,18 @@ justifié par 4 usages. Aucune duplication évidente.
 Le réemploi des primitives de reprise de 152 (`latest_in_chain`, `may_resume`,
 `schedule_execution_recovery`, `native_child_env`) est audité en 160, quand 152
 est livrée et ses primitives prouvées (`spec.md`, section « Session future 160 »).
+
+## Réattestation ciblée au GO157 — 2026-10-12
+La base livrée est 8b5b313694cf05eabfe6a86a970b96f03b015f49, sources156 cf498755dc871b51eb8c0add5f8a882d67651d2a.
+Dix sources ont été relues par plages et sont restées stables. Cette lecture ne valide ni une baseline157, ni un incident réel, ni le dépôt entier.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/specs/157-catalogue-quotas/validation/readiness157-after156.json
+SHA256 : 9de506e51b9d3b00a7e2b7cf3ab76c35453b29181e091f7e24560e5ea5fb7654.
+Les trois passes Probe, Reserve et Commit conserveront le candidat et la définition épinglée. Commit refusera une invalidation sans nouvelle sélection.
+Le refus du parent child_requests_reviewer_unsupported reste hors fallback. Les contrôles de dossier et la politique héritée restent requis.
+Le détail code:JSON étendra le failure existant. Les diagnostics154 de chemin et de branche resteront conservés.
+Le seul helper privé proposé pour T007 construit le registre de quatre alias. Ses six consommateurs sont les six scénarios déjà prévus. Il réemploie la fixture149 ; aucun verdict miroir, nouvelle API ou infrastructure de test.
+
+
+## Arbitrage R8 et raccords des tests157 — 2026-10-12
+- R8 : réutiliser les corps de resolve_target et child_policy, puis extraire target_resolver/child_policy_reader. Les trois politiques gardent leurs branches ; seules les lectures/préflight liés aux mêmes entrées sont préparés une fois. Deux consommateurs de contexte (admission fraîche et catalogue trois postures), avec la contrainte architecturale écrite R8/SC007. La première mesure dépassait le seuil ; aucun cache durable, DTO ou verdict parallèle créé. Preuves : manifest R8 en cache, mesure-catalogue.json et matrice T007. Les équivalents sont les fonctions existantes, conservées comme entrées fraîches.
+- T017 : réutiliser fixture_with_reader149, delegate_request et les gestionnaires réels. Les trois raccords privés fallback157_definition/registry/request ont chacun au moins trois consommateurs dans les quatorze tests déjà prévus ; aucun scénario ni infrastructure supplémentaire.
