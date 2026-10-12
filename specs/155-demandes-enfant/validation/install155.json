@@ -1,0 +1,14 @@
+{
+  "installed_at": "2026-10-12T03:46:39.477451+00:00",
+  "source_commit": "59da3968c7d14dbd7acd1370875dd9d135ba7dcb",
+  "binary": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+  "candidate": "/Users/moi/.cache/bridget-build-155.hmr0msjd/release/bridget",
+  "sha256": "4d3ff43d6a82de02b4ed115f1af422703ca584d1ce7f4843dcda41179ac748a7",
+  "version": "bridget 0.1.3",
+  "signature": "adhoc strict verified",
+  "rollback_binary": "/Users/moi/.cache/bridget-delivery155.um4xccv4/rollback-t000155-bridget",
+  "rollback_sha256": "992c52c7dc4ca336b14f6d12111adbd5888772c87a276bcf3dc77f9eb61c5283",
+  "native_state_counts_before": [],
+  "processes_before": "  PID STARTED                      COMMAND\n60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)\n60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3\n81535 Mon Oct 12 01:48:33 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon\n81746 Mon Oct 12 01:48:36 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve\n",
+  "runtime_activated": false
+}

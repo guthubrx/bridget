@@ -1,0 +1,22 @@
+{
+  "started_at_utc": "2026-10-12T03:42:27.303282+00:00",
+  "finished_at_utc": "2026-10-12T03:44:41.102188+00:00",
+  "elapsed_seconds": 133.79776716709603,
+  "returncode": 0,
+  "source_commit": "59da3968c7d14dbd7acd1370875dd9d135ba7dcb",
+  "build_id": "59da3968c7d1",
+  "source_checkout": "/Users/moi/Nextcloud/10.Scripts/64.bridget",
+  "stage": "/Users/moi/.cache/bridget-build-155.hmr0msjd",
+  "log": "/Users/moi/.cache/bridget-delivery155.um4xccv4/build155.log",
+  "command": [
+    "python3",
+    "scripts/build.py",
+    "cargo",
+    "build",
+    "--locked",
+    "--offline",
+    "--release",
+    "-p",
+    "bridget-daemon"
+  ]
+}

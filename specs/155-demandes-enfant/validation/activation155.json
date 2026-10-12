@@ -1,0 +1,16 @@
+{
+  "time": "2026-10-12T03:47:40.486274+00:00",
+  "source_commit": "59da3968c7d14dbd7acd1370875dd9d135ba7dcb",
+  "daemon_build": "59da3968c7d1",
+  "daemon_pid": 69512,
+  "bridge_pid": 69652,
+  "t3_unchanged_pids": [
+    60116,
+    60228
+  ],
+  "processes": "  PID STARTED                      COMMAND\n60116 Sun Oct 11 01:13:35 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)\n60228 Sun Oct 11 01:13:36 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha) --require /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /Applications/T3 Code (Local).app/Contents/Resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3\n69512 Mon Oct 12 05:47:08 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon\n69652 Mon Oct 12 05:47:11 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve\n",
+  "binary_sha256": "4d3ff43d6a82de02b4ed115f1af422703ca584d1ce7f4843dcda41179ac748a7",
+  "status_rc": 0,
+  "status": "Daemon: en ligne\nMachine du daemon: monordinateur\nSocket: /Users/moi/.cache/bridget-core/bridget.sock\nBase de donn\u00e9es du daemon: /Users/moi/.cache/bridget-core/bridget.db\nAgents connect\u00e9s: 235\nMessages en base: total non publi\u00e9 par le daemon \u2014 consulter ledger\nBuild-id daemon: 59da3968c7d1\n",
+  "runtime_activated": true
+}

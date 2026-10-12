@@ -1,0 +1,24 @@
+{
+  "signals": [
+    {
+      "utc": "2026-10-12T03:47:11.021811+00:00",
+      "label": "com.bridget.daemon",
+      "old_pid": 81535,
+      "identity": "Mon Oct 12 01:48:33 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget daemon",
+      "signal": "SIGTERM",
+      "old_gone_after_3s": true,
+      "new_pid": 69512,
+      "native_nonterminal_tasks": []
+    },
+    {
+      "utc": "2026-10-12T03:47:14.105750+00:00",
+      "label": "com.bridget.t3",
+      "old_pid": 81746,
+      "identity": "Mon Oct 12 01:48:36 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget t3 serve",
+      "signal": "SIGTERM",
+      "old_gone_after_3s": true,
+      "new_pid": 69652,
+      "native_nonterminal_tasks": []
+    }
+  ]
+}

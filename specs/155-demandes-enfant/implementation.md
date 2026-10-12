@@ -1,9 +1,15 @@
-# Implémentation155 — revue T038 clôturée, validation finale en cours
+# Implémentation155 — livrée et activée le 2026-10-12
 
-Checkpoint courant R2 : In Progress, 42/42 acquises, T040 validée sur le reçu
+Statut courant : Livré, 42/42. Source 59da3968c7d14dbd7acd1370875dd9d135ba7dcb
+intégrée/poussée, binaire signé installé et runtime actif. Trois Converge et
+contrôle cwd ciblé acquis ; audit final 2 LOW, couverture 27,46 %, validateur 0/0.
+WT/branche retirés ; clôture documentaire sans changement du binaire.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/155-demandes-enfant/validation/livraison155.md.
+Les checkpoints ci-dessous sont historiques, sans GREEN workspace global.
+Checkpoint historique R2 : In Progress, 42/42 acquises, T040 validée sur le reçu
 réel antérieur au correctif cwd. Ce correctif a maintenant 71 PASS ciblés sur le code courant. Converge P3 est historique ; relecture du delta après
 audit attendue. Les anciens statuts et PASS ci-dessous gardent leur snapshot.
-État courant : implémentation réalisée à 100 %, 42/42 tâches cochées par le
+État historique : implémentation réalisée à 100 %, 42/42 tâches cochées par le
 principal, T040 validée après accord explicite de l’utilisateur et quatre cas
 PASS. Le pipeline reste In Progress : Converge P3, audit final, revue code R2
 et livraison restent à faire. Aucun GREEN workspace global n’est revendiqué.
@@ -233,7 +239,7 @@ lignes 307–327 : native_child_requests conserve state, outcome, decision,
 answer_json et decided_by. Le journal fournisseur ne reçoit aucune valeur
 nouvelle de réponse ou de décision.
 
-Checkpoint courant : In Progress, 41/42 ; T041 documentaire et T039 acquises,
+Checkpoint historique : In Progress, 41/42 ; T041 documentaire et T039 acquises,
 T040 seule ouverte. Ce checkpoint remplace les statuts historiques 40/41
 conservés dans ce reçu. Les résultats de tests antérieurs restent inchangés.
 
@@ -326,7 +332,7 @@ d’un programme hostile, benchmark ou couverture globale n’est ajoutée.
 
 ## Checkpoint R2 — correctif cwd prouvé par les ciblés
 
-État courant : In Progress, 42/42 tâches acquises, T040 validée. L’objection
+État historique : In Progress, 42/42 tâches acquises, T040 validée. L’objection
 MEDIUM cwd de la revue R2 est retenue ; le correctif minimal a maintenant 71 PASS ciblés, RC0, sources 214 stables.
 Le reçu post-cwd ci-dessous remplace l’attente des tests ; aucun hash futur
 de source ou résultat global n’est inventé. Converge P3 est un

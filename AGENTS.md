@@ -1,4 +1,15 @@
 <!-- SPECKIT START -->
+Session 155 livrée et activée le 2026-10-12 : 42/42 ; trois Converge puis contrôle cwd ciblé, pas passage 4.
+Source 59da3968c7d14dbd7acd1370875dd9d135ba7dcb intégrée/poussée github/main ; build 133,80 s RC0.
+Binaire signé installé/actif SHA 4d3ff43d6a82de02b4ed115f1af422703ca584d1ce7f4843dcda41179ac748a7.
+Daemon 69512/pont 69652 nés 05:47:08/11 CEST ; T3 PID 60116/60228 inchangés.
+71 PASS post-cwd ; T040 quatre cas réels PASS validés par l’utilisateur avant cwd, provenances conservées.
+FULL unique antérieur 2259 PASS/15 FAIL/72 ignored, 180 baseline PASS ; aucun GREEN global ni seconde suite.
+Audit final 0C/0H/0M/2LOW, couverture 27,46 %, validateur 0/0 ; limites conservées.
+WT/branche 155 retirés ; 81 preuves ignorées archivées/vérifiées, DB/rollback/cache utile 156–160 préservés.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/155-demandes-enfant/validation/livraison155.md.
+La clôture documentaire conserve la distinction entre source du binaire et métadonnées de livraison.
+Les checkpoints ci-dessous restent historiques, pas une preuve du runtime courant.
 Correctif T000155 livré seul le 2026-10-12 : sources c8f6f8a0e09a fusionnées et poussées github/main.
 Binaire signé installé et actif ; daemon81535/pont81746 à01:48CEST. T3 inchangé, aucune base supprimée.
 Trois tests ciblés PASS, ConvergeP2, audit A99.95 sans blocage. Les 40 autres tâches155 restent ouvertes.

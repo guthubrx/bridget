@@ -1,0 +1,22 @@
+{
+  "utc": "2026-10-12T03:49:07.476203+00:00",
+  "worktree_removed": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant",
+  "branch_removed": "session-155-demandes-enfant",
+  "merged_source": "59da3968c7d14dbd7acd1370875dd9d135ba7dcb",
+  "remote_main_verified": "59da3968c7d14dbd7acd1370875dd9d135ba7dcb",
+  "ignored_archive": "/Users/moi/.cache/bridget-delivery155.um4xccv4/worktree155-ignored",
+  "ignored_files_archived_sha_verified": 81,
+  "busy_cwd_in_worktree": false,
+  "thread_binding": "root main, attached=false confirmed by t3_worktree_status",
+  "remote_session_branch": "absent",
+  "build_intermediates": "installed command RC0 removed0.29GiB logical, not physical claim",
+  "retained": [
+    "production DB and sidecars",
+    "private recipe DBs",
+    "rollback-t000155-bridget",
+    "final build binary",
+    "Cargo cache used for specs156-160",
+    "audit archives and source/test receipts"
+  ],
+  "remaining_worktrees": "/Users/moi/Nextcloud/10.Scripts/64.bridget 59da3968 [main]\n"
+}

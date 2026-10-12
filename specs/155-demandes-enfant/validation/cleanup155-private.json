@@ -1,0 +1,123 @@
+{
+  "utc": "2026-10-12T03:19:06.918571+00:00",
+  "scope": "obsolete private recipe processes only",
+  "signals": [
+    {
+      "pid": 95068,
+      "birth": "Mon Oct 12 03:32:59 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        95068,
+        95075,
+        95131
+      ]
+    },
+    {
+      "pid": 97169,
+      "birth": "Mon Oct 12 03:34:08 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        97169,
+        97175
+      ]
+    },
+    {
+      "pid": 9955,
+      "birth": "Mon Oct 12 03:40:03 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        9955,
+        9959
+      ]
+    },
+    {
+      "pid": 24596,
+      "birth": "Mon Oct 12 03:47:05 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        24596,
+        24602
+      ]
+    },
+    {
+      "pid": 98080,
+      "birth": "Mon Oct 12 03:34:33 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        98080
+      ]
+    },
+    {
+      "pid": 93884,
+      "birth": "Mon Oct 12 03:32:32 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        93884
+      ]
+    },
+    {
+      "pid": 24227,
+      "birth": "Mon Oct 12 03:46:58 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        24227
+      ]
+    },
+    {
+      "pid": 43750,
+      "birth": "Mon Oct 12 05:06:17 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        43750
+      ]
+    },
+    {
+      "pid": 3299,
+      "birth": "Mon Oct 12 03:37:02 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        3299
+      ]
+    },
+    {
+      "pid": 11171,
+      "birth": "Mon Oct 12 03:40:38 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        11171
+      ]
+    },
+    {
+      "pid": 2648,
+      "birth": "Mon Oct 12 04:10:08 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        2648
+      ]
+    },
+    {
+      "pid": 46586,
+      "birth": "Mon Oct 12 05:07:42 2026",
+      "signal": "SIGTERM",
+      "observed_gone_after_3s": [
+        46586
+      ]
+    }
+  ],
+  "guards": "each PID/exe/birth read before one signal, own private fixture, never Firefox/T3/production",
+  "private_databases": "retained intact",
+  "final_private_daemon": 2648,
+  "production_unchanged": [
+    81535,
+    81746,
+    80752,
+    60116,
+    60228
+  ],
+  "private_auth_copies_removed": [
+    "/private/tmp/b155.2s2_gkz3/codex/auth.json",
+    "/private/tmp/b155.2s2_gkz3/codex-wsw/auth.json",
+    "/private/tmp/b155.2s2_gkz3/codex-human/auth.json"
+  ],
+  "private_all_processes_stopped_at": "2026-10-12T03:20:10.618423+00:00"
+}

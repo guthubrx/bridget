@@ -5,7 +5,7 @@
 
 Spec: 155-demandes-enfant
 Titre: Remontée des demandes de l'enfant au parent ou à l'humain
-Statut: In Progress (42/42 acquises ; T040 validée ; correctif cwd prouvé par 71 PASS ciblés ; vérification du delta après P3 attendue)
+Statut: Livré le 2026-10-12 (42/42 ; trois Converge et contrôle cwd ciblé ; installé/actif ; WT/branche retirés)
 Priorité: P1
 Tâches: 42/42 (cochées par root ; T040 validée avec accord explicite utilisateur)
 Tests: 71 PASS ciblés post-cwd, RC0, 214 sources stables ; quatre régressions canal087/STDIO antérieures distinctes ; recette réelle quatre cas PASS avant cwd ; suite unique antérieure 2259 PASS / 15 FAIL / 72 ignored, aucun GREEN global
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-155-demandes-enfant` (worktree dédié `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/155-demandes-enfant`, exécution séquentielle, sans commit automatique)
 **Created**: 2026-10-11
-**Status**: In Progress
+**Status**: Livré
 **Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-150, SPEC-151
 
@@ -408,7 +408,7 @@ selon `permissions`, élicitations refusées, mêmes octets canoniques, mêmes t
    Réponse attendue : `Codex seul` ou `inclure Claude` (ajoute une sonde et environ 6
    tâches).
 
-Checkpoint courant après T041 : In Progress, 41/42, T039 et T041 documentaire
+Checkpoint historique après T041 : In Progress, 41/42, T039 et T041 documentaire
 acquises ; T040 seule ouverte. Les checkpoints historiques 40/41 restent
 historiques et sont remplacés par cet état courant. T041 corrige uniquement
 le paragraphe Journal du contrat, sans changement de code ou de tests.
@@ -438,7 +438,7 @@ Aucune seconde suite complète n’a été lancée.
 
 ## Checkpoint R2 — correctif cwd prouvé par les ciblés
 
-État courant : In Progress, 42/42 tâches acquises, T040 validée. L’objection
+État historique : In Progress, 42/42 tâches acquises, T040 validée. L’objection
 MEDIUM cwd de la revue R2 est retenue ; le correctif minimal a maintenant 71 PASS ciblés, RC0, sources 214 stables.
 Le reçu post-cwd ci-dessous remplace l’attente des tests ; aucun hash futur
 de source ou résultat global n’est inventé. Converge P3 est un
@@ -479,3 +479,12 @@ canonique 153b70 reste validée sur ses provenances antérieures à cwd, avec Hu
 après H1/H2/H3. Aucun nouveau runtime de modèle, second délai réel de 600 s ou second
 FULL n’est lancé ou déduit. Statut In Progress, 42/42 et T040 acquise ; audit
 final, relecture du delta, revue finale et livraison restent distincts.
+
+## Statut de livraison155
+
+Livré et activé le 2026-10-12 : source 59da3968c7d14dbd7acd1370875dd9d135ba7dcb,
+42/42 ; trois Converge et contrôle cwd ciblé acquis. Audit final 2 LOW,
+couverture 27,46 %, validateur 0/0. Build/install/activation et nettoyage attestés.
+La clôture documentaire conserve le commit source du binaire ; les métadonnées ne changent pas ce build.
+Les checkpoints In Progress et les chemins WT ci-dessus restent historiques.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/155-demandes-enfant/validation/livraison155.md.
