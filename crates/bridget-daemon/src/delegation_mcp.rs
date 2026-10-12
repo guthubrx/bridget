@@ -133,18 +133,26 @@ pub(crate) fn execute(
             fallback: match args.get("fallback") {
                 None => Vec::new(),
                 Some(Value::Array(values)) if (1..=3).contains(&values.len()) => {
-                    let candidates: Vec<FallbackTarget> = serde_json::from_value(Value::Array(values.clone()))
-                        .map_err(|_| ClientError::InvalidParams("fallback invalide".into()))?;
+                    let candidates: Vec<FallbackTarget> =
+                        serde_json::from_value(Value::Array(values.clone()))
+                            .map_err(|_| ClientError::InvalidParams("fallback invalide".into()))?;
                     let requested_type = string("agent_type")?;
                     let requested_model = string("model")?;
                     let requested_effort = args.get("effort").and_then(Value::as_str);
                     for (index, candidate) in candidates.iter().enumerate() {
-                        if candidate.agent_type.trim().is_empty() || candidate.model.trim().is_empty()
-                            || candidate.agent_type.chars().any(char::is_control) || candidate.model.chars().any(char::is_control)
-                            || candidate.effort.as_ref().is_some_and(|value| value.trim().is_empty() || value.chars().any(char::is_control))
-                            || values[index].get("effort").is_some_and(|value| !value.is_string())
+                        if candidate.agent_type.trim().is_empty()
+                            || candidate.model.trim().is_empty()
+                            || candidate.agent_type.chars().any(char::is_control)
+                            || candidate.model.chars().any(char::is_control)
+                            || candidate.effort.as_ref().is_some_and(|value| {
+                                value.trim().is_empty() || value.chars().any(char::is_control)
+                            })
+                            || values[index]
+                                .get("effort")
+                                .is_some_and(|value| !value.is_string())
                             || candidates[..index].contains(candidate)
-                            || (candidate.agent_type == requested_type && candidate.model == requested_model
+                            || (candidate.agent_type == requested_type
+                                && candidate.model == requested_model
                                 && candidate.effort.as_deref() == requested_effort)
                         {
                             return Err(ClientError::InvalidParams("fallback invalide".into()));
@@ -286,13 +294,19 @@ pub(crate) fn execute(
             Err(ClientError::Technical {
                 code: "native_delegation_refused",
                 message: match result.get("detail").filter(|value| !value.is_null()) {
-                    Some(detail) => format!("{} {}", result["code"].as_str().unwrap_or("refused"), detail),
+                    Some(detail) => format!(
+                        "{} {}",
+                        result["code"].as_str().unwrap_or("refused"),
+                        detail
+                    ),
                     None => result["code"].as_str().unwrap_or("refused").to_string(),
                 },
             })
         }
         DaemonToWrapper::NativeDelegationResult { mut result } => {
             if name == "bridget_capabilities" {
+                // Conserve le booléen held attesté par le daemon et les métadonnées par type.
+                result["queue"]["actions"] = json!(["list", "cancel", "reorder", "promote"]);
                 result["guidance"] = json!({
                     "intents":["queue","steer","interrupt"],
                     "interrupt_cooldown_secs":30,"interrupt_cap_per_10min":3,
@@ -311,23 +325,36 @@ mod tests {
 
     #[test]
     fn native157_fallback_mcp_schema_ferme() {
-        let delegate = crate::mcp::tools().into_iter()
-            .find(|tool| tool["name"] == "bridget_delegate").unwrap();
+        let delegate = crate::mcp::tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_delegate")
+            .unwrap();
         let fallback = &delegate["inputSchema"]["properties"]["fallback"];
         assert_eq!(fallback["type"], "array");
         assert_eq!(fallback["minItems"], 1);
         assert_eq!(fallback["maxItems"], 3);
         assert_eq!(fallback["items"]["type"], "object");
         assert_eq!(fallback["items"]["additionalProperties"], false);
-        assert_eq!(fallback["items"]["required"], json!(["agent_type", "model"]));
+        assert_eq!(
+            fallback["items"]["required"],
+            json!(["agent_type", "model"])
+        );
         for field in ["agent_type", "model"] {
             assert_eq!(fallback["items"]["properties"][field]["type"], "string");
             assert_eq!(fallback["items"]["properties"][field]["minLength"], 1);
         }
         assert_eq!(fallback["items"]["properties"]["effort"]["type"], "string");
-        assert_eq!(fallback["items"]["properties"].as_object().unwrap().len(), 3);
-        assert!(!delegate["inputSchema"]["required"].as_array().unwrap()
-            .iter().any(|key| key == "fallback"));
+        assert_eq!(
+            fallback["items"]["properties"].as_object().unwrap().len(),
+            3
+        );
+        assert!(
+            !delegate["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|key| key == "fallback")
+        );
     }
 
     #[test]
@@ -336,7 +363,9 @@ mod tests {
         use std::os::fd::AsRawFd;
         use std::os::unix::net::UnixListener;
         let identity = ResolvedIdentity {
-            name: "owner".into(), instance_id: "instance".into(), delegated_origin: None,
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
         };
         let base = json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp"});
         let socket = crate::mcp_identity::mock_socket("fallback157-invalid");
@@ -344,60 +373,102 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
         for fallback in [
-            json!(null), json!(false), json!("b"), json!({"agent_type":"b","model":"n"}),
-            json!([]), json!(vec![json!({"agent_type":"b","model":"n"}); 4]),
-            json!([null]), json!([{}]),
-            json!([{"agent_type":"b"}]), json!([{"model":"n"}]),
-            json!([{"agent_type":"","model":"n"}]), json!([{"agent_type":"b","model":""}]),
-            json!([{"agent_type":2,"model":"n"}]), json!([{"agent_type":"b","model":2}]),
+            json!(null),
+            json!(false),
+            json!("b"),
+            json!({"agent_type":"b","model":"n"}),
+            json!([]),
+            json!(vec![json!({"agent_type":"b","model":"n"}); 4]),
+            json!([null]),
+            json!([{}]),
+            json!([{"agent_type":"b"}]),
+            json!([{"model":"n"}]),
+            json!([{"agent_type":"","model":"n"}]),
+            json!([{"agent_type":"b","model":""}]),
+            json!([{"agent_type":2,"model":"n"}]),
+            json!([{"agent_type":"b","model":2}]),
             json!([{"agent_type":"b","model":"n","effort":null}]),
             json!([{"agent_type":"b","model":"n","effort":2}]),
             json!([{"agent_type":"b","model":"n","permissions":"allow"}]),
             json!([{"agent_type":"b","model":"n"},{"agent_type":"b","model":"n"}]),
             json!([{"agent_type":"a","model":"m"}]),
         ] {
-            let mut args = base.clone(); args["fallback"] = fallback;
+            let mut args = base.clone();
+            args["fallback"] = fallback;
             let result = execute(&identity, "bridget_delegate", &args, &socket);
-            assert!(matches!(result, Err(ClientError::InvalidParams(_))), "{args}: {result:?}");
-            assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
-                "une forme invalide a ouvert la socket");
+            assert!(
+                matches!(result, Err(ClientError::InvalidParams(_))),
+                "{args}: {result:?}"
+            );
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "une forme invalide a ouvert la socket"
+            );
         }
         drop(listener);
         let _ = std::fs::remove_dir_all(socket.parent().unwrap());
 
         // Réemploi du faux daemon MCP : absence byte-identique et liste bornée
         // transmise telle quelle, sans appeler de fournisseur.
-        for fallback in [None, Some(json!([{"agent_type":"b","model":"n"}])),
+        for fallback in [
+            None,
+            Some(json!([{"agent_type":"b","model":"n"}])),
             Some(json!([{"agent_type":"b","model":"n"},
                 {"agent_type":"c","model":"p","effort":"high"},
-                {"agent_type":"d","model":"q"}]))] {
+                {"agent_type":"d","model":"q"}])),
+        ] {
             let socket = crate::mcp_identity::mock_socket("fallback157-valid");
             let listener = UnixListener::bind(&socket).unwrap();
             crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
             let backend = std::thread::spawn(move || {
-                let mut pollfd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-                if unsafe { libc::poll(&mut pollfd, 1, 3000) } <= 0 { return None; }
+                let mut pollfd = libc::pollfd {
+                    fd: listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut pollfd, 1, 3000) } <= 0 {
+                    return None;
+                }
                 let (mut stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new(); reader.read_line(&mut line).unwrap();
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
                 let registration: Value = serde_json::from_str(&line).unwrap();
                 assert_eq!(registration["type"], "RegisterAuxiliary");
-                writeln!(stream, "{}", json!({"type":"Registered","agent_id":"owner","credential":null})).unwrap();
-                line.clear(); reader.read_line(&mut line).unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"type":"Registered","agent_id":"owner","credential":null})
+                )
+                .unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
                 let frame: WrapperToDaemon = serde_json::from_str(&line).unwrap();
                 let WrapperToDaemon::NativeDelegation { request } = frame else {
                     panic!("trame native attendue : {frame:?}")
                 };
-                writeln!(stream, "{}", json!({"type":"NativeDelegationResult","result":{"status":"accepted"}})).unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"type":"NativeDelegationResult","result":{"status":"accepted"}})
+                )
+                .unwrap();
                 Some(request)
             });
             let mut args = base.clone();
-            if let Some(value) = &fallback { args["fallback"] = value.clone(); }
+            if let Some(value) = &fallback {
+                args["fallback"] = value.clone();
+            }
             let result = execute(&identity, "bridget_delegate", &args, &socket);
             let request = backend.join().unwrap();
             let _ = std::fs::remove_dir_all(socket.parent().unwrap());
-            assert!(result.is_ok(), "une liste valide doit atteindre le daemon : {args}: {result:?}");
+            assert!(
+                result.is_ok(),
+                "une liste valide doit atteindre le daemon : {args}: {result:?}"
+            );
             let request = request.expect("requête transmise");
             if let Some(value) = fallback {
                 assert_eq!(serde_json::to_value(request).unwrap()["fallback"], value);
@@ -625,52 +696,89 @@ mod tests {
         }
     }
 
-
     #[test]
     fn native157_quota_detail_visible_cote_mcp() {
         use std::io::{BufRead, BufReader, Write};
         use std::os::fd::AsRawFd;
         use std::os::unix::net::UnixListener;
         for (returned, expected_code, expected_detail) in [
-            (json!({"status":"refused","code":"provider_quota_exhausted","detail":{"resets_at":1_900_000_000}}), "provider_quota_exhausted", Some(json!({"resets_at":1_900_000_000}))),
-            (json!({"status":"refused","code":"permission_source_unavailable"}), "permission_source_unavailable", None),
+            (
+                json!({"status":"refused","code":"provider_quota_exhausted","detail":{"resets_at":1_900_000_000}}),
+                "provider_quota_exhausted",
+                Some(json!({"resets_at":1_900_000_000})),
+            ),
+            (
+                json!({"status":"refused","code":"permission_source_unavailable"}),
+                "permission_source_unavailable",
+                None,
+            ),
         ] {
             let socket = crate::mcp_identity::mock_socket("quota157");
             let listener = UnixListener::bind(&socket).unwrap();
             crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
             let backend = std::thread::spawn(move || {
-                let mut pollfd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-                assert!(unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0, "connexion MCP attendue");
+                let mut pollfd = libc::pollfd {
+                    fd: listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                assert!(
+                    unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0,
+                    "connexion MCP attendue"
+                );
                 let (mut stream, _) = listener.accept().unwrap();
                 stream.set_nonblocking(false).unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let registration: Value = serde_json::from_str(&line).unwrap();
                 assert_eq!(registration["type"], "RegisterAuxiliary");
                 assert_eq!(registration["agent_id"], "owner");
-                writeln!(stream, "{}", json!({"type":"Registered","agent_id":"owner","credential":null})).unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"type":"Registered","agent_id":"owner","credential":null})
+                )
+                .unwrap();
                 line.clear();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
                 assert_eq!(request["type"], "NativeDelegation");
-                writeln!(stream, "{}", json!({"type":"NativeDelegationResult","result":returned})).unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"type":"NativeDelegationResult","result":returned})
+                )
+                .unwrap();
                 request
             });
-            let identity = ResolvedIdentity { name: "owner".into(), instance_id: "instance".into(), delegated_origin: None };
+            let identity = ResolvedIdentity {
+                name: "owner".into(),
+                instance_id: "instance".into(),
+                delegated_origin: None,
+            };
             let args = json!({"request_id":"quota157","agent_type":"codex","model":"fixture","task":"fixture","cwd":socket.parent().unwrap()});
             let result = execute(&identity, "bridget_delegate", &args, &socket);
             let request = backend.join().unwrap();
             assert_eq!(request["request"]["agent_type"], "codex");
-            let Err(ClientError::Technical { code, message }) = result else { panic!("refus technique MCP attendu : {result:?}") };
+            let Err(ClientError::Technical { code, message }) = result else {
+                panic!("refus technique MCP attendu : {result:?}")
+            };
             assert_eq!(code, "native_delegation_refused");
             if let Some(detail) = expected_detail {
-                let (actual_code, raw_detail) = message.split_once(' ').expect("code suivi du JSON de detail");
+                let (actual_code, raw_detail) = message
+                    .split_once(' ')
+                    .expect("code suivi du JSON de detail");
                 assert_eq!(actual_code, expected_code);
                 assert_eq!(serde_json::from_str::<Value>(raw_detail).unwrap(), detail);
             } else {
-                assert_eq!(message, expected_code, "les autres refus gardent le message historique");
+                assert_eq!(
+                    message, expected_code,
+                    "les autres refus gardent le message historique"
+                );
             }
             let _ = std::fs::remove_dir_all(socket.parent().unwrap());
         }

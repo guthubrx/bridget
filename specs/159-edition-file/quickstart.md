@@ -1,9 +1,11 @@
 # Vérification rapide - Session159
 
-Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159A-edition-file`.
+Les commandes reproductibles partent de la racine canonique après intégration :
+`/Users/moi/Nextcloud/10.Scripts/64.bridget`.
+Le worktree159B est le lieu historique d’implémentation après son nettoyage ;
+les chemins présents dans les reçus conservent leur provenance.
 
-**Base prévue pour159A** : livraison158B préalable, commit e52a96240b6168bf4466712e1bda8852b4ecb43f. Le candidat daemon2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5 ne prouve pas une livraison. Aucun GO159A dans cette préparation.
+**État technique B** : validation close après gates ROOT, A14/B14. FULL unique RC101 et ciblés PASS conservés séparément, sans GREEN global. Activation et nettoyage B sont attestés seulement par le futur reçu de livraison ROOT ; aucune activation déduite ici.
 
 ## Environnement de test (obligatoire)
 
@@ -46,14 +48,34 @@ Lot B (159b) :
 
 Non-régression : filtres `spec_087`, `native148`, `native149`, `native150`, `guidance156`, `t3code`, `mcp::`.
 
-## Recette manuelle (après relance décidée par l'utilisateur)
+## Recette manuelle B (après validation et activation par ROOT)
 
-Ne pas relancer les services dans cette session. Après relance :
+La série autorisée permet build signé, installation et activation Bridget après vérification de zéro mission native non terminale. T3 reste protégé, sans relance. Aucun succès de recette B n’est annoncé ici. Après activation :
 
 ```sh
 bridget queue --target <enfant>
 bridget queue cancel --target <enfant> --message <id> --request <clé>
+bridget queue reorder --target <enfant> --message <id> --request <clé> --before <autre_id>
+# Omettre --before signifie fin ; MCP exige before_message_id: null.
+bridget queue promote --target <enfant> --message <id> --request <clé>
 ```
+
+Rejouer conserve exactement la clé et les paramètres, sous droits frais.
+Un auteur non vérifiable après purge de l’envoi ne récupère pas ses droits
+par receipt.actor : intent_not_permitted avant le reçu. La CLI humaine sans
+contexte agent reste Attach autorisée ; un contexte agent invalide ne donne
+aucun repli humain.
+
+SC010 étend la recette ouverte existante : 24 appels privés, quatre acteurs,
+trois mutations et deux façades. Aucun T3 réel n’est impliqué. Les délais
+d’attente tiennent compte de la réservation FR024 (ACK + 30 s) ; un timeout
+de fixture trop court n’est pas une preuve de libération défectueuse. Les
+24 assertions des façades ont réussi dans la recette ouverte privée.
+La recette ouverte a réussi au run final ; la recette fermée avait réussi
+dans le lot précédent. Deux recettes distinctes PASS cumulées, pas un run
+unique 2/2. Le FULL unique et ses replays sont conservés séparément dans le reçu.
+La livraison reste distincte des gates techniques. Reçus :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/tests-159.md
 
 Pour une ouverture ultérieure du réglage, obtenir d'abord les mesuresSC004/SC005
 comparées à T001 et la décision associée. L'ouverture éventuelle pour `codex`
@@ -68,4 +90,4 @@ T011 doit préserver et empreinter le vrai binaire158B installé avant reconstru
 La sauvegarde `.backup` précède toute ouverture migrante. La répétition emploie
 uniquement des copies privées : migrationv7, refus de l'ancien binaire sur v7,
 restauration pré-v7 dans un autre espace privé, ouverture avec le binaire158B
-sauvegardé et comparaison des données. Ce gate reste non levé à ce checkpoint.
+sauvegardé et comparaison des données. Ce checkpoint initial A est historique : T011 a ensuite réussi en isolation. Lire le reçu A canonique avant toute restauration. B reste v7 et crée queue_edits dans init_schema, sans nouvelle migration ni nouveau PASS de restauration.

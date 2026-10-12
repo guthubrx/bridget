@@ -528,7 +528,31 @@ Migration v7, mesure SC004, procédure et preuve T011 sont détaillées dans :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md
 Décision et limites :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md
-Cancel/reorder/promote de file restent le lot B ; aucune installation déduite.
+Les actions d’édition sont décrites ci-dessous ; les reçus de session attestent la livraison.
+
+
+### Édition de file — lot 159B
+
+Contrat d’édition de la file retenue.
+`bridget_queue` garde `list` par défaut.
+Écritures : `action: "cancel"|"reorder"|"promote"`, `target`, `message_id`,
+`request_id` non vide. Reorder exige `before_message_id` (UUID ou `null` = fin).
+Cancel : auteur, parent ou humain Attach attesté ; aucun interrupt. Reorder :
+parent ou humain Attach attesté. Promote : Steer156, tour actif, held sans
+réservation, demande valide, porteur `queue_fallback` ; pause agent refusée.
+Preuve enfant refusée avant connexion ; aucun acteur fourni dans les arguments.
+Mutation négociée par `QueueEditV1`. Reçu sept jours, sous droits frais :
+mêmes paramètres = même résultat ; autres paramètres = `envelope_mismatch`.
+Nouvelle clé après refus. Auteur cancel : si l’envoi a été purgé ou ses octets
+sont absents, auteur non vérifiable = `intent_not_permitted` avant le reçu ;
+`receipt.actor` n’accorde aucun droit persistant.
+`applied` prouve le commit. Promote porte `effect: "unconfirmed"` : repli FIFO,
+rejet si pleine et doublon Codex possible après erreur ambiguë. Aucun avis
+universel neuf pour `reply=false`, aucun rejeu d'effet. Le défaut held reste fermé.
+Référence, exemples CLI et limites complètes :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md
+Décision :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md
 
 Tous les membres d'un fil peuvent lire un nouveau dépôt, même avec `notify:[]`.
 Une création, un ajout de membres ou un dépôt mixte exige donc le motif pour
@@ -617,7 +641,7 @@ validation de mission ni la réponse exigée par un `reply`.
 | Partager un extrait du journal | MCP `bridget_journal`, source UUID, `to` et `reply` facultatifs ; max200 entrées/64Kio, lacunes explicites |
 | Être prévenu d'un fait ou d'une collision | MCP `bridget_events`, actions types/sub/list/unsub ; fin de tour ≠ succès, aucun verrou |
 | Renommer, DND, domaine ou runtime propres | MCP `bridget_rename/dnd/domain/runtime`; CLI seulement selon le repli explicite ci-dessus |
-| Lire les remises visibles d’une cible | MCP `bridget_queue` avec `target` ; capacité QueueListV1, aucune édition |
+| Lire les remises visibles d’une cible | MCP `bridget_queue` list avec `target` ; capacité QueueListV1 |
 | Santé daemon et contrôle en lecture | MCP `bridget_status/control_status`; les inconnus restent inconnus |
 | Lire/publier un artefact | MCP `bridget_read_artifact/publish_artifact`; contenu inerte, références exactes |
 | Lancer/arrêter/relancer un équipier | CLI explicite ; aucun outil MCP de supervision annoncé |

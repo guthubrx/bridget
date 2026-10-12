@@ -1,0 +1,2096 @@
+{
+  "kind": "159B_T027_complete_diff_self_review",
+  "base_head": "b0a165edfc6fc5476b2330193c7822e0faecef33",
+  "capture_at_utc": "2026-10-12T19:45:08.606353+00:00",
+  "completed_read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+  "diff_sha256": "4eab752d8d0e553fd7ebe297f32ebfb6003d85a247680a73b4a2982d3112334e",
+  "counts": {
+    "files": 60,
+    "rust_files": 44,
+    "tracked": 54,
+    "new": 6,
+    "hunks_current": 197,
+    "hunks_read": 197,
+    "hunks_unread": 0
+  },
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/attach.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/attach.rs",
+      "sha256": "dd821d7992a10145cfbf819072c01daa469eebe64ad9cef31e5f504ba14d42ea",
+      "line_count": 9298,
+      "ranges": [
+        [
+          4271,
+          4277
+        ]
+      ],
+      "hunk_ids": [
+        "H001"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/cli.rs",
+      "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+      "line_count": 11062,
+      "ranges": [
+        [
+          694,
+          700
+        ],
+        [
+          4652,
+          4658
+        ],
+        [
+          4719,
+          4824
+        ],
+        [
+          9121,
+          9127
+        ],
+        [
+          10872,
+          10967
+        ]
+      ],
+      "hunk_ids": [
+        "H002",
+        "H003",
+        "H004",
+        "H005",
+        "H006"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "line_count": 48737,
+      "ranges": [
+        [
+          858,
+          864
+        ],
+        [
+          8445,
+          8451
+        ],
+        [
+          9471,
+          9479
+        ],
+        [
+          10909,
+          10918
+        ],
+        [
+          10952,
+          10962
+        ],
+        [
+          11066,
+          11072
+        ],
+        [
+          11115,
+          11407
+        ],
+        [
+          18064,
+          18080
+        ],
+        [
+          18280,
+          18286
+        ],
+        [
+          18374,
+          18397
+        ],
+        [
+          18640,
+          18646
+        ],
+        [
+          18671,
+          18757
+        ],
+        [
+          20238,
+          20244
+        ],
+        [
+          21500,
+          21506
+        ],
+        [
+          21531,
+          21543
+        ],
+        [
+          22749,
+          22755
+        ],
+        [
+          24422,
+          25484
+        ],
+        [
+          26199,
+          26205
+        ],
+        [
+          27115,
+          27121
+        ],
+        [
+          30395,
+          30401
+        ],
+        [
+          30419,
+          30425
+        ],
+        [
+          31194,
+          31200
+        ],
+        [
+          31759,
+          31765
+        ],
+        [
+          40105,
+          40111
+        ],
+        [
+          40290,
+          40296
+        ],
+        [
+          40773,
+          40779
+        ],
+        [
+          42724,
+          42730
+        ],
+        [
+          44653,
+          44659
+        ],
+        [
+          44764,
+          44770
+        ],
+        [
+          44814,
+          44820
+        ],
+        [
+          47352,
+          47358
+        ],
+        [
+          48027,
+          48033
+        ]
+      ],
+      "hunk_ids": [
+        "H007",
+        "H008",
+        "H009",
+        "H010",
+        "H011",
+        "H012",
+        "H013",
+        "H014",
+        "H015",
+        "H016",
+        "H017",
+        "H018",
+        "H019",
+        "H020",
+        "H021",
+        "H022",
+        "H023",
+        "H024",
+        "H025",
+        "H026",
+        "H027",
+        "H028",
+        "H029",
+        "H030",
+        "H031",
+        "H032",
+        "H033",
+        "H034",
+        "H035",
+        "H036",
+        "H037",
+        "H038"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "69d6dc4bd0bae2ad81f4e71bc481e73956eb162fa7a0e6014e092462c00f3482",
+      "line_count": 13562,
+      "ranges": [
+        [
+          1975,
+          1986
+        ],
+        [
+          2056,
+          2065
+        ],
+        [
+          2067,
+          2073
+        ],
+        [
+          11255,
+          11261
+        ],
+        [
+          11264,
+          11277
+        ]
+      ],
+      "hunk_ids": [
+        "H039",
+        "H040",
+        "H041",
+        "H042",
+        "H043"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs",
+      "sha256": "67a04b5283bcf67ba91a393e3e6171114de4c685845d93ffe0b975611c0d554c",
+      "line_count": 6167,
+      "ranges": [
+        [
+          753,
+          759
+        ]
+      ],
+      "hunk_ids": [
+        "H044"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "3d3e0c659620109e8ac9fdbe7926aed7b0505f0d7c6a6048cbce202ab997d055",
+      "line_count": 786,
+      "ranges": [
+        [
+          133,
+          158
+        ],
+        [
+          294,
+          312
+        ],
+        [
+          325,
+          360
+        ],
+        [
+          363,
+          371
+        ],
+        [
+          373,
+          474
+        ],
+        [
+          696,
+          784
+        ]
+      ],
+      "hunk_ids": [
+        "H045",
+        "H046",
+        "H047",
+        "H048",
+        "H049",
+        "H050"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/guidance.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+      "line_count": 687,
+      "ranges": [
+        [
+          7,
+          15
+        ],
+        [
+          40,
+          49
+        ],
+        [
+          59,
+          92
+        ],
+        [
+          131,
+          150
+        ],
+        [
+          180,
+          207
+        ],
+        [
+          220,
+          229
+        ],
+        [
+          456,
+          687
+        ]
+      ],
+      "hunk_ids": [
+        "H051",
+        "H052",
+        "H053",
+        "H054",
+        "H055",
+        "H056",
+        "H057"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+      "line_count": 1715,
+      "ranges": [
+        [
+          18,
+          24
+        ],
+        [
+          465,
+          478
+        ],
+        [
+          877,
+          903
+        ],
+        [
+          1421,
+          1443
+        ]
+      ],
+      "hunk_ids": [
+        "H058",
+        "H059",
+        "H060",
+        "H061"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+      "line_count": 1948,
+      "ranges": [
+        [
+          10,
+          371
+        ],
+        [
+          1444,
+          1474
+        ],
+        [
+          1533,
+          1542
+        ]
+      ],
+      "hunk_ids": [
+        "H062",
+        "H063",
+        "H064"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/tests.rs",
+      "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+      "line_count": 5762,
+      "ranges": [
+        [
+          3579,
+          5762
+        ]
+      ],
+      "hunk_ids": [
+        "H065"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+      "line_count": 8850,
+      "ranges": [
+        [
+          634,
+          705
+        ],
+        [
+          765,
+          775
+        ],
+        [
+          1297,
+          1340
+        ],
+        [
+          1351,
+          1363
+        ],
+        [
+          1365,
+          1373
+        ],
+        [
+          1378,
+          1384
+        ],
+        [
+          1387,
+          1394
+        ],
+        [
+          1396,
+          1430
+        ],
+        [
+          2673,
+          2690
+        ],
+        [
+          2910,
+          3024
+        ],
+        [
+          3075,
+          3095
+        ],
+        [
+          3223,
+          3229
+        ],
+        [
+          3238,
+          3251
+        ],
+        [
+          6076,
+          6087
+        ],
+        [
+          8595,
+          8601
+        ]
+      ],
+      "hunk_ids": [
+        "H066",
+        "H067",
+        "H068",
+        "H069",
+        "H070",
+        "H071",
+        "H072",
+        "H073",
+        "H074",
+        "H075",
+        "H076",
+        "H077",
+        "H078",
+        "H079",
+        "H080"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_identity.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp_identity.rs",
+      "sha256": "9c6fb69397a70f3a451509df002e4954499897f76ff7286cb8bc432115f51133",
+      "line_count": 1566,
+      "ranges": [
+        [
+          305,
+          315
+        ],
+        [
+          357,
+          363
+        ]
+      ],
+      "hunk_ids": [
+        "H081",
+        "H082"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+      "line_count": 352,
+      "ranges": [
+        [
+          88,
+          95
+        ],
+        [
+          212,
+          220
+        ],
+        [
+          267,
+          289
+        ]
+      ],
+      "hunk_ids": [
+        "H083",
+        "H084",
+        "H085"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/reprise.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/reprise.rs",
+      "sha256": "a0f132c1890ce34ae7b3f9f337096ee99b5529e09b8f35e0bf0bcc9420eda73a",
+      "line_count": 1320,
+      "ranges": [
+        [
+          266,
+          272
+        ]
+      ],
+      "hunk_ids": [
+        "H086"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/src/wrapper.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "bbf931ee21149e5b69500c07b9e3043e6725f7c48955af39751c9fb23b62ddd0",
+      "line_count": 11946,
+      "ranges": [
+        [
+          1858,
+          1864
+        ],
+        [
+          11310,
+          11369
+        ]
+      ],
+      "hunk_ids": [
+        "H087",
+        "H088"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/tests/attach_journal_attestation_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/attach_journal_attestation_test.rs",
+      "sha256": "7287fcc7b5348e3d5f869af4c3b85c4e828677e5662569d1211e29a3c6750325",
+      "line_count": 385,
+      "ranges": [
+        [
+          284,
+          290
+        ],
+        [
+          357,
+          363
+        ]
+      ],
+      "hunk_ids": [
+        "H089",
+        "H090"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 2,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "sha256": "dab0be5761f9cf55368896aeb2ab78c19a752c53129f1d3754f0fdecaddddb7a",
+      "line_count": 446,
+      "ranges": [
+        [
+          109,
+          115
+        ]
+      ],
+      "hunk_ids": [
+        "H091"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/channel_observation_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/channel_observation_test.rs",
+      "sha256": "56d81885e63fc94d2eb2a6a7354556f60ee85404ee3ddc685b7e134adc29ad6c",
+      "line_count": 318,
+      "ranges": [
+        [
+          215,
+          221
+        ]
+      ],
+      "hunk_ids": [
+        "H092"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/coordination_events_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/coordination_events_test.rs",
+      "sha256": "579d4742874094d39a002804e4ea3750c102795087dddafca3dd5f08581af7ac",
+      "line_count": 812,
+      "ranges": [
+        [
+          237,
+          243
+        ]
+      ],
+      "hunk_ids": [
+        "H093"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_content_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_content_test.rs",
+      "sha256": "22c629f0248d35a9f97a50984f8badd02372ad7428810cb11372664c2b24148f",
+      "line_count": 751,
+      "ranges": [
+        [
+          444,
+          450
+        ]
+      ],
+      "hunk_ids": [
+        "H094"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "sha256": "12431c0ee19b1bda1cd73438df900ee97a011af8a99e616d7c9e08f3f7a8c77f",
+      "line_count": 452,
+      "ranges": [
+        [
+          370,
+          376
+        ]
+      ],
+      "hunk_ids": [
+        "H095"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_host_session_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_host_session_test.rs",
+      "sha256": "7e22df63a5c68cbeed293a8a6255804fff6023e725ff7703e4346b7e2b0ed9bf",
+      "line_count": 422,
+      "ranges": [
+        [
+          295,
+          301
+        ]
+      ],
+      "hunk_ids": [
+        "H096"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_native_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_native_test.rs",
+      "sha256": "27c0579fb2b069ec33a89ca8d01be920d7f711b8fef1901695fec72e53da3e31",
+      "line_count": 672,
+      "ranges": [
+        [
+          314,
+          320
+        ]
+      ],
+      "hunk_ids": [
+        "H097"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_service_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_service_test.rs",
+      "sha256": "c99f2a265a17a38902717d7f6aed1ee4c4bc53e55d392b85765990e91ffedbbc",
+      "line_count": 1338,
+      "ranges": [
+        [
+          381,
+          387
+        ],
+        [
+          485,
+          491
+        ],
+        [
+          697,
+          703
+        ],
+        [
+          722,
+          728
+        ],
+        [
+          1064,
+          1070
+        ],
+        [
+          1089,
+          1095
+        ]
+      ],
+      "hunk_ids": [
+        "H098",
+        "H099",
+        "H100",
+        "H101",
+        "H102",
+        "H103"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 6,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "sha256": "48fd809d6d963e2c0c013181fe29e8aff958107358b2591a21fef1e13457d315",
+      "line_count": 289,
+      "ranges": [
+        [
+          123,
+          129
+        ]
+      ],
+      "hunk_ids": [
+        "H104"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "49647e27cccbd3912838c7c5c618a70e4320e0f41f1c0b41a6726f0d060d3216",
+      "line_count": 1047,
+      "ranges": [
+        [
+          652,
+          658
+        ]
+      ],
+      "hunk_ids": [
+        "H105"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "26cb48cee36d90ec2fd56ff3620e47eac7c9024257cf29dc0e72b326f35b1b1c",
+      "line_count": 2117,
+      "ranges": [
+        [
+          690,
+          696
+        ]
+      ],
+      "hunk_ids": [
+        "H106"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/integration_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/integration_test.rs",
+      "sha256": "3ed988a67d878524a5cf0fb3e9897b70999518a9d966f8a3372f9158e00c5b4d",
+      "line_count": 387,
+      "ranges": [
+        [
+          86,
+          92
+        ]
+      ],
+      "hunk_ids": [
+        "H107"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "sha256": "6729d943d366e8e0fe4531bc10a51b9448f3193ea1f1ade22e9ab35769cde756",
+      "line_count": 676,
+      "ranges": [
+        [
+          136,
+          142
+        ]
+      ],
+      "hunk_ids": [
+        "H108"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/managed_parity_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/managed_parity_test.rs",
+      "sha256": "e9784ef6d739af08998a3d3598f3cfbcdfb2156527c87f3fe1a6b0942cc834d6",
+      "line_count": 1888,
+      "ranges": [
+        [
+          595,
+          601
+        ]
+      ],
+      "hunk_ids": [
+        "H109"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "84a5cc7f7a4803213b545a91376ada4121e843e867d2d6a2a6383b7e1cc8f21e",
+      "line_count": 2453,
+      "ranges": [
+        [
+          769,
+          775
+        ],
+        [
+          858,
+          864
+        ],
+        [
+          1183,
+          1189
+        ]
+      ],
+      "hunk_ids": [
+        "H110",
+        "H111",
+        "H112"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 3,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "sha256": "64b705640d879557ba4fff6d8d96a0c34ceaba191132e2a0735b578457b0bf8e",
+      "line_count": 784,
+      "ranges": [
+        [
+          541,
+          547
+        ]
+      ],
+      "hunk_ids": [
+        "H113"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "sha256": "fb84af733336befd4e345188389a8afbf41e139917b73a2d17ddbbf5b32f84da",
+      "line_count": 406,
+      "ranges": [
+        [
+          232,
+          238
+        ]
+      ],
+      "hunk_ids": [
+        "H114"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/sc005_attach_budget.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/sc005_attach_budget.rs",
+      "sha256": "bf1314cdd22c36dfc9c4dad11b546fa98163ae302c66c0f73387d8e05926c650",
+      "line_count": 1027,
+      "ranges": [
+        [
+          257,
+          263
+        ]
+      ],
+      "hunk_ids": [
+        "H115"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/spawn_refusal_hosts_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/spawn_refusal_hosts_test.rs",
+      "sha256": "7d3fcce1e785f0aa18095bcc73d3ca9d94cb2d7ab4b0a108326324bf2bb8214f",
+      "line_count": 257,
+      "ranges": [
+        [
+          178,
+          184
+        ]
+      ],
+      "hunk_ids": [
+        "H116"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/spec102_threads_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/spec102_threads_test.rs",
+      "sha256": "4628a3c61b8acd5597db5f2e566c7f70d74e05bfb03906ae611f6028c339afc8",
+      "line_count": 2865,
+      "ranges": [
+        [
+          81,
+          87
+        ]
+      ],
+      "hunk_ids": [
+        "H117"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/spec138_project_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/spec138_project_test.rs",
+      "sha256": "fb6dbd445de35f68d83f756698f423f9870717f4e46f86f46af14ac7a89f4c04",
+      "line_count": 219,
+      "ranges": [
+        [
+          90,
+          96
+        ]
+      ],
+      "hunk_ids": [
+        "H118"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/support/idempotent.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/support/idempotent.rs",
+      "sha256": "6db645dc1b862cafd11125ea438139f838b3b48d57065a73bddf04780df501b8",
+      "line_count": 1090,
+      "ranges": [
+        [
+          765,
+          771
+        ]
+      ],
+      "hunk_ids": [
+        "H119"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-daemon/tests/t3code_098_test.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/t3code_098_test.rs",
+      "sha256": "7ad5a126eff55fbb6f992c9643996463a2436d0c876d404b24790cebd98503d6",
+      "line_count": 556,
+      "ranges": [
+        [
+          229,
+          235
+        ]
+      ],
+      "hunk_ids": [
+        "H120"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": {
+        "register_false_defaults": 1,
+        "mode": "fresh_hunks_and_fresh_source_sha"
+      }
+    },
+    {
+      "file": "crates/bridget-transport/src/acp.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/acp.rs",
+      "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+      "line_count": 4250,
+      "ranges": [
+        [
+          617,
+          628
+        ],
+        [
+          632,
+          647
+        ],
+        [
+          4204,
+          4250
+        ]
+      ],
+      "hunk_ids": [
+        "H121",
+        "H122",
+        "H123"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-transport/src/claude_stream_json.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+      "line_count": 2876,
+      "ranges": [
+        [
+          85,
+          91
+        ],
+        [
+          170,
+          176
+        ],
+        [
+          307,
+          318
+        ],
+        [
+          328,
+          343
+        ],
+        [
+          366,
+          377
+        ],
+        [
+          570,
+          577
+        ],
+        [
+          968,
+          975
+        ],
+        [
+          983,
+          989
+        ],
+        [
+          1000,
+          1063
+        ],
+        [
+          1138,
+          1192
+        ],
+        [
+          1280,
+          1300
+        ],
+        [
+          2847,
+          2876
+        ]
+      ],
+      "hunk_ids": [
+        "H124",
+        "H125",
+        "H126",
+        "H127",
+        "H128",
+        "H129",
+        "H130",
+        "H131",
+        "H132",
+        "H133",
+        "H134",
+        "H135"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-transport/src/codex_app_server.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+      "line_count": 9586,
+      "ranges": [
+        [
+          911,
+          929
+        ],
+        [
+          956,
+          966
+        ],
+        [
+          1896,
+          1910
+        ],
+        [
+          1993,
+          2007
+        ],
+        [
+          9181,
+          9586
+        ]
+      ],
+      "hunk_ids": [
+        "H136",
+        "H137",
+        "H138",
+        "H139",
+        "H140"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+      "line_count": 8887,
+      "ranges": [
+        [
+          209,
+          243
+        ],
+        [
+          3170,
+          3184
+        ],
+        [
+          3558,
+          3566
+        ],
+        [
+          4109,
+          4123
+        ],
+        [
+          5621,
+          5667
+        ],
+        [
+          5699,
+          5705
+        ],
+        [
+          5720,
+          5726
+        ],
+        [
+          5736,
+          5742
+        ]
+      ],
+      "hunk_ids": [
+        "H141",
+        "H142",
+        "H143",
+        "H144",
+        "H145",
+        "H146",
+        "H147",
+        "H148"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "docs/decisions/159-file-retenue-et-edition.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "ee41671b9c7f89f53bf46784f90c8dbf58d4902db188765bddefa801a18b5084",
+      "line_count": 203,
+      "ranges": [
+        [
+          1,
+          10
+        ],
+        [
+          143,
+          203
+        ]
+      ],
+      "hunk_ids": [
+        "H149",
+        "H150"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "docs/reference-communication.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/docs/reference-communication.md",
+      "sha256": "c281c9ddb04f18955d98c301fd1222661164b1cc899ab096f353373e7dd177f2",
+      "line_count": 1197,
+      "ranges": [
+        [
+          248,
+          254
+        ],
+        [
+          265,
+          328
+        ],
+        [
+          367,
+          373
+        ]
+      ],
+      "hunk_ids": [
+        "H151",
+        "H152",
+        "H153"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "skills/bridget/SKILL.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/skills/bridget/SKILL.md",
+      "sha256": "1754e574f782b458ac1849cb4312dc6129dc3c43b7f9afdf6f6ea0a17d728984",
+      "line_count": 1035,
+      "ranges": [
+        [
+          528,
+          558
+        ],
+        [
+          641,
+          647
+        ]
+      ],
+      "hunk_ids": [
+        "H154",
+        "H155"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "skills/bridget/references/commandes.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/skills/bridget/references/commandes.md",
+      "sha256": "385579cbc5f067763251c669e5f99112553697f46b743a05112cf7fa2878722a",
+      "line_count": 1528,
+      "ranges": [
+        [
+          56,
+          62
+        ],
+        [
+          137,
+          143
+        ],
+        [
+          182,
+          188
+        ],
+        [
+          397,
+          403
+        ],
+        [
+          1500,
+          1528
+        ]
+      ],
+      "hunk_ids": [
+        "H156",
+        "H157",
+        "H158",
+        "H159",
+        "H160"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/contracts/edition159.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "b6e1a43cc1bb3b10ae45700f2ce93d6db8a2e83f7e3e087c8de2759877de4113",
+      "line_count": 190,
+      "ranges": [
+        [
+          13,
+          22
+        ],
+        [
+          62,
+          103
+        ],
+        [
+          105,
+          113
+        ],
+        [
+          124,
+          136
+        ],
+        [
+          152,
+          190
+        ]
+      ],
+      "hunk_ids": [
+        "H161",
+        "H162",
+        "H163",
+        "H164",
+        "H165"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/data-model.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "7f00837c8fdb7d538275ff0d437b84b2f49365d2b3ea9ffe36f4e43811158450",
+      "line_count": 188,
+      "ranges": [
+        [
+          75,
+          81
+        ],
+        [
+          97,
+          103
+        ],
+        [
+          115,
+          122
+        ],
+        [
+          136,
+          142
+        ],
+        [
+          149,
+          155
+        ],
+        [
+          170,
+          188
+        ]
+      ],
+      "hunk_ids": [
+        "H166",
+        "H167",
+        "H168",
+        "H169",
+        "H170",
+        "H171"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/plan.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "d4a0ca0268ea77a3ee314bdfa2c9e573b9a9ca4b84e91fdd0727b48d5260b10f",
+      "line_count": 202,
+      "ranges": [
+        [
+          1,
+          9
+        ],
+        [
+          11,
+          17
+        ],
+        [
+          22,
+          28
+        ],
+        [
+          35,
+          41
+        ],
+        [
+          44,
+          57
+        ],
+        [
+          87,
+          94
+        ],
+        [
+          96,
+          102
+        ],
+        [
+          116,
+          128
+        ],
+        [
+          164,
+          170
+        ],
+        [
+          173,
+          202
+        ]
+      ],
+      "hunk_ids": [
+        "H172",
+        "H173",
+        "H174",
+        "H175",
+        "H176",
+        "H177",
+        "H178",
+        "H179",
+        "H180",
+        "H181"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/quickstart.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/quickstart.md",
+      "sha256": "93457ca4cafebc61526c8a947f9a2a6171eadd7f7e0d5d176f3dca466a195f74",
+      "line_count": 90,
+      "ranges": [
+        [
+          1,
+          9
+        ],
+        [
+          46,
+          79
+        ],
+        [
+          87,
+          90
+        ]
+      ],
+      "hunk_ids": [
+        "H182",
+        "H183",
+        "H184"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/research.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/research.md",
+      "sha256": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62",
+      "line_count": 287,
+      "ranges": [
+        [
+          147,
+          154
+        ],
+        [
+          173,
+          179
+        ],
+        [
+          231,
+          237
+        ]
+      ],
+      "hunk_ids": [
+        "H185",
+        "H186",
+        "H187"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/reuse-audit.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "77cf8c1d55cbb5f29cfe910d007620912a9b167b6d9f24c086f6b403393e4f6d",
+      "line_count": 148,
+      "ranges": [
+        [
+          98,
+          148
+        ]
+      ],
+      "hunk_ids": [
+        "H188"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/spec.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "acd4d02679e754f655d93b36b9d7e89b57b5d46ec1c21bd16cb3ceb437f7093f",
+      "line_count": 213,
+      "ranges": [
+        [
+          125,
+          132
+        ],
+        [
+          143,
+          149
+        ],
+        [
+          163,
+          171
+        ]
+      ],
+      "hunk_ids": [
+        "H189",
+        "H190",
+        "H191"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": false,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/edit159_e2e.rs",
+      "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+      "line_count": 1615,
+      "ranges": [
+        [
+          1,
+          1615
+        ]
+      ],
+      "hunk_ids": [
+        "H192"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": true,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/contre-revue159B-plan.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contre-revue159B-plan.md",
+      "sha256": "61fb411c5f6cbc3fc17632532bd0a1bb8ebfa6d41dabe896cf45a186ccc70b77",
+      "line_count": 33,
+      "ranges": [
+        [
+          1,
+          33
+        ]
+      ],
+      "hunk_ids": [
+        "H193"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": true,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/implementation-b-foundations-annexe.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/implementation-b-foundations-annexe.md",
+      "sha256": "4ca3691945fd56140c5469f7e43315c8a1d7a7b97603b2ec57f867a860730ca4",
+      "line_count": 32,
+      "ranges": [
+        [
+          1,
+          32
+        ]
+      ],
+      "hunk_ids": [
+        "H194"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": true,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/validation/preflight159B.json",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/preflight159B.json",
+      "sha256": "55fcd106e92bbee3067970c711a2c98a942713b7cf8bc59581a24a519c11a4f8",
+      "line_count": 343,
+      "ranges": [
+        [
+          1,
+          343
+        ]
+      ],
+      "hunk_ids": [
+        "H195"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": true,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/validation/preflight159B.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/preflight159B.md",
+      "sha256": "7e80fd3ae719b82476d77ed45f013b6ee53a09b8f6e9a14e40a3b93b2b7e01b9",
+      "line_count": 44,
+      "ranges": [
+        [
+          1,
+          44
+        ]
+      ],
+      "hunk_ids": [
+        "H196"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": true,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    },
+    {
+      "file": "specs/159-edition-file/validation/tests-159.md",
+      "absolute_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/tests-159.md",
+      "sha256": "796eec2daa974216b0fc566c7dfd9098d4a8093ff37fb50703ba7d1c687fea27",
+      "line_count": 128,
+      "ranges": [
+        [
+          1,
+          128
+        ]
+      ],
+      "hunk_ids": [
+        "H197"
+      ],
+      "read_mode": "fresh_diff_hunks",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "complete_file_read": true,
+      "whole_legacy_body_read": false,
+      "qualification": null
+    }
+  ],
+  "auxiliary_reads": [
+    {
+      "file": "/Users/moi/.speckit/constitution.md",
+      "sha256": "0258b90dc1402f6d20881d2766b16552f269742d4f91f9b127b1e752b633fb3f",
+      "ranges": [
+        [
+          466,
+          642
+        ]
+      ],
+      "read_mode": "fresh_targeted_lines",
+      "read_at_utc": "2026-10-12T19:52:40.439681+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "44ee6ced8325fa65e3501f24be7d5ff92d27da5fc9065176fc053e07aca462d6",
+      "ranges": [
+        [
+          53,
+          55
+        ],
+        [
+          61,
+          61
+        ],
+        [
+          68,
+          68
+        ],
+        [
+          74,
+          75
+        ],
+        [
+          79,
+          84
+        ],
+        [
+          93,
+          104
+        ],
+        [
+          122,
+          122
+        ]
+      ],
+      "read_mode": "fresh_targeted_lines",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00"
+    }
+  ],
+  "external_reviews": [
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-code-r1-terminal.json",
+      "sha256": "ed4cfff581bf32c70929a516e302c97e80feba6ac194e8622b9c6e5c39c0ba90",
+      "read_mode": "latestTerminalSummary_entire_field",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "scope": "revue externe partielle US4/US5/US6 ; aucun crédit exhaustif de notre diff"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-code-r2-terminal.json",
+      "sha256": "04de006f542898c5960bdd670a776b02c3ffb6d63b516df04855f097d6a73d2e",
+      "read_mode": "latestTerminalSummary_entire_field",
+      "read_at_utc": "2026-10-12T19:51:37.519172+00:00",
+      "scope": "revue externe partielle US4/US5/US6 ; aucun crédit exhaustif de notre diff"
+    }
+  ],
+  "source_revalidation": {
+    "at_utc": "2026-10-12T19:51:37.519172+00:00",
+    "all_60_files_match_capture": true,
+    "fresh_git_diff_sha256": "4eab752d8d0e553fd7ebe297f32ebfb6003d85a247680a73b4a2982d3112334e",
+    "recorded_diff_sha256": "4eab752d8d0e553fd7ebe297f32ebfb6003d85a247680a73b4a2982d3112334e",
+    "fresh_git_diff_equal_recorded": true
+  },
+  "mechanical_qualification": {
+    "files": 26,
+    "false_defaults": 34,
+    "fresh_read": true,
+    "items": {
+      "crates/bridget-daemon/src/attach.rs": 1,
+      "crates/bridget-daemon/src/mcp.rs": 1,
+      "crates/bridget-daemon/tests/attach_journal_attestation_test.rs": 2,
+      "crates/bridget-daemon/tests/capabilities_integration_test.rs": 1,
+      "crates/bridget-daemon/tests/channel_observation_test.rs": 1,
+      "crates/bridget-daemon/tests/coordination_events_test.rs": 1,
+      "crates/bridget-daemon/tests/core_089_content_test.rs": 1,
+      "crates/bridget-daemon/tests/core_089_contract_test.rs": 1,
+      "crates/bridget-daemon/tests/core_089_host_session_test.rs": 1,
+      "crates/bridget-daemon/tests/core_089_native_test.rs": 1,
+      "crates/bridget-daemon/tests/core_089_service_test.rs": 6,
+      "crates/bridget-daemon/tests/core_089_skill_test.rs": 1,
+      "crates/bridget-daemon/tests/guidance156_e2e.rs": 1,
+      "crates/bridget-daemon/tests/held159_e2e.rs": 1,
+      "crates/bridget-daemon/tests/integration_test.rs": 1,
+      "crates/bridget-daemon/tests/lineage_cli_test.rs": 1,
+      "crates/bridget-daemon/tests/managed_parity_test.rs": 1,
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": 3,
+      "crates/bridget-daemon/tests/native_delegation_real_glm.rs": 1,
+      "crates/bridget-daemon/tests/native_provider_death149_test.rs": 1,
+      "crates/bridget-daemon/tests/sc005_attach_budget.rs": 1,
+      "crates/bridget-daemon/tests/spawn_refusal_hosts_test.rs": 1,
+      "crates/bridget-daemon/tests/spec102_threads_test.rs": 1,
+      "crates/bridget-daemon/tests/spec138_project_test.rs": 1,
+      "crates/bridget-daemon/tests/support/idempotent.rs": 1,
+      "crates/bridget-daemon/tests/t3code_098_test.rs": 1
+    },
+    "total_false_additions_all_diff": 58,
+    "total_false_files_all_diff": 31
+  },
+  "limits": [
+    "Lecture de tous les hunks supprimés/ajoutés et contextes, pas des corps hérités complets.",
+    "Les six nouveaux fichiers sont lus entièrement via leur diff.",
+    "Aucun test, Cargo, scanner, benchmark, DB, service, modèle ou écriture Git/WT.",
+    "La capture ne contient pas le futur rapport implementation-b ni le diff de validation à intégrer par ROOT.",
+    "Aucun succès du FULL en cours ni cochage T027 par ce lecteur."
+  ]
+}

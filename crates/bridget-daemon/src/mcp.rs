@@ -634,6 +634,72 @@ fn execute_tool_at_with_identity(
             message: "une preuve enfant ne peut pas consulter la file".into(),
         });
     }
+    let queue_request = if name == "bridget_queue" {
+        use bridget_transport::protocol::QueueEditAction;
+        let action = match arguments.get("action") {
+            None => "list",
+            Some(Value::String(action))
+                if matches!(action.as_str(), "list" | "cancel" | "reorder" | "promote") =>
+            {
+                action.as_str()
+            }
+            _ => {
+                return Err(ToolError::InvalidParams(
+                    "action attendue : list, cancel, reorder ou promote".into(),
+                ));
+            }
+        };
+        let target = required_non_empty_string(arguments, "target")?;
+        Some(if action == "list" {
+            reject_unknown_arguments(arguments, &["target", "action"])?;
+            WrapperToDaemon::QueueList { target }
+        } else {
+            reject_unknown_arguments(
+                arguments,
+                &[
+                    "target",
+                    "action",
+                    "message_id",
+                    "request_id",
+                    "before_message_id",
+                ],
+            )?;
+            let request_id = required_non_empty_string(arguments, "request_id")?;
+            let message_id = required_non_empty_string(arguments, "message_id")?;
+            let before_message_id = if action == "reorder" {
+                match arguments.get("before_message_id") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+                    _ => {
+                        return Err(ToolError::InvalidParams(
+                            "before_message_id doit être une chaîne non vide ou null".into(),
+                        ));
+                    }
+                }
+            } else {
+                if arguments.contains_key("before_message_id") {
+                    return Err(ToolError::InvalidParams(
+                        "before_message_id est réservé à reorder".into(),
+                    ));
+                }
+                None
+            };
+            WrapperToDaemon::QueueEditRequest {
+                request_id,
+                target,
+                message_id,
+                before_message_id,
+                action: match action {
+                    "cancel" => QueueEditAction::Cancel,
+                    "reorder" => QueueEditAction::Reorder,
+                    "promote" => QueueEditAction::Promote,
+                    _ => unreachable!("action d'édition validée"),
+                },
+            }
+        })
+    } else {
+        None
+    };
     // Contrat103 : aperçu pur, sans daemon, identifiant ni transport.
     // Le même parseur fermé refuse tout paramètre d'envoi, même nul.
     if name == "bridget_handoff" && scope == crate::mcp_scopes::Scope::Reads {
@@ -699,11 +765,11 @@ fn execute_tool_at_with_identity(
         ),
         "bridget_request_wait" => execute_request_wait(identity, arguments, socket),
         "bridget_send" => execute_send(identity, arguments, socket),
-        "bridget_queue" => {
-            reject_unknown_arguments(arguments, &["target"])?;
-            let target = required_non_empty_string(arguments, "target")?;
-            execute_queue(Some(identity), &target, socket)
-        }
+        "bridget_queue" => execute_queue(
+            Some(identity),
+            queue_request.expect("requête queue validée avant la connexion"),
+            socket,
+        ),
         "bridget_wake" => {
             use bridget_transport::protocol::{
                 WAKE_CONTRACT_VERSION, WakeAction, WakeCadence, WakeRequest, WakeTarget,
@@ -1231,26 +1297,44 @@ fn execute_send(
     Ok(result)
 }
 
-/// Lecture commune MCP/CLI, sans promotion du rôle Client ni autostart.
-/// L'absence d'identité auxiliaire garde le client humain nu et sa vue filtrée.
+/// Façade commune MCP/CLI, sans autostart. La lecture nue garde le rôle Client.
+/// L'édition humaine explicite vient du contexte CLI fermé, puis négocie Attach.
+/// Côté client : temps et espace O(b), b = octets traités dans les échanges.
+/// Le nombre d'échanges est borné ; le coût du traitement daemon est exclu.
 pub(crate) fn execute_queue(
     identity: Option<&crate::mcp_identity::ResolvedIdentity>,
-    target: &str,
+    mut request: WrapperToDaemon,
     socket: &Path,
 ) -> Result<Value, ToolError> {
     if identity.is_some_and(|identity| identity.delegated_origin.is_some()) {
         return Err(ToolError::Technical {
             code: "delegated_tool_forbidden",
-            message: "une preuve enfant ne peut pas consulter la file".into(),
+            message: "une preuve enfant ne peut pas consulter ni éditer la file".into(),
         });
     }
+    let (capability, mut target, expected_request_id) = match &request {
+        WrapperToDaemon::QueueList { target } => {
+            (ClientCapability::QueueListV1, target.clone(), None)
+        }
+        WrapperToDaemon::QueueEditRequest {
+            request_id, target, ..
+        } => (
+            ClientCapability::QueueEditV1,
+            target.clone(),
+            Some(request_id.clone()),
+        ),
+        _ => return Err(ToolError::InvalidParams("requête de file attendue".into())),
+    };
+    // La lecture humaine historique reste Client. L'édition humaine explicite
+    // emploie la connexion Attach vérifiée, sans from/origin inventé.
+    let role = if identity.is_none() && expected_request_id.is_some() {
+        ConnectionRole::Attach
+    } else {
+        ConnectionRole::Client
+    };
     let mut connection = DaemonConnection::connect(socket)?;
-    match connection.exchange(&WrapperToDaemon::RoleHandshake {
-        role: ConnectionRole::Client,
-    })? {
-        DaemonToWrapper::RoleAccepted {
-            role: ConnectionRole::Client,
-        } => {}
+    match connection.exchange(&WrapperToDaemon::RoleHandshake { role })? {
+        DaemonToWrapper::RoleAccepted { role: accepted } if accepted == role => {}
         other => return unexpected_response(other),
     }
     if let Some(identity) = identity {
@@ -1267,13 +1351,13 @@ pub(crate) fn execute_queue(
     match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
         issuer_scope: issuer_scope(instance),
-        capabilities: vec![ClientCapability::QueueListV1],
+        capabilities: vec![capability],
     })? {
         DaemonToWrapper::ClientWelcome {
             capabilities,
             build_id,
             ..
-        } if capabilities.contains(&ClientCapability::QueueListV1) => {
+        } if capabilities.contains(&capability) => {
             if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
                 eprintln!("{warning}");
             }
@@ -1281,7 +1365,9 @@ pub(crate) fn execute_queue(
         DaemonToWrapper::ClientWelcome { .. } => {
             return Err(ToolError::Technical {
                 code: "queue_unsupported",
-                message: "le daemon ne négocie pas QueueListV1 ; aucune lecture envoyée".into(),
+                message: format!(
+                    "le daemon ne négocie pas {capability:?} ; aucune requête envoyée"
+                ),
             });
         }
         DaemonToWrapper::ClientRejected { reason } => {
@@ -1292,9 +1378,7 @@ pub(crate) fn execute_queue(
         }
         other => return unexpected_response(other),
     }
-    let target = if bridget_core::router::validate_agent_id(target).is_ok() {
-        target.to_owned()
-    } else {
+    if bridget_core::router::validate_agent_id(&target).is_err() {
         let DaemonToWrapper::AgentList { agents } =
             DaemonConnection::connect(socket)?.exchange(&WrapperToDaemon::ListAgents)?
         else {
@@ -1303,8 +1387,8 @@ pub(crate) fn execute_queue(
                 message: "annuaire indisponible : donner l'UUID".into(),
             });
         };
-        crate::cli::resolve_name_in_directory(
-            target,
+        target = crate::cli::resolve_name_in_directory(
+            &target,
             agents
                 .iter()
                 .map(|agent| (agent.display_name.as_str(), agent.agent_id.as_str())),
@@ -1312,13 +1396,35 @@ pub(crate) fn execute_queue(
         .map_err(|message| ToolError::Technical {
             code: "target_unavailable",
             message,
-        })?
-    };
-    match connection.exchange(&WrapperToDaemon::QueueList { target })? {
+        })?;
+    }
+    match &mut request {
+        WrapperToDaemon::QueueList { target: to }
+        | WrapperToDaemon::QueueEditRequest { target: to, .. } => *to = target,
+        _ => unreachable!("requête de file validée"),
+    }
+    match connection.exchange(&request)? {
         DaemonToWrapper::QueueListResult {
             entries,
             queue_bound,
-        } => Ok(json!({"entries":entries,"queue_bound":queue_bound})),
+        } if expected_request_id.is_none() => {
+            Ok(json!({"entries":entries,"queue_bound":queue_bound}))
+        }
+        DaemonToWrapper::QueueEditResult {
+            request_id,
+            state,
+            refusal,
+            effect,
+        } if expected_request_id.as_ref() == Some(&request_id) => {
+            let mut result = json!({"request_id":request_id,"state":state});
+            if let Some(refusal) = refusal {
+                result["refusal"] = json!(refusal);
+            }
+            if let Some(effect) = effect {
+                result["effect"] = json!(effect);
+            }
+            Ok(result)
+        }
         DaemonToWrapper::Nack { reason, .. } => Err(ToolError::Technical {
             code: if reason.starts_with("target_unavailable") {
                 "target_unavailable"
@@ -2567,9 +2673,18 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_queue",
-            "description": "Lire jusqu'à200 remises idempotentes en attente ou injection. N'inclut ni Send historique ni file interne du fournisseur. La vue est filtrée par droits ; aucune modification de file.",
-            "inputSchema": {"type":"object","properties":{"target":{"type":"string","minLength":1}},"required":["target"],"additionalProperties":false},
-            "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}
+            "description": "Lire la file durable, retirer, réordonner ou promouvoir un message retenu. Les droits sont vérifiés par le daemon. applied atteste le commit ; promote reste un effet non confirmé. Sans action, lecture seule.",
+            "inputSchema": {"type":"object","properties":{
+                "target":{"type":"string","minLength":1},
+                "action":{"type":"string","enum":["list","cancel","reorder","promote"],"default":"list"},
+                "message_id":{"type":"string","minLength":1},
+                "request_id":{"type":"string","minLength":1},
+                "before_message_id":{"type":["string","null"],"minLength":1}
+            },"required":["target"],"additionalProperties":false,"allOf":[
+                {"if":{"properties":{"action":{"enum":["cancel","reorder","promote"]}},"required":["action"]},"then":{"required":["message_id","request_id"]}},
+                {"if":{"properties":{"action":{"const":"reorder"}},"required":["action"]},"then":{"required":["before_message_id"]}}
+            ]},
+            "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}
         }),
         json!({
             "name": "bridget_cancel",
@@ -2796,6 +2911,115 @@ mod tests {
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
     #[test]
+    fn edit159_mcp_schema() {
+        let queue = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_queue")
+            .unwrap();
+        assert_eq!(
+            queue["inputSchema"]["properties"]["action"]["enum"],
+            json!(["list", "cancel", "reorder", "promote"])
+        );
+        assert_eq!(
+            queue["inputSchema"]["properties"]["action"]["default"],
+            "list"
+        );
+        assert_eq!(queue["inputSchema"]["required"], json!(["target"]));
+        assert_eq!(queue["inputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            queue["inputSchema"]["properties"]["request_id"]["minLength"],
+            1
+        );
+        assert_eq!(
+            queue["inputSchema"]["properties"]["before_message_id"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(queue["annotations"]["readOnlyHint"], false);
+        assert!(
+            queue["inputSchema"]["allOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|rule| rule["then"]["required"] == json!(["message_id", "request_id"]))
+        );
+    }
+
+    #[test]
+    fn edit159_mcp_request_id_obligatoire() {
+        let socket = test_socket("edit159-required-id");
+        for action in ["cancel", "reorder", "promote"] {
+            for request_id in [None, Some(json!(""))] {
+                let mut args = json!({"target":"89000000-0000-4000-8000-000000000159",
+                    "action":action,"message_id":"m159"});
+                if action == "reorder" {
+                    args["before_message_id"] = Value::Null;
+                }
+                if let Some(value) = request_id {
+                    args["request_id"] = value;
+                }
+                let result = execute_tool_at(
+                    "89000000-0000-4000-8000-000000000156",
+                    "bridget_queue",
+                    args.as_object().unwrap(),
+                    &socket,
+                );
+                assert!(
+                    matches!(result, Err(ToolError::InvalidParams(ref reason))
+                    if reason.contains("request_id")),
+                    "forme refusée avant connexion : {result:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+    }
+
+    #[test]
+    fn edit159_mcp_preuve_enfant_refusee() {
+        let socket = test_socket("edit159-child-proof");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let child = crate::mcp_identity::ResolvedIdentity {
+            name: "89000000-0000-4000-8000-000000000156".into(),
+            instance_id: "edit159-child-instance".into(),
+            delegated_origin: Some(bridget_core::DelegatedOrigin {
+                provider: "codex".into(),
+                child_ref: "opaque-child-proof159".into(),
+            }),
+        };
+        for action in ["list", "cancel", "reorder", "promote"] {
+            let mut args = json!({"target":"89000000-0000-4000-8000-000000000159","action":action});
+            if action != "list" {
+                args["message_id"] = json!("m159");
+                args["request_id"] = json!("r159");
+            }
+            if action == "reorder" {
+                args["before_message_id"] = Value::Null;
+            }
+            let result = execute_tool_at_with_identity(
+                &child,
+                "bridget_queue",
+                args.as_object().unwrap(),
+                &socket,
+            );
+            assert!(
+                matches!(
+                    result,
+                    Err(ToolError::Technical {
+                        code: "delegated_tool_forbidden",
+                        ..
+                    })
+                ),
+                "{result:?}"
+            );
+        }
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+        );
+        drop(listener);
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn guidance156_mcp_queue_schema() {
         // ADR044 : origine enfant attestée par le résolveur, pas par le
         // payload QueueList et jamais par un issuer_scope inventé.
@@ -2851,15 +3075,21 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["target"]
+            [
+                "action",
+                "before_message_id",
+                "message_id",
+                "request_id",
+                "target"
+            ]
         );
         assert_eq!(
             queue["inputSchema"]["properties"]["target"]["type"],
             "string"
         );
         assert_eq!(queue["inputSchema"]["properties"]["target"]["minLength"], 1);
-        assert_eq!(queue["annotations"]["readOnlyHint"], true);
-        assert_eq!(queue["annotations"]["destructiveHint"], false);
+        assert_eq!(queue["annotations"]["readOnlyHint"], false);
+        assert_eq!(queue["annotations"]["destructiveHint"], true);
     }
 
     // Trois oracles wire partagent ce réemploi des helpers MCP existants.
@@ -2993,7 +3223,7 @@ mod tests {
             write_command(
                 &mut writer,
                 DaemonToWrapper::NativeDelegationResult {
-                    result: json!({"providers":[]}),
+                    result: json!({"providers":[{"agent_type":"fakeglm","queue":{"held":true}}],"queue":{"held":false}}),
                 },
             );
         });
@@ -3007,6 +3237,14 @@ mod tests {
         assert_eq!(
             capabilities["guidance"],
             json!({"intents":["queue","steer","interrupt"], "interrupt_cooldown_secs":30, "interrupt_cap_per_10min":3, "queue_tool":true})
+        );
+        assert_eq!(
+            capabilities["queue"],
+            json!({"held":false,"actions":["list","cancel","reorder","promote"]})
+        );
+        assert_eq!(
+            capabilities["providers"][0]["queue"]["held"], true,
+            "flag réel par type conservé"
         );
         server.join().unwrap();
         std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
@@ -5838,7 +6076,12 @@ mod tests {
             .collect::<Vec<_>>();
         let socket = test_socket("mcp158-parent");
         let listener = UnixListener::bind(&socket).unwrap();
-        let count = names.len();
+        // Les paramètres queue invalides sont refusés avant le RPC CallerScope.
+        // Garder tous les noms dans l'oracle, compter seulement les vrais échanges.
+        let count = names
+            .iter()
+            .filter(|name| name.as_str() != "bridget_queue")
+            .count();
         let server = thread::spawn(move || {
             for _ in 0..count {
                 let scope_result = json!({"version":1,"caller_read_only":false});
@@ -8352,6 +8595,7 @@ mod tests {
                     turn_in_progress: false,
                     journal_available: Some(false),
                     turn_attest: false,
+                    queue_fallback: false,
                 })
                 .unwrap(),
             DaemonToWrapper::Registered { .. }

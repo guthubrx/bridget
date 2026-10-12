@@ -284,6 +284,7 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
             turn_in_progress: false,
             journal_available: Some(false),
             turn_attest: false,
+            queue_fallback: false,
         },
     );
     assert!(matches!(
@@ -356,6 +357,7 @@ fn pilote_sans_journal_reste_refuse_par_le_gate() {
             // Attestation explicite : pas de journal, pas de JournalReady.
             journal_available: Some(false),
             turn_attest: false,
+            queue_fallback: false,
         },
     );
     assert!(matches!(

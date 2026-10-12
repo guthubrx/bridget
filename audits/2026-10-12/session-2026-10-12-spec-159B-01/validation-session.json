@@ -1,0 +1,16 @@
+{
+  "observed_at": "2026-10-12T19:49:09.802085+00:00",
+  "command": [
+    "python3",
+    "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py",
+    "/Users/moi/.cache/bridget-audit159B-preparation-20261012"
+  ],
+  "rc": 0,
+  "stdout": "\n0 erreur(s), 0 warning(s) — session conforme\n",
+  "stderr": "",
+  "source_guard": {
+    "ROOTFULL223_beforeafter_stable": true,
+    "capture_scope60_beforeafter_stable": true
+  },
+  "limits": "Validation de schéma, fingerprints, summary etcoverage déclarée seulement. FULLROOT66127encours ; aucune preuveglobale verte/compilation/runtime/livraison déduite."
+}

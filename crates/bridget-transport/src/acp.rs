@@ -617,7 +617,12 @@ impl Transport for AcpTransport {
                 });
             return Ok(());
         }
-        if msg.intent == Some(MessageIntent::SteerCurrent) {
+        let steer_or_queue = msg.intent == Some(MessageIntent::SteerCurrent)
+            && msg
+                .references
+                .iter()
+                .any(|reference| reference == "steer-or-queue");
+        if msg.intent == Some(MessageIntent::SteerCurrent) && !steer_or_queue {
             self.events
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
@@ -627,11 +632,16 @@ impl Transport for AcpTransport {
                 });
             return Ok(());
         }
-        let active_message_id = if msg.intent == Some(MessageIntent::InterruptAndStart)
-            || msg.origin == Some(MessageOrigin::Human)
+        let mut ordinary = msg.clone();
+        if steer_or_queue {
+            ordinary.intent = None;
+        }
+        let active_message_id = if !steer_or_queue
+            && (msg.intent == Some(MessageIntent::InterruptAndStart)
+                || msg.origin == Some(MessageOrigin::Human))
         {
-            enqueue_and_capture_active_message_id(&self.queue, self.queue_capacity, msg.clone())
-        } else if enqueue(&self.queue, self.queue_capacity, msg.clone()) {
+            enqueue_and_capture_active_message_id(&self.queue, self.queue_capacity, ordinary)
+        } else if enqueue(&self.queue, self.queue_capacity, ordinary) {
             Some(None)
         } else {
             None
@@ -4193,5 +4203,48 @@ exit 0
         assert!(prompt.contains("via sous-agent claude 0123456789abcdef"));
         assert!(prompt.contains("\"delegated_origin\""));
         assert!(!prompt.contains("session-native-secrete"));
+    }
+    #[test]
+    fn edit159_promote_transport_acp_enfile() {
+        let script = r#"
+read initialize
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read session
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read prompt
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+while read remaining; do :; done
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            queue_capacity: 2,
+            permissions: "allow".into(),
+            notify_timeout_secs: 2,
+            provider_observation: None,
+        })
+        .unwrap();
+        let mut promoted = message("acp-promoted159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        transport.deliver(&promoted).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline && !finished {
+            for event in transport.drain_events() {
+                assert!(
+                    !matches!(&event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "acp-promoted159")
+                );
+                finished |= matches!(&event, AcpEvent::TurnFinished { message, .. } if message.id == "acp-promoted159");
+            }
+            if !finished {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        transport.stop();
+        assert!(
+            finished,
+            "ACP traite la promotion comme une remise FIFO ordinaire"
+        );
     }
 }

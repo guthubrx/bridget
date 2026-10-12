@@ -136,6 +136,7 @@ fn register_t3_wrapper(socket: &std::path::Path) -> support::Client {
         journal_available: Some(false),
         turn_in_progress: false,
         turn_attest: false,
+        queue_fallback: false,
     });
     let DaemonToWrapper::Registered { agent_id, .. } = t3.receive() else {
         panic!("wrapper T3 attendu");

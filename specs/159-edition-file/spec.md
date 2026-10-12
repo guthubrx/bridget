@@ -5,13 +5,13 @@
 
 Spec: 159-edition-file
 Titre: File de remise tenue par le daemon (159a) et édition de cette file (159b)
-Statut: Spécifiée (conception refondue après contre-revues Codex, rondes 1 et 2, 2026-10-11)
+Statut: Implémentée — validation technique A14/B14 close après gates ROOT ; livraison B distincte
 Priorité: P1
-Tâches: 27 à cocher (159a : 13, 159b : 14, voir tasks.md)
-Tests: rouges d'abord, filtres `held159_*` (lot A) et `edit159_*` (lot B)
+Tâches: 28 (159a : 14, 159b : 14 ; cochage exclusivement par ROOT)
+Tests: FULL unique RC101 puis ciblés PASS distincts ; résultats et arbitrage dans validation/tests-159.md, aucun GREEN global
 
 Résumé:
-- Contexte: T3 Code permet de lister, retirer, éditer, réordonner un message en file et de le promouvoir en guidage, parce que sa file est durable côté serveur. Chez Bridget la file vit dans la mémoire de chaque porteur (transport géré, pont T3). Toute édition devient donc une saga répartie entre deux processus, et la contre-revue de la première conception a relevé 11 défauts de cette racine commune.
+- Contexte historique avant159A: T3 Code permet de lister, retirer, éditer, réordonner un message en file et de le promouvoir en guidage, parce que sa file est durable côté serveur. Avant159A, la file Bridget vivait dans la mémoire de chaque porteur (transport géré, pont T3). Toute édition devient donc une saga répartie entre deux processus, et la contre-revue de la première conception a relevé 11 défauts de cette racine commune.
 - Objectif: Le daemon retient en base les messages destinés à un agent occupé, puis les libère quand l'agent est libre. Retirer, réordonner et promouvoir un message retenu devient une transaction unique. Guidage 4 vers 5.
 - Dépendances: SPEC-156 (garde de droits, origine fabriquée, `bridget_queue` en lecture, cadre de menace), SPEC-150, ADR 007, ADR 011, ADR 027, ADR 044.
 
@@ -21,12 +21,12 @@ Fichiers:
 - tasks.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-159-edition-file`
+**Feature Branch utilisée pour B**: `session-159B-edition-file`
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implémentée ; livraison B en attente du reçu ROOT
 **Priority**: P1
-**Base prévue pour159A** : livraison158B préalable, commit e52a96240b6168bf4466712e1bda8852b4ecb43f. Le candidat daemon2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5 ne prouve pas une livraison. Aucun GO159A dans cette préparation.
-**Dependencies**: SPEC-156 (livrée), SPEC-150 ; base opérationnelle158B après sa livraison attestée
+**Base livrée pour159B** : 159A source 53863bd09a4ff364dc2b412519b343c77e163685, métadonnées b0a165edfc6fc5476b2330193c7822e0faecef33 ; A14 livrées. Les références 158B/candidat2124 sont historiques.
+**Dependencies**: SPEC-156 (livrée), SPEC-150 ; base opérationnelle159A livrée
 
 Accord utilisateur du 2026-10-11 : être au moins aussi bon que T3
 (`t3_queue_list/read/edit/cancel/reorder/promote_to_steer`). Critère visé :
@@ -125,7 +125,8 @@ libération change dans une transaction. Il tient face à une arrivée concurren
 
 Un parent promeut un message retenu : le daemon le libère tout de suite en
 guidage dans le tour en cours. Si le transport ne peut pas guider, il l'enfile
-en file ordinaire : le message n'est jamais rejeté. Un porteur qui n'a pas
+en file ordinaire. Ce repli reste soumis au rejet explicite si la file est pleine
+et aux ambiguïtés après libération de FR-016, SC-009 et R17. Un porteur qui n'a pas
 déclaré cette garantie reçoit un refus `steer_unavailable` et le message reste
 retenu.
 
@@ -142,7 +143,7 @@ perte.
 - **FR-001** : Le registre des types d'agents gagne un réglage booléen `held_queue` (défaut faux). Seuls les types qui le mettent à vrai utilisent la file retenue.
 - **FR-002** : Un message est retenu si et seulement si : le type du destinataire a `held_queue` ; l'instance du destinataire a déclaré `turn_attest` à l'enregistrement (FR-023) ; c'est un envoi client idempotent sans intention (`queue` ou absente) ; son origine n'est ni `Human` ni `System` et il n'est ni alerte de fil, ni observation (`bridget-observation:`), ni incident délégué (`delegated-runtime-`), ni message d'une mission native ; le destinataire n'est pas un fil T3 ; la présence du destinataire est `busy`, ou il a déjà au moins un message retenu (l'ordre est conservé). Sinon, chemin actuel.
 - **FR-003** : Un message retenu a la phase `held` dans `send_deliveries`, sans exécution liée et sans push. Le résultat rendu à l'expéditeur est celui d'aujourd'hui (admission acceptée). L'échéance de tour est posée à la libération (`stamp_turn_deadline_for_delivery`), pas à l'admission.
-- **FR-004** : Une libération (`held` vers `dispatching`) se fait dans une seule transaction, et seulement si toutes les conditions suivantes tiennent : le repos du destinataire est **attesté** (FR-023), ou la période occupée a atteint la sortie forcée explicitement prévue par FR-025 ; aucune réservation de tour n'est ouverte pour lui (FR-024) ; le contrôle n'est pas en pause et aucune reprise de pause n'attend pour cet agent (FR-026) ; l'enregistrement d'envoi n'a pas expiré ; si le message suit une demande (`reply=true`), la demande est encore ouverte et son échéance n'est pas passée (relue dans la transaction). Cette sortie forcée est une expiration, pas une preuve que le fournisseur est libre. Elle ne fabrique pas de nouvelle attestation. Le plus petit rang part. Puis la trame `DeliverIdempotent` part par le chemin de reprise existant. Un arrêt entre les deux laisse une remise `dispatching` que la reprise relivre.
+- **FR-004** : Une libération ordinaire (`held` vers `dispatching`) se fait dans une seule transaction, et seulement si toutes les conditions suivantes tiennent : le repos du destinataire est **attesté** (FR-023), ou la période occupée a atteint la sortie forcée explicitement prévue par FR-025 ; aucune réservation de tour n'est ouverte pour lui (FR-024) ; le contrôle n'est pas en pause et aucune reprise de pause n'attend pour cet agent (FR-026) ; l'enregistrement d'envoi n'a pas expiré ; si le message suit une demande (`reply=true`), la demande est encore ouverte et son échéance n'est pas passée (relue dans la transaction). Cette sortie forcée est une expiration, pas une preuve que le fournisseur est libre. Elle ne fabrique pas de nouvelle attestation. Le plus petit rang part. Puis la trame `DeliverIdempotent` part par le chemin de reprise existant. Un arrêt entre les deux laisse une remise `dispatching` que la reprise relivre. La promotion explicite relève de FR-016 et FR-018 : elle exige un tour actif au lieu du repos, avec l’exception humaine de pause prévue par 156. Ces exceptions ne changent pas les libérations automatiques de FR-026.
 - **FR-005** : Déclencheurs de libération : repos attesté (`TurnState{in_progress: false}` véridique), enregistrement ou reconnexion de l'instance, fin d'exécution du destinataire, levée de la pause, et balayage périodique sur le tick des relances. Un déclencheur ne prouve pas à lui seul le repos : FR-004 le revérifie.
 - **FR-006** : Le balayage retire de la file tout message retenu dont l'enregistrement d'envoi a expiré ou dont la demande suivie est close ou expirée. Le message passe à `cancelled` (raison `expired_in_queue` ou `request_closed_in_queue`), l'envoi d'origine devient `Rejected(<raison>)`, l'auteur est prévenu. Après chaque retrait validé, le daemon retire le suivi en mémoire (`pending_replies`) de ce message. Tant qu'un message est retenu, le destinataire ne reçoit aucun rappel (paliers 1 et 2) pour sa demande : il ne l'a pas reçue.
 - **FR-007** : Chaque remise garde un rattachement durable à son destinataire logique (`recipient_agent`, identifiant d'agent résolu à l'admission). À chaque enregistrement d'un agent, le daemon rattache à la nouvelle instance les messages retenus de cet agent, même si les présences sont vides après un redémarrage du daemon. Une instance purgée orpheline ses messages retenus comme ses remises `dispatching` ; un agent qui ne revient pas voit ses messages retirés par le balayage à l'échéance.
@@ -162,9 +163,9 @@ perte.
 - **FR-013** : Seuls les messages `held` sont éditables. Un message libéré, accusé, orphelin, indéterminé ou déjà retiré donne `not_held`.
 - **FR-014** : `cancel` : une transaction unique écrit la phase `cancelled`, le résultat terminal de l'envoi d'origine `Rejected(cancelled_in_queue)`, la notice d'auteur, la clôture du suivi de réponse et le reçu ; après le commit, le suivi mémoire est retiré (FR-006). Le message n'est plus jamais livré. Le résultat est final (`applied`) : jamais `outcome_unknown`.
 - **FR-015** : `reorder` : une transaction re-numérote les seuls messages retenus du destinataire. Les valeurs de rang du groupe sont conservées, leur attribution change. Les deux messages doivent être retenus, du même destinataire. Une arrivée concurrente donne l'un de deux ordres valides selon l'ordre de validation ; le résultat persistant est celui que `list` montre.
-- **FR-016** : `promote` : refusé hors tour actif (`no_active_turn`), refusé si le porteur n'a pas déclaré `queue_fallback` (`steer_unavailable`). Sinon une transaction libère le message (mêmes vérifications que FR-004 : demande ouverte, échéance, pause) et la trame de remise porte l'intention de guidage et le marqueur `steer-or-queue`. Un transport qui ne peut pas guider enfile le message en file ordinaire au lieu de le rejeter. **Garanties réduites, dites telles quelles** : après la libération, le message suit les garanties de toute remise. Si la file ordinaire du porteur est pleine, la remise est rejetée explicitement (indéterminée, sort connu de l'expéditeur par les voies existantes). Si Codex reçoit une erreur ambiguë alors que le guidage a été appliqué, il remet le message en file (`codex_app_server.rs:1724`) et un doublon est possible. Ces deux cas sont testés et documentés ; ils ne sont pas supprimés.
+- **FR-016** : `promote` : refusé hors tour actif (`no_active_turn`), refusé si le porteur n'a pas déclaré `queue_fallback` (`steer_unavailable`). La transaction recontrôle l’identité attestée, les droits et gardes de `Steer` de 156, la phase `held`, le tour actif, l’absence de réservation de tour, la saga non expirée et, si `reply=true`, la demande ouverte et son échéance. Le tour actif remplace la condition de repos de la libération ordinaire ; il ne la cumule pas. Pendant la pause, un agent est refusé ; l’humain attaché attesté conserve l’exception de guidage de 156. La priorité de reprise de FR-026 continue à différer les libérations automatiques, sans supprimer cette commande humaine explicite. La transaction libère le message et pose la réservation de tour. La copie de la trame de remise porte l’intention de guidage et le marqueur `steer-or-queue` ; l’enveloppe stockée reste inchangée. Un transport qui ne peut pas guider enfile le message en file ordinaire au lieu de le rejeter. **Garanties réduites, dites telles quelles** : après la libération, le message suit les garanties de toute remise. Si la file ordinaire du porteur est pleine, la remise est rejetée explicitement (indéterminée, sort connu de l'expéditeur par les voies existantes). Si Codex reçoit une erreur ambiguë alors que le guidage a été appliqué, il remet le message en file (`codex_app_server.rs:1724`) et un doublon est possible. Ces deux cas sont testés et documentés ; ils ne sont pas supprimés.
 - **FR-017** : Reçu `queue_edits` complet, écrit dans la transaction de l'effet, conservé 7 jours. Même clé et mêmes paramètres : même résultat. Autres paramètres : `envelope_mismatch`. Les refus sont mémorisés ; pour réessayer il faut une nouvelle clé.
-- **FR-018** : Droits : `cancel` : auteur du message, parent de la cible, humain attaché. `reorder` : parent, humain attaché. `promote` : droits de `steer` de 156 (garde obligatoire). Le destinataire et les pairs n'éditent pas (question 1). Pendant la pause, `promote` est refusé pour un agent ; `cancel` et `reorder` sont admis. Preuve enfant et client nu : refusés, comme en 156.
+- **FR-018** : Droits : `cancel` : auteur du message, parent de la cible, humain attaché. `reorder` : parent, humain attaché. `promote` : droits de `steer` de 156 (garde obligatoire). Le destinataire et les pairs n'éditent pas (question 1). Pendant la pause, `promote` est refusé pour un agent ; l’humain attaché attesté garde l’exception de `Steer` de 156. Son identité vient de la connexion validée, jamais de `from=human` ou d’une référence du message. Cette exception ne supprime aucune autre garde de FR-016. `cancel` et `reorder` sont admis. Preuve enfant et client nu : refusés, comme en 156.
 - **FR-019** : Un porteur déclare `queue_fallback` à l'enregistrement (champ optionnel, défaut faux). Un porteur ancien reste valable pour `cancel` et `reorder` mais pas pour `promote`, et n'ouvre pas la file retenue sans `turn_attest`.
 - **FR-020** : Capacité client `QueueEditV1` pour les écritures de `bridget_queue`. Sans elle : `CapabilityNotNegotiated`.
 - **FR-021** : `docs/reference-communication.md`, la skill Bridget et une ADR décrivent la nouveauté, le cadre de menace, le réglage `held_queue`, les garanties réduites, et la procédure de sauvegarde et de restauration avant la migration.
@@ -196,7 +197,7 @@ perte.
 - **Réglage `held_queue`** : booléen par type d'agent dans le registre.
 - **Édition** : `cancel`, `reorder`, `promote`, avec reçu `queue_edits`.
 
-**Hypothèses (vérifiées en T002)**
+**Diagnostic historique avant159A (vérifié en T002 ; corrections A livrées)**
 
 - Le signal de tour des porteurs gérés n'est **pas** fiable aujourd'hui : un refus de remise envoie `TurnState false` sans condition (`wrapper.rs:6666`) et chaque `true` remet `busy_since` à zéro (`daemon.rs:3484`). Le lot A corrige ces deux points (FR-023, FR-025) et n'ouvre la file qu'aux instances qui déclarent `turn_attest`.
 - Un envoi sans intention ne crée pas d'exécution liée (`admit_starting_message` ne concerne que `TriggerTurn` et `InterruptAndStart`, `daemon.rs:8828-8850`).

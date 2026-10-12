@@ -98,3 +98,51 @@ Le rang automatique ne recule pas après purge. Cette propriété vient de [SQLi
 - Borne initiale7min dépassée ; collecte générale arrêtée sur demande ROOT. Seule vérification supplémentaire autorisée2min sur AUTOINCREMENT/FK/INSERT/rowid réalisée.
 
 Outputs : /Users/moi/.cache/bridget-reuse159A-20261012/reuse-audit159A.md ; /Users/moi/.cache/bridget-reuse159A-20261012/manifest.json ; /Users/moi/.cache/bridget-reuse159A-20261012/reuse-audit159A.json
+
+
+## Annexe B — préflight documentaire 159B du 12 octobre2026
+
+Le checkpoint A ci-dessus reste historique. A14 est livrée ; B14 ouverte. Réemploi B ciblé PASS selon Analyze final et annexe R2 (18 exigences/14 tâches), pas couverturecode/tests. GO ROOT enregistré pour T014/T015/T016 après fermeture des points documentaires.
+
+- REUTILISER settle_held_in_transaction dans la TX propre du reçu d'apply_cancel ; jamais une seconde TX via settle_held.
+- REUTILISER authorize/Steer156 et identité de connexion pour apply_promote ; aucun droit depuis from=human ou le marqueur de repli.
+- REUTILISER send_deliveries, queue_rank, QueueList et permutations de rangs ; pas nouvelle file/compteur d'ordre.
+- CREER seulement les éléments B prévus : queue_edits+index dans init_schema (chaque open/in_memory, déjà v7 inclus, sans v8) et les trois mutations apply_cancel/apply_reorder/apply_promote.
+- queue_edit_once, nom mutualisé retenu ROOT, a trois consommateurs réels prévus : cancel/reorder/promote. Lecture/rejeu/effet/reçu partagent leurTX ; commun limité au module, aucun framework/service/store nouveau. Le code n'est pas attesté implémenté par ce préflight.
+
+Promotion : tour actif remplace le repos ordinaire ; exception de pause humaine uniquement par l'identité Attach attestée et Steer156 existants.
+
+Ordre State→TX Immediate→gardes SQL→commit→sortie State→writer/push. applied=commit, pas injection ; saturationFIFO/indeterminate et avis ordinary reply=false restent bornés. Deux intentions fausses avant repli marqué ; fallback n'acquiert aucun droit. Matrice/revues ciblées, pascouverture de code, ni tests exécutés ici. Aucun ajout T024/T025 de documentation de livraison à ce stade.
+
+Preuves et SHA :
+/Users/moi/.cache/bridget-analysis159B-20261012/analyze159B-final.json
+SHA256 48c29d82567b20076db5bde1d1142ac59c27b82768108ff3e67e20ce293c4e92
+/Users/moi/.cache/bridget-analysis159B-20261012/analyze159B-R2-annexe.json
+SHA256 cdcce9be8422cf97a89044b4428e3346995cf6e672dc56b10e450e5ab80d7d38
+/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-GO159B-foundations.json
+SHA256 5e504f3484e94a4719bbed8f5850ebdce7b2cf35fe77ad3d79234ea276330372
+
+Arbitrage reçu inconnu : queue_edits.delivery_id TEXT nullable ; canonical_bytes
+conserve les arguments publics. Refus durable même sans remise interne, jamais
+faux UUID. Cette précision n'ajoute aucun magasin/compteur/version/service.
+Modèle appliqué SHA256 f28f2e0b6d2194b223c47fca8e1f29ef1faec249ce332fcf8a264b1effa5d23b.
+T016 GREEN2 ciblé ne vaut ni preuve d'implémentation des trois mutations ni
+cochage B ; T014/T015 RED7 reste distinct avant leur code/GREEN.
+
+
+## Annexe B — réemplois d’implémentation T021/SC014
+
+Lecture ciblée fraîche sur les sources du GREEN 19/19 ; les checkpoints
+préflight précédents restent historiques. Aucun nouvel audit global revendiqué.
+
+- `edit159_promote_fixture` (daemon.rs:24614) reprend `edit159_cancel_fixture`, la présence attestée et les montages existants d’acteur/Register/négociation : sept appels réels. `edit159_promote_request` (:24631) centralise la trame prévue dans les mêmes oracles : huit appels réels. Ce sont deux raccords privés de tests, pas un framework ni une abstraction de production.
+- T019 réemploie `held159_release_event` pour drainer le vrai flux ; aucun mécanisme de remise supplémentaire.
+- L’API privée existante `queue_edit_once` (send_delivery.rs:195) étend son tuple avec `Option<OrphanedDeliveryNotice>`, type déjà utilisé pour les retraits. Trois consommateurs réels : apply_promote (:30), apply_reorder (:104), apply_cancel (:171). SC014 conserve seulement la clôture explicite promote/not_held avec sa notice correspondant à delivery_id ; les autres refus rollback leur callback. Effet, notice et reçu sortent après le commit commun ; un rejeu n’en produit aucun. Aucun type, magasin, table, service ou framework neuf pour ce raccord.
+
+Sources lues :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon.rs
+SHA256 44ea8c110584b0948574b0a33f9a869a31f37d2385b7481c9da98ce545fe3418
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs
+SHA256 5359de01577985e8f747bc0bdf17b09fc80154665c1021cadcca90749b3f134c
+Plages et consommations : preuve T021-SC014 ci-dessus. Les tests T023, le FULL,
+Converge, audit et livraison B restent distincts de ces preuves ciblées.

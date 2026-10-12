@@ -314,6 +314,7 @@ fn sender(socket: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
             turn_in_progress: false,
             journal_available: None,
             turn_attest: false,
+            queue_fallback: false,
         },
     );
     assert!(matches!(

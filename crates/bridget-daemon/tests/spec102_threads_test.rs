@@ -81,6 +81,7 @@ fn register138(socket: &Path, agent: &str, instance: &str) -> Client {
         journal_available: None,
         turn_in_progress: false,
         turn_attest: false,
+        queue_fallback: false,
     });
     assert!(matches!(
         client.receive(),

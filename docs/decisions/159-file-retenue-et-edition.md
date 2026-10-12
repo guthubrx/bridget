@@ -1,9 +1,10 @@
 # ADR159 — file retenue par le daemon et édition
 
 Date : 12 octobre 2026.
-Statut : **Adoptée pour la conception du lot A**. SC004 et T011 sont
-maintenant documentés ci-dessous. Release, installation et sauvegarde de
-remplacement restent distincts ; le lot B reste différé.
+Statut A : livré sous le source 53863bd09a4ff364dc2b412519b343c77e163685.
+Les preuves de conception, SC004 et T011 ci-dessous restent historiques.
+Statut B : décision adoptée et implémentation validée après gates ROOT ;
+la livraison B reste attestée séparément par son reçu.
 
 ## Contexte
 
@@ -142,3 +143,62 @@ Les JSON exacts restent privés, hors dépôt. Les résumés sans corps conserve
 identités, empreintes des tables et SHA256 de chaque message_bytes.
 Reçu canonique et diagnostic :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/restauration-v7.md
+
+
+## Décision B — édition des retenus
+
+Statut B : adoptée et implémentée après gates ROOT ; livraison séparée.
+Les preuves A ci-dessus sont historiques. A est livrée sous le source
+53863bd09a4ff364dc2b412519b343c77e163685 ; sa migration v7 et sa restauration
+T011 ne deviennent pas une nouvelle migration B.
+
+Cancel/reorder/promote partagent la file durable `send_deliveries` du daemon.
+`queue_edits` et ses deux index sont créés dans `init_schema`, même sur une
+base déjà v7, sans version 8. `queue_edit_once` est le puits privé commun aux
+trois mutations : reçu et effet dans la même transaction, sans nouveau store.
+State protège tour et identité jusqu'au commit. La transaction relit pause,
+interruptions, réservation, saga et demande sur la même connexion. Aucun writer
+socket sous transaction ; le push vient après commit et relâchement de State.
+
+La table `execution_queue` d’ExecutionStore est écartée : elle porte des
+exécutions, sans échéance de remise, instance ni lien à la saga d’envoi. Sa
+connexion distincte ne devient pas un second writer sous cette transaction.
+La conception antérieure d’édition dans les files mémoire des porteurs
+présentait onze défauts liés au partage d’état entre processus (research R2). Le découpage A/B conserve l'envoi fermé d'A et
+limite B aux trois actions. `edit`, les fils T3 et 159c restent différés.
+
+Cancel réemploie clôture et notice durable existantes, sans interrupt. Reorder
+permute les rangs existants dans une transaction, avec valeurs temporaires
+négatives jamais publiées. Promote réemploie Steer156, le tour actif et la
+réservation ; `queue_fallback` n'accorde aucun droit. HeldRelease reste différé
+par la pause et la priorité de reprise. Seul l'humain Attach attesté garde
+l'exception explicite prévue, avec toutes les autres gardes.
+
+Après promotion, `applied` signifie commit et `effect: "unconfirmed"` signifie
+absence de preuve d'injection. FIFO pleine : rejet et remise indéterminée ;
+Codex ambigu après guidage : doublon possible. Aucun avis universel ajouté
+pour `reply=false`. Rejeu sous droits frais : reçu historique, jamais nouvelle
+émission.
+
+Les droits restent frais avant toute lecture du reçu. Si l’auteur ne peut
+plus être vérifié parce que l’envoi d’origine a été purgé ou que message_bytes
+est absent, son seul statut d’auteur ne permet plus cancel : refus
+`intent_not_permitted` avant le reçu. `receipt.actor` est une trace, pas un
+grant persistant. Les autres droits exigent toujours leur propre preuve fraîche.
+Le réglage held reste fermé par défaut. Les preuves ciblées des mutations,
+transports et façades sont consignées dans :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/tests-159.md
+Les coûts B non mesurés ne deviennent pas une latence promise. Le FULL, les
+replays, la revue et l’audit ont des périmètres distincts ; leurs reçus conservent
+les limites. La livraison B ne se déduit pas d’un PASS ciblé.
+La recette SC010 est privée : ses marqueurs enfant149 et PID/naissance ne
+prouvent pas une interopérabilité T3 réelle. La reprise E2E cancel emploie une
+pause explicite ; SC007 commence au commit Applied, sans preuve de retry
+gagné contre une libération non pausée.
+Choix des trois questions : destinataire sans droit d’édition ; held fermé
+par défaut ; modification du corps différée. Aucun choix supplémentaire exigé.
+
+Contrat et droits :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/contracts/edition159.md
+Référence d'usage :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md

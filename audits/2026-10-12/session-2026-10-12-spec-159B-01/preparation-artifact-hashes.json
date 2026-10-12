@@ -1,0 +1,44 @@
+{
+  "at_utc": "2026-10-12T19:11:10.827133+00:00",
+  "provisional": true,
+  "files": [
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/00_Configuration_Chargee.md",
+      "sha256": "7047b0ddc16a48f51442949b48656c1f6f6519fa1567df094028fac136724f9d"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/01_Decouverte.md",
+      "sha256": "5090fc43e130a44afb641e9fd1c6aa2d5f5d8236f4d7d0d0295394633baaf2b7"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/audit-readiness159B.md",
+      "sha256": "647bf9c42b1c13efa47c12ff6703270c0f8532fb849c475e273ee0d3ffb64b62"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/config-effective.json",
+      "sha256": "8ce57204339ae375f35f0786c1833d9295b47ca9e13950f11fac02db2a0bf60a"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/diff-provisional159B.patch",
+      "sha256": "010df9b05b2f79f4b2a40c3eefe550646d2a7c0fe3d53d7b1d1783cd841ebc7a"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/manifest.json",
+      "sha256": "72e51dc2bf2139db584f53556764b6ef91cebd2bf43c8b5c4aa3afa5f8a287c1"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/read-manifest-skeleton.json",
+      "sha256": "ab67b119d2f53888d8e88541596c8db5aff1e6e3a7b5e3bde06251da84eb8e6a"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/scope-files-provisional.json",
+      "sha256": "f92b366c328d7a76ae113a5c4aa3f8215f2e09ade9c633a5107481d967cb6024"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/source-hashes-provisional.json",
+      "sha256": "937a9d20589e4cd30299fd4255c1678269d3669d2cd36789997be262296893c7"
+    }
+  ],
+  "self_excluded": true,
+  "final_freeze": false
+}

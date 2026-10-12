@@ -266,6 +266,7 @@ fn send_ledger_both(
         // Une connexion CLI éphémère ne tient aucun journal : elle n'est jamais attachable.
         journal_available: Some(false),
         turn_attest: false,
+        queue_fallback: false,
     };
     writeln!(writer, "{}", encode(&reg).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;

@@ -765,6 +765,7 @@ pub fn register_agent_as(socket: &Path, agent_id: &str, instance_id: &str) -> Cl
         journal_available: None,
         turn_in_progress: false,
         turn_attest: false,
+        queue_fallback: false,
     });
     let DaemonToWrapper::Registered {
         agent_id: registered,

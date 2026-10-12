@@ -1,0 +1,49 @@
+{
+  "module": "06",
+  "findings": [
+    {
+      "id": "REL-002",
+      "category": "reliability",
+      "subcategory": "corrupt_local_storage",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "line": 1458,
+      "title": "Une ligne Held JSON corrompue refuse les éditions de sa cible",
+      "description": "La résolution d’un message public utilise json_extract sans garde json_valid. Une ligne Held corrompue de la cible peut produire une erreur SQLite et une réponse Nack queue_edit_storage_unavailable, sans effet committé. Les octets sont normalement écrits par le daemon ; aucune voie d’écriture non autorisée ni élévation de droits n’est prouvée. ROOT conserve cette limite visible de stockage.",
+      "evidence": "            \"SELECT delivery_id FROM send_deliveries\n        WHERE recipient_agent=?1 AND phase='held'\n          AND json_extract(CAST(message_bytes AS TEXT),'$.id')=?2\n        ORDER BY queue_rank LIMIT 2\",",
+      "exploitability": "THEORETICAL",
+      "impact": "Une corruption locale Held peut empêcher temporairement l’édition de la cible. Le refus reste visible et fermé ; aucun effet silencieux ni gain de droits.",
+      "path_type": "cold",
+      "remediation": "Conserver la limite de stockage explicitement acceptée par ROOT. Ne pas ajouter de correctif, scénario ou test hors périmètre de ce lot.",
+      "verification": "Relire la résolution SQL et sa remontée IdempotencyError vers Nack queue_edit_storage_unavailable ; contre-revue ClaudeR1/R2 et ROOT déjà réalisées.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "open",
+      "disposition": "accepted_low_risk_by_ROOT",
+      "external_provenance": {
+        "review": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-code-r2-terminal.json",
+        "ROOT_fresh_read_at": "2026-10-12T19:46:00+00:00",
+        "source_sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1449,
+            1470
+          ]
+        ],
+        "daemon_sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "daemon_ranges": [
+          [
+            11203,
+            11215
+          ],
+          [
+            11338,
+            11405
+          ]
+        ],
+        "independence": "Claudemodelreview+ROOT ; auditeur avait aussi lu résolution1447–1470 et puits11338–11405."
+      },
+      "fingerprint": "02367fd85287"
+    }
+  ]
+}

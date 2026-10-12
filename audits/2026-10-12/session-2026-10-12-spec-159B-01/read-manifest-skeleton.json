@@ -1,0 +1,710 @@
+{
+  "at_utc": "2026-10-12T19:09:42.892947+00:00",
+  "provisional": true,
+  "scope_manifest": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/manifest.json",
+  "rule": "Each future thematicreader appends own exactranges/date/currentSHA, never credit hashing as reading. Mechanicaldiffinspectioncredit stays separate.",
+  "modules_pending": [
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "12"
+  ],
+  "files": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/attach.rs",
+      "sha256": "dd821d7992a10145cfbf819072c01daa469eebe64ad9cef31e5f504ba14d42ea",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          4271,
+          4277
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/cli.rs",
+      "sha256": "f5a90a4732b5d120a7152461dfabf285720eb8d2799f16acb038e5308da63d90",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2c207d0f8e1d44b67193e0f483c7bf7e10a80e1bad88f5f39eaabb82b5dccbfb",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "2a088ef9c22de44b8033586aebb03e34e74c5299e259061585f21760231c95b8",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "3224b78d5064f7a8734918fdd8c93a6a45e04ce3d4e150a1724f0a57f48ca59e",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "0c9b3d5f7158276426fe25dab112bbc33f7a6226fcd96eb5b4360951b4910009",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "97e939fd582878210d9fb763bc92d6620a62e10510dbf29c4c94b4836358caaf",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/tests.rs",
+      "sha256": "16c16c050cf4a58039569a3aca30fbf3820578c3b9a22eed8390c72ea251814e",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "47d29429134370428113a2d4ec3b135a4cb42d12e5553e2f034c354c4d15e542",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp_identity.rs",
+      "sha256": "81493fadb1cb9a19ca949c6b89e889be3ae31772add252b7c9594f56b782f7e9",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "04ff2d2dac5f7c1bad60bea0ba216c98b0cca75b0dc4199b9926559806f08b83",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/reprise.rs",
+      "sha256": "a0f132c1890ce34ae7b3f9f337096ee99b5529e09b8f35e0bf0bcc9420eda73a",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          266,
+          272
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "2c43bb92dab0f0649b9a31b452b9781488b17248b61ec2e14c023b531907c38c",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/attach_journal_attestation_test.rs",
+      "sha256": "7287fcc7b5348e3d5f869af4c3b85c4e828677e5662569d1211e29a3c6750325",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          284,
+          290
+        ],
+        [
+          357,
+          363
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/capabilities_integration_test.rs",
+      "sha256": "dab0be5761f9cf55368896aeb2ab78c19a752c53129f1d3754f0fdecaddddb7a",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          109,
+          115
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/channel_observation_test.rs",
+      "sha256": "56d81885e63fc94d2eb2a6a7354556f60ee85404ee3ddc685b7e134adc29ad6c",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          215,
+          221
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/coordination_events_test.rs",
+      "sha256": "579d4742874094d39a002804e4ea3750c102795087dddafca3dd5f08581af7ac",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          237,
+          243
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_content_test.rs",
+      "sha256": "22c629f0248d35a9f97a50984f8badd02372ad7428810cb11372664c2b24148f",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          444,
+          450
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_contract_test.rs",
+      "sha256": "12431c0ee19b1bda1cd73438df900ee97a011af8a99e616d7c9e08f3f7a8c77f",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          370,
+          376
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_host_session_test.rs",
+      "sha256": "7e22df63a5c68cbeed293a8a6255804fff6023e725ff7703e4346b7e2b0ed9bf",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          295,
+          301
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_native_test.rs",
+      "sha256": "27c0579fb2b069ec33a89ca8d01be920d7f711b8fef1901695fec72e53da3e31",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          314,
+          320
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_service_test.rs",
+      "sha256": "c99f2a265a17a38902717d7f6aed1ee4c4bc53e55d392b85765990e91ffedbbc",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          381,
+          387
+        ],
+        [
+          485,
+          491
+        ],
+        [
+          697,
+          703
+        ],
+        [
+          722,
+          728
+        ],
+        [
+          1064,
+          1070
+        ],
+        [
+          1089,
+          1095
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/core_089_skill_test.rs",
+      "sha256": "48fd809d6d963e2c0c013181fe29e8aff958107358b2591a21fef1e13457d315",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          123,
+          129
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/edit159_e2e.rs",
+      "sha256": "1fd3ee6d9f2fa99328f7b69a62d115e32ec366133a4251ca59a5312e295d45a6",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "49647e27cccbd3912838c7c5c618a70e4320e0f41f1c0b41a6726f0d060d3216",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          652,
+          658
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "26cb48cee36d90ec2fd56ff3620e47eac7c9024257cf29dc0e72b326f35b1b1c",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          690,
+          696
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/integration_test.rs",
+      "sha256": "3ed988a67d878524a5cf0fb3e9897b70999518a9d966f8a3372f9158e00c5b4d",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          86,
+          92
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/lineage_cli_test.rs",
+      "sha256": "6729d943d366e8e0fe4531bc10a51b9448f3193ea1f1ade22e9ab35769cde756",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          136,
+          142
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/managed_parity_test.rs",
+      "sha256": "e9784ef6d739af08998a3d3598f3cfbcdfb2156527c87f3fe1a6b0942cc834d6",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          595,
+          601
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "84a5cc7f7a4803213b545a91376ada4121e843e867d2d6a2a6383b7e1cc8f21e",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          769,
+          775
+        ],
+        [
+          858,
+          864
+        ],
+        [
+          1183,
+          1189
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_delegation_real_glm.rs",
+      "sha256": "64b705640d879557ba4fff6d8d96a0c34ceaba191132e2a0735b578457b0bf8e",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          541,
+          547
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_provider_death149_test.rs",
+      "sha256": "fb84af733336befd4e345188389a8afbf41e139917b73a2d17ddbbf5b32f84da",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          232,
+          238
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/sc005_attach_budget.rs",
+      "sha256": "bf1314cdd22c36dfc9c4dad11b546fa98163ae302c66c0f73387d8e05926c650",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          257,
+          263
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/spawn_refusal_hosts_test.rs",
+      "sha256": "7d3fcce1e785f0aa18095bcc73d3ca9d94cb2d7ab4b0a108326324bf2bb8214f",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          178,
+          184
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/spec102_threads_test.rs",
+      "sha256": "4628a3c61b8acd5597db5f2e566c7f70d74e05bfb03906ae611f6028c339afc8",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          81,
+          87
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/spec138_project_test.rs",
+      "sha256": "fb6dbd445de35f68d83f756698f423f9870717f4e46f86f46af14ac7a89f4c04",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          90,
+          96
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/support/idempotent.rs",
+      "sha256": "6db645dc1b862cafd11125ea438139f838b3b48d57065a73bddf04780df501b8",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          765,
+          771
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/t3code_098_test.rs",
+      "sha256": "7ad5a126eff55fbb6f992c9643996463a2436d0c876d404b24790cebd98503d6",
+      "classification": "Register_default_false_only",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [
+        [
+          229,
+          235
+        ]
+      ],
+      "mechanical_diff_read_completed_no_later_than_utc": "2026-10-12T19:09:42.892947+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/acp.rs",
+      "sha256": "5fb0ae7c0f8f0043d8a5ec1aa994ecf6c1a4bd4e12d95588e159b70d812e35fc",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "2f409ee8cdeaf9bea1855c98e128122cb0e9169c3665272f5ccb5c0212f247b0",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "2cf5e15d979e811d5712bc6047f5a54a26547637f718051f992f15d35c84daa9",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "d1bb585a8d78a433c462e2068a8e708a5a3f3e1ad8b80c4e3b95a175827ae9a6",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "a1350645807f8546ef821da3d775f46cd130ad7cfb01a49fab081ffae699994e",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/docs/reference-communication.md",
+      "sha256": "2a9ffa4f524bf741834c50f41a984178f65a14c0cca224fa33834e03155d8f96",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/skills/bridget/SKILL.md",
+      "sha256": "8d7ec8ebec639c037d347c21545fadb489f779e24507b361d05dbc2abbe20bf0",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/skills/bridget/references/commandes.md",
+      "sha256": "b049412bf85288d14dea8947d9bb1d3cc4e64c764de705829905ffa19cd7e54b",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "edb2d875d570700a3fba50a3714ef926ff1e0a28c1513e7260132a26bf84841d",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contre-revue159B-plan.md",
+      "sha256": "61fb411c5f6cbc3fc17632532bd0a1bb8ebfa6d41dabe896cf45a186ccc70b77",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "7f00837c8fdb7d538275ff0d437b84b2f49365d2b3ea9ffe36f4e43811158450",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/implementation-b-foundations-annexe.md",
+      "sha256": "4ca3691945fd56140c5469f7e43315c8a1d7a7b97603b2ec57f867a860730ca4",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "d4a0ca0268ea77a3ee314bdfa2c9e573b9a9ca4b84e91fdd0727b48d5260b10f",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/quickstart.md",
+      "sha256": "35ca3eac390b1c70fb6fbf1e842bc145686ced769dae68b2f617fdc0419315c1",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/research.md",
+      "sha256": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "a96c535c55e51ac30f58e27712e950f53e7b8b96a8d1297d2bf5063132f135c2",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "acd4d02679e754f655d93b36b9d7e89b57b5d46ec1c21bd16cb3ceb437f7093f",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/preflight159B.json",
+      "sha256": "55fcd106e92bbee3067970c711a2c98a942713b7cf8bc59581a24a519c11a4f8",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/preflight159B.md",
+      "sha256": "7e80fd3ae719b82476d77ed45f013b6ee53a09b8f6e9a14e40a3b93b2b7e01b9",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/tests-159.md",
+      "sha256": "6005982865b6768a81c997c8001ea799408260cbd163b3c21a7b967180353a1e",
+      "classification": "semantic_or_mixed_requires_review",
+      "thematic_ranges": [],
+      "thematic_status": "NOT_STARTED",
+      "mechanical_diff_ranges": [],
+      "mechanical_diff_read_completed_no_later_than_utc": null
+    }
+  ]
+}

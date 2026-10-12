@@ -7,6 +7,9 @@ pub(crate) enum GuidanceAction {
     Interrupt,
     MidTurnDelivery,
     QueueList,
+    QueueCancel,
+    QueueReorder,
+    QueuePromote,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +40,10 @@ pub(crate) struct GuidanceFacts {
     pub actor_is_target: bool,
     pub actor_is_parent: bool,
     pub actor_is_child: bool,
+    pub actor_is_author: bool,
+    pub message_editable: bool,
+    pub recipient_turn_active: bool,
+    pub carrier_queue_fallback: bool,
     pub cross_project: bool,
     pub paused: bool,
     pub target_has_active_native_task: bool,
@@ -52,14 +59,34 @@ pub(crate) enum GuidanceRefusal {
     IntentNotPermitted { reason: &'static str },
     ReferentPaused,
     MissionActive,
+    NotEditable,
+    NoActiveTurn,
+    SteerUnavailable,
     InterruptRateLimited { retry_after_secs: u64 },
 }
 
-/// O(1), sans I/O ; les timestamps et comptes proviennent de guidance_events.
+/// Sans I/O ; O(1), ou O(1+Bactor) pour les copies locales de QueuePromote.
+/// Les timestamps et comptes proviennent de guidance_events.
 /// Les fenêtres sont libérées exactement à at+30 ou at+600, compte SQL inclusif.
 pub(crate) fn authorize(facts: &GuidanceFacts) -> Result<(), GuidanceRefusal> {
     use GuidanceAction::{Interrupt, MidTurnDelivery, QueueList};
     use GuidanceRefusal::IntentNotPermitted;
+    if matches!(
+        facts.action,
+        GuidanceAction::QueueCancel | GuidanceAction::QueueReorder | GuidanceAction::QueuePromote
+    ) && facts.actor == GuidanceActor::InternalPause
+    {
+        return Err(IntentNotPermitted {
+            reason: "identity_unattested",
+        });
+    }
+    if facts.action == GuidanceAction::QueuePromote {
+        // Avant reçu : droits Steer réemployés, la pause est évaluée après le rejeu.
+        let mut steer = facts.clone();
+        steer.action = GuidanceAction::Steer;
+        steer.paused = false;
+        return authorize(&steer);
+    }
     if facts.actor == GuidanceActor::InternalPause {
         return Ok(());
     }
@@ -104,6 +131,20 @@ pub(crate) fn authorize(facts: &GuidanceFacts) -> Result<(), GuidanceRefusal> {
             reason: "cross_project",
         });
     }
+    if matches!(
+        facts.action,
+        GuidanceAction::QueueCancel | GuidanceAction::QueueReorder
+    ) {
+        return if facts.actor_is_parent
+            || (facts.action == GuidanceAction::QueueCancel && facts.actor_is_author)
+        {
+            Ok(())
+        } else {
+            Err(IntentNotPermitted {
+                reason: "not_parent",
+            })
+        };
+    }
     if !facts.actor_is_parent && !(facts.action == MidTurnDelivery && facts.actor_is_child) {
         return Err(IntentNotPermitted {
             reason: "not_parent",
@@ -139,6 +180,28 @@ pub(crate) fn authorize(facts: &GuidanceFacts) -> Result<(), GuidanceRefusal> {
     Ok(())
 }
 
+/// Après le reçu : O(1+Bactor), mêmes droits156, puis phase et gardes de promotion.
+/// Le caller rejoue un reçu connu avant ce contrôle, sans relancer son effet.
+pub(crate) fn authorize_queue_edit(facts: &GuidanceFacts) -> Result<(), GuidanceRefusal> {
+    authorize(facts)?;
+    if !facts.message_editable {
+        return Err(GuidanceRefusal::NotEditable);
+    }
+    if facts.action == GuidanceAction::QueuePromote {
+        let mut steer = facts.clone();
+        steer.action = GuidanceAction::Steer;
+        // Cette fois, la garde Steer reçoit la vraie pause et conserve l'exception humaine.
+        authorize(&steer)?;
+        if !facts.recipient_turn_active {
+            return Err(GuidanceRefusal::NoActiveTurn);
+        }
+        if !facts.carrier_queue_fallback {
+            return Err(GuidanceRefusal::SteerUnavailable);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +220,10 @@ mod tests {
             actor_is_target: false,
             actor_is_parent: true,
             actor_is_child: false,
+            actor_is_author: false,
+            message_editable: true,
+            recipient_turn_active: true,
+            carrier_queue_fallback: true,
             cross_project: false,
             paused: false,
             target_has_active_native_task: false,
@@ -388,5 +455,233 @@ mod tests {
                 reason: "identity_unattested"
             })
         );
+    }
+
+    #[test]
+    fn edit159_rights_matrix() {
+        for action in [
+            GuidanceAction::QueueCancel,
+            GuidanceAction::QueueReorder,
+            GuidanceAction::QueuePromote,
+        ] {
+            let author_refusal = (action != GuidanceAction::QueueCancel).then_some("not_parent");
+            let cases = [
+                (
+                    "parent",
+                    GuidanceActor::Agent {
+                        id: "parent159".into(),
+                    },
+                    true,
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    None,
+                ),
+                (
+                    "humain attaché",
+                    GuidanceActor::AttachedHuman,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    None,
+                ),
+                (
+                    "auteur",
+                    GuidanceActor::Agent {
+                        id: "author159".into(),
+                    },
+                    false,
+                    true,
+                    false,
+                    true,
+                    false,
+                    false,
+                    author_refusal,
+                ),
+                (
+                    "destinataire",
+                    GuidanceActor::Agent {
+                        id: "target159".into(),
+                    },
+                    false,
+                    false,
+                    true,
+                    true,
+                    false,
+                    false,
+                    Some("self_target"),
+                ),
+                (
+                    "destinataire auteur",
+                    GuidanceActor::Agent {
+                        id: "target159".into(),
+                    },
+                    false,
+                    true,
+                    true,
+                    true,
+                    false,
+                    false,
+                    Some("self_target"),
+                ),
+                (
+                    "pair",
+                    GuidanceActor::Agent {
+                        id: "peer159".into(),
+                    },
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    Some("not_parent"),
+                ),
+                (
+                    "client nu",
+                    GuidanceActor::BareClient,
+                    false,
+                    true,
+                    false,
+                    true,
+                    false,
+                    false,
+                    Some("identity_unattested"),
+                ),
+                (
+                    "preuve enfant",
+                    GuidanceActor::Agent {
+                        id: "child159".into(),
+                    },
+                    true,
+                    true,
+                    false,
+                    true,
+                    true,
+                    false,
+                    Some("identity_unattested"),
+                ),
+                (
+                    "identité non attestée",
+                    GuidanceActor::Agent {
+                        id: "parent159".into(),
+                    },
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Some("identity_unattested"),
+                ),
+                (
+                    "autre projet",
+                    GuidanceActor::Agent {
+                        id: "author159".into(),
+                    },
+                    true,
+                    true,
+                    false,
+                    true,
+                    false,
+                    true,
+                    Some("cross_project"),
+                ),
+                (
+                    "pause interne sans droit neuf",
+                    GuidanceActor::InternalPause,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                    false,
+                    Some("identity_unattested"),
+                ),
+            ];
+            for (label, actor, parent, author, target, attested, child, cross, refusal) in cases {
+                let mut f = facts(action);
+                f.actor = actor;
+                f.actor_is_parent = parent;
+                f.actor_is_author = author;
+                f.actor_is_target = target;
+                f.identity_attested = attested;
+                f.child_proof = child;
+                f.cross_project = cross;
+                let expected = refusal.map_or(Ok(()), |reason| {
+                    Err(GuidanceRefusal::IntentNotPermitted { reason })
+                });
+                assert_eq!(
+                    authorize(&f),
+                    expected,
+                    "identité/droits {label}/{action:?}"
+                );
+                assert_eq!(
+                    authorize_queue_edit(&f),
+                    expected,
+                    "édition {label}/{action:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn edit159_rights_pause_et_gardes() {
+        for action in [
+            GuidanceAction::QueueCancel,
+            GuidanceAction::QueueReorder,
+            GuidanceAction::QueuePromote,
+        ] {
+            let mut f = facts(action);
+            f.paused = true;
+            assert_eq!(authorize(&f), Ok(()), "avant reçu: droits seuls/{action:?}");
+            let expected = if action == GuidanceAction::QueuePromote {
+                Err(GuidanceRefusal::ReferentPaused)
+            } else {
+                Ok(())
+            };
+            assert_eq!(authorize_queue_edit(&f), expected, "pause/{action:?}");
+            f.message_editable = false;
+            assert_eq!(
+                authorize(&f),
+                Ok(()),
+                "reçu consultable après changement de phase"
+            );
+            assert_eq!(
+                authorize_queue_edit(&f),
+                Err(GuidanceRefusal::NotEditable),
+                "phase avant pause"
+            );
+            f.actor = GuidanceActor::AttachedHuman;
+            f.actor_is_parent = false;
+            assert_eq!(authorize_queue_edit(&f), Err(GuidanceRefusal::NotEditable));
+            f.message_editable = true;
+            assert_eq!(
+                authorize_queue_edit(&f),
+                Ok(()),
+                "exception humaine attestée/{action:?}"
+            );
+            assert!(f.paused, "la garde ne modifie pas les faits source");
+        }
+        let mut f = facts(GuidanceAction::QueuePromote);
+        f.recipient_turn_active = false;
+        f.carrier_queue_fallback = false;
+        assert_eq!(
+            authorize_queue_edit(&f),
+            Err(GuidanceRefusal::NoActiveTurn),
+            "tour avant fallback"
+        );
+        f.recipient_turn_active = true;
+        assert_eq!(
+            authorize_queue_edit(&f),
+            Err(GuidanceRefusal::SteerUnavailable)
+        );
+        f.carrier_queue_fallback = true;
+        assert_eq!(authorize_queue_edit(&f), Ok(()));
     }
 }

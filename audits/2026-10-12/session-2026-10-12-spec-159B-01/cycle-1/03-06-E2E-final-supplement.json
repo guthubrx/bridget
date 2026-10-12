@@ -1,0 +1,34 @@
+{
+  "module": [
+    "03",
+    "06"
+  ],
+  "observed_at": "2026-10-12T19:36:45.552688+00:00",
+  "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+  "sha256_before": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+  "sha256_after": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+  "fresh_read_ranges": [
+    [
+      600,
+      616
+    ],
+    [
+      932,
+      950
+    ],
+    [
+      1529,
+      1578
+    ]
+  ],
+  "whole_file": false,
+  "source_guard": true,
+  "historical_sources": [
+    "70cdcapturec400",
+    "943b",
+    "016788"
+  ],
+  "receipt_root": "/Users/moi/.cache/bridget-tests159B-20261012/ROOT-final-E2E-FR024-source.json",
+  "conclusion": "Uniquementfixturetest. itemstarted+completed corrélésclientId ; wait40bornégrace30+tick ; phaseDdispatching|acked neforgeACK. Oraclesordre strict/noDdup/canonintacts. T023pendingpasPASSanticipé.",
+  "metadata_precision": "Ancien03-06-read-manifest.started_at19:29:00 estestimationdecontexte, pasmesureexacte. Seul completed_at horodatéau momentréeldeproductionrapport vautbornedeslectures ; nepasutiliserstarted_atpourdéduireduréeprecise."
+}

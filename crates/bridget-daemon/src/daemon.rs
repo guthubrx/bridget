@@ -858,6 +858,7 @@ struct Presence {
     busy_period_start: Option<Instant>,
     last_attested_at: Option<Instant>,
     turn_attest: bool,
+    queue_fallback: bool,
     /// Dernière attestation de CAPACITÉ (register, tour, runtime…) — pas le
     /// heartbeat. C'est ce que `last_seen_secs` expose à who / bridget-idle.
     capacity_seen: Instant,
@@ -8444,6 +8445,7 @@ fn handle_register_with_channel(
                             .then_some(register_now),
                         last_attested_at: turn_attest.then_some(register_now),
                         turn_attest,
+                        queue_fallback: false,
                         capacity_seen: Instant::now(),
                         link_seen: Instant::now(),
                         reconnect_count,
@@ -9468,6 +9470,9 @@ fn maintain_stores(st: &mut DaemonState, now: i64) {
     native_delegation::maintain_retention(st, now);
     if let Err(error) = st.idempotency.purge_guidance_events(now) {
         warn!("entretien: purge du guidage : {error}");
+    }
+    if let Err(error) = st.idempotency.purge_queue_edits(now) {
+        warn!("entretien: purge des reçus d'édition : {error}");
     }
 }
 
@@ -10904,6 +10909,10 @@ fn guidance_facts(
         actor_is_target: identity.as_ref().is_some_and(|(agent, _)| agent == target),
         actor_is_parent: parent,
         actor_is_child: child,
+        actor_is_author: false,
+        message_editable: false,
+        recipient_turn_active: false,
+        carrier_queue_fallback: false,
         actor,
         trusted_origin: trusted_producer.or(if ui {
             Some(bridget_core::MessageOrigin::Human)
@@ -10943,7 +10952,11 @@ fn guidance_event_labels(
     let action = match action {
         GuidanceAction::Steer => "steer",
         GuidanceAction::Interrupt => "interrupt",
-        GuidanceAction::MidTurnDelivery | GuidanceAction::QueueList => "read_only",
+        GuidanceAction::MidTurnDelivery
+        | GuidanceAction::QueueList
+        | GuidanceAction::QueueCancel
+        | GuidanceAction::QueueReorder => "read_only",
+        GuidanceAction::QueuePromote => "steer",
     };
     let path = match path {
         GuidancePath::SendIdempotent => "send_idempotent",
@@ -11053,13 +11066,7 @@ fn check_guidance(
         ("intent_not_permitted".into(), "identity_unattested".into())
     })?;
     if let Err(refusal) = crate::guidance::authorize(&facts) {
-        use crate::guidance::GuidanceRefusal;
-        let (code, reason) = match refusal {
-            GuidanceRefusal::IntentNotPermitted { reason } => ("intent_not_permitted", reason.to_string()),
-            GuidanceRefusal::ReferentPaused => ("referent_paused", "referent_paused".into()),
-            GuidanceRefusal::MissionActive => ("mission_active", "mission_active".into()),
-            GuidanceRefusal::InterruptRateLimited { retry_after_secs } => ("interrupt_rate_limited", serde_json::json!({"code":"interrupt_rate_limited","retry_after_secs":retry_after_secs}).to_string()),
-        };
+        let (code, reason) = guidance_refusal_fields(refusal);
         if let Err(error) =
             record_guidance_outcome(st, &facts, target, id, &format!("refused:{code}"))
         {
@@ -11108,6 +11115,293 @@ fn guidance_mid_turn_ok(
 }
 
 // Lecture SQL par rang puis droits156 avant aperçu ; au plus 200 entrées, aucune écriture.
+// Même rendu156 pour le contrôle existant et les éditions; aucune autorité ici.
+fn guidance_refusal_fields(refusal: crate::guidance::GuidanceRefusal) -> (&'static str, String) {
+    use crate::guidance::GuidanceRefusal;
+    match refusal {
+        GuidanceRefusal::IntentNotPermitted { reason } => ("intent_not_permitted", reason.to_string()),
+        GuidanceRefusal::ReferentPaused => ("referent_paused", "referent_paused".into()),
+        GuidanceRefusal::MissionActive => ("mission_active", "mission_active".into()),
+        GuidanceRefusal::NotEditable => ("not_held", "not_held".into()),
+        GuidanceRefusal::NoActiveTurn => ("no_active_turn", "no_active_turn".into()),
+        GuidanceRefusal::SteerUnavailable => ("steer_unavailable", "steer_unavailable".into()),
+        GuidanceRefusal::InterruptRateLimited { retry_after_secs } => ("interrupt_rate_limited", serde_json::json!({"code":"interrupt_rate_limited","retry_after_secs":retry_after_secs}).to_string()),
+    }
+}
+
+pub(crate) fn queue_edit_refusal_code(refusal: crate::guidance::GuidanceRefusal) -> String {
+    let (code, reason) = guidance_refusal_fields(refusal);
+    if code == "intent_not_permitted" {
+        format!("{code}:{reason}")
+    } else {
+        code.into()
+    }
+}
+
+// O(log n+mB): reçu scoped ou au plus deux Held du destinataire; bytes authentiques.
+// Cette lecture d'autorité ne rend aucun résultat de reçu et ne change aucune phase.
+fn queue_edit_actor_is_author(
+    st: &DaemonState,
+    scope: &str,
+    request: &str,
+    recipient: &str,
+    message_id: &str,
+    actor: &str,
+) -> rusqlite::Result<bool> {
+    use rusqlite::OptionalExtension;
+    let original: Option<Option<Vec<u8>>> = st
+        .store
+        .connection()
+        .query_row(
+            "SELECT d.message_bytes FROM queue_edits e LEFT JOIN send_deliveries d
+           ON d.delivery_id=e.delivery_id WHERE e.issuer_scope=?1 AND e.request_id=?2",
+            rusqlite::params![scope, request],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let bytes = match original {
+        Some(bytes) => bytes,
+        None => {
+            let mut stmt = st.store.connection().prepare(
+                "SELECT message_bytes FROM send_deliveries WHERE recipient_agent=?1 AND phase='held'
+                 AND CASE WHEN json_valid(message_bytes) THEN json_extract(message_bytes,'$.id') END=?2 LIMIT 2",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![recipient, message_id], |row| {
+                    row.get::<_, Vec<u8>>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.len() != 1 {
+                return Ok(false);
+            }
+            rows.into_iter().next()
+        }
+    };
+    Ok(bytes
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<bridget_core::BridgetMessage>(bytes).ok())
+        .is_some_and(|message| {
+            message.id == message_id
+                && routing_agent_id(&message.to) == recipient
+                && routing_agent_id(&message.from) == actor
+        }))
+}
+
+// O(C+log E+log N+log R+Bgroup+B), mémoire O(B+I).
+// C garde156/preuve auteur, E reçus, N remises, R demandes, Bgroup JSON cible, B octets, I acteur.
+// State est tenu jusqu’au COMMIT ; le reçu seul ne prouve aucun droit.
+#[allow(clippy::too_many_arguments)]
+fn handle_queue_edit(
+    st: &mut DaemonState,
+    conn: &str,
+    request_id: String,
+    target: String,
+    action: bridget_transport::protocol::QueueEditAction,
+    message_id: String,
+    before_message_id: Option<String>,
+    controls: &mut Vec<DeferredControl>,
+) -> (
+    DaemonToWrapper,
+    Option<crate::idempotency::OrphanedDeliveryNotice>,
+) {
+    use bridget_transport::protocol::{QueueEditAction, QueueEditState};
+    let failed = |id: &str| DaemonToWrapper::Nack {
+        id: id.into(),
+        reason: "queue_edit_storage_unavailable".into(),
+    };
+    let Some(negotiated) = st.client_negotiations.get(conn) else {
+        return (
+            DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::NegotiationRequired,
+            },
+            None,
+        );
+    };
+    let scope = negotiated.issuer_scope.clone();
+    let recipient = routing_agent_id(&target).to_string();
+    let mut facts = match guidance_facts(
+        st,
+        Some(conn),
+        &recipient,
+        match action {
+            QueueEditAction::Cancel => crate::guidance::GuidanceAction::QueueCancel,
+            QueueEditAction::Reorder => crate::guidance::GuidanceAction::QueueReorder,
+            QueueEditAction::Promote => crate::guidance::GuidanceAction::QueuePromote,
+        },
+        crate::guidance::GuidancePath::Cancel,
+        None,
+        false,
+        unix_now_secs(),
+    ) {
+        Ok(facts) => facts,
+        Err(error) => {
+            warn!("faits d'édition indisponibles: {error}");
+            return (failed(&request_id), None);
+        }
+    };
+    let (actor, identity, _) = guidance_source(st, Some(conn));
+    let actor_label = match &actor {
+        crate::guidance::GuidanceActor::Agent { id } => id.clone(),
+        crate::guidance::GuidanceActor::AttachedHuman => "human".into(),
+        _ => "unattested".into(),
+    };
+    if let Some((agent, _)) = identity {
+        facts.actor_is_author = match queue_edit_actor_is_author(
+            st,
+            &scope,
+            &request_id,
+            &recipient,
+            &message_id,
+            &agent,
+        ) {
+            Ok(author) => author,
+            Err(error) => {
+                warn!("preuve auteur indisponible: {error}");
+                return (failed(&request_id), None);
+            }
+        };
+    }
+    if let Err(refusal) = crate::guidance::authorize(&facts) {
+        return (
+            DaemonToWrapper::QueueEditResult {
+                request_id,
+                state: QueueEditState::Refused,
+                refusal: Some(queue_edit_refusal_code(refusal)),
+                effect: None,
+            },
+            None,
+        );
+    }
+    // Faits primaires du porteur, protégés par State ; aucune déduction depuis le message.
+    let target_conn = st.router.get_agent(&recipient).and_then(|route| {
+        live_connection_identity(st, &route.connection_id)
+            .filter(|(agent, _)| agent == &recipient)
+            .filter(|_| st.connections.contains_key(&route.connection_id))
+            .map(|(_, instance)| (route.connection_id.clone(), instance))
+    });
+    if let Some((_, instance)) = &target_conn
+        && let Some(presence) = st.presences.get(instance)
+    {
+        facts.recipient_turn_active = presence.turn_attest
+            && presence.state == "busy"
+            && presence.last_attested_at.is_some_and(|at| {
+                Instant::now().saturating_duration_since(at) <= Duration::from_secs(90)
+            });
+        facts.carrier_queue_fallback = presence.queue_fallback;
+    }
+    let canon = match serde_json::to_vec(&serde_json::json!({
+        "action": action, "target": recipient, "message_id": message_id, "before_message_id": before_message_id,
+    })) {
+        Ok(canon) => canon,
+        Err(error) => {
+            warn!("canon d'édition indisponible: {error}");
+            return (failed(&request_id), None);
+        }
+    };
+    let result = match action {
+        QueueEditAction::Cancel => st
+            .idempotency
+            .apply_cancel(
+                &scope,
+                &request_id,
+                &canon,
+                &actor_label,
+                &recipient,
+                &message_id,
+                unix_now_secs(),
+            )
+            .map(|(receipt, notice)| (receipt, notice, None)),
+        QueueEditAction::Reorder => st
+            .idempotency
+            .apply_reorder(
+                &scope,
+                &request_id,
+                &canon,
+                &actor_label,
+                &recipient,
+                &message_id,
+                before_message_id.as_deref(),
+                unix_now_secs(),
+            )
+            .map(|(receipt, _fresh)| (receipt, None, None)),
+        QueueEditAction::Promote => st
+            .idempotency
+            .apply_promote(
+                &scope,
+                &request_id,
+                &canon,
+                &actor_label,
+                &recipient,
+                &message_id,
+                &facts,
+                queue_edit_refusal_code,
+                unix_now_secs(),
+            )
+            .map(|(receipt, delivery, notice)| (receipt, notice, delivery)),
+    };
+    match result {
+        Ok((receipt, notice, promoted)) => {
+            if let Some(notice) = &notice {
+                st.held_ids.remove(&notice.message_id);
+                st.pending_replies
+                    .retain(|pending| pending.msg_id != notice.message_id);
+            }
+            if let Some(delivery) = promoted {
+                st.held_ids.remove(&message_id);
+                // Seule la copie envoyée change ; BLOB, canon, ID et génération SQL restent intacts.
+                let projection =
+                    serde_json::from_slice::<bridget_core::BridgetMessage>(&delivery.message_bytes)
+                        .map_err(|error| error.to_string())
+                        .and_then(|mut message| {
+                            message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+                            if !message
+                                .references
+                                .iter()
+                                .any(|reference| reference == "steer-or-queue")
+                            {
+                                message.references.push("steer-or-queue".into());
+                            }
+                            serde_json::to_vec(&message).map_err(|error| error.to_string())
+                        })
+                        .and_then(|bytes| {
+                            let target = target_conn
+                                .as_ref()
+                                .map(|(conn, _)| conn.as_str())
+                                .ok_or_else(|| {
+                                    "connexion primaire de promotion absente".to_string()
+                                })?;
+                            let mut copy = delivery.clone();
+                            copy.message_bytes = bytes;
+                            defer_idempotent_delivery(st, target, copy, controls, None, Some(conn))
+                        });
+                if let Err(error) = projection {
+                    warn!("promotion committée, projection non confirmée: {error}");
+                    if let Err(error) = st.idempotency.mark_delivery_indeterminate(
+                        &delivery.delivery_id,
+                        &delivery.recipient_instance_id,
+                        delivery.delivery_generation,
+                    ) {
+                        warn!("quarantaine de promotion non confirmée: {error}");
+                    }
+                }
+            }
+            (
+                DaemonToWrapper::QueueEditResult {
+                    request_id,
+                    state: receipt.state,
+                    refusal: receipt.refusal,
+                    effect: receipt.effect,
+                },
+                notice,
+            )
+        }
+        Err(error) => {
+            warn!("transaction d'édition refusée: {error}");
+            (failed(&request_id), None)
+        }
+    }
+}
+
 fn handle_guidance_queue(st: &DaemonState, conn: &str, target: &str) -> DaemonToWrapper {
     let unavailable = || DaemonToWrapper::Nack {
         id: "queue".into(),
@@ -17770,9 +18064,17 @@ fn handle_wrapper_message_with_peer(
             && st.connections.contains_key(conn_id)
             && match &msg {
                 WrapperToDaemon::ClientHello { capabilities, .. } => {
-                    capabilities.as_slice() == [ClientCapability::QueueListV1]
+                    !capabilities.is_empty()
+                        && capabilities.iter().all(|capability| {
+                            matches!(
+                                capability,
+                                ClientCapability::QueueListV1 | ClientCapability::QueueEditV1
+                            )
+                        })
                 }
-                WrapperToDaemon::QueueList { .. } => true,
+                WrapperToDaemon::QueueList { .. } | WrapperToDaemon::QueueEditRequest { .. } => {
+                    true
+                }
                 _ => false,
             };
         if queue_attach {
@@ -17978,6 +18280,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::QueueList { .. }
+                | WrapperToDaemon::QueueEditRequest { .. }
                 | WrapperToDaemon::ControlExecution { .. }
                 | WrapperToDaemon::ControlExecutionReported { .. }
                 | WrapperToDaemon::DelegatedRuntimeEvent { .. }
@@ -18071,7 +18374,24 @@ fn handle_wrapper_message_with_peer(
             {
                 Some(ClientRefusal::CapabilityNotNegotiated)
             }
+            Some(ConnectionRole::Attach)
+                if matches!(&msg, WrapperToDaemon::QueueEditRequest { .. })
+                    && !st.client_negotiations.contains_key(conn_id) =>
+            {
+                Some(ClientRefusal::NegotiationRequired)
+            }
+            Some(ConnectionRole::Attach)
+                if matches!(&msg, WrapperToDaemon::QueueEditRequest { .. })
+                    && !st.client_negotiations.get(conn_id).is_some_and(|n| {
+                        n.capabilities.contains(&ClientCapability::QueueEditV1)
+                    }) =>
+            {
+                Some(ClientRefusal::CapabilityNotNegotiated)
+            }
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
+                WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueEditV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
+                WrapperToDaemon::QueueEditRequest { .. } => None,
                 WrapperToDaemon::WakeRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::WakeRequest { .. } => None,
                 WrapperToDaemon::QueueList { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
@@ -18320,6 +18640,7 @@ fn handle_wrapper_message_with_peer(
                         | WrapperToDaemon::SendIdempotent { .. }
                         | WrapperToDaemon::Lookup { .. }
                         | WrapperToDaemon::QueueList { .. }
+                        | WrapperToDaemon::QueueEditRequest { .. }
                         | WrapperToDaemon::ControlExecution { .. }
                         | WrapperToDaemon::ProjectRoundRequest { .. }
                         | WrapperToDaemon::ProjectRoundDispatch { .. }
@@ -18350,6 +18671,87 @@ fn handle_wrapper_message_with_peer(
             state,
             unix_now_secs(),
         )),
+        WrapperToDaemon::QueueEditRequest {
+            request_id,
+            target,
+            action,
+            message_id,
+            before_message_id,
+        } => {
+            let mut controls = Vec::new();
+            let (response, notice) = {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                handle_queue_edit(
+                    &mut st,
+                    conn_id,
+                    request_id,
+                    target,
+                    action,
+                    message_id,
+                    before_message_id,
+                    &mut controls,
+                )
+            };
+            // Le COMMIT et le relâchement de State précèdent toute poussée. Rejeu : zéro contrôle.
+            let failed_controls = execute_controls(controls);
+            if !failed_controls.is_empty() {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                for control in failed_controls {
+                    if let DaemonToWrapper::DeliverIdempotent {
+                        delivery_id,
+                        recipient_instance_id,
+                        delivery_generation,
+                        ..
+                    } = control.message
+                    {
+                        if let Err(error) = st.idempotency.mark_delivery_indeterminate(
+                            &delivery_id,
+                            &recipient_instance_id,
+                            delivery_generation,
+                        ) {
+                            warn!("poussée de promotion non confirmée: {error}");
+                        }
+                    }
+                }
+            }
+            // Le retrait est committé et State relâché avant le writer. Rejeu: aucune notice fresh.
+            if let Some(notice) = notice {
+                use rusqlite::OptionalExtension;
+                let pending = {
+                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let body = st.store.connection().query_row(
+                        "SELECT body FROM orphan_emitter_notices WHERE delivery_id=?1 AND notified_at IS NULL",
+                        [&notice.delivery_id], |row| row.get::<_, String>(0),
+                    ).optional();
+                    match body {
+                        Ok(Some(body)) => st
+                            .router
+                            .get_agent(&notice.sender)
+                            .and_then(|route| st.connections.get(&route.connection_id))
+                            .cloned()
+                            .map(|writer| (writer, body)),
+                        Ok(None) => None,
+                        Err(error) => {
+                            warn!("notice d'édition reste durable: {error}");
+                            None
+                        }
+                    }
+                };
+                if let Some((writer, body)) = pending {
+                    if let Err(error) = deliver_to_agent(&writer, &notice.sender, &body) {
+                        warn!("notice d'édition différée: {error}");
+                    } else if let Err(error) = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .idempotency
+                        .mark_orphan_emitter_notified(&notice.delivery_id, unix_now_secs())
+                    {
+                        warn!("accusé de notice d'édition refusé: {error}");
+                    }
+                }
+            }
+            Some(response)
+        }
         WrapperToDaemon::QueueList { target } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             Some(handle_guidance_queue(&st, conn_id, &target))
@@ -19836,6 +20238,7 @@ fn handle_wrapper_message_with_peer(
                         capability,
                         ClientCapability::SendIdempotent
                             | ClientCapability::QueueListV1
+                            | ClientCapability::QueueEditV1
                             | ClientCapability::ThreadMembersV1
                             | ClientCapability::HumanThreadViewV1
                             | ClientCapability::HumanThreadViewRecentV1
@@ -21097,6 +21500,7 @@ fn handle_wrapper_message_with_peer(
             turn_in_progress,
             journal_available,
             turn_attest,
+            queue_fallback,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if instance_id
@@ -21127,6 +21531,13 @@ fn handle_wrapper_message_with_peer(
                 &mut st,
                 turn_attest,
             );
+            if let DaemonToWrapper::Registered { agent_id, .. } = &response
+                && let Some((owner, instance)) = live_connection_identity(&st, conn_id)
+                && owner.as_str() == agent_id.as_str()
+                && let Some(presence) = st.presences.get_mut(&instance)
+            {
+                presence.queue_fallback = queue_fallback;
+            }
             if let (
                 Some(instance_id),
                 DaemonToWrapper::Registered {
@@ -22338,6 +22749,7 @@ fn get_status_until(
         turn_in_progress: false,
         journal_available: None,
         turn_attest: false,
+        queue_fallback: false,
     };
     if !matches!(
         connection.exchange(&registration),
@@ -24010,6 +24422,1063 @@ mod spec140_title_tests {
 mod presence_tests {
     use super::*;
 
+    // T017 : vrais sockets, preuve primaire réemployée et une seule négociation.
+    fn edit159_cancel_auxiliary(
+        f: &Held159SweepFixture,
+        connection: &str,
+        scope: &str,
+        agent: &str,
+    ) -> BufReader<UnixStream> {
+        let (writer, peer) = control_socket("edit159-aux");
+        let (instance_id, credential) = {
+            let mut st = f.shared.lock().unwrap();
+            let owner = st.router.get_agent(agent).unwrap().connection_id.clone();
+            let instance_id = st.conn_instances[&owner].clone();
+            let credential = st.identity_credentials[&owner].clone();
+            st.connections.insert(connection.into(), writer);
+            (instance_id, credential)
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &f.shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RegisterAuxiliary {
+                    agent_id: agent.into(),
+                    instance_id,
+                    credential,
+                },
+                &f.shared
+            ),
+            Some(DaemonToWrapper::Registered {
+                credential: None,
+                ..
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message(connection, WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION, issuer_scope: scope.into(),
+            capabilities: vec![ClientCapability::QueueEditV1],
+        }, &f.shared), Some(DaemonToWrapper::ClientWelcome { capabilities, .. })
+            if capabilities == vec![ClientCapability::QueueEditV1])
+        );
+        assert_eq!(
+            live_connection_identity(&f.shared.lock().unwrap(), connection)
+                .unwrap()
+                .0,
+            agent
+        );
+        peer
+    }
+
+    fn edit159_cancel_fixture() -> (Held159SweepFixture, BufReader<UnixStream>) {
+        let f = held159_sweep_fixture();
+        // held159-client garde son Hello SendOnly; une nouvelle connexion édite.
+        let peer = edit159_cancel_auxiliary(
+            &f,
+            "edit159-client",
+            "012_scope_held159_oracle",
+            &f.message.from,
+        );
+        (f, peer)
+    }
+
+    fn edit159_cancel_request(
+        f: &Held159SweepFixture,
+        connection: &str,
+        request: &str,
+    ) -> DaemonToWrapper {
+        handle_wrapper_message(
+            connection,
+            WrapperToDaemon::QueueEditRequest {
+                request_id: request.into(),
+                target: f.message.to.clone(),
+                action: bridget_transport::protocol::QueueEditAction::Cancel,
+                message_id: f.message.id.clone(),
+                before_message_id: None,
+            },
+            &f.shared,
+        )
+        .unwrap()
+    }
+
+    fn edit159_cancel_applied(response: &DaemonToWrapper, request: &str) {
+        assert!(
+            matches!(response, DaemonToWrapper::QueueEditResult {
+            request_id, state: bridget_transport::protocol::QueueEditState::Applied,
+            refusal: None, effect: None,
+        } if request_id == request),
+            "résultat de retrait final attendu: {response:?}"
+        );
+    }
+
+    #[test]
+    fn edit159_cancel_retient_puis_retire_jamais_livre() {
+        let (mut f, _editor_peer) = edit159_cancel_fixture();
+        edit159_cancel_applied(
+            &edit159_cancel_request(&f, "edit159-client", "cancel159-never"),
+            "cancel159-never",
+        );
+        assert_eq!(
+            held159_release_phase(&f.shared, &f.delivery_id),
+            "cancelled"
+        );
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::TurnState { in_progress: false },
+                &f.shared
+            )
+            .is_none()
+        );
+        assert_eq!(
+            held159_release_phase(&f.shared, &f.delivery_id),
+            "cancelled"
+        );
+        f._target
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            matches!(f._target.read_line(&mut line), Err(e)
+            if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "{line}"
+        );
+        assert!(line.is_empty(), "aucune remise retirée: {line}");
+    }
+
+    #[test]
+    fn edit159_cancel_suivi_de_reponse_clos_en_base_et_en_memoire() {
+        let (f, _editor_peer) = edit159_cancel_fixture();
+        assert!(
+            f.shared
+                .lock()
+                .unwrap()
+                .pending_replies
+                .iter()
+                .any(|p| p.msg_id == f.message.id)
+        );
+        assert!(f.shared.lock().unwrap().held_ids.contains(&f.message.id));
+        edit159_cancel_applied(
+            &edit159_cancel_request(&f, "edit159-client", "cancel159-tracking"),
+            "cancel159-tracking",
+        );
+        let st = f.shared.lock().unwrap();
+        assert_eq!(
+            st.store.get_request(&f.message.id).unwrap().unwrap().state,
+            "cancelled"
+        );
+        assert!(!st.pending_replies.iter().any(|p| p.msg_id == f.message.id));
+        assert!(!st.held_ids.contains(&f.message.id));
+    }
+
+    #[test]
+    fn edit159_cancel_aucun_rappel_apres_retrait() {
+        let (f, _editor_peer) = edit159_cancel_fixture();
+        edit159_cancel_applied(
+            &edit159_cancel_request(&f, "edit159-client", "cancel159-reminders"),
+            "cancel159-reminders",
+        );
+        for elapsed in [20, 40, 60, 91] {
+            assert!(
+                held159_sweep_cycle(&f, elapsed).is_empty(),
+                "aucun palier après retrait/{elapsed}"
+            );
+        }
+        let st = f.shared.lock().unwrap();
+        assert_eq!(
+            st.store.get_request(&f.message.id).unwrap().unwrap().state,
+            "cancelled"
+        );
+        assert!(
+            st.store
+                .latest_deferred_reminder(&f.message.id)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn edit159_cancel_droits_auteur_parent_humain() {
+        for role in ["auteur", "parent", "humain"] {
+            let (f, _editor_peer) = edit159_cancel_fixture();
+            let mut retained_peers = Vec::new();
+            let connection = match role {
+                "auteur" => "edit159-client",
+                "parent" => {
+                    let parent = "89000000-0000-4000-8000-000000000201";
+                    negotiate_idempotent_client(
+                        &f.shared,
+                        "edit159-parent-bootstrap",
+                        "012_scope_edit159_parent",
+                        parent,
+                    );
+                    let (writer, peer) = control_socket("edit159-parent-primary");
+                    {
+                        let mut st = f.shared.lock().unwrap();
+                        let primary = st.router.get_agent(parent).unwrap().connection_id.clone();
+                        st.connections.insert(primary, writer);
+                        guidance156_link_parent(&mut st, "edit159-parent-bootstrap", "conn-1");
+                    }
+                    retained_peers.push(peer);
+                    retained_peers.push(edit159_cancel_auxiliary(
+                        &f,
+                        "edit159-parent",
+                        "012_scope_edit159_parent",
+                        parent,
+                    ));
+                    "edit159-parent"
+                }
+                "humain" => {
+                    let (writer, peer) = control_socket("edit159-human");
+                    retained_peers.push(peer);
+                    f.shared
+                        .lock()
+                        .unwrap()
+                        .connections
+                        .insert("edit159-human".into(), writer);
+                    assert!(matches!(
+                        handle_wrapper_message(
+                            "edit159-human",
+                            WrapperToDaemon::RoleHandshake {
+                                role: ConnectionRole::Attach,
+                            },
+                            &f.shared
+                        ),
+                        Some(DaemonToWrapper::RoleAccepted {
+                            role: ConnectionRole::Attach
+                        })
+                    ));
+                    assert!(matches!(
+                        handle_wrapper_message(
+                            "edit159-human",
+                            WrapperToDaemon::ClientHello {
+                                contract_version: CLIENT_CONTRACT_VERSION,
+                                issuer_scope: "012_scope_edit159_human".into(),
+                                capabilities: vec![ClientCapability::QueueEditV1],
+                            },
+                            &f.shared
+                        ),
+                        Some(DaemonToWrapper::ClientWelcome { .. })
+                    ));
+                    assert_eq!(
+                        guidance_source(&f.shared.lock().unwrap(), Some("edit159-human")).0,
+                        crate::guidance::GuidanceActor::AttachedHuman
+                    );
+                    "edit159-human"
+                }
+                _ => unreachable!(),
+            };
+            let request = format!("cancel159-rights-{role}");
+            let first = edit159_cancel_request(&f, connection, &request);
+            edit159_cancel_applied(&first, &request);
+            assert_eq!(
+                held159_release_phase(&f.shared, &f.delivery_id),
+                "cancelled"
+            );
+            let replay = edit159_cancel_request(&f, connection, &request);
+            assert_eq!(
+                encode(&replay).unwrap(),
+                encode(&first).unwrap(),
+                "même résultat rejoué pour {role}"
+            );
+            assert_eq!(
+                held159_release_phase(&f.shared, &f.delivery_id),
+                "cancelled"
+            );
+            drop(retained_peers);
+        }
+    }
+
+    #[test]
+    fn edit159_cancel_destinataire_et_pair_refuses() {
+        for recipient in [true, false] {
+            let (f, _editor_peer) = edit159_cancel_fixture();
+            let actor = if recipient {
+                f.message.to.as_str()
+            } else {
+                "89000000-0000-4000-8000-000000000301"
+            };
+            negotiate_idempotent_client(
+                &f.shared,
+                "edit159-denied-bootstrap",
+                "012_scope_edit159_denied",
+                actor,
+            );
+            let (writer, peer) = control_socket("edit159-denied-primary");
+            {
+                let mut st = f.shared.lock().unwrap();
+                let primary = st.router.get_agent(actor).unwrap().connection_id.clone();
+                st.connections.insert(primary, writer);
+            }
+            let _denied_editor_peer =
+                edit159_cancel_auxiliary(&f, "edit159-denied", "012_scope_edit159_denied", actor);
+            assert_eq!(
+                live_connection_identity(&f.shared.lock().unwrap(), "edit159-denied")
+                    .unwrap()
+                    .0,
+                actor
+            );
+            let response = edit159_cancel_request(&f, "edit159-denied", "cancel159-denied");
+            let reason = if recipient {
+                "self_target"
+            } else {
+                "not_parent"
+            };
+            assert!(
+                matches!(response, DaemonToWrapper::QueueEditResult {
+                state: bridget_transport::protocol::QueueEditState::Refused, refusal: Some(ref code), effect: None, ..
+            } if code.contains("intent_not_permitted") && code.contains(reason)),
+                "{response:?}"
+            );
+            assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+            let st = f.shared.lock().unwrap();
+            assert_eq!(
+                st.store.get_request(&f.message.id).unwrap().unwrap().state,
+                "open"
+            );
+            assert!(st.held_ids.contains(&f.message.id));
+            assert!(st.pending_replies.iter().any(|p| p.msg_id == f.message.id));
+            drop(peer);
+        }
+    }
+
+    #[test]
+    fn edit159_cancel_pause_admis() {
+        let (f, _editor_peer) = edit159_cancel_fixture();
+        {
+            let st = f.shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "edit159-cancel-pause",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle cancel159"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None,
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        edit159_cancel_applied(
+            &edit159_cancel_request(&f, "edit159-client", "cancel159-paused"),
+            "cancel159-paused",
+        );
+        assert_eq!(
+            held159_release_phase(&f.shared, &f.delivery_id),
+            "cancelled"
+        );
+        assert!(
+            crate::referent_control::read(f.shared.lock().unwrap().store.connection())
+                .unwrap()
+                .paused
+        );
+    }
+
+    #[test]
+    fn edit159_cancel_aucune_interruption_de_tour() {
+        let (mut f, _editor_peer) = edit159_cancel_fixture();
+        let before = {
+            let st = f.shared.lock().unwrap();
+            let p = &st.presences["instance-1"];
+            (
+                p.state.clone(),
+                p.busy_since,
+                p.busy_period_start,
+                p.last_attested_at,
+            )
+        };
+        edit159_cancel_applied(
+            &edit159_cancel_request(&f, "edit159-client", "cancel159-no-interrupt"),
+            "cancel159-no-interrupt",
+        );
+        {
+            let st = f.shared.lock().unwrap();
+            let p = &st.presences["instance-1"];
+            assert_eq!(
+                (
+                    p.state.clone(),
+                    p.busy_since,
+                    p.busy_period_start,
+                    p.last_attested_at
+                ),
+                before
+            );
+            assert_eq!(
+                st.idempotency
+                    .count_interrupts_target(&f.message.to, unix_now_secs() - 600)
+                    .unwrap()
+                    .0,
+                0
+            );
+        }
+        f._target
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            matches!(f._target.read_line(&mut line), Err(e)
+            if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "{line}"
+        );
+        assert!(
+            line.is_empty(),
+            "aucun CancelDelivery ni autre commande: {line}"
+        );
+    }
+
+    #[test]
+    fn edit159_cancel_crash_apres_commit_message_non_livre() {
+        let (f, _editor_peer) = edit159_cancel_fixture();
+        edit159_cancel_applied(
+            &edit159_cancel_request(&f, "edit159-client", "cancel159-restart"),
+            "cancel159-restart",
+        );
+        assert_eq!(
+            held159_release_phase(&f.shared, &f.delivery_id),
+            "cancelled"
+        );
+        let Held159SweepFixture {
+            shared,
+            config,
+            message,
+            delivery_id,
+            author,
+            _target,
+            ..
+        } = f;
+        drop(author);
+        drop(_target);
+        drop(_editor_peer);
+        let mut old = Arc::try_unwrap(shared)
+            .ok()
+            .expect("aucun autre propriétaire de fixture")
+            .into_inner()
+            .unwrap();
+        let original_instance = old.instance_id.clone();
+        let fixture_root = old.fixture_root.take().unwrap();
+        let registry_home = fixture_root.0.clone();
+        drop(old); // Fermeture de toutes les connexions SQL: frontière durable après COMMIT.
+        let mut st = {
+            let guard = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os("HOME");
+            unsafe { std::env::set_var("HOME", &registry_home) };
+            let (tx, _rx) = mpsc::channel();
+            let result = DaemonState::new(&config, tx);
+            if let Some(home) = previous {
+                unsafe { std::env::set_var("HOME", home) };
+            } else {
+                unsafe { std::env::remove_var("HOME") };
+            }
+            drop(guard);
+            result.unwrap()
+        };
+        assert_ne!(st.instance_id, original_instance);
+        st.fixture_root = Some(fixture_root);
+        st.registry = crate::registry::AgentRegistry::from_json(
+            r#"{"agents":{"claude":{"command":"/bin/sh","protocol":"acp","held_queue":true,"queue_capacity":32}}}"#,
+            st.registry.source().to_path_buf(),
+        ).unwrap();
+        let (writer, mut reader) = control_socket("edit159-after-commit");
+        st.connections.insert("edit159-reconnected".into(), writer);
+        assert!(matches!(
+            handle_register_with_channel(
+                "edit159-reconnected",
+                2,
+                "claude".into(),
+                message.to.clone(),
+                Some("fixture".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("test".into()),
+                Some("edit159-restart-instance".into()),
+                None,
+                false,
+                Some(true),
+                &mut st,
+                true,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(!st.held_ids.contains(&message.id));
+        assert!(
+            !st.idempotency
+                .dispatching_deliveries_for_instance("edit159-restart-instance", unix_now_secs())
+                .unwrap()
+                .iter()
+                .any(|d| d.delivery_id == delivery_id)
+        );
+        assert!(!schedule_held_release(&mut st, &message.to, Instant::now()));
+        assert_eq!(
+            st.idempotency
+                .send_delivery_phase(&IdempotencyKey {
+                    issuer_scope: "012_scope_held159_oracle".into(),
+                    operation_kind: OperationKind::Send,
+                    idempotency_key: message.id.clone()
+                })
+                .unwrap()
+                .as_deref(),
+            Some("cancelled")
+        );
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            matches!(reader.read_line(&mut line), Err(e)
+            if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "{line}"
+        );
+        assert!(line.is_empty());
+    }
+
+    // T019/T021 : même montage des deux seuls rôles autorisés, sockets gardées.
+    fn edit159_queue_actor(
+        f: &Held159SweepFixture,
+        human: bool,
+    ) -> (&'static str, Vec<BufReader<UnixStream>>) {
+        let mut peers = Vec::new();
+        if human {
+            let (writer, peer) = control_socket("edit159-humanB");
+            peers.push(peer);
+            f.shared
+                .lock()
+                .unwrap()
+                .connections
+                .insert("edit159-humanB".into(), writer);
+            assert!(matches!(
+                handle_wrapper_message(
+                    "edit159-humanB",
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Attach,
+                    },
+                    &f.shared
+                ),
+                Some(DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Attach
+                })
+            ));
+            assert!(matches!(
+                handle_wrapper_message(
+                    "edit159-humanB",
+                    WrapperToDaemon::ClientHello {
+                        contract_version: CLIENT_CONTRACT_VERSION,
+                        issuer_scope: "012_scope_edit159_humanB".into(),
+                        capabilities: vec![ClientCapability::QueueEditV1],
+                    },
+                    &f.shared
+                ),
+                Some(DaemonToWrapper::ClientWelcome { .. })
+            ));
+            assert_eq!(
+                guidance_source(&f.shared.lock().unwrap(), Some("edit159-humanB")).0,
+                crate::guidance::GuidanceActor::AttachedHuman
+            );
+            ("edit159-humanB", peers)
+        } else {
+            let parent = "89000000-0000-4000-8000-000000000201";
+            negotiate_idempotent_client(
+                &f.shared,
+                "edit159-parentB-bootstrap",
+                "012_scope_edit159_parentB",
+                parent,
+            );
+            let (writer, peer) = control_socket("edit159-parentB-primary");
+            peers.push(peer);
+            {
+                let mut st = f.shared.lock().unwrap();
+                let primary = st.router.get_agent(parent).unwrap().connection_id.clone();
+                st.connections.insert(primary, writer);
+                guidance156_link_parent(&mut st, "edit159-parentB-bootstrap", "conn-1");
+            }
+            peers.push(edit159_cancel_auxiliary(
+                f,
+                "edit159-parentB",
+                "012_scope_edit159_parentB",
+                parent,
+            ));
+            ("edit159-parentB", peers)
+        }
+    }
+
+    fn edit159_reorder_request(
+        f: &Held159SweepFixture,
+        connection: &str,
+        request: &str,
+        message: &str,
+        before: Option<&str>,
+    ) -> DaemonToWrapper {
+        handle_wrapper_message(
+            connection,
+            WrapperToDaemon::QueueEditRequest {
+                request_id: request.into(),
+                target: f.message.to.clone(),
+                action: bridget_transport::protocol::QueueEditAction::Reorder,
+                message_id: message.into(),
+                before_message_id: before.map(str::to_owned),
+            },
+            &f.shared,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn edit159_reorder_ordre_de_liberation_suit() {
+        let (mut f, _editor) = edit159_cancel_fixture();
+        let (connection, _peers) = edit159_queue_actor(&f, false);
+        let mut second = f.message.clone();
+        second.id = "edit159-order-B".into();
+        second.body = "voisin B159".into();
+        second.reply = false;
+        second.reply_timeout = None;
+        let mut third = second.clone();
+        third.id = "edit159-order-C".into();
+        third.body = "voisin C159".into();
+        for message in [&second, &third] {
+            assert!(matches!(
+                held159_submit(&f.shared, message.clone(), &message.id, unix_now_secs()),
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ));
+        }
+        edit159_cancel_applied(
+            &edit159_reorder_request(
+                &f,
+                connection,
+                "reorder159-order",
+                &third.id,
+                Some(&f.message.id),
+            ),
+            "reorder159-order",
+        );
+        for expected in [&third.id, &f.message.id, &second.id] {
+            held159_release_event(&f.shared, WrapperToDaemon::TurnState { in_progress: false });
+            let response = read_control(&mut f._target);
+            assert!(
+                matches!(response, DaemonToWrapper::DeliverIdempotent { ref message, .. } if &message.id == expected),
+                "{expected}/{response:?}"
+            );
+            held159_release_event(&f.shared, WrapperToDaemon::TurnState { in_progress: true });
+        }
+    }
+
+    #[test]
+    fn edit159_reorder_droits_parent_humain() {
+        for human in [false, true] {
+            let (f, _editor) = edit159_cancel_fixture();
+            let (connection, _peers) = edit159_queue_actor(&f, human);
+            let response =
+                edit159_reorder_request(&f, connection, "reorder159-rights", &f.message.id, None);
+            edit159_cancel_applied(&response, "reorder159-rights");
+            assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+            assert_eq!(
+                f.shared
+                    .lock()
+                    .unwrap()
+                    .store
+                    .get_request(&f.message.id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "open"
+            );
+        }
+    }
+
+    #[test]
+    fn edit159_reorder_destinataire_refuse() {
+        let (f, _editor) = edit159_cancel_fixture();
+        let _peer = edit159_cancel_auxiliary(
+            &f,
+            "edit159-reorder-self",
+            "012_scope_edit159_reorderself",
+            &f.message.to,
+        );
+        let before: (i64, Vec<u8>) = f
+            .shared
+            .lock()
+            .unwrap()
+            .store
+            .connection()
+            .query_row(
+                "SELECT queue_rank,message_bytes FROM send_deliveries WHERE delivery_id=?1",
+                [&f.delivery_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let response = edit159_reorder_request(
+            &f,
+            "edit159-reorder-self",
+            "reorder159-self",
+            &f.message.id,
+            None,
+        );
+        assert!(
+            matches!(response, DaemonToWrapper::QueueEditResult {
+            state: bridget_transport::protocol::QueueEditState::Refused, refusal: Some(ref code), ..
+        } if code.contains("intent_not_permitted") && code.contains("self_target")),
+            "{response:?}"
+        );
+        let after: (i64, Vec<u8>) = f
+            .shared
+            .lock()
+            .unwrap()
+            .store
+            .connection()
+            .query_row(
+                "SELECT queue_rank,message_bytes FROM send_deliveries WHERE delivery_id=?1",
+                [&f.delivery_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before);
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+    }
+
+    #[test]
+    fn edit159_reorder_pause_admis() {
+        let (f, _editor) = edit159_cancel_fixture();
+        let (connection, _peers) = edit159_queue_actor(&f, false);
+        {
+            let st = f.shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "edit159-reorder-pause",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle reorder159"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None,
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        edit159_cancel_applied(
+            &edit159_reorder_request(&f, connection, "reorder159-pause", &f.message.id, None),
+            "reorder159-pause",
+        );
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+        assert!(
+            crate::referent_control::read(f.shared.lock().unwrap().store.connection())
+                .unwrap()
+                .paused
+        );
+    }
+
+    // T021 : Held réel et présence déjà attestée ; le Register public est couvert par T020.
+    fn edit159_promote_fixture(fallback: bool) -> (Held159SweepFixture, BufReader<UnixStream>) {
+        let (f, peer) = edit159_cancel_fixture();
+        {
+            let mut st = f.shared.lock().unwrap();
+            let (agent, instance) = live_connection_identity(&st, "conn-1").unwrap();
+            assert_eq!(agent, f.message.to);
+            assert_eq!(instance, "instance-1");
+            // Même montage de faits que turn_attest/busy dans held159_fixture.
+            let presence = st.presences.get_mut(&instance).unwrap();
+            assert!(presence.turn_attest);
+            assert_eq!(presence.state, "busy");
+            presence.queue_fallback = fallback;
+        }
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+        (f, peer)
+    }
+
+    fn edit159_promote_request(
+        f: &Held159SweepFixture,
+        connection: &str,
+        request: &str,
+    ) -> DaemonToWrapper {
+        handle_wrapper_message(
+            connection,
+            WrapperToDaemon::QueueEditRequest {
+                request_id: request.into(),
+                target: f.message.to.clone(),
+                action: bridget_transport::protocol::QueueEditAction::Promote,
+                message_id: f.message.id.clone(),
+                before_message_id: None,
+            },
+            &f.shared,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn edit159_promote_libere_et_pousse_en_guidage() {
+        let (mut f, _editor) = edit159_promote_fixture(true);
+        let (connection, _peers) = edit159_queue_actor(&f, false);
+        let before: (Vec<u8>, Vec<u8>, u64) = f.shared.lock().unwrap().store.connection().query_row(
+            "SELECT d.message_bytes,r.canonical_bytes,d.delivery_generation FROM send_deliveries d
+             JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key) WHERE d.delivery_id=?1",
+            [&f.delivery_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        let response = edit159_promote_request(&f, connection, "promote159-push");
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::QueueEditResult {
+                    state: bridget_transport::protocol::QueueEditState::Applied,
+                    refusal: None,
+                    effect: Some(bridget_transport::protocol::QueueEditEffect::Unconfirmed),
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        let pushed = read_control(&mut f._target);
+        assert!(
+            matches!(pushed, DaemonToWrapper::DeliverIdempotent { ref delivery_id, ref message, mid_turn_ok: Some(true), .. }
+            if delivery_id == &f.delivery_id && message.id == f.message.id
+                && message.from == f.message.from && message.to == f.message.to
+                && message.body == f.message.body && message.reply == f.message.reply
+                && message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+                && message.references.iter().any(|r| r == "steer-or-queue")),
+            "{pushed:?}"
+        );
+        let after: (Vec<u8>, Vec<u8>, u64) = f.shared.lock().unwrap().store.connection().query_row(
+            "SELECT d.message_bytes,r.canonical_bytes,d.delivery_generation FROM send_deliveries d
+             JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key) WHERE d.delivery_id=?1",
+            [&f.delivery_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(after, before);
+        assert_eq!(
+            held159_release_phase(&f.shared, &f.delivery_id),
+            "dispatching"
+        );
+    }
+
+    #[test]
+    fn edit159_promote_garde_156_obligatoire_pair_refuse() {
+        let (f, _editor) = edit159_promote_fixture(true);
+        // L'auteur est un pair, sans lien parent : aucun droit de promotion.
+        let response = edit159_promote_request(&f, "edit159-client", "promote159-peer");
+        assert!(
+            matches!(response, DaemonToWrapper::QueueEditResult {
+            state: bridget_transport::protocol::QueueEditState::Refused, refusal: Some(ref code), ..
+        } if code.contains("intent_not_permitted") && code.contains("not_parent")),
+            "{response:?}"
+        );
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+        assert!(f.shared.lock().unwrap().held_ids.contains(&f.message.id));
+    }
+
+    #[test]
+    fn edit159_promote_destinataire_non_occupe_no_active_turn() {
+        let (f, _editor) = edit159_promote_fixture(true);
+        let (connection, _peers) = edit159_queue_actor(&f, false);
+        // Fait de présence au repos, sans TurnState false qui libérerait Held.
+        {
+            let mut st = f.shared.lock().unwrap();
+            let presence = st.presences.get_mut("instance-1").unwrap();
+            presence.state = "connected".into();
+            presence.busy_since = None;
+            presence.busy_period_start = None;
+            presence.last_attested_at = Some(Instant::now());
+        }
+        let response = edit159_promote_request(&f, connection, "promote159-idle");
+        assert!(
+            matches!(response, DaemonToWrapper::QueueEditResult {
+            state: bridget_transport::protocol::QueueEditState::Refused, refusal: Some(ref code), ..
+        } if code == "no_active_turn"),
+            "{response:?}"
+        );
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+    }
+
+    #[test]
+    fn edit159_promote_porteur_sans_queue_fallback_steer_unavailable_message_reste_retenu() {
+        let (f, _editor) = edit159_promote_fixture(false);
+        let (connection, _peers) = edit159_queue_actor(&f, false);
+        let response = edit159_promote_request(&f, connection, "promote159-no-fallback");
+        assert!(
+            matches!(response, DaemonToWrapper::QueueEditResult {
+            state: bridget_transport::protocol::QueueEditState::Refused, refusal: Some(ref code), ..
+        } if code == "steer_unavailable"),
+            "{response:?}"
+        );
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+        assert!(f.shared.lock().unwrap().held_ids.contains(&f.message.id));
+    }
+
+    #[test]
+    fn edit159_promote_pause_humain_admis() {
+        let (mut f, _editor) = edit159_promote_fixture(true);
+        let (connection, _peers) = edit159_queue_actor(&f, true);
+        {
+            let st = f.shared.lock().unwrap();
+            assert!(
+                crate::referent_control::set(
+                    st.store.connection(),
+                    crate::referent_control::ControlMutation {
+                        command_id: "edit159-promote-pause",
+                        expected_generation: 0,
+                        paused: Some(true),
+                        auto_objectives_cap: None,
+                        reason: Some("oracle promote159"),
+                        actor: "human",
+                        now: unix_now_secs(),
+                        agent_posture: None,
+                        auto_reassignment: None,
+                    }
+                )
+                .unwrap()
+                .is_ok()
+            );
+        }
+        let response = edit159_promote_request(&f, connection, "promote159-human-pause");
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::QueueEditResult {
+                    state: bridget_transport::protocol::QueueEditState::Applied,
+                    refusal: None,
+                    effect: Some(bridget_transport::protocol::QueueEditEffect::Unconfirmed),
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        assert!(
+            matches!(read_control(&mut f._target), DaemonToWrapper::DeliverIdempotent { message, .. }
+            if message.id == f.message.id && message.intent == Some(bridget_core::MessageIntent::SteerCurrent))
+        );
+        assert!(
+            crate::referent_control::read(f.shared.lock().unwrap().store.connection())
+                .unwrap()
+                .paused
+        );
+    }
+
+    #[test]
+    fn edit159_promote_sans_droit_refuse() {
+        let (f, _editor) = edit159_promote_fixture(true);
+        let (writer, _peer) = control_socket("edit159-promote-bare");
+        f.shared
+            .lock()
+            .unwrap()
+            .connections
+            .insert("edit159-promote-bare".into(), writer);
+        assert!(matches!(
+            handle_wrapper_message(
+                "edit159-promote-bare",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &f.shared
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "edit159-promote-bare",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: "012_scope_edit159_bare".into(),
+                    capabilities: vec![ClientCapability::QueueEditV1],
+                },
+                &f.shared
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        assert_eq!(
+            guidance_source(&f.shared.lock().unwrap(), Some("edit159-promote-bare")).0,
+            crate::guidance::GuidanceActor::BareClient
+        );
+        let response = edit159_promote_request(&f, "edit159-promote-bare", "promote159-bare");
+        assert!(
+            matches!(response, DaemonToWrapper::QueueEditResult {
+            state: bridget_transport::protocol::QueueEditState::Refused, refusal: Some(ref code), ..
+        } if code.contains("intent_not_permitted") && code.contains("identity_unattested")),
+            "{response:?}"
+        );
+        assert_eq!(held159_release_phase(&f.shared, &f.delivery_id), "held");
+    }
+
+    #[test]
+    fn edit159_promote_aucun_doublon_cote_daemon() {
+        let (mut f, _editor) = edit159_promote_fixture(true);
+        let (connection, _peers) = edit159_queue_actor(&f, false);
+        let applied = edit159_promote_request(&f, connection, "promote159-once");
+        assert!(
+            matches!(
+                applied,
+                DaemonToWrapper::QueueEditResult {
+                    state: bridget_transport::protocol::QueueEditState::Applied,
+                    refusal: None,
+                    effect: Some(bridget_transport::protocol::QueueEditEffect::Unconfirmed),
+                    ..
+                }
+            ),
+            "{applied:?}"
+        );
+        assert!(
+            matches!(read_control(&mut f._target), DaemonToWrapper::DeliverIdempotent { message, .. }
+            if message.id == f.message.id && message.intent == Some(bridget_core::MessageIntent::SteerCurrent))
+        );
+        let replay = edit159_promote_request(&f, connection, "promote159-once");
+        assert_eq!(
+            bridget_transport::protocol::encode(&applied).unwrap(),
+            bridget_transport::protocol::encode(&replay).unwrap()
+        );
+        let st = f.shared.lock().unwrap();
+        assert_eq!(
+            st.store
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM queue_edits WHERE request_id='promote159-once'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(!st.held_ids.contains(&f.message.id));
+        drop(st);
+        f._target
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            matches!(f._target.read_line(&mut line), Err(e)
+            if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "{line}"
+        );
+        assert!(line.is_empty());
+    }
+
     // T008 : fixture dédiée, onze usages, primitives149/T004/T005 et suivi mémoire réels.
     struct Held159SweepFixture {
         shared: Arc<Mutex<DaemonState>>,
@@ -24730,6 +26199,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -25645,6 +27115,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -28924,6 +30395,7 @@ mod presence_tests {
                     turn_in_progress: false,
                     journal_available: None,
                     turn_attest: false,
+                    queue_fallback: false,
                 },
                 &shared,
             ),
@@ -28947,6 +30419,7 @@ mod presence_tests {
                     turn_in_progress: false,
                     journal_available: None,
                     turn_attest: false,
+                    queue_fallback: false,
                 },
                 &shared,
             ),
@@ -29721,6 +31194,7 @@ mod presence_tests {
                     turn_in_progress: false,
                     journal_available: None,
                     turn_attest: false,
+                    queue_fallback: false,
                 },
                 &shared,
             ),
@@ -30285,6 +31759,7 @@ mod presence_tests {
                     turn_in_progress: false,
                     journal_available: None,
                     turn_attest: false,
+                    queue_fallback: false,
                 },
                 &shared,
             ),
@@ -38630,6 +40105,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -38814,6 +40290,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -39296,6 +40773,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -41246,6 +42724,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -43174,6 +44653,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -43284,6 +44764,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -43333,6 +44814,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -45870,6 +47352,7 @@ mod presence_tests {
                 busy_period_start: None,
                 last_attested_at: None,
                 turn_attest: false,
+                queue_fallback: false,
                 capacity_seen: Instant::now(),
                 link_seen: Instant::now(),
                 reconnect_count: 0,
@@ -46544,6 +48027,7 @@ fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
         turn_in_progress: false,
         journal_available: Some(true),
         turn_attest: false,
+        queue_fallback: false,
     };
     writeln!(writer, "{}", encode(&register).unwrap()).unwrap();
     writer.flush().unwrap();

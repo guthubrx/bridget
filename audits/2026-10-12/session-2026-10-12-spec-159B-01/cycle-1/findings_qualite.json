@@ -1,0 +1,382 @@
+{
+  "review_kind": "fresh_readonly_targeted",
+  "audit_mode": "readonly_reviewer_ROOTfix_cycle1",
+  "read_at": "2026-10-12T19:34:55.980410+00:00",
+  "scope_sha256": "665b6559f6e35ccc8160b713d4b2022140a9bcffb5853c6668d18d7dc90cc184",
+  "capture_manifest_sha256": "c400c05eb2787df95ae23a9c8de4fc1a92a9ab4eaf07a5a066b2cca19157ad5e",
+  "capture_patch_sha256": "5267592c6b40e3a10fc1d7ea8ae826c0f82591cccabd4d38d03e6b53103b188e",
+  "read_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+      "ranges": [
+        [
+          1,
+          420
+        ],
+        [
+          1444,
+          1598
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "ranges": [
+        [
+          11140,
+          11550
+        ],
+        [
+          25200,
+          25238
+        ],
+        [
+          25426,
+          25490
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/guidance.rs",
+      "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+      "ranges": [
+        [
+          1,
+          210
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+      "ranges": [
+        [
+          450,
+          485
+        ],
+        [
+          875,
+          905
+        ],
+        [
+          1410,
+          1448
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/protocol.rs",
+      "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+      "ranges": [
+        [
+          206,
+          244
+        ],
+        [
+          3550,
+          3567
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+      "ranges": [
+        [
+          890,
+          1065
+        ],
+        [
+          1880,
+          1940
+        ],
+        [
+          1980,
+          2036
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+      "ranges": [
+        [
+          300,
+          357
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-transport/src/acp.rs",
+      "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+      "ranges": [
+        [
+          605,
+          677
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "bbf931ee21149e5b69500c07b9e3043e6725f7c48955af39751c9fb23b62ddd0",
+      "ranges": [
+        [
+          1840,
+          1872
+        ],
+        [
+          11310,
+          11369
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp.rs",
+      "sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+      "ranges": [
+        [
+          631,
+          711
+        ],
+        [
+          1304,
+          1444
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/cli.rs",
+      "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+      "ranges": [
+        [
+          4712,
+          4857
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+      "ranges": [
+        [
+          210,
+          230
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/tests.rs",
+      "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+      "ranges": [
+        [
+          3785,
+          3898
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/edit159_e2e.rs",
+      "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+      "ranges": [
+        [
+          433,
+          489
+        ],
+        [
+          540,
+          620
+        ],
+        [
+          805,
+          900
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/held159_e2e.rs",
+      "sha256": "26cb48cee36d90ec2fd56ff3620e47eac7c9024257cf29dc0e72b326f35b1b1c",
+      "ranges": [
+        [
+          443,
+          499
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/guidance156_e2e.rs",
+      "sha256": "49647e27cccbd3912838c7c5c618a70e4320e0f41f1c0b41a6726f0d060d3216",
+      "ranges": [
+        [
+          343,
+          399
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/native_delegation_e2e.rs",
+      "sha256": "84a5cc7f7a4803213b545a91376ada4121e843e867d2d6a2a6383b7e1cc8f21e",
+      "ranges": [
+        [
+          473,
+          529
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "77cf8c1d55cbb5f29cfe910d007620912a9b167b6d9f24c086f6b403393e4f6d",
+      "ranges": [
+        [
+          90,
+          148
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/docs/decisions/159-file-retenue-et-edition.md",
+      "sha256": "a1350645807f8546ef821da3d775f46cd130ad7cfb01a49fab081ffae699994e",
+      "ranges": [
+        [
+          1,
+          190
+        ]
+      ],
+      "review_kind": "fresh_readonly_targeted",
+      "read_at": "2026-10-12T19:34:55.980410+00:00",
+      "read_time_basis": "reviewcompletionupperbound, not invented per-range starttime"
+    }
+  ],
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "exists": false,
+    "modified": false
+  },
+  "source_delta_since_capture": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/edit159_e2e.rs",
+      "old_sha256": "70cd228110c951770141296d9d613ce4015ef4e817593058442f47f66586a725",
+      "actual_sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59"
+    }
+  ],
+  "source_delta_reviewed": {
+    "ranges": [
+      [
+        540,
+        620
+      ]
+    ],
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/tests/edit159_e2e.rs",
+    "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+    "evidence": "Four addedproviderfixture lines609–612 emit item/started/completed after turn/steer response; no productiondelta. Oldnewfile body was compared to currentfile via capturepatch, whole-file70cd not inherited."
+  },
+  "warnings": [
+    "Revue ciblée et partielle. Aucun grade global, FULLGREEN ou100% de couverture annoncé. Les corps entiers du daemon, du wrapper et des boucles fournisseur ne sont pas tous relus.",
+    "Aucun Cargo, test, Clippy, jscpd, scanner, modèle, base ou service exécuté. Aucun Git en écriture. Seul fingerprint.py officiel a été exécuté pour cet extrait.",
+    "Le périmètre compte60 fichiers,44 Rust et195 hunks. Les26 fichiers et34 valeurs Register examinés par protocole154 ne sont pas automatiquement crédités ici.",
+    "Le fichier de fixture a changé pendant la lecture. Son delta a été relu et signalé. Les59 autres empreintes de la capture restent identiques.",
+    "Le formatage ancien et le volume des tests prévus ne démontrent pas une complexité métier nouvelle. La première sortie gitdiff tronquée n’est pas créditée comme lecture complète."
+  ],
+  "module": "05",
+  "module_id": "05",
+  "findings": [],
+  "positives": [
+    "send_delivery.rs:266–367 : transactionImmediate, savepoint et reçu partagent le même commit. Seule la clôtureSC014 explicite reste conservée sur refus.",
+    "daemon.rs:11343–11386 : la mémoire ne change que pour un effet frais committé. Une erreur de projection est journalisée et reste indéterminée, sans fauxACK.",
+    "mcp.rs:637–698 et cli.rs:4722–4769 : les actions sont fermées. Paramètres inconnus, manquants ou dupliqués refusés avant mutation."
+  ],
+  "large_functions_signal": [
+    {
+      "name": "apply_promote",
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "range": [
+        16,
+        114
+      ],
+      "lines": 99
+    },
+    {
+      "name": "apply_reorder",
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "range": [
+        119,
+        179
+      ],
+      "lines": 61
+    },
+    {
+      "name": "queue_edit_once",
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "range": [
+        228,
+        367
+      ],
+      "lines": 140
+    },
+    {
+      "name": "handle_queue_edit",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "range": [
+        11194,
+        11403
+      ],
+      "lines": 210
+    }
+  ],
+  "length_decision": "Signal read, not automatic refactor: documented atomicity/replay/SC014 justify coherent paths. No dangerousstub/newsilentcatch shown in inspectedranges; fulllegacyTODO/lint inventory not claimed."
+}

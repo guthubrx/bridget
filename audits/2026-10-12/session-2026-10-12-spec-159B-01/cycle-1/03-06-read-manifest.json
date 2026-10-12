@@ -1,0 +1,330 @@
+{
+  "authority_manifest": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/capture-final19-25/manifest.json",
+  "authority_sha256": "c400c05eb2787df95ae23a9c8de4fc1a92a9ab4eaf07a5a066b2cca19157ad5e",
+  "started_at": "2026-10-12T19:29:00+00:00",
+  "completed_at": "2026-10-12T19:34:07.846088+00:00",
+  "entries": [
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          1,
+          400
+        ],
+        [
+          1447,
+          1598
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/guidance.rs",
+      "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          1,
+          240
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          10745,
+          10955
+        ],
+        [
+          11115,
+          11430
+        ],
+        [
+          18360,
+          18410
+        ],
+        [
+          18655,
+          18730
+        ],
+        [
+          24530,
+          24570
+        ],
+        [
+          24613,
+          24650
+        ],
+        [
+          25340,
+          25484
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          865,
+          920
+        ],
+        [
+          1415,
+          1445
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+      "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          3585,
+          3640
+        ],
+        [
+          3700,
+          3885
+        ],
+        [
+          3993,
+          4109
+        ],
+        [
+          4189,
+          4259
+        ],
+        [
+          4574,
+          4625
+        ],
+        [
+          4690,
+          4752
+        ],
+        [
+          5073,
+          5272
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          620,
+          710
+        ],
+        [
+          1302,
+          1445
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/cli.rs",
+      "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          4680,
+          4840
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+      "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          28,
+          52
+        ],
+        [
+          74,
+          96
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "69d6dc4bd0bae2ad81f4e71bc481e73956eb162fa7a0e6014e092462c00f3482",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          1950,
+          2075
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "3d3e0c659620109e8ac9fdbe7926aed7b0505f0d7c6a6048cbce202ab997d055",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          282,
+          320
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          906,
+          995
+        ],
+        [
+          1560,
+          1665
+        ],
+        [
+          1870,
+          2025
+        ],
+        [
+          2060,
+          2120
+        ],
+        [
+          3765,
+          3989
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-transport/src/acp.rs",
+      "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          602,
+          684
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-transport/src/protocol.rs",
+      "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          210,
+          245
+        ],
+        [
+          2950,
+          2964
+        ],
+        [
+          3080,
+          3095
+        ],
+        [
+          3160,
+          3190
+        ],
+        [
+          5600,
+          5665
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "specs/159-edition-file/contracts/edition159.md",
+      "sha256": "edb2d875d570700a3fba50a3714ef926ff1e0a28c1513e7260132a26bf84841d",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          1,
+          179
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": true
+    },
+    {
+      "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+      "sha256": "016788d3d935057d46a50796a6122125322bda67242ae9452512ddc69fd951c1",
+      "read_at": "2026-10-12T19:34:07.846088+00:00",
+      "ranges": [
+        [
+          600,
+          616
+        ]
+      ],
+      "whole_file": false,
+      "authority_match": false,
+      "delta_test_only": true,
+      "historical_reads": {
+        "sha256": "943b45c4b6da509b38c9bc7d5e8fce2c6835140434d260fd464ce453f4f6005c",
+        "ranges": [
+          [
+            993,
+            1166
+          ],
+          [
+            1248,
+            1598
+          ]
+        ],
+        "credit_current": false
+      }
+    }
+  ],
+  "partial": true,
+  "source_guard": {
+    "current_hashes_checked": true,
+    "production14_read_sources_match_capture": true,
+    "E2E_drift_test_only": "943b45→016788; historiques préservés; dernier delta600–616 relu"
+  },
+  "exclusions": [
+    "Corps complets des grands fichiers non lus",
+    "Autres tests prescrits : noms/receipts seulement, sans crédit corps complet",
+    "Réseauweb,CVE,histoiresecrets,scanners,testsCargo,DB,runtime,fournisseur réel non examinés",
+    "26fichiersRegister34defaults inspectésenpréparation : pascréditwholefile ni nouvellelecturemodule03/06"
+  ],
+  "independence": {
+    "implementation_business_owned": false,
+    "small_prior_contribution": "Catalogue metadataT022 et extension oracle GLM : auto-revue explicitement limitée, contre-revue indépendante ROOT/Claude requise"
+  }
+}

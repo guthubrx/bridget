@@ -1858,6 +1858,7 @@ pub(crate) fn connect_and_register_at(
         turn_in_progress,
         journal_available: Some(false),
         turn_attest,
+        queue_fallback: true,
     };
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -11308,6 +11309,60 @@ mod reconnect_tests {
             bindings["message-079"].execution_id, "execution-079",
             "un rejeu ne remplace jamais la première corrélation admise"
         );
+    }
+    #[test]
+    fn edit159_promote_transport_file_ordinaire_pleine_indeterminee() {
+        let root = receipt_root("edit159-full");
+        let instance = "instance-edit159";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance).unwrap();
+        let now = unix_now_secs();
+        let mut promoted = idempotent_message("full159");
+        promoted.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        assert!(matches!(
+            tracker.receive(
+                "delivery-full159".into(),
+                instance.into(),
+                7,
+                now + 60,
+                promoted,
+                now
+            ),
+            IdempotentDeliveryAction::Inject { .. }
+        ));
+        let (stream, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        assert!(!forward_managed_events(
+            &writer,
+            "equipier",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                Vec::new(),
+                ManagedEventKind::DeliveryRejected {
+                    message_id: "full159".into(),
+                    reason: "file Codex pleine".into()
+                },
+            )],
+            &mut tracker,
+            &mut HashMap::new()
+        ));
+        let mut reader = BufReader::new(peer);
+        let mut frames = Vec::new();
+        for _ in 0..3 {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            frames.push(decode::<WrapperToDaemon>(line.trim()).unwrap());
+        }
+        assert!(frames.iter().any(|frame| matches!(frame, WrapperToDaemon::DeliveryIndeterminate { delivery_id, delivery_generation: 7 } if delivery_id == "delivery-full159")));
+        assert!(frames.iter().any(|frame| matches!(frame, WrapperToDaemon::DeliveryRejected { id, reason } if id == "full159" && reason == "file Codex pleine")));
+        assert!(
+            !frames
+                .iter()
+                .any(|frame| matches!(frame, WrapperToDaemon::DeliverAcked { .. }))
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

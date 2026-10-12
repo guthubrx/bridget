@@ -1,0 +1,99 @@
+{
+  "grade": "A",
+  "date": "2026-10-12",
+  "spec": "159B",
+  "scope": "diff Béditioncancel/reorder/promote ; lecture partielle, FULLindépendantencours",
+  "coverage_percent": 3.215,
+  "justification": "Score 99.75/100 surplagesciblées.0C/0H/0M/3LOWactifs ; deuxMEDIUMdocumentairesrésolus. Ne vautpasFULLPASS ni livraison.",
+  "numeric": 99.75,
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 99,
+      "findings_count": 1
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 99,
+      "findings_count": 1
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 99,
+      "findings_count": 1
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "ux": {
+      "grade": "N/A",
+      "numeric": null,
+      "findings_count": 0,
+      "reason": "manifesthas_uifalse; noUIchanged"
+    }
+  },
+  "weights": {
+    "security": 3,
+    "llm_security": 2,
+    "supply_chain": 1,
+    "observability": 1,
+    "reliability": 2,
+    "tests": 1,
+    "performance": 2,
+    "complexity": 2,
+    "quality": 2,
+    "architecture": 1,
+    "ai_hygiene": 1,
+    "duplication": 1,
+    "minimalism": 1
+  },
+  "release_blocked": false,
+  "test_suite_status": "FULL159BROOT66127ongoing"
+}

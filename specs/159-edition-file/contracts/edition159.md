@@ -13,9 +13,10 @@ sont jamais concernés.
 La rétention n'est active que pour une instance qui a déclaré un signal de tour
 véridique (`turn_attest` à l'enregistrement). Sinon, chemin actuel.
 
-Ce que voit l'expéditeur : rien ne change. Son envoi est accepté. Sa remise reste
-« en cours » jusqu'à l'injection. Il peut recevoir un refus net `queue_full` si la
-file retenue atteint `queue_capacity` du type.
+Hors refus d’admission `queue_full`, le résultat d’admission existant reste
+conservé. La remise reste « en cours » jusqu’à son issue. Si la file retenue
+atteint `queue_capacity` du type, l’admission rend un refus net `queue_full`.
+Ce refus est distinct de la saturation de la FIFO après une promotion libérée.
 
 ## Messages jamais retenus
 
@@ -61,13 +62,42 @@ doivent être retenus, pour le même destinataire. L'ordre de libération suit.
 
 ### `promote`
 
-Libère le message tout de suite en guidage, dans le tour en cours (demande encore
-ouverte et échéance non passée, vérifiées dans la transaction). Le transport qui
+Libère le message tout de suite en guidage dans un tour actif recontrôlé. Ce tour
+remplace le repos exigé pour la libération ordinaire. La transaction vérifie
+l’identité attestée, les droits et gardes de `Steer` de 156, la phase `held`,
+l’absence de réservation, la saga non expirée et, si `reply=true`, la demande
+ouverte et son échéance. Elle pose la réservation de tour. Un agent est refusé
+pendant la pause. L’humain attaché attesté garde l’exception de guidage de 156 ;
+son identité vient de la connexion validée. State protège les faits du tour
+jusqu’au commit. Après `BEGIN IMMEDIATE`, la même connexion relit les tables
+`control_state` et `control_pause_interruptions`, la réservation, la saga et la
+demande. Le commit précède le relâchement de State et le push par le writer ;
+aucun writer socket ni autre connexion SQL sous cette transaction. La pause et la priorité de reprise
+continuent à différer la libération automatique `HeldRelease`. Elles ne
+suppriment pas cette commande humaine explicite ni ses autres gardes. Le transport qui
 ne peut pas guider l'enfile en file ordinaire. **Garanties réduites** : après la
 libération, file ordinaire pleine = rejet explicite (remise indéterminée) ; erreur
 ambiguë de Codex après guidage appliqué = doublon possible. Refus `no_active_turn` si le
 destinataire n'est pas occupé, `steer_unavailable` si son porteur n'a pas déclaré
-`queue_fallback`. Dans ces deux cas le message reste retenu.
+`queue_fallback`. Dans ces deux cas le message reste retenu. Un tour perdu
+après le commit déclenche le repli ; il ne rend pas admissible une promotion
+initialement hors tour. `applied` atteste le commit de libération ;
+`effect: "unconfirmed"` ne prouve pas une consommation par le modèle. Le daemon
+ne refait pas l’effet sur rejeu et ne fabrique ni ACK ni reçu d’injection.
+
+Le transport reconnaît le marqueur avant ses refus de `SteerCurrent`. Une copie
+marquée qui ne peut guider, y compris en interface interactive ou avec
+`steering_open` fermé, rejoint la FIFO ordinaire. Une copie non marquée garde le
+comportement actuel. Pour le repli de la copie marquée, `steering_requested`
+et `interrupt_requested` deviennent tous deux faux avant les refus de contrôle.
+Un message humain en tour actif ne déclenche donc pas un interrupt implicite.
+La saturation teste `queue.messages`. La FIFO pleine garde son rejet explicite.
+
+`applied` n’est pas démenti par l’issue de transport ultérieure : son objet est
+le commit d’édition. Rejet ou `indeterminate` n’avertissent pas universellement
+l’auteur d’un envoi ordinaire `reply=false`. Les avis existants restent ceux
+des chemins attach et demande suivie. Aucune nouvelle notification ni lecture
+d’état n’est promise. Le retrait demandé conserve sa notice durable existante.
 
 ## Rejeu et reçu
 
@@ -75,9 +105,9 @@ Reçu `queue_edits`, 7 jours, clé `(issuer scope, request_id)`.
 
 | Rejeu | Résultat |
 |---|---|
-| mêmes paramètres | même résultat |
-| autres paramètres | `envelope_mismatch` |
-| refus déjà rendu | même refus ; pour réessayer, nouvelle clé |
+| mêmes paramètres, droits frais admis | même résultat |
+| autres paramètres, droits frais admis | `envelope_mismatch` |
+| refus déjà rendu, droits frais admis | même refus ; pour réessayer, nouvelle clé |
 
 ## Refus
 
@@ -93,6 +123,13 @@ Reçu `queue_edits`, 7 jours, clé `(issuer scope, request_id)`.
 
 Ordre : identité attestée, droits, reçu, `not_held`, pause, `no_active_turn`,
 `steer_unavailable`, effet.
+
+Les droits restent frais avant toute lecture du reçu. Si l’auteur ne peut
+plus être vérifié parce que l’envoi d’origine a été purgé ou que message_bytes
+est absent, son seul statut d’auteur ne permet plus cancel : refus
+`intent_not_permitted` avant le reçu. `receipt.actor` est une trace, pas un
+grant persistant. Les autres droits exigent toujours leur propre preuve fraîche.
+Le reçu ne contourne donc jamais l’ordre identité → droits → reçu.
 
 ## Annonce de capacités
 
@@ -115,12 +152,39 @@ Ordre : identité attestée, droits, reçu, `not_held`, pause, `no_active_turn`,
 
 ## Base de données
 
-Migration v7 (voir `data-model.md`) : phases `held` et `cancelled`, colonne
-`queue_rank`, table `queue_edits` (lot B). Elle se rejoue sans effet. **Sens
-unique** : un binaire antérieur refuse la base. Sauvegarde obligatoire avant la
-première ouverture ; la restauration avec l'ancien binaire est répétée en
-isolation avant la livraison du lot A.
+La migration v7 du lotA est déjà livrée : phases `held` et `cancelled`, rang,
+rattachement et réservation (voir `data-model.md`). Ses preuves de sauvegarde
+et restauration restent celles de159A. Le lotB crée `queue_edits` et ses index
+par `CREATE IF NOT EXISTS` dans `IdempotencyStore::init_schema`, exécuté à chaque
+ouverture même si la base est déjàv7. Le DDL reste hors branche de migrationv7.
+Les cinq oracles T014 existants partent aussi d’une basev7 sans table, la
+réouvrent puis appliquent la première édition. Pas de v8, reconstruction
+ou nouvelle sauvegarde de migration. Le précontrôle livré accepte7 et refuse8 ;
+un binaire antérieur à159A continue à refuser la basev7.
 
 ## Lineage T3 et pont
 
 Aucun changement de forme de la projection Lineage. Le pont T3 n'est pas modifié.
+
+
+### Résolution déterministe du message public — arbitrage ROOT B
+
+Le message_id public n'est pas unique entre plusieurs issuer_scopes pour une
+même cible : la clé durable reste (issuer_scope, send, message_id). Chaque
+mutation résout uniquement une remise held de la cible, avec au plus deux
+correspondances lues (LIMIT 2). Une seule correspondance permet l'édition.
+Zéro correspondance ou ambiguïté : reçu refused/not_held, delivery_id=NULL ;
+aucun UUID interne fabriqué. Les arguments publics restent dans le canon.
+Cet arbitrage ne crée ni index, identifiant, scénario ou autorité supplémentaire.
+Les fondations validées ne prouvent pas encore les trois chemins de mutation.
+
+
+### Promotion et reprise de pause — précision T021
+
+Une réservation de tour déjà prise, une saga expirée ou une demande close
+rendent `not_held`. Une ligne de `control_pause_interruptions` pour la cible
+avec `resumed_at IS NULL` bloque la promotion par un agent avec
+`referent_paused`, même lorsque `control_state.paused` est faux. L'humain
+Attach attesté conserve son exception explicite. Cette commande humaine
+n'est pas une libération autonome `HeldRelease`. Les deux tables sont relues
+dans la même transaction ; aucun droit ni identifiant de test supplémentaire.

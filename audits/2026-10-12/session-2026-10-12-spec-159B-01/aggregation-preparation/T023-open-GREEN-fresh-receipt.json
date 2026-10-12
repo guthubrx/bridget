@@ -1,0 +1,27 @@
+{
+  "observed_at": "2026-10-12T19:36:59.025020+00:00",
+  "receipt": "/Users/moi/.cache/bridget-tests159B-20261012/T023-open-recipe-FR024-grace-and-correlated-provider-verification.json",
+  "receipt_sha256": "7d182d4ad2f1b5ba277dcbd87def1674dca2696eed7c4342f221f64cfa85c83a",
+  "result": {
+    "seconds": 47.74,
+    "rc": 0,
+    "test_results": [
+      [
+        "ok",
+        "1",
+        "0",
+        "0"
+      ]
+    ],
+    "failed_tests": [],
+    "log_sha256": "861259b6a539f8b4b56342cb4091950c3b05a665459e6acebacad6357baed45f",
+    "sources_stable": true
+  },
+  "E2E_source_sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+  "limits": [
+    "UnseultestopenRC0 ; closedPASSautreexécutionhistorique, jamais2PASSdansunruninventé",
+    "24negativemutationsCLI/MCPdansopenfixtureprivée, unsignedchildmarkerpasinteropT3",
+    "Sourceproductioninchangée ; wait40graceFR02430+tick, pasnouveaugarde",
+    "FULLBpending, docsREL001pending ; pasGLOBALGREEN/grade"
+  ]
+}

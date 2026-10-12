@@ -1,0 +1,53 @@
+{
+  "observed_at": "2026-10-12T20:03:00.171168+00:00",
+  "status": "ROOT_ACCEPTED_NONREPRODUCED_TEST_FIXTURE_FAILURE_SCOPE_T026",
+  "global_full_green": false,
+  "full_rc": 101,
+  "full_duration_seconds": 856.66,
+  "full_failed_test": "claude_gere_recoit_mcp_identite_et_path",
+  "observed_failure": {
+    "file": "crates/bridget-daemon/tests/claude_native_permissions_test.rs",
+    "line": 263,
+    "operation": "mock UnixStream.set_read_timeout(Some3s) during cleanup",
+    "errno": 22,
+    "message": "Invalid argument",
+    "downstream_join_line": 301
+  },
+  "source_unchanged_from_base": true,
+  "test_source_sha256": "4c5452e736d9c256576cdb8f34b91719a5a8add333c31373286e18770f05e52f",
+  "replay_exact": {
+    "passed": 1,
+    "failed": 0,
+    "rc": 0,
+    "seconds": 6.36
+  },
+  "replay_existing_four_case_context": {
+    "passed": 4,
+    "failed": 0,
+    "rc": 0,
+    "seconds": 6.33,
+    "test_threads": 2
+  },
+  "all_223_sources_identical_across_full_and_replays": true,
+  "root_disposition": "Retain Full failure and both successful replays. No production defect reproduced. No code changed to obtain green. Existing sensitive-test replays fulfil T026. A comparable observed failure was not in the priorAFull failed list; do not label it a previously observed A failure.",
+  "limits": [
+    "Darwin errno failure is observed in the mock cleanup; precise OS cause not claimed.",
+    "A successful replay does not make the initial whole-suite run green.",
+    "No performance activation or real-provider/T3 interop certification inferred.",
+    "All Held defaults remain closed."
+  ],
+  "proofs": [
+    {
+      "path": "/Users/moi/.cache/bridget-tests159B-20261012/T026-FULL159B-once-final-source.json",
+      "sha256": "85f3537514a0604bb66549c73aa92009b09ebca4fcb96b9f69048708cc486cf5"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests159B-20261012/T026-FULL-sensitive-claude-managed-identity-exact-replay.json",
+      "sha256": "ca4f9f496def341a24d222a6139531765ad2a1c2d96799c17812a7bdf17f3ebe"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-tests159B-20261012/T026-FULL-sensitive-claude-existing-four-case-context-replay.json",
+      "sha256": "efe3746fd88759c2dc2d49ac6feaa97d1e2dea57a7bdae1be809c9ffb05e328c"
+    }
+  ]
+}

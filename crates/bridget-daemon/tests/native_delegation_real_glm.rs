@@ -541,6 +541,7 @@ fn native148_parent_codex_fixture_delegates_once_to_real_glm() {
         journal_available: None,
         turn_in_progress: false,
         turn_attest: false,
+        queue_fallback: false,
     });
     let DaemonToWrapper::Registered {
         credential: Some(credential),

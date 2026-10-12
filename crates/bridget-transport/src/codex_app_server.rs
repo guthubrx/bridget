@@ -911,9 +911,19 @@ impl Transport for CodexAppServerTransport {
         // dans un tour en cours mélange sa réponse à celle du message actif :
         // l'utilisateur voit alors son envoi mais jamais sa réponse dédiée.
         // Le pilotage reste réservé au contrôle explicite.
-        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent);
-        let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart)
-            || (human_message && has_active_turn && !steering_requested);
+        let steer_or_queue = message.intent == Some(MessageIntent::SteerCurrent)
+            && message
+                .references
+                .iter()
+                .any(|reference| reference == "steer-or-queue");
+        // Choisir le repli sous le verrou avant les refus TUI/non-pilotable.
+        // Une promotion ne gagne jamais le droit d'interrompre le tour actif.
+        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent)
+            && (!steer_or_queue
+                || (self.interactive_socket.is_none() && has_active_turn && queue.steering_open));
+        let interrupt_requested = !steer_or_queue
+            && (message.intent == Some(MessageIntent::InterruptAndStart)
+                || (human_message && has_active_turn && !steering_requested));
         if self.interactive_socket.is_some() && (steering_requested || interrupt_requested) {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -946,7 +956,11 @@ impl Transport for CodexAppServerTransport {
         if steering_requested {
             queue.steer.push_back(message.clone());
         } else {
-            queue.messages.push_back(message.clone());
+            let mut ordinary = message.clone();
+            if steer_or_queue {
+                ordinary.intent = None;
+            }
+            queue.messages.push_back(ordinary);
         }
         // La nouvelle demande reste FIFO, mais l'interruption vise seulement
         // le tour actif capturé sous le même verrou.
@@ -1882,10 +1896,15 @@ fn requeue_unconfirmed(
     let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
     state.steering_open = false;
     let steered: Vec<_> = state.steer.drain(..).collect();
-    for message in steered.into_iter().rev() {
-        state.messages.push_front(message);
-    }
-    for message in pending.drain(..).rev() {
+    for mut message in steered.into_iter().rev().chain(pending.drain(..).rev()) {
+        if message.intent == Some(MessageIntent::SteerCurrent)
+            && message
+                .references
+                .iter()
+                .any(|reference| reference == "steer-or-queue")
+        {
+            message.intent = None;
+        }
         state.messages.push_front(message);
     }
     wake.notify_one();
@@ -1974,7 +1993,15 @@ fn clear_active(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
     // `turn/start` peut échouer avant `wait_for_turn`. Dans ce chemin, aucun
     // repli précédent n’a vidé `steer` : le restituer évite une perte humaine.
     let steered: Vec<_> = state.steer.drain(..).collect();
-    for message in steered.into_iter().rev() {
+    for mut message in steered.into_iter().rev() {
+        if message.intent == Some(MessageIntent::SteerCurrent)
+            && message
+                .references
+                .iter()
+                .any(|reference| reference == "steer-or-queue")
+        {
+            message.intent = None;
+        }
         state.messages.push_front(message);
     }
     state.active = None;
@@ -9153,5 +9180,407 @@ for line in sys.stdin:
         assert_eq!(reply["result"]["action"], "decline");
         assert!(reply["result"].get("content").is_none());
         assert_eq!(payload["code"], "mcp_elicitation_declined");
+    }
+    #[test]
+    fn edit159_promote_transport_codex_tour_actif_guide() {
+        let root = root("edit159-active");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 20;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("active159")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while Instant::now() < deadline && !started {
+            started = transport.drain_events().iter().any(|event|
+                matches!(&event.kind, ManagedEventKind::PromptDispatched { message_id } if message_id == "active159"));
+            if !started {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(started, "tour fournisseur réellement ouvert");
+        let mut promoted = message("promoted159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        transport.deliver(&promoted).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let trace = fs::read_to_string(&trace).unwrap_or_default();
+            if trace.lines().any(|line| {
+                line.contains("\"method\":\"turn/steer\"") && line.contains("promoted159")
+            }) {
+                assert!(trace.contains("\"expectedTurnId\":\"turn-native\""));
+                assert!(!trace.contains("\"method\":\"turn/interrupt\""));
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "le marqueur doit guider le tour actif"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit159_promote_transport_codex_sans_tour_enfile() {
+        let root = root("edit159-idle");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 20;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[(
+                "BRIDGET_CODEX_TRACE".into(),
+                trace.to_string_lossy().into_owned(),
+            )],
+            false,
+        )
+        .unwrap();
+        let mut promoted = message("promoted159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        transport.deliver(&promoted).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut finished = false;
+        while Instant::now() < deadline && !finished {
+            for event in transport.drain_events() {
+                assert!(
+                    !matches!(&event.kind, ManagedEventKind::DeliveryRejected { message_id, .. } if message_id == "promoted159"),
+                    "pas de rejet quand le guidage manque"
+                );
+                finished |= matches!(&event.kind, ManagedEventKind::TurnFinished { message, .. } if message.id == "promoted159");
+            }
+            if !finished {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(finished, "le marqueur doit obtenir un tour FIFO propre");
+        let trace = fs::read_to_string(&trace).unwrap();
+        assert!(!trace.contains("\"method\":\"turn/steer\""));
+        assert!(trace.contains("\"method\":\"turn/start\""));
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit159_promote_transport_codex_steering_open_ferme_enfile() {
+        let root = root("edit159-closed");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 20;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("active159")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while Instant::now() < deadline && !started {
+            started = transport.drain_events().iter().any(|event|
+                matches!(&event.kind, ManagedEventKind::PromptDispatched { message_id } if message_id == "active159"));
+            if !started {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(started, "tour fournisseur réellement ouvert");
+        transport.queue.0.lock().unwrap().steering_open = false;
+        transport.deliver(&message("older159")).unwrap();
+        let mut promoted = message("promoted159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        promoted.origin = Some(MessageOrigin::Human);
+        let source = promoted.clone();
+        transport.deliver(&promoted).unwrap();
+        {
+            let queue = transport.queue.0.lock().unwrap();
+            assert_eq!(
+                queue
+                    .messages
+                    .iter()
+                    .map(|m| m.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["older159", "promoted159"]
+            );
+            assert!(queue.steer.is_empty());
+            assert_eq!(queue.messages.back().unwrap().intent, None);
+            assert_eq!(queue.messages.back().unwrap().body, source.body);
+        }
+        assert_eq!(
+            promoted, source,
+            "copie remise seulement, enveloppe appelante intacte"
+        );
+        let mut overflow = promoted.clone();
+        overflow.id = "overflow159".into();
+        transport.deliver(&overflow).unwrap();
+        assert!(transport.drain_events().iter().any(
+            |event| matches!(&event.kind, ManagedEventKind::DeliveryRejected { message_id, reason }
+                if message_id == "overflow159" && reason == "file Codex pleine")
+        ));
+        assert_eq!(transport.queue.0.lock().unwrap().messages.len(), 2);
+        assert!(
+            !fs::read_to_string(&trace)
+                .unwrap()
+                .contains("\"method\":\"turn/interrupt\"")
+        );
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit159_promote_transport_sans_marqueur_inchange() {
+        let root = root("edit159-legacy");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 20;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+            ],
+            false,
+        )
+        .unwrap();
+        let mut legacy = message("legacy159");
+        legacy.intent = Some(MessageIntent::SteerCurrent);
+        transport.deliver(&legacy).unwrap();
+        assert!(transport.drain_events().iter().any(|event|
+            matches!(&event.kind, ManagedEventKind::DeliveryRejected { message_id, reason }
+                if message_id == "legacy159" && reason == "pilotage Codex indisponible pour le tour courant")));
+        transport.deliver(&message("active159")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while Instant::now() < deadline && !started {
+            started = transport.drain_events().iter().any(|event|
+                matches!(&event.kind, ManagedEventKind::PromptDispatched { message_id } if message_id == "active159"));
+            if !started {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(started, "tour fournisseur réellement ouvert");
+        transport.queue.0.lock().unwrap().steering_open = false;
+        transport.deliver(&message("first159")).unwrap();
+        transport.deliver(&message("second159")).unwrap();
+        let mut promoted = message("full159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        transport.deliver(&promoted).unwrap();
+        assert!(transport.drain_events().iter().any(
+            |event| matches!(&event.kind, ManagedEventKind::DeliveryRejected { message_id, reason }
+                if message_id == "full159" && reason == "file Codex pleine")
+        ));
+        let queue = transport.queue.0.lock().unwrap();
+        assert_eq!(
+            queue
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first159", "second159"]
+        );
+        drop(queue);
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit159_promote_transport_codex_erreur_ambigue_doublon_possible() {
+        let root = root("edit159-ambiguous");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 20;
+        let applied = root.join("applied.jsonl");
+        let script = &mut options.args[1];
+        *script = script.replace("if [ \"${BRIDGET_CODEX_STEER_REFUSE:-0}\" = 1 ]; then", concat!(
+            "if [ \"${BRIDGET_CODEX_STEER_REFUSE:-0}\" = 1 ]; then ",
+            "printf '%s\\n' \"$line\" >> \"$BRIDGET_CODEX_APPLIED_TRACE\"; ",
+            "steered=$(printf '%s' \"$line\" | sed 's/.*\"clientUserMessageId\":\"\\([^\"]*\\)\".*/\\1/'); ",
+            "printf '%s\\n' \"{\\\"method\\\":\\\"item/completed\\\",\\\"params\\\":{\\\"threadId\\\":\\\"thread-native\\\",\\\"turnId\\\":\\\"turn-native\\\",\\\"item\\\":{\\\"id\\\":\\\"applied159\\\",\\\"clientId\\\":\\\"$steered\\\",\\\"type\\\":\\\"userMessage\\\",\\\"content\\\":[]}}}\"; "));
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BRIDGET_CODEX_APPLIED_TRACE".into(),
+                    applied.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+                ("BRIDGET_CODEX_STEER_REFUSE".into(), "1".into()),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("active159")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while Instant::now() < deadline && !started {
+            started = transport.drain_events().iter().any(|event|
+                matches!(&event.kind, ManagedEventKind::PromptDispatched { message_id } if message_id == "active159"));
+            if !started {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(started, "tour fournisseur réellement ouvert");
+        // Geler uniquement le prochain retrait FIFO pour examiner le repli committé en mémoire.
+        transport.queue.0.lock().unwrap().external_turn = Some("fixture-next-turn".into());
+        let mut promoted = message("promoted159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        transport.deliver(&promoted).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while transport.queue.0.lock().unwrap().steering_open {
+            assert!(Instant::now() < deadline, "refus fournisseur réel attendu");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            fs::read_to_string(&applied)
+                .unwrap()
+                .contains("promoted159"),
+            "le fournisseur a appliqué avant de renvoyer l'erreur"
+        );
+        {
+            let mut writer = transport.writer.lock().unwrap();
+            let writer = writer.as_mut().unwrap();
+            writeln!(writer, "{{\"method\":\"native155/finish\"}}").unwrap();
+            writer.flush().unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let queue = transport.queue.0.lock().unwrap();
+            if queue.messages.iter().any(|m| m.id == "promoted159") {
+                break;
+            }
+            drop(queue);
+            assert!(
+                Instant::now() < deadline,
+                "message accepté restitué à la FIFO"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.queue.0.lock().unwrap().external_turn = None;
+        transport.queue.1.notify_one();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let content = fs::read_to_string(&trace).unwrap_or_default();
+            if content.lines().any(|line| {
+                line.contains("\"method\":\"turn/start\"") && line.contains("promoted159")
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "le repli émet un nouveau tour avec le même message"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit159_promote_transport_codex_refus_apres_acceptation_enfile() {
+        let root = root("edit159-refused");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 20;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".into(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".into(), "1".into()),
+                ("BRIDGET_CODEX_STEER_REFUSE".into(), "1".into()),
+            ],
+            false,
+        )
+        .unwrap();
+        transport.deliver(&message("active159")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut started = false;
+        while Instant::now() < deadline && !started {
+            started = transport.drain_events().iter().any(|event|
+                matches!(&event.kind, ManagedEventKind::PromptDispatched { message_id } if message_id == "active159"));
+            if !started {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(started, "tour fournisseur réellement ouvert");
+        // Geler uniquement le prochain retrait FIFO pour examiner le repli committé en mémoire.
+        transport.queue.0.lock().unwrap().external_turn = Some("fixture-next-turn".into());
+        let mut promoted = message("promoted159");
+        promoted.intent = Some(MessageIntent::SteerCurrent);
+        promoted.references.push("steer-or-queue".into());
+        transport.deliver(&promoted).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while transport.queue.0.lock().unwrap().steering_open {
+            assert!(Instant::now() < deadline, "refus fournisseur réel attendu");
+            thread::sleep(Duration::from_millis(10));
+        }
+        {
+            let mut writer = transport.writer.lock().unwrap();
+            let writer = writer.as_mut().unwrap();
+            writeln!(writer, "{{\"method\":\"native155/finish\"}}").unwrap();
+            writer.flush().unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let queue = transport.queue.0.lock().unwrap();
+            if queue.messages.iter().any(|m| m.id == "promoted159") {
+                break;
+            }
+            drop(queue);
+            assert!(
+                Instant::now() < deadline,
+                "message accepté restitué à la FIFO"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.queue.0.lock().unwrap().external_turn = None;
+        transport.queue.1.notify_one();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let content = fs::read_to_string(&trace).unwrap_or_default();
+            if content.lines().any(|line| {
+                line.contains("\"method\":\"turn/start\"") && line.contains("promoted159")
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "le repli émet un nouveau tour avec le même message"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
     }
 }

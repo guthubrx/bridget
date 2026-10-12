@@ -123,6 +123,7 @@ fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
             journal_available: None,
             turn_in_progress: false,
             turn_attest: false,
+            queue_fallback: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,

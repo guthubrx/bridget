@@ -86,6 +86,7 @@ fn test_reply_from_ephemeral_cli_is_rejected() {
         turn_in_progress: false,
         journal_available: None,
         turn_attest: false,
+        queue_fallback: false,
     });
     assert!(matches!(cli.receive(), DaemonToWrapper::Registered { .. }));
     let mut request = BridgetMessage::new(ACTOR, RECIPIENT, "réponds-user");

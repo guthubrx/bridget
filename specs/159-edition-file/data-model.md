@@ -75,7 +75,7 @@ Garde de libération (décision ROOT) : conserver le mutex State de la lecture d
 | Retrait automatique | `settle_held(delivery_id, reason)` | `cancelled`, `Rejected(<raison>)`, notice d'auteur |
 | Retrait demandé (lot B) | `apply_cancel` | idem + reçu `applied` |
 | Déplacement (lot B) | `apply_reorder` | permutation des valeurs de rang existantes du groupe ; rangs provisoires négatifs dans la même transaction pour éviter une collision de clé primaire, jamais publiés ; reçu |
-| Promotion (lot B) | `apply_promote` | mêmes vérifications que la libération ; `held` vers `dispatching` (avec réservation) + reçu |
+| Promotion (lot B) | `apply_promote` | gardes de FR-016/FR-018 et R9 : tour actif au lieu du repos ordinaire ; identité et `Steer` de 156, phase `held`, absence de réservation, saga et demande non expirées recontrôlées ; exception de pause pour l’humain attaché attesté ; `held` vers `dispatching` avec réservation + reçu |
 
 Raisons de `settle_held` : `expired_in_queue` (enregistrement d'envoi expiré),
 `request_closed_in_queue` (demande suivie close ou expirée), `cancelled_in_queue`
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS queue_edits(
   canonical_bytes BLOB NOT NULL,      -- action, cible, message_id, before_message_id
   action TEXT NOT NULL CHECK (action IN ('cancel','reorder','promote')),
   actor TEXT NOT NULL,                -- identité attestée
-  delivery_id TEXT NOT NULL,
+  delivery_id TEXT,                   -- NULL si le message refusé n'existe pas
   before_delivery_id TEXT,
   state TEXT NOT NULL CHECK (state IN ('applied','refused')),
   refusal TEXT,
@@ -115,6 +115,8 @@ CREATE INDEX IF NOT EXISTS idx_queue_edits_delivery ON queue_edits(delivery_id);
 - Purge à l'entretien horaire, après `expires_at` seulement.
 - Pas d'arriéré à plafonner (les éditions sont synchrones).
 - Aucune clé étrangère : la ligne peut survivre à la purge de la remise (audit pendant 7 jours).
+- Les identifiants internes de remise sont `NULL` quand un refus concerne un message inconnu. Les arguments publics restent dans le canon du reçu.
+- La v7 est déjà livrée par le lotA. Cette table et ses deux index sont créés par `CREATE IF NOT EXISTS` dans `IdempotencyStore::init_schema`, à chaque ouverture même si la base est déjàv7, hors branche de migrationv7. Les cinq oracles T014 existants incluent la basev7 initialement sans table, sa réouverture et sa première édition. Pas de nouvelle versionv8 ni reconstruction de remise.
 
 ## Notice d'auteur
 
@@ -134,7 +136,7 @@ présence. La rétention exige `turn_attest` ; la promotion exige `queue_fallbac
 ## Marqueur de promotion
 
 Référence de message `steer-or-queue` (`BridgetMessage.references`) sur la trame de
-remise d'une promotion. Absente de l'enveloppe stockée et du canon.
+remise d'une promotion. Absente de l’enveloppe stockée et du canon. Le transport la teste avant ses refus de `SteerCurrent` : cette seule copie peut rejoindre la FIFO ordinaire si le guidage est fermé, le tour perdu ou l’interface interactive active. Pour ce repli marqué, `steering_requested` et `interrupt_requested` sont tous deux faux avant les earlyrejects, y compris pour un humain avec tour actif ; la saturation utilise `queue.messages`. La FIFO pleine conserve son rejet ; les copies sans marqueur gardent leur comportement.
 
 ## Faits de la garde (extension de `guidance.rs`, 156)
 
@@ -147,7 +149,7 @@ Refus ajoutés    : NotEditable | NoActiveTurn
 
 - `QueueCancel` : humain attaché, parent, auteur. Admis pendant la pause.
 - `QueueReorder` : humain attaché, parent. Admis pendant la pause.
-- `QueuePromote` : droits de `Steer` (156), refus de pause pour un agent, `NoActiveTurn` si le destinataire n'est pas `busy`, `steer_unavailable` si `carrier_queue_fallback` est faux.
+- `QueuePromote` : droits et gardes de `Steer` (156), refus de pause pour un agent et exception pour l’humain attaché attesté ; `NoActiveTurn` si le destinataire n’est pas `busy`, `steer_unavailable` si `carrier_queue_fallback` est faux. Les faits du tour restent sous State jusqu’au commit. La propre transaction Immediate relit SQLpause/reprise, réservation, saga et demande ; aucun writer socket ou autre connexion SQL sous elle. Le push vient après commit et relâchement de State. La priorité de reprise s’applique aux libérations automatiques, pas à la promotion humaine explicite autorisée.
 - `NotEditable` = la remise n'est pas `held`. Le code de refus public est `not_held`.
 - `BareClient`, preuve enfant, identité non attestée : refus, comme en 156.
 
@@ -168,3 +170,19 @@ Aucun nouvel état de tâche, d'exécution ou de projection Lineage.
 Le réordonnancement ne fait aucun nouvel INSERT de rang. Aucun CHECK positif ne bloque ses valeurs provisoires négatives ; la transaction ne publie que la permutation des rangs existants. AUTOINCREMENT ajoute un coût SQLite/CPU/E/S, justifié par FR008 qui interdit le recyclage après purge. Références : [SQLite AUTOINCREMENT](https://www.sqlite.org/autoinc.html), [SQLite Foreign Keys](https://www.sqlite.org/foreignkeys.html).
 
 Les lectures control_state et control_pause_interruptions sont exécutées après BEGIN IMMEDIATE, dans cette même transaction. En cas de SQLITE_BUSY, la remise reste held : aucun refus, aucune libération ni push ; le prochain déclencheur réessaie. L’attente SQL peut durer busy_timeout (2 s) sous State ; ce risque de latence sera mesuré, sans nouvelle garantie. Les chemins TurnState et pause prennent ce même mutex ; les cas concurrents T007 prévus vérifient l’ordre.
+
+### Limite des avis après promotion
+
+`applied` prouve le commit d’édition. `mark_delivery_indeterminate` ne fait aujourd’hui qu’une mise à jour phase/turn_gate ; il n’écrit pas de notice. Le handler `DeliveryRejected` prévient seulement une remise attach en attente ou une demande suivie existante. Aucun avis automatique universel n’est garanti pour la promotion d’un envoi ordinaire `reply=false`. Le retrait demandé et l’orphelinage gardent leurs notices `orphan_emitter_notices`, vidées par le mécanisme existant. Aucun nouvel état consultable ni avis durable supplémentaire n’est ajouté au lotB.
+
+
+### Résolution déterministe du message public — arbitrage ROOT B
+
+Le message_id public n'est pas unique entre plusieurs issuer_scopes pour une
+même cible : la clé durable reste (issuer_scope, send, message_id). Chaque
+mutation résout uniquement une remise held de la cible, avec au plus deux
+correspondances lues (LIMIT 2). Une seule correspondance permet l'édition.
+Zéro correspondance ou ambiguïté : reçu refused/not_held, delivery_id=NULL ;
+aucun UUID interne fabriqué. Les arguments publics restent dans le canon.
+Cet arbitrage ne crée ni index, identifiant, scénario ou autorité supplémentaire.
+Les fondations validées ne prouvent pas encore les trois chemins de mutation.

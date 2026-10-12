@@ -232,6 +232,7 @@ impl Pair {
             turn_in_progress: false,
             journal_available: None,
             turn_attest: false,
+            queue_fallback: false,
         });
         assert!(matches!(
             pair.recevoir(),

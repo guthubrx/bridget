@@ -1,0 +1,514 @@
+{
+  "review_kind": "fresh_readonly_cycle1",
+  "audit_mode": "fix",
+  "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+  "scope_sha256": "665b6559f6e35ccc8160b713d4b2022140a9bcffb5853c6668d18d7dc90cc184",
+  "capture_manifest_sha256": "c400c05eb2787df95ae23a9c8de4fc1a92a9ab4eaf07a5a066b2cca19157ad5e",
+  "capture_patch_sha256": "5267592c6b40e3a10fc1d7ea8ae826c0f82591cccabd4d38d03e6b53103b188e",
+  "read_manifest": [
+    {
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "current_sha256_at_output": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "ranges": [
+        [
+          9408,
+          9488
+        ],
+        [
+          10904,
+          10925
+        ],
+        [
+          10947,
+          10968
+        ],
+        [
+          11058,
+          11080
+        ],
+        [
+          11115,
+          11413
+        ],
+        [
+          18050,
+          18093
+        ],
+        [
+          18664,
+          18764
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        18
+      ],
+      "hunks_read_unified_diff_complete": [
+        9,
+        10,
+        11,
+        12,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "hunks_not_fully_read": [
+        7,
+        8,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency.rs",
+      "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+      "current_sha256_at_output": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+      "ranges": [
+        [
+          128,
+          147
+        ],
+        [
+          862,
+          922
+        ],
+        [
+          1017,
+          1038
+        ],
+        [
+          1274,
+          1316
+        ],
+        [
+          1416,
+          1451
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        60,
+        61
+      ],
+      "hunks_read_unified_diff_complete": [
+        58,
+        59,
+        60,
+        61
+      ],
+      "hunks_not_fully_read": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+      "current_sha256_at_output": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+      "ranges": [
+        [
+          1,
+          405
+        ],
+        [
+          1440,
+          1610
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        62,
+        63,
+        64
+      ],
+      "hunks_read_unified_diff_complete": [
+        63
+      ],
+      "hunks_not_fully_read": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+      "current_sha256_at_output": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+      "ranges": [
+        [
+          615,
+          714
+        ],
+        [
+          1264,
+          1435
+        ],
+        [
+          6066,
+          6118
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": false,
+      "hunks_read_current_side_complete": [
+        66,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        79
+      ],
+      "hunks_read_unified_diff_complete": [
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73
+      ],
+      "hunks_not_fully_read": [
+        74,
+        75,
+        76,
+        77,
+        78,
+        80
+      ]
+    },
+    {
+      "file": "crates/bridget-transport/src/acp.rs",
+      "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+      "current_sha256_at_output": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+      "ranges": [
+        [
+          609,
+          670
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        121,
+        122
+      ],
+      "hunks_read_unified_diff_complete": [],
+      "hunks_not_fully_read": [
+        123
+      ]
+    },
+    {
+      "file": "crates/bridget-transport/src/claude_stream_json.rs",
+      "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+      "current_sha256_at_output": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+      "ranges": [
+        [
+          299,
+          357
+        ],
+        [
+          990,
+          1090
+        ],
+        [
+          1130,
+          1198
+        ],
+        [
+          1274,
+          1314
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        126,
+        127,
+        132,
+        133,
+        134
+      ],
+      "hunks_read_unified_diff_complete": [
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134
+      ],
+      "hunks_not_fully_read": [
+        135
+      ]
+    },
+    {
+      "file": "crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+      "current_sha256_at_output": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+      "ranges": [
+        [
+          894,
+          1002
+        ],
+        [
+          1888,
+          2014
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        136,
+        137,
+        138,
+        139
+      ],
+      "hunks_read_unified_diff_complete": [
+        136,
+        137,
+        138,
+        139
+      ],
+      "hunks_not_fully_read": [
+        140
+      ]
+    },
+    {
+      "file": "specs/159-edition-file/research.md",
+      "sha256": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62",
+      "current_sha256_at_output": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62",
+      "ranges": [
+        [
+          173,
+          185
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "scope",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [
+        184
+      ],
+      "hunks_read_unified_diff_complete": [
+        184
+      ],
+      "hunks_not_fully_read": [
+        183,
+        185
+      ]
+    },
+    {
+      "file": "crates/bridget-daemon/src/registry.rs",
+      "sha256": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "current_sha256_at_output": "9bafd5aa9d5d9431e66256ec924f836580acfaf084f5d79efb4d72cbf700b624",
+      "ranges": [
+        [
+          93,
+          107
+        ],
+        [
+          1004,
+          1022
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "context_only",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [],
+      "hunks_read_unified_diff_complete": [],
+      "hunks_not_fully_read": []
+    },
+    {
+      "file": "crates/bridget-daemon/src/store/service_events.rs",
+      "sha256": "a711a4c6ff8dce5f9eb01cca91457216c74c6ced4ed7837fc9eede4690ce0a69",
+      "current_sha256_at_output": "a711a4c6ff8dce5f9eb01cca91457216c74c6ced4ed7837fc9eede4690ce0a69",
+      "ranges": [
+        [
+          667,
+          716
+        ]
+      ],
+      "read_mode": "fresh_readonly_cycle1_source_and_targeted_diff",
+      "read_at_utc": "2026-10-12T19:43:16.313446+00:00",
+      "read_time_basis": "Clôture : borne supérieure des lectures fraîches, aucun début par plage inventé.",
+      "scope_role": "context_only",
+      "source_unchanged_at_output": true,
+      "hunks_read_current_side_complete": [],
+      "hunks_read_unified_diff_complete": [],
+      "hunks_not_fully_read": []
+    }
+  ],
+  "coverage": {
+    "scope_files_total": 60,
+    "scope_rust_files_total": 44,
+    "scope_hunks_total": 195,
+    "scope_files_read_targeted": 8,
+    "context_files_read": 2,
+    "hunks_read_new_side_or_unified_diff": 44,
+    "hunk_indices": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      79,
+      121,
+      122,
+      124,
+      125,
+      126,
+      127,
+      128,
+      129,
+      130,
+      131,
+      132,
+      133,
+      134,
+      136,
+      137,
+      138,
+      139,
+      184
+    ],
+    "coverage_complete": false,
+    "basis": "Union des hunks dont le côté courant entier a été lu dans les plages, ou dont le diff entier a été visible ; pas une couverture de fichiers entiers.",
+    "truncation_limit": "Deux affichages du patch tronqués ; portions cachées non créditées comme diff lu. Aucun crédit des lectures de préparation/implémentation."
+  },
+  "source_delta_since_capture": [
+    {
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "captured_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+      "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+      "change": "ROOT annonce deux commentaires de complexité ajoutés après les lectures C1 ; lecture courante non créditée."
+    }
+  ],
+  "self_review_disclosure": [
+    "Auteur des candidats SQL T014/T017/T019/T021 et du correctif SC014 : relecture Store en auto-revue, sans prétention de contre-audit indépendant.",
+    "Auteur du comptage corrigé de la fixture MCP mcp158_plafond_parent : relecture déclarée, aucune nouvelle preuve runtime exécutée par cet auditeur."
+  ],
+  "warnings": [
+    "Périmètre historique capture19:25. Contrat/E2E ultérieurs annoncés par ROOT hors de ces plages et SHA ; consolidation finale à venir.",
+    "La fonction SQL de résolution du message public parcourt le JSON des Held du destinataire : LIMIT2 borne les IDs rendus, pas le scan. Bgroup est documenté.",
+    "Capacité de file configurable, pas de plafond global32 prouvé. busy_timeout sous State admis par le contrat, pas un défaut de performance sans autre preuve.",
+    "Aucun test/Cargo/scanner/banc/service/DB/WT modifié. Pas de p95/p99/SLO de production ni de gain temporel inventé.",
+    "ROOT annonce T023 1PASS47.74s et deux anciens oracles 2PASS21.68s ; leurs derniers reçus ne sont pas inspectés ici. FULL final pas encore lancé : pas de GREEN global.",
+    "ROOT a ajouté les deux commentaires de execute_queue après les lectures : PERF-001 conservé historiquement, résolution fraîche à établir au scoring.",
+    "UI hors périmètre ; lectures mécaniques ROOT de26fichiers/34defaults non créditées ici."
+  ],
+  "metrics": {
+    "production_p95_ms": null,
+    "production_p99_ms": null,
+    "peak_memory_bytes": null,
+    "benchmark_executed": false
+  },
+  "baseline": null,
+  "module": "08",
+  "module_id": "08",
+  "findings": [
+    {
+      "id": "PERF-002",
+      "category": "performance",
+      "subcategory": "allocations",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 11373,
+      "title": "Promotion : le BLOB cloné est immédiatement remplacé",
+      "description": "SendDelivery dérive Clone et possède message_bytes sous forme de Vec. Après sérialisation de la projection, delivery.clone copie donc le BLOB original, puis copy.message_bytes remplace immédiatement cette copie. Cette allocation et cette copie linéaire inutiles ont lieu sous State.",
+      "evidence": "                            let target = target_conn\n                                .as_ref()\n                                .map(|(conn, _)| conn.as_str())\n                                .ok_or_else(|| {\n                                    \"connexion primaire de promotion absente\".to_string()\n                                })?;\n                            let mut copy = delivery.clone();\n                            copy.message_bytes = bytes;\n                            defer_idempotent_delivery(st, target, copy, controls, None, Some(conn))",
+      "exploitability": "N/A",
+      "impact": "Une copie et une allocation supplémentaires de B octets par promotion fraîche. Commande explicite froide ; aucune latence, contention ou saturation mesurée.",
+      "path_type": "cold",
+      "remediation": "Construire SendDelivery avec ses deux identifiants clonés, ses deux scalaires recopiés et message_bytes=bytes. Garder delivery original pour la quarantaine après échec de projection.",
+      "verification": "Si ROOT retient ce nettoyage, relire succès/quarantaine et réemployer les oracles T021 déjà prévus. Aucun scénario ou banc supplémentaire. Une allocation et B octets copiés seraient évités, délai inconnu. Retour arrière : rétablir le clone puis remplacement.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "severity_justification": "LOW : copie redondante prouvée, chemin administratif froid, aucun impact temporel mesuré ni scénario de blocage confirmé.",
+      "status": "OPEN",
+      "metric": "Une copie du Vec original dans ce bloc actuellement ; zéro après construction directe. Déduction du code, pas mesure instrumentée.",
+      "expected_gain": "Une allocation et une copie O(B) évitées ; aucun pourcentage ou gain de latence annoncé.",
+      "rollback": "Rétablir delivery.clone suivi du remplacement ; canon SQL inchangé.",
+      "fingerprint": "8b9b680c6115"
+    }
+  ],
+  "positives": [
+    "Le COMMIT et la sortie de State précèdent execute_controls et le writer de la notice dans QueueEditRequest.",
+    "Les trois transports conservent leur contrôle de capacité ; steer-or-queue ne déclenche pas d’interruption implicite.",
+    "Le replay rend le reçu sans effet ou notice fresh : pas de deuxième poussée de promotion."
+  ]
+}

@@ -769,6 +769,7 @@ fn working_native152(nested: bool) -> (Fixture, support::Client, Value) {
             journal_available: None,
             turn_in_progress: false,
             turn_attest: false,
+            queue_fallback: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,
@@ -857,6 +858,7 @@ fn native152_rouge_panne_mission_working() {
             journal_available: None,
             turn_in_progress: false,
             turn_attest: false,
+            queue_fallback: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,
@@ -1181,6 +1183,7 @@ for line in sys.stdin:
             journal_available: None,
             turn_in_progress: false,
             turn_attest: false,
+            queue_fallback: false,
         });
         let DaemonToWrapper::Registered {
             agent_id,

@@ -1,0 +1,70 @@
+{
+  "AUDIT_ROOT_PATH": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file",
+  "AUDIT_SCOPE": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file",
+  "SCOPE_MODE": "diff",
+  "DIFF_BASE": "b0a165edfc6fc5476b2330193c7822e0faecef33",
+  "AUDIT_MODE": "fix",
+  "REVIEWERS_MODE": "readonly",
+  "FIX_OWNER": "ROOT",
+  "AUDIT_GRID": "pre-release",
+  "MODULES_ACTIFS": [
+    "00",
+    "01",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "12"
+  ],
+  "MAX_CYCLES": 1,
+  "FINAL_READONLY_SCORING_REQUIRED": true,
+  "MAX_FIXES_PER_CYCLE": 10,
+  "MAX_RETRY_PER_FINDING": 2,
+  "AUTO_COMMIT": false,
+  "SKIP_HOOKS": false,
+  "SESSION_ID": "session-2026-10-12-spec-159B-01",
+  "SESSION_DATE": "2026-10-12",
+  "SESSION_DIR": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/audits/2026-10-12/session-2026-10-12-spec-159B-01",
+  "PREPARATION_DIR": "/Users/moi/.cache/bridget-audit159B-preparation-20261012",
+  "PREPARATION_PHASES": [
+    "0",
+    "0.5",
+    "0.75"
+  ],
+  "SOURCE_FINAL_FREEZE": false,
+  "OUTPUT_FORMATS": [
+    "json",
+    "md"
+  ],
+  "GENERATE_DASHBOARD": false,
+  "BASELINE_PATH": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+  "SEVERITY_DEFAULTS": {
+    "CRITICAL": {
+      "block_release": true
+    },
+    "HIGH": {
+      "block_release": true
+    },
+    "MEDIUM": {
+      "block_release": false
+    },
+    "LOW": {
+      "block_release": false
+    }
+  },
+  "SAMPLING_THRESHOLD": 500,
+  "SAMPLING_DAYS": 90,
+  "MIN_SAMPLE_SIZE": 50,
+  "USER_OVERRIDES": [
+    "Cache outputs only; ROOTcopies after finalcode freeze.",
+    "No scanners/tests/build/DB/runtime/services/Gitmutations.",
+    "No arbitrarynew tests/tools or newimplementations proposed by audit.",
+    "State currently includes promote/SC014 pending work; do not audit as completed."
+  ]
+}

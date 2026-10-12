@@ -10,6 +10,362 @@ use super::{
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl IdempotencyStore {
+    /// O(log E+log N+Bgroup+log R+B+C+L), E reçus, N remises, R demandes,
+    /// Bgroup JSON inspecté, B message, C garde156, L dépôts clos ; mémoire O(B+I).
+    /// State garde identité/tour/capacité jusqu'au COMMIT ; aucun writer ni autre connexion SQL.
+    pub(crate) fn apply_promote(
+        &mut self,
+        issuer_scope: &str,
+        request_id: &str,
+        canonical_bytes: &[u8],
+        actor: &str,
+        recipient_agent: &str,
+        message_id: &str,
+        facts: &crate::guidance::GuidanceFacts,
+        refusal_code: fn(crate::guidance::GuidanceRefusal) -> String,
+        now: i64,
+    ) -> Result<
+        (
+            super::QueueEditReceipt,
+            Option<SendDelivery>,
+            Option<OrphanedDeliveryNotice>,
+        ),
+        IdempotencyError,
+    > {
+        use bridget_transport::protocol::QueueEditState;
+        let mut rights = facts.clone();
+        rights.action = crate::guidance::GuidanceAction::QueuePromote;
+        // Droits avant receipt, garde Steer réelle réemployée sans pause anticipée.
+        if let Err(refusal) = crate::guidance::authorize(&rights) {
+            return Ok((
+                super::QueueEditReceipt {
+                    state: QueueEditState::Refused,
+                    refusal: Some(refusal_code(refusal)),
+                    effect: None,
+                },
+                None,
+                None,
+            ));
+        }
+        let result=self.queue_edit_once(issuer_scope,request_id,canonical_bytes,
+            bridget_transport::protocol::QueueEditAction::Promote,actor,now,|tx| {
+                let Some(id)=unique_held_public_id(tx,recipient_agent,message_id)? else {
+                    return Ok((None,None,Err(("not_held".to_string(),None))));
+                };
+                let row=tx.query_row("SELECT d.recipient_instance_id,d.delivery_generation,
+                    d.expires_at,d.message_bytes,r.expires_at,r.state,
+                    EXISTS(SELECT 1 FROM send_delivery_execution_links l WHERE l.delivery_id=d.delivery_id)
+                    FROM send_deliveries d JOIN idempotency_records r
+                      ON r.issuer_scope=d.issuer_scope AND r.operation_kind=d.operation_kind
+                        AND r.idempotency_key=d.idempotency_key
+                    WHERE d.delivery_id=?1 AND d.phase='held'",[&id],|row|Ok((
+                        row.get::<_,String>(0)?,row.get::<_,u64>(1)?,row.get::<_,i64>(2)?,
+                        row.get::<_,Vec<u8>>(3)?,row.get::<_,i64>(4)?,row.get::<_,String>(5)?,
+                        row.get::<_,bool>(6)?)))?;
+                let message:bridget_core::BridgetMessage=serde_json::from_slice(&row.3)
+                    .map_err(|_|IdempotencyError::CorruptRecord("enveloppe retenue illisible"))?;
+                let reserved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM send_deliveries
+                    WHERE recipient_agent=?1 AND turn_gate=1)",[recipient_agent],|r|r.get(0))?;
+                let request_open=if message.reply {
+                    tx.query_row("SELECT EXISTS(SELECT 1 FROM tracked_requests
+                        WHERE id=?1 AND sender=?2 AND target=?3 AND state='open' AND deadline_at>?4)",
+                        params![message.id,message.from,message.to,now],|r|r.get::<_,bool>(0))?
+                } else { true };
+                let settlement_reason=if row.2<=now || row.4<=now {
+                    Some("expired_in_queue")
+                } else if message.reply && !request_open {
+                    Some("request_closed_in_queue")
+                } else { None };
+                if let Some(reason)=settlement_reason {
+                    // SC014 : ménage obligatoire, distinct d'une promotion refusée.
+                    // Le reçu not_held et cette clôture restent dans le même COMMIT.
+                    let notice=settle_held_in_transaction(tx,&id,reason,now)?
+                        .ok_or(IdempotencyError::DispatchUnavailable)?;
+                    return Ok((Some(id),None,Err(("not_held".to_string(),Some(notice)))));
+                }
+                let mut fresh=rights.clone();
+                fresh.message_editable=row.2>now && row.4>now && row.5=="dispatching"
+                    && !row.6 && !reserved && request_open;
+                // Ces faits variables sont relus APRÈS BEGIN, même connexion.
+                let control=crate::referent_control::read(tx)?;
+                let pending_pause:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM control_pause_interruptions
+                    WHERE target_agent=?1 AND resumed_at IS NULL)",[recipient_agent],|r|r.get(0))?;
+                fresh.paused=control.paused || pending_pause;
+                fresh.now=now;
+                // Une seule source156 pour phase/pause/tour/fallback ; humain attesté
+                // conserve son exception, contrairement à HeldRelease autonome.
+                if let Err(refusal)=crate::guidance::authorize_queue_edit(&fresh) {
+                    return Ok((Some(id),None,Err((refusal_code(refusal),None))));
+                }
+                if tx.execute("UPDATE send_deliveries SET phase='dispatching',turn_gate=1
+                    WHERE delivery_id=?1 AND recipient_agent=?2 AND phase='held' AND turn_gate=0",
+                    params![id,recipient_agent])?!=1 {
+                    return Err(IdempotencyError::DispatchUnavailable);
+                }
+                let delivery=SendDelivery{delivery_id:id.clone(),recipient_instance_id:row.0,
+                    delivery_generation:row.1,expires_at:row.2,message_bytes:row.3};
+                Ok((Some(id),None,Ok(delivery)))
+            })?;
+        if result.1.is_some() || result.2.is_some() {
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_queue_promote_commit");
+        }
+        Ok(result)
+    }
+
+    /// O(log E+log N+Bgroup+H log N), E reçus, N remises, H retenus du groupe,
+    /// Bgroup JSON inspecté ; mémoire O(H+I), I octets des IDs. Rangs hors groupe intacts.
+    /// Toutes les valeurs provisoires négatives restent dans la TX Immediate.
+    pub(crate) fn apply_reorder(
+        &mut self,
+        issuer_scope: &str,
+        request_id: &str,
+        canonical_bytes: &[u8],
+        actor: &str,
+        recipient_agent: &str,
+        message_id: &str,
+        before_message_id: Option<&str>,
+        now: i64,
+    ) -> Result<(super::QueueEditReceipt, Option<()>), IdempotencyError> {
+        self.queue_edit_once(issuer_scope,request_id,canonical_bytes,
+            bridget_transport::protocol::QueueEditAction::Reorder,actor,now,|tx| {
+                let Some(id)=unique_held_public_id(tx,recipient_agent,message_id)? else {
+                    return Ok((None,None,Err(("not_held".to_string(),None))));
+                };
+                let before_id=if let Some(before)=before_message_id {
+                    let Some(before)=unique_held_public_id(tx,recipient_agent,before)? else {
+                        return Ok((Some(id),None,Err(("not_held".to_string(),None))));
+                    };
+                    Some(before)
+                } else { None };
+                let rows=tx.prepare("SELECT delivery_id,queue_rank FROM send_deliveries
+                    WHERE recipient_agent=?1 AND phase='held' ORDER BY queue_rank")?
+                    .query_map([recipient_agent],|row|Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?)))?
+                    .collect::<Result<Vec<_>,_>>()?;
+                if rows.iter().any(|(_,rank)|*rank<=0) {
+                    return Err(IdempotencyError::CorruptRecord("rang retenu non positif"));
+                }
+                let mut ordered=rows.iter().map(|(id,_)|id.clone()).collect::<Vec<_>>();
+                let source=ordered.iter().position(|candidate|candidate==&id)
+                    .ok_or(IdempotencyError::DispatchUnavailable)?;
+                if before_id.as_ref()==Some(&id) {
+                    return Ok((Some(id),before_id,Ok(())));
+                }
+                let moved=ordered.remove(source);
+                let destination=if let Some(before)=&before_id {
+                    ordered.iter().position(|candidate|candidate==before)
+                        .ok_or(IdempotencyError::DispatchUnavailable)?
+                } else { ordered.len() };
+                ordered.insert(destination,moved);
+                if rows.iter().map(|(id,_)|id).eq(ordered.iter()) {
+                    return Ok((Some(id),before_id,Ok(())));
+                }
+                for (row_id,rank) in &rows {
+                    if tx.execute("UPDATE send_deliveries SET queue_rank=?1
+                        WHERE delivery_id=?2 AND recipient_agent=?3 AND phase='held' AND queue_rank=?4",
+                        params![-rank,row_id,recipient_agent,rank])?!=1 {
+                        return Err(IdempotencyError::DispatchUnavailable);
+                    }
+                }
+                for (row_id,(_,rank)) in ordered.iter().zip(&rows) {
+                    if tx.execute("UPDATE send_deliveries SET queue_rank=?1
+                        WHERE delivery_id=?2 AND recipient_agent=?3 AND phase='held' AND queue_rank<0",
+                        params![rank,row_id,recipient_agent])?!=1 {
+                        return Err(IdempotencyError::DispatchUnavailable);
+                    }
+                }
+                Ok((Some(id),before_id,Ok(())))
+            }).map(|(receipt,effect,_)|(receipt,effect))
+    }
+
+    /// O(log E+log N+Bgroup+log R+B+L), E reçus, N remises, R demandes,
+    /// Bgroup JSON du destinataire, B message, L dépôts liés ; mémoire O(B).
+    /// State protège les droits attestés jusqu'au COMMIT ; le résultat fresh
+    /// seul autorise le cleanup mémoire. Aucune interruption ni E/S socket.
+    pub(crate) fn apply_cancel(
+        &mut self,
+        issuer_scope: &str,
+        request_id: &str,
+        canonical_bytes: &[u8],
+        actor: &str,
+        recipient_agent: &str,
+        message_id: &str,
+        now: i64,
+    ) -> Result<(super::QueueEditReceipt, Option<OrphanedDeliveryNotice>), IdempotencyError> {
+        #[cfg(feature = "test-support")]
+        crate::test_sync::checkpoint("before_queue_cancel_transaction");
+        let result = self.queue_edit_once(
+            issuer_scope,
+            request_id,
+            canonical_bytes,
+            bridget_transport::protocol::QueueEditAction::Cancel,
+            actor,
+            now,
+            |tx| {
+                // UUID public du message, distinct de la clé de remise interne.
+                // Le filtre destinataire vient de la résolution attestée du caller.
+                let Some(id) = unique_held_public_id(tx, recipient_agent, message_id)? else {
+                    return Ok((None, None, Err(("not_held".to_string(), None))));
+                };
+                let notice = settle_held_in_transaction(tx, &id, "cancelled_in_queue", now)?
+                    .ok_or(IdempotencyError::DispatchUnavailable)?;
+                Ok((Some(id), None, Ok(notice)))
+            },
+        )?;
+        if result.1.is_some() {
+            #[cfg(feature = "test-support")]
+            crate::test_sync::checkpoint("after_queue_cancel_commit");
+        }
+        Ok((result.0, result.1))
+    }
+
+    /// O(log E + B + C), E reçus, B canon, C callback métier ; mémoire O(B + M).
+    /// Identité/droits frais vérifiés par le caller avant cet appel. Les trois
+    /// mutations de file relisent leurs gardes SQL après le lookup, dans `apply`.
+    /// Un refus ordinaire annule les écritures du callback. Seule une notice
+    /// de clôture SC014 explicite conserve ce ménage avec le reçu not_held.
+    /// Effet T et notice fresh sortent uniquement après le COMMIT commun.
+    pub(crate) fn queue_edit_once<T>(
+        &mut self,
+        issuer_scope: &str,
+        request_id: &str,
+        canonical_bytes: &[u8],
+        action: bridget_transport::protocol::QueueEditAction,
+        actor: &str,
+        now: i64,
+        apply: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+        ) -> Result<
+            (
+                Option<String>,
+                Option<String>,
+                Result<T, (String, Option<OrphanedDeliveryNotice>)>,
+            ),
+            IdempotencyError,
+        >,
+    ) -> Result<
+        (
+            super::QueueEditReceipt,
+            Option<T>,
+            Option<OrphanedDeliveryNotice>,
+        ),
+        IdempotencyError,
+    > {
+        use bridget_transport::protocol::{QueueEditAction, QueueEditEffect, QueueEditState};
+        super::validate_issuer_scope(issuer_scope)?;
+        super::validate_idempotency_key(request_id)?;
+        super::validate_canonical_bytes(canonical_bytes)?;
+        let expires_at = now
+            .checked_add(super::QUEUE_EDIT_RETENTION_SECS)
+            .ok_or(IdempotencyError::InvalidIssuedAt)?;
+        let action_name = match action {
+            QueueEditAction::Cancel => "cancel",
+            QueueEditAction::Reorder => "reorder",
+            QueueEditAction::Promote => "promote",
+        };
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous = tx
+            .query_row(
+                "SELECT canonical_bytes, action, state, refusal FROM queue_edits
+             WHERE issuer_scope=?1 AND request_id=?2",
+                params![issuer_scope, request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((canonical, stored_action, state, refusal)) = previous {
+            if canonical != canonical_bytes || stored_action != action_name {
+                return Ok((
+                    super::QueueEditReceipt {
+                        state: QueueEditState::Refused,
+                        refusal: Some("envelope_mismatch".to_string()),
+                        effect: None,
+                    },
+                    None,
+                    None,
+                ));
+            }
+            let state = match state.as_str() {
+                "applied" => QueueEditState::Applied,
+                "refused" => QueueEditState::Refused,
+                _ => return Err(IdempotencyError::CorruptRecord("issue queue_edit invalide")),
+            };
+            return Ok((
+                super::QueueEditReceipt {
+                    state,
+                    refusal,
+                    effect: (state == QueueEditState::Applied
+                        && action == QueueEditAction::Promote)
+                        .then_some(QueueEditEffect::Unconfirmed),
+                },
+                None,
+                None,
+            ));
+        }
+        // SAVEPOINT local : refus normal rollback ; clôture SC014 explicite conservée.
+        tx.execute_batch("SAVEPOINT queue_edit_effect")?;
+        let (delivery_id, before_delivery_id, decision) = apply(&tx)?;
+        let (state, refusal, effect, notice) = match decision {
+            Ok(effect) => (QueueEditState::Applied, None, Some(effect), None),
+            Err((refusal, notice)) => {
+                if let Some(notice) = &notice {
+                    // Seule la clôture SC014 explicite est admissible sur refus.
+                    if action != QueueEditAction::Promote
+                        || refusal != "not_held"
+                        || delivery_id.as_deref() != Some(notice.delivery_id.as_str())
+                    {
+                        return Err(IdempotencyError::InvalidDelivery);
+                    }
+                } else {
+                    tx.execute_batch("ROLLBACK TO queue_edit_effect")?;
+                }
+                (QueueEditState::Refused, Some(refusal), None, notice)
+            }
+        };
+        tx.execute_batch("RELEASE queue_edit_effect")?;
+        let state_name = match state {
+            QueueEditState::Applied => "applied",
+            QueueEditState::Refused => "refused",
+        };
+        tx.execute(
+            "INSERT INTO queue_edits(issuer_scope,request_id,canonical_bytes,action,
+             actor,delivery_id,before_delivery_id,state,refusal,created_at,expires_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                issuer_scope,
+                request_id,
+                canonical_bytes,
+                action_name,
+                actor,
+                delivery_id,
+                before_delivery_id,
+                state_name,
+                refusal,
+                now,
+                expires_at
+            ],
+        )?;
+        tx.commit()?;
+        Ok((
+            super::QueueEditReceipt {
+                state,
+                refusal,
+                effect: (state == QueueEditState::Applied && action == QueueEditAction::Promote)
+                    .then_some(QueueEditEffect::Unconfirmed),
+            },
+            effect,
+            notice,
+        ))
+    }
+
     /// O(log N + G + B), G réservations de l'agent, B enveloppe. Un seul candidat.
     /// Le caller garde State et la preuve de repos jusqu'au COMMIT ; aucune E/S.
     pub(crate) fn release_next_held(
@@ -1088,6 +1444,31 @@ impl IdempotencyStore {
     }
 }
 
+/// O(log N+Bgroup), JSON des seuls retenus du destinataire ; deux IDs au plus.
+/// Trois mutations emploient la même résolution conservative (Cancel/Reorder/Promote).
+fn unique_held_public_id(
+    conn: &rusqlite::Connection,
+    recipient_agent: &str,
+    message_id: &str,
+) -> Result<Option<String>, IdempotencyError> {
+    let ids = conn
+        .prepare(
+            "SELECT delivery_id FROM send_deliveries
+        WHERE recipient_agent=?1 AND phase='held'
+          AND json_extract(CAST(message_bytes AS TEXT),'$.id')=?2
+        ORDER BY queue_rank LIMIT 2",
+        )?
+        .query_map(params![recipient_agent, message_id], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(if ids.len() == 1 {
+        ids.into_iter().next()
+    } else {
+        None
+    })
+}
+
 /// FR006/FR024 : réutilisé par libération et balayage, jamais deux COMMIT.
 /// O(log N+log R+B+L), R demandes, B enveloppe, L dépôts liés ; DTO/table existants.
 fn settle_held_in_transaction(
@@ -1151,6 +1532,10 @@ fn settle_held_in_transaction(
     )? != 1
     {
         return Err(IdempotencyError::DispatchUnavailable);
+    }
+    #[cfg(feature = "test-support")]
+    if reason == "cancelled_in_queue" {
+        crate::test_sync::checkpoint("after_queue_cancel_delivery_write");
     }
     let body = format!(
         "RETIRÉ DE LA FILE : votre message {} pour {} a été retiré avant livraison ({}). Il ne sera pas livré.",

@@ -444,6 +444,7 @@ impl Client {
             turn_in_progress: false,
             journal_available: Some(false),
             turn_attest: false,
+            queue_fallback: false,
         });
         if let DaemonToWrapper::Registered {
             credential: Some(credential),

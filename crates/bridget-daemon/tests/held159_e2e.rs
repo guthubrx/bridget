@@ -690,6 +690,7 @@ fn bootstrap159(
         journal_available: None,
         turn_in_progress: false,
         turn_attest: false,
+        queue_fallback: false,
     });
     let DaemonToWrapper::Registered {
         agent_id,

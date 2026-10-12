@@ -3579,3 +3579,2184 @@ fn held159_migration_fantomes_ecartes_avec_warn() {
         "le nettoyage doit être dit et identifier le fantôme ; logs={logs:?}"
     );
 }
+
+// T014 : mêmes cinq oracles que RED ; réouverture v7 puis API SQL réelle.
+#[test]
+fn edit159_receipt_store_reserver_puis_rejouer_meme_resultat() {
+    use bridget_transport::protocol::{QueueEditAction, QueueEditState};
+    let db = TempDbGuard::new("edit159-old-v7");
+    let old_user_version;
+    {
+        let old = IdempotencyStore::open(db.path()).unwrap();
+        assert_eq!(
+            old.conn
+                .query_row(
+                    "SELECT MAX(version) FROM idempotency_schema_migrations",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            7
+        );
+        old_user_version = old
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        old.conn
+            .execute_batch("DROP TABLE IF EXISTS queue_edits")
+            .unwrap();
+        assert!(
+            !old.conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='queue_edits')",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+        );
+    }
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT MAX(version) FROM idempotency_schema_migrations",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        7
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        old_user_version
+    );
+    assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_queue_edits_expires','idx_queue_edits_delivery')", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+    let (first,effect,_notice)=store.queue_edit_once("012_scope_aaaaaaaaaaaa", "edit-1", b"cancel,target,public-message,null", QueueEditAction::Cancel, "author", NOW,
+        |tx| {
+            tx.execute("INSERT INTO ledger(id,ts,sender,target,body,conversation_key) VALUES('effect-1',?1,'author','target','effect','test')", params![NOW])?;
+            Ok((Some("internal-delivery-different".to_string()), None, Ok("committed")))
+        }).unwrap();
+    assert_eq!(first.state, QueueEditState::Applied);
+    assert_eq!(effect, Some("committed"));
+    drop(store);
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let (replayed, effect, _notice) = store
+        .queue_edit_once::<()>(
+            "012_scope_aaaaaaaaaaaa",
+            "edit-1",
+            b"cancel,target,public-message,null",
+            QueueEditAction::Cancel,
+            "author",
+            NOW + 1,
+            |_| panic!("un rejeu ne réapplique aucun effet"),
+        )
+        .unwrap();
+    assert_eq!(replayed, first);
+    assert_eq!(effect, None);
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM ledger WHERE id='effect-1'", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT delivery_id FROM queue_edits WHERE request_id='edit-1'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "internal-delivery-different"
+    );
+}
+
+#[test]
+fn edit159_receipt_store_autres_parametres_envelope_mismatch() {
+    use bridget_transport::protocol::{QueueEditAction, QueueEditState};
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let canonical = b"cancel,target,public-message,null";
+    let (first, _, _notice) = store
+        .queue_edit_once(
+            "012_scope_aaaaaaaaaaaa",
+            "edit-2",
+            canonical,
+            QueueEditAction::Cancel,
+            "author",
+            NOW,
+            |_| Ok((Some("internal-2".to_string()), None, Ok(()))),
+        )
+        .unwrap();
+    for changed in [
+        b"cancel,other-target,public-message,null".as_slice(),
+        b"cancel,target,other-message,null".as_slice(),
+        b"cancel,target,public-message,before".as_slice(),
+    ] {
+        let (receipt, effect, _notice) = store
+            .queue_edit_once::<()>(
+                "012_scope_aaaaaaaaaaaa",
+                "edit-2",
+                changed,
+                QueueEditAction::Cancel,
+                "author",
+                NOW,
+                |_| panic!("paramètres différents : aucun effet"),
+            )
+            .unwrap();
+        assert_eq!(receipt.state, QueueEditState::Refused);
+        assert_eq!(receipt.refusal.as_deref(), Some("envelope_mismatch"));
+        assert_eq!(effect, None);
+    }
+    let (receipt, _, _notice) = store
+        .queue_edit_once::<()>(
+            "012_scope_aaaaaaaaaaaa",
+            "edit-2",
+            b"promote,target,public-message,null",
+            QueueEditAction::Promote,
+            "author",
+            NOW,
+            |_| panic!("action différente : aucun effet"),
+        )
+        .unwrap();
+    assert_eq!(receipt.refusal.as_deref(), Some("envelope_mismatch"));
+    let (replayed, _, _notice) = store
+        .queue_edit_once::<()>(
+            "012_scope_aaaaaaaaaaaa",
+            "edit-2",
+            canonical,
+            QueueEditAction::Cancel,
+            "author",
+            NOW,
+            |_| panic!("ancien reçu préservé"),
+        )
+        .unwrap();
+    assert_eq!(replayed, first);
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM queue_edits", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn edit159_receipt_store_refus_memorise() {
+    use bridget_transport::protocol::{QueueEditAction, QueueEditState};
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let (first,effect,_notice)=store.queue_edit_once::<()>("012_scope_aaaaaaaaaaaa", "edit-3", b"promote,target,unknown,null", QueueEditAction::Promote, "parent", NOW,
+        |tx| {
+            tx.execute("INSERT INTO ledger(id,ts,sender,target,body,conversation_key) VALUES('refused-effect',?1,'parent','target','must rollback','test')", params![NOW])?;
+            Ok((None, None, Err(("not_held".to_string(),None))))
+        }).unwrap();
+    assert_eq!(first.state, QueueEditState::Refused);
+    assert_eq!(first.refusal.as_deref(), Some("not_held"));
+    assert_eq!(first.effect, None);
+    assert_eq!(effect, None);
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM ledger WHERE id='refused-effect'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT delivery_id FROM queue_edits WHERE request_id='edit-3'",
+                [],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .unwrap(),
+        None
+    );
+    let (replayed, effect, _notice) = store
+        .queue_edit_once::<()>(
+            "012_scope_aaaaaaaaaaaa",
+            "edit-3",
+            b"promote,target,unknown,null",
+            QueueEditAction::Promote,
+            "parent",
+            NOW + 1,
+            |_| panic!("phase/pause nouvelles ne réévaluent pas le refus reçu"),
+        )
+        .unwrap();
+    assert_eq!(replayed, first);
+    assert_eq!(effect, None);
+}
+
+#[test]
+fn edit159_receipt_store_effet_et_recu_atomiques() {
+    use bridget_transport::protocol::{QueueEditAction, QueueEditState};
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    store.conn.execute_batch("CREATE TEMP TRIGGER edit159_receipt_failure BEFORE INSERT ON queue_edits BEGIN SELECT RAISE(ABORT,'receipt failure'); END;").unwrap();
+    let result = store.queue_edit_once("012_scope_aaaaaaaaaaaa", "edit-4", b"cancel,target,message,null", QueueEditAction::Cancel, "author", NOW,
+        |tx| {
+            tx.execute("INSERT INTO ledger(id,ts,sender,target,body,conversation_key) VALUES('atomic-effect',?1,'author','target','effect','test')", params![NOW])?;
+            Ok((Some("internal-4".to_string()), None, Ok(())))
+        });
+    assert!(matches!(result, Err(IdempotencyError::Sqlite(_))));
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM ledger WHERE id='atomic-effect'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM queue_edits", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    store
+        .conn
+        .execute_batch("DROP TRIGGER edit159_receipt_failure")
+        .unwrap();
+    let (receipt, effect, _notice) = store
+        .queue_edit_once(
+            "012_scope_aaaaaaaaaaaa",
+            "edit-4",
+            b"cancel,target,message,null",
+            QueueEditAction::Cancel,
+            "author",
+            NOW,
+            |_| Ok((Some("internal-4".to_string()), None, Ok(()))),
+        )
+        .unwrap();
+    assert_eq!(receipt.state, QueueEditState::Applied);
+    assert_eq!(effect, Some(()));
+}
+
+#[test]
+fn edit159_receipt_store_purge_apres_horizon_seulement() {
+    use bridget_transport::protocol::QueueEditAction;
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for request_id in ["edit-5a", "edit-5b"] {
+        store
+            .queue_edit_once(
+                "012_scope_aaaaaaaaaaaa",
+                request_id,
+                b"cancel,target,message,null",
+                QueueEditAction::Cancel,
+                "author",
+                NOW,
+                |_| Ok((Some("internal-5".to_string()), None, Ok(()))),
+            )
+            .unwrap();
+    }
+    let expires_at: i64 = store
+        .conn
+        .query_row("SELECT MIN(expires_at) FROM queue_edits", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(expires_at, NOW + 7 * 86_400);
+    assert_eq!(store.purge_expired(expires_at - 1).unwrap(), 0);
+    assert_eq!(store.purge_expired(expires_at).unwrap(), 0);
+    assert_eq!(store.purge_expired(expires_at + 1).unwrap(), 2);
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM queue_edits", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+// T017 Store : sept noms prescrits ; vrais reserve/begin Held, IDs distincts.
+#[test]
+fn edit159_cancel_phase_cancelled_et_envoi_rejete_cancelled_in_queue() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let bytes = sample_message_bytes("public-cancel", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-cancel".into(),
+        recipient_instance_id: "instance-cancel".into(),
+        delivery_generation: 3,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes,
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let (receipt, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(delivery_phase(&store, "delivery-cancel"), "cancelled");
+    assert_eq!(
+        notice.as_ref().map(|n| n.message_id.as_str()),
+        Some("public-cancel")
+    );
+    let terminal: (String,String) = store.conn.query_row("SELECT public_result_kind, public_result_category FROM idempotency_records WHERE issuer_scope=?1 AND idempotency_key=?2", params![key().issuer_scope,key().idempotency_key], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+    assert_eq!(
+        terminal,
+        ("rejected".to_string(), "cancelled_in_queue".to_string())
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT delivery_id FROM queue_edits WHERE request_id='cancel-edit'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "delivery-cancel"
+    );
+}
+
+#[test]
+fn edit159_cancel_prevenance_auteur() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let bytes = sample_message_bytes("public-cancel", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-cancel".into(),
+        recipient_instance_id: "instance-cancel".into(),
+        delivery_generation: 3,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes,
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let (receipt, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(notice.unwrap().sender, "sender-peer");
+    let durable: (String,String,Option<i64>) = store.conn.query_row("SELECT sender,body,notified_at FROM orphan_emitter_notices WHERE delivery_id='delivery-cancel'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(durable.0, "sender-peer");
+    assert!(durable.1.contains("public-cancel") && durable.1.contains("cancelled_in_queue"));
+    assert_eq!(durable.2, None);
+}
+
+#[test]
+fn edit159_cancel_une_seule_transaction() {
+    for (operation, table, filter) in [
+        (
+            "UPDATE",
+            "send_deliveries",
+            "NEW.delivery_id='delivery-cancel'",
+        ),
+        (
+            "UPDATE",
+            "idempotency_records",
+            "NEW.idempotency_key='message-1'",
+        ),
+        ("UPDATE", "tracked_requests", "NEW.id='public-cancel'"),
+        (
+            "INSERT",
+            "orphan_emitter_notices",
+            "NEW.delivery_id='delivery-cancel'",
+        ),
+        ("INSERT", "queue_edits", "NEW.request_id='cancel-edit'"),
+    ] {
+        let db = TempDbGuard::new("edit159-cancel-atomic");
+        drop(crate::store::Store::open(db.path()).unwrap());
+        let mut store = IdempotencyStore::open(db.path()).unwrap();
+        let mut message: bridget_core::BridgetMessage =
+            serde_json::from_slice(&sample_message_bytes("public-cancel", "agent-2")).unwrap();
+        message.reply = true;
+        let bytes = serde_json::to_vec(&message).unwrap();
+        reserve(&store, &bytes);
+        let tracking = ReplyTracking {
+            request_id: message.id.clone(),
+            sender: message.from.clone(),
+            target: message.to.clone(),
+            created_at: NOW,
+            deadline_at: NOW + HORIZON,
+        };
+        let delivery = SendDelivery {
+            delivery_id: "delivery-cancel".into(),
+            recipient_instance_id: "instance-cancel".into(),
+            delivery_generation: 3,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key(),
+                &delivery,
+                Some(&tracking),
+                None,
+                None,
+                Some(8),
+                Some("agent-2"),
+            )
+            .unwrap();
+        store.conn.execute_batch(&format!("CREATE TEMP TRIGGER cancel159_failure AFTER {operation} ON {table} WHEN {filter} BEGIN SELECT RAISE(ABORT,'cancel159 failure after write'); END;")).unwrap();
+        assert!(
+            matches!(
+                store.apply_cancel(
+                    "012_scope_aaaaaaaaaaaa",
+                    "cancel-edit",
+                    b"cancel,agent-2,public-cancel,null",
+                    "sender-peer",
+                    "agent-2",
+                    "public-cancel",
+                    NOW
+                ),
+                Err(IdempotencyError::Sqlite(_))
+            ),
+            "fault on {table}"
+        );
+        assert_eq!(
+            delivery_phase(&store, "delivery-cancel"),
+            "held",
+            "fault on {table}"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT state FROM idempotency_records WHERE idempotency_key='message-1'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "dispatching"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT state FROM tracked_requests WHERE id='public-cancel'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "open"
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM orphan_emitter_notices", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM queue_edits", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn edit159_cancel_not_held_pour_message_libere() {
+    let db = TempDbGuard::new("edit159-cancel-released");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let bytes = sample_message_bytes("public-cancel", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-cancel".into(),
+        recipient_instance_id: "instance-cancel".into(),
+        delivery_generation: 3,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes,
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    assert!(store.release_next_held("agent-2", NOW).unwrap().0.is_some());
+    let (receipt, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Refused
+    );
+    assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+    assert_eq!(notice, None);
+    assert_eq!(delivery_phase(&store, "delivery-cancel"), "dispatching");
+}
+
+#[test]
+fn edit159_cancel_not_held_pour_message_jamais_retenu() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let (receipt, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Refused
+    );
+    assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+    assert_eq!(notice, None);
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT delivery_id FROM queue_edits WHERE request_id='cancel-edit'",
+                [],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn edit159_cancel_rejeu_meme_resultat() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let bytes = sample_message_bytes("public-cancel", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-cancel".into(),
+        recipient_instance_id: "instance-cancel".into(),
+        delivery_generation: 3,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes,
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let (first, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        first.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert!(notice.is_some());
+    let (replayed, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(replayed, first);
+    assert_eq!(notice, None, "pas de cleanup/notification une seconde fois");
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM orphan_emitter_notices", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM queue_edits", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn edit159_cancel_autres_parametres_envelope_mismatch() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    let bytes = sample_message_bytes("public-cancel", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-cancel".into(),
+        recipient_instance_id: "instance-cancel".into(),
+        delivery_generation: 3,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes,
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let (first, _) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        first.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    let (mismatch, notice) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,other-target,public-cancel,null",
+            "sender-peer",
+            "other-target",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(mismatch.refusal.as_deref(), Some("envelope_mismatch"));
+    assert_eq!(notice, None);
+    let (replayed, _) = store
+        .apply_cancel(
+            "012_scope_aaaaaaaaaaaa",
+            "cancel-edit",
+            b"cancel,agent-2,public-cancel,null",
+            "sender-peer",
+            "agent-2",
+            "public-cancel",
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(replayed, first);
+    assert_eq!(delivery_phase(&store, "delivery-cancel"), "cancelled");
+}
+
+// T019 Store : dix noms planifiés ; droits/pause et libération réservés au daemon.
+#[test]
+fn edit159_reorder_avant_un_message() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let before = held159_migration_rows(
+        &store.conn,
+        "SELECT delivery_id,message_bytes,delivery_generation FROM send_deliveries ORDER BY delivery_id",
+    );
+    let (receipt, _) = store
+        .apply_reorder(
+            "012_scope_aaaaaaaaaaaa",
+            "reorder-edit",
+            b"reorder,agent-2,public-B,public-A",
+            "parent",
+            "agent-2",
+            "public-B",
+            Some("public-A"),
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-B","delivery-A","delivery-C"]);
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,message_bytes,delivery_generation FROM send_deliveries ORDER BY delivery_id"
+        ),
+        before
+    );
+}
+
+#[test]
+fn edit159_reorder_a_la_fin() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let (receipt, _) = store
+        .apply_reorder(
+            "012_scope_aaaaaaaaaaaa",
+            "reorder-end",
+            b"reorder,agent-2,public-A,null",
+            "parent",
+            "agent-2",
+            "public-A",
+            None,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-B","delivery-C","delivery-A"]);
+}
+
+#[test]
+fn edit159_reorder_message_libere_not_held() {
+    let db = TempDbGuard::new("edit159-reorder-released");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    assert!(store.release_next_held("agent-2", NOW).unwrap().0.is_some());
+    let (receipt, effect) = store
+        .apply_reorder(
+            "012_scope_aaaaaaaaaaaa",
+            "reorder-released",
+            b"reorder,agent-2,public-A,public-B",
+            "parent",
+            "agent-2",
+            "public-A",
+            Some("public-B"),
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+    assert_eq!(effect, None);
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-B","delivery-C"]);
+}
+
+#[test]
+fn edit159_reorder_before_inconnu_ou_autre_destinataire_not_held() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let other_key =
+        IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "key-D").unwrap();
+    let bytes = sample_message_bytes("public-D", "agent-other");
+    store
+        .reserve(&other_key, &bytes, NOW, HORIZON, NOW, 30)
+        .unwrap();
+    store
+        .begin_send_delivery_with_guidance(
+            &other_key,
+            &SendDelivery {
+                delivery_id: "delivery-D".into(),
+                recipient_instance_id: "instance-other".into(),
+                delivery_generation: 1,
+                expires_at: NOW + HORIZON,
+                message_bytes: bytes,
+            },
+            None,
+            None,
+            None,
+            Some(16),
+            Some("agent-other"),
+        )
+        .unwrap();
+    let before = held159_migration_rows(
+        &store.conn,
+        "SELECT delivery_id,queue_rank FROM send_deliveries ORDER BY delivery_id",
+    );
+    for before_message in ["unknown", "public-D"] {
+        let request_id = format!("bad-before-{before_message}");
+        let canonical = format!("reorder,agent-2,public-A,{before_message}");
+        let (receipt, effect) = store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                &request_id,
+                canonical.as_bytes(),
+                "parent",
+                "agent-2",
+                "public-A",
+                Some(before_message),
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+        assert_eq!(effect, None);
+    }
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,queue_rank FROM send_deliveries ORDER BY delivery_id"
+        ),
+        before
+    );
+}
+
+#[test]
+fn edit159_reorder_arrivee_concurrente_deplacement_valide_d_abord_donne_B_A_C() {
+    let db = TempDbGuard::new("edit159-two-writers");
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    for label in ["A", "B"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &SendDelivery {
+                    delivery_id: format!("delivery-{label}"),
+                    recipient_instance_id: "instance-reorder".into(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: bytes,
+                },
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let ckey = IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "key-C").unwrap();
+    let cbytes = sample_message_bytes("public-C", "agent-2");
+    store
+        .reserve(&ckey, &cbytes, NOW, HORIZON, NOW, 30)
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let (committed_tx, committed_rx) = std::sync::mpsc::channel();
+    let move_path = db.path().to_path_buf();
+    let arrival_path = move_path.clone();
+    let move_barrier = barrier.clone();
+    let movement = thread::spawn(move || {
+        let mut store = IdempotencyStore::open(&move_path).unwrap();
+        move_barrier.wait();
+        let (receipt, _) = store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                "reorder-race",
+                b"reorder,agent-2,public-A,null",
+                "parent",
+                "agent-2",
+                "public-A",
+                None,
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(
+            receipt.state,
+            bridget_transport::protocol::QueueEditState::Applied
+        );
+        committed_tx.send(()).unwrap();
+    });
+    let arrival = thread::spawn(move || {
+        let mut store = IdempotencyStore::open(&arrival_path).unwrap();
+        barrier.wait();
+        committed_rx.recv().unwrap();
+        store
+            .begin_send_delivery_with_guidance(
+                &ckey,
+                &SendDelivery {
+                    delivery_id: "delivery-C".into(),
+                    recipient_instance_id: "instance-reorder".into(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: cbytes,
+                },
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    });
+    movement.join().unwrap();
+    arrival.join().unwrap();
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-B","delivery-A","delivery-C"]);
+}
+
+#[test]
+fn edit159_reorder_arrivee_concurrente_arrivee_valide_d_abord_donne_B_C_A() {
+    let db = TempDbGuard::new("edit159-two-writers");
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    for label in ["A", "B"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &SendDelivery {
+                    delivery_id: format!("delivery-{label}"),
+                    recipient_instance_id: "instance-reorder".into(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: bytes,
+                },
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let ckey = IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "key-C").unwrap();
+    let cbytes = sample_message_bytes("public-C", "agent-2");
+    store
+        .reserve(&ckey, &cbytes, NOW, HORIZON, NOW, 30)
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let (committed_tx, committed_rx) = std::sync::mpsc::channel();
+    let move_path = db.path().to_path_buf();
+    let arrival_path = move_path.clone();
+    let move_barrier = barrier.clone();
+    let movement = thread::spawn(move || {
+        let mut store = IdempotencyStore::open(&move_path).unwrap();
+        move_barrier.wait();
+        committed_rx.recv().unwrap();
+        let (receipt, _) = store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                "reorder-race",
+                b"reorder,agent-2,public-A,null",
+                "parent",
+                "agent-2",
+                "public-A",
+                None,
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(
+            receipt.state,
+            bridget_transport::protocol::QueueEditState::Applied
+        );
+    });
+    let arrival = thread::spawn(move || {
+        let mut store = IdempotencyStore::open(&arrival_path).unwrap();
+        barrier.wait();
+        store
+            .begin_send_delivery_with_guidance(
+                &ckey,
+                &SendDelivery {
+                    delivery_id: "delivery-C".into(),
+                    recipient_instance_id: "instance-reorder".into(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: cbytes,
+                },
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+        committed_tx.send(()).unwrap();
+    });
+    movement.join().unwrap();
+    arrival.join().unwrap();
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-B","delivery-C","delivery-A"]);
+}
+
+#[test]
+fn edit159_reorder_ordre_persistant_egal_ordre_de_validation() {
+    let db = TempDbGuard::new("edit159-order-persistent");
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                "reorder-edit",
+                b"reorder,agent-2,public-B,public-A",
+                "parent",
+                "agent-2",
+                "public-B",
+                Some("public-A"),
+                NOW
+            )
+            .unwrap()
+            .0
+            .state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(
+        store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                "second",
+                b"reorder,agent-2,public-C,public-B",
+                "parent",
+                "agent-2",
+                "public-C",
+                Some("public-B"),
+                NOW + 1
+            )
+            .unwrap()
+            .0
+            .state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    drop(store);
+    let store = IdempotencyStore::open(db.path()).unwrap();
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-C","delivery-B","delivery-A"]);
+}
+
+#[test]
+fn edit159_reorder_survit_a_la_reaffectation() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                "reorder-edit",
+                b"reorder,agent-2,public-B,public-A",
+                "parent",
+                "agent-2",
+                "public-B",
+                Some("public-A"),
+                NOW
+            )
+            .unwrap()
+            .0
+            .state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    let before = held159_migration_rows(
+        &store.conn,
+        "SELECT delivery_id,queue_rank,message_bytes,delivery_generation FROM send_deliveries ORDER BY queue_rank",
+    );
+    assert_eq!(
+        store
+            .adopt_held_for_agent("agent-2", "new-instance-reorder", false)
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,queue_rank,message_bytes,delivery_generation FROM send_deliveries ORDER BY queue_rank"
+        ),
+        before
+    );
+    assert_eq!(store.conn.prepare("SELECT delivery_id FROM send_deliveries WHERE recipient_agent='agent-2' AND phase='held' ORDER BY queue_rank").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap(),vec!["delivery-B","delivery-A","delivery-C"]);
+}
+
+#[test]
+fn edit159_reorder_rangs_hors_groupe_inchanges() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let other =
+        IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "other-rank").unwrap();
+    let bytes = sample_message_bytes("other-public", "agent-other");
+    store
+        .reserve(&other, &bytes, NOW, HORIZON, NOW, 30)
+        .unwrap();
+    store
+        .begin_send_delivery_with_guidance(
+            &other,
+            &SendDelivery {
+                delivery_id: "other-delivery".into(),
+                recipient_instance_id: "other-instance".into(),
+                delivery_generation: 1,
+                expires_at: NOW + HORIZON,
+                message_bytes: bytes,
+            },
+            None,
+            None,
+            None,
+            Some(16),
+            Some("agent-other"),
+        )
+        .unwrap();
+    let other_before = held159_migration_rows(
+        &store.conn,
+        "SELECT * FROM send_deliveries WHERE recipient_agent='agent-other'",
+    );
+    let ranks = held159_migration_rows(
+        &store.conn,
+        "SELECT queue_rank FROM send_deliveries WHERE recipient_agent='agent-2' ORDER BY queue_rank",
+    );
+    assert_eq!(
+        store
+            .apply_reorder(
+                "012_scope_aaaaaaaaaaaa",
+                "reorder-edit",
+                b"reorder,agent-2,public-B,public-A",
+                "parent",
+                "agent-2",
+                "public-B",
+                Some("public-A"),
+                NOW
+            )
+            .unwrap()
+            .0
+            .state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT * FROM send_deliveries WHERE recipient_agent='agent-other'"
+        ),
+        other_before
+    );
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT queue_rank FROM send_deliveries WHERE recipient_agent='agent-2' ORDER BY queue_rank"
+        ),
+        ranks
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries WHERE queue_rank<0",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn edit159_reorder_rejeu_meme_resultat() {
+    let mut store = IdempotencyStore::open_in_memory().unwrap();
+    for label in ["A", "B", "C"] {
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            format!("key-{label}"),
+        )
+        .unwrap();
+        let bytes = sample_message_bytes(&format!("public-{label}"), "agent-2");
+        store.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+        let delivery = SendDelivery {
+            delivery_id: format!("delivery-{label}"),
+            recipient_instance_id: "instance-reorder".into(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key,
+                &delivery,
+                None,
+                None,
+                None,
+                Some(16),
+                Some("agent-2"),
+            )
+            .unwrap();
+    }
+    let (first, effect) = store
+        .apply_reorder(
+            "012_scope_aaaaaaaaaaaa",
+            "reorder-edit",
+            b"reorder,agent-2,public-B,public-A",
+            "parent",
+            "agent-2",
+            "public-B",
+            Some("public-A"),
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        first.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(effect, Some(()));
+    let once = held159_migration_rows(
+        &store.conn,
+        "SELECT delivery_id,queue_rank FROM send_deliveries ORDER BY queue_rank",
+    );
+    let (replay, effect) = store
+        .apply_reorder(
+            "012_scope_aaaaaaaaaaaa",
+            "reorder-edit",
+            b"reorder,agent-2,public-B,public-A",
+            "parent",
+            "agent-2",
+            "public-B",
+            Some("public-A"),
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(replay, first);
+    assert_eq!(effect, None);
+    assert_eq!(
+        held159_migration_rows(
+            &store.conn,
+            "SELECT delivery_id,queue_rank FROM send_deliveries ORDER BY queue_rank"
+        ),
+        once
+    );
+}
+
+// T021 Store : sept noms planifiés, même renderer que les handlers ; aucun banc neuf.
+#[test]
+fn edit159_promote_demande_close_juste_avant_ne_promeut_pas() {
+    let db = TempDbGuard::new("edit159-promote-store");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let mut message: bridget_core::BridgetMessage =
+        serde_json::from_slice(&sample_message_bytes("public-promote", "agent-2")).unwrap();
+    message.reply = true;
+    let bytes = serde_json::to_vec(&message).unwrap();
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-promote".into(),
+        recipient_instance_id: "instance-promote".into(),
+        delivery_generation: 7,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes.clone(),
+    };
+    let tracking = ReplyTracking {
+        request_id: "public-promote".into(),
+        sender: "sender-peer".into(),
+        target: "agent-2".into(),
+        created_at: NOW,
+        deadline_at: NOW + HORIZON,
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            Some(&tracking),
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let facts = crate::guidance::GuidanceFacts {
+        action: crate::guidance::GuidanceAction::QueuePromote,
+        path: crate::guidance::GuidancePath::SendIdempotent,
+        actor: crate::guidance::GuidanceActor::Agent {
+            id: "parent".into(),
+        },
+        identity_attested: true,
+        trusted_origin: None,
+        child_proof: false,
+        actor_is_target: false,
+        actor_is_parent: true,
+        actor_is_child: false,
+        actor_is_author: false,
+        message_editable: true,
+        recipient_turn_active: true,
+        carrier_queue_fallback: true,
+        cross_project: false,
+        paused: false,
+        target_has_active_native_task: false,
+        recent_interrupts_pair: 0,
+        recent_interrupts_target: 0,
+        now: NOW,
+        last_interrupt_pair_at: None,
+        third_latest_interrupt_target_at: None,
+    };
+    store
+        .conn
+        .execute(
+            "UPDATE tracked_requests SET state='answered' WHERE id='public-promote'",
+            [],
+        )
+        .unwrap();
+    let (receipt, effect, notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+    assert_eq!(effect, None);
+    assert_eq!(delivery_phase(&store, "delivery-promote"), "cancelled");
+    assert_eq!(
+        notice.as_ref().map(|n| n.message_id.as_str()),
+        Some("public-promote")
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT turn_gate FROM send_deliveries WHERE delivery_id='delivery-promote'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn edit159_promote_echeance_juste_avant_ne_promeut_pas() {
+    // Deux montages indépendants : échéance demande et horizon saga/canon.
+    for deadline in ["request", "saga"] {
+        let db = TempDbGuard::new("edit159-promote-store");
+        drop(crate::store::Store::open(db.path()).unwrap());
+        drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+        let mut store = IdempotencyStore::open(db.path()).unwrap();
+        let mut message: bridget_core::BridgetMessage =
+            serde_json::from_slice(&sample_message_bytes("public-promote", "agent-2")).unwrap();
+        message.reply = true;
+        let bytes = serde_json::to_vec(&message).unwrap();
+        reserve(&store, &bytes);
+        let delivery = SendDelivery {
+            delivery_id: "delivery-promote".into(),
+            recipient_instance_id: "instance-promote".into(),
+            delivery_generation: 7,
+            expires_at: NOW + HORIZON,
+            message_bytes: bytes.clone(),
+        };
+        let tracking = ReplyTracking {
+            request_id: "public-promote".into(),
+            sender: "sender-peer".into(),
+            target: "agent-2".into(),
+            created_at: NOW,
+            deadline_at: NOW + HORIZON,
+        };
+        store
+            .begin_send_delivery_with_guidance(
+                &key(),
+                &delivery,
+                Some(&tracking),
+                None,
+                None,
+                Some(8),
+                Some("agent-2"),
+            )
+            .unwrap();
+        let facts = crate::guidance::GuidanceFacts {
+            action: crate::guidance::GuidanceAction::QueuePromote,
+            path: crate::guidance::GuidancePath::SendIdempotent,
+            actor: crate::guidance::GuidanceActor::Agent {
+                id: "parent".into(),
+            },
+            identity_attested: true,
+            trusted_origin: None,
+            child_proof: false,
+            actor_is_target: false,
+            actor_is_parent: true,
+            actor_is_child: false,
+            actor_is_author: false,
+            message_editable: true,
+            recipient_turn_active: true,
+            carrier_queue_fallback: true,
+            cross_project: false,
+            paused: false,
+            target_has_active_native_task: false,
+            recent_interrupts_pair: 0,
+            recent_interrupts_target: 0,
+            now: NOW,
+            last_interrupt_pair_at: None,
+            third_latest_interrupt_target_at: None,
+        };
+        if deadline == "request" {
+            store
+                .conn
+                .execute(
+                    "UPDATE tracked_requests SET deadline_at=?1 WHERE id='public-promote'",
+                    [NOW],
+                )
+                .unwrap();
+        } else {
+            store.conn.execute("UPDATE idempotency_records SET expires_at=?1 WHERE idempotency_key='message-1'",[NOW]).unwrap();
+        }
+        let (receipt, effect, notice) = store
+            .apply_promote(
+                "012_scope_aaaaaaaaaaaa",
+                "promote-edit",
+                b"promote,agent-2,public-promote,null",
+                "parent",
+                "agent-2",
+                "public-promote",
+                &facts,
+                crate::daemon::queue_edit_refusal_code,
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+        assert_eq!(effect, None);
+        assert_eq!(delivery_phase(&store, "delivery-promote"), "cancelled");
+        assert_eq!(
+            notice.as_ref().map(|n| n.message_id.as_str()),
+            Some("public-promote")
+        );
+    }
+}
+
+#[test]
+fn edit159_promote_pose_la_reservation_de_tour() {
+    let db = TempDbGuard::new("edit159-promote-store");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let bytes = sample_message_bytes("public-promote", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-promote".into(),
+        recipient_instance_id: "instance-promote".into(),
+        delivery_generation: 7,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes.clone(),
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let facts = crate::guidance::GuidanceFacts {
+        action: crate::guidance::GuidanceAction::QueuePromote,
+        path: crate::guidance::GuidancePath::SendIdempotent,
+        actor: crate::guidance::GuidanceActor::Agent {
+            id: "parent".into(),
+        },
+        identity_attested: true,
+        trusted_origin: None,
+        child_proof: false,
+        actor_is_target: false,
+        actor_is_parent: true,
+        actor_is_child: false,
+        actor_is_author: false,
+        message_editable: true,
+        recipient_turn_active: true,
+        carrier_queue_fallback: true,
+        cross_project: false,
+        paused: false,
+        target_has_active_native_task: false,
+        recent_interrupts_pair: 0,
+        recent_interrupts_target: 0,
+        now: NOW,
+        last_interrupt_pair_at: None,
+        third_latest_interrupt_target_at: None,
+    };
+    let (receipt, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    assert_eq!(
+        receipt.effect,
+        Some(bridget_transport::protocol::QueueEditEffect::Unconfirmed)
+    );
+    assert_eq!(effect, Some(delivery.clone()));
+    assert_eq!(delivery_phase(&store, "delivery-promote"), "dispatching");
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT turn_gate FROM send_deliveries WHERE delivery_id='delivery-promote'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .conn
+            .query_row(
+                "SELECT message_bytes FROM send_deliveries WHERE delivery_id='delivery-promote'",
+                [],
+                |r| r.get::<_, Vec<u8>>(0)
+            )
+            .unwrap(),
+        bytes
+    );
+    let next_key =
+        IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "next-gate").unwrap();
+    let next_bytes = sample_message_bytes("next-public", "agent-2");
+    store
+        .reserve(&next_key, &next_bytes, NOW, HORIZON, NOW, 30)
+        .unwrap();
+    store
+        .begin_send_delivery_with_guidance(
+            &next_key,
+            &SendDelivery {
+                delivery_id: "next-internal".into(),
+                recipient_instance_id: "instance-promote".into(),
+                delivery_generation: 8,
+                expires_at: NOW + HORIZON,
+                message_bytes: next_bytes,
+            },
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let (refused, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "next-edit",
+            b"promote,agent-2,next-public,null",
+            "parent",
+            "agent-2",
+            "next-public",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(refused.refusal.as_deref(), Some("not_held"));
+    assert_eq!(effect, None);
+    assert_eq!(delivery_phase(&store, "next-internal"), "held");
+}
+
+#[test]
+fn edit159_promote_rejeu_meme_resultat() {
+    let db = TempDbGuard::new("edit159-promote-store");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let bytes = sample_message_bytes("public-promote", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-promote".into(),
+        recipient_instance_id: "instance-promote".into(),
+        delivery_generation: 7,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes.clone(),
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let facts = crate::guidance::GuidanceFacts {
+        action: crate::guidance::GuidanceAction::QueuePromote,
+        path: crate::guidance::GuidancePath::SendIdempotent,
+        actor: crate::guidance::GuidanceActor::Agent {
+            id: "parent".into(),
+        },
+        identity_attested: true,
+        trusted_origin: None,
+        child_proof: false,
+        actor_is_target: false,
+        actor_is_parent: true,
+        actor_is_child: false,
+        actor_is_author: false,
+        message_editable: true,
+        recipient_turn_active: true,
+        carrier_queue_fallback: true,
+        cross_project: false,
+        paused: false,
+        target_has_active_native_task: false,
+        recent_interrupts_pair: 0,
+        recent_interrupts_target: 0,
+        now: NOW,
+        last_interrupt_pair_at: None,
+        third_latest_interrupt_target_at: None,
+    };
+    let (first, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert!(effect.is_some());
+    let mut later = facts.clone();
+    later.recipient_turn_active = false;
+    later.paused = true;
+    later.carrier_queue_fallback = false;
+    store
+        .conn
+        .execute("UPDATE control_state SET paused=1 WHERE id=1", [])
+        .unwrap();
+    let (replayed, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &later,
+            crate::daemon::queue_edit_refusal_code,
+            NOW + 1,
+        )
+        .unwrap();
+    assert_eq!(replayed, first);
+    assert_eq!(effect, None);
+    assert_eq!(
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM queue_edits", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn edit159_promote_panne_apres_transaction_relivre_en_file_ordinaire() {
+    let db = TempDbGuard::new("edit159-promote-store");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let bytes = sample_message_bytes("public-promote", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-promote".into(),
+        recipient_instance_id: "instance-promote".into(),
+        delivery_generation: 7,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes.clone(),
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let facts = crate::guidance::GuidanceFacts {
+        action: crate::guidance::GuidanceAction::QueuePromote,
+        path: crate::guidance::GuidancePath::SendIdempotent,
+        actor: crate::guidance::GuidanceActor::Agent {
+            id: "parent".into(),
+        },
+        identity_attested: true,
+        trusted_origin: None,
+        child_proof: false,
+        actor_is_target: false,
+        actor_is_parent: true,
+        actor_is_child: false,
+        actor_is_author: false,
+        message_editable: true,
+        recipient_turn_active: true,
+        carrier_queue_fallback: true,
+        cross_project: false,
+        paused: false,
+        target_has_active_native_task: false,
+        recent_interrupts_pair: 0,
+        recent_interrupts_target: 0,
+        now: NOW,
+        last_interrupt_pair_at: None,
+        third_latest_interrupt_target_at: None,
+    };
+    let (receipt, _, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        bridget_transport::protocol::QueueEditState::Applied
+    );
+    drop(store);
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let resumed = store
+        .dispatching_deliveries_for_instance("instance-promote", NOW + 1)
+        .unwrap();
+    assert_eq!(resumed, vec![delivery]);
+    let original: bridget_core::BridgetMessage =
+        serde_json::from_slice(&resumed[0].message_bytes).unwrap();
+    assert_eq!(
+        original.intent, None,
+        "pas de marqueur/guidage ajouté aux octets durables"
+    );
+}
+
+#[test]
+fn edit159_promote_not_held_pour_message_libere() {
+    let db = TempDbGuard::new("edit159-promote-store");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let bytes = sample_message_bytes("public-promote", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-promote".into(),
+        recipient_instance_id: "instance-promote".into(),
+        delivery_generation: 7,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes.clone(),
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let facts = crate::guidance::GuidanceFacts {
+        action: crate::guidance::GuidanceAction::QueuePromote,
+        path: crate::guidance::GuidancePath::SendIdempotent,
+        actor: crate::guidance::GuidanceActor::Agent {
+            id: "parent".into(),
+        },
+        identity_attested: true,
+        trusted_origin: None,
+        child_proof: false,
+        actor_is_target: false,
+        actor_is_parent: true,
+        actor_is_child: false,
+        actor_is_author: false,
+        message_editable: true,
+        recipient_turn_active: true,
+        carrier_queue_fallback: true,
+        cross_project: false,
+        paused: false,
+        target_has_active_native_task: false,
+        recent_interrupts_pair: 0,
+        recent_interrupts_target: 0,
+        now: NOW,
+        last_interrupt_pair_at: None,
+        third_latest_interrupt_target_at: None,
+    };
+    assert!(store.release_next_held("agent-2", NOW).unwrap().0.is_some());
+    let (receipt, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(receipt.refusal.as_deref(), Some("not_held"));
+    assert_eq!(effect, None);
+    assert_eq!(delivery_phase(&store, "delivery-promote"), "dispatching");
+}
+
+#[test]
+fn edit159_promote_pause_agent_refuse() {
+    let db = TempDbGuard::new("edit159-promote-store");
+    drop(crate::store::Store::open(db.path()).unwrap());
+    drop(crate::execution_store::ExecutionStore::open(db.path()).unwrap());
+    let mut store = IdempotencyStore::open(db.path()).unwrap();
+    let bytes = sample_message_bytes("public-promote", "agent-2");
+    reserve(&store, &bytes);
+    let delivery = SendDelivery {
+        delivery_id: "delivery-promote".into(),
+        recipient_instance_id: "instance-promote".into(),
+        delivery_generation: 7,
+        expires_at: NOW + HORIZON,
+        message_bytes: bytes.clone(),
+    };
+    store
+        .begin_send_delivery_with_guidance(
+            &key(),
+            &delivery,
+            None,
+            None,
+            None,
+            Some(8),
+            Some("agent-2"),
+        )
+        .unwrap();
+    let facts = crate::guidance::GuidanceFacts {
+        action: crate::guidance::GuidanceAction::QueuePromote,
+        path: crate::guidance::GuidancePath::SendIdempotent,
+        actor: crate::guidance::GuidanceActor::Agent {
+            id: "parent".into(),
+        },
+        identity_attested: true,
+        trusted_origin: None,
+        child_proof: false,
+        actor_is_target: false,
+        actor_is_parent: true,
+        actor_is_child: false,
+        actor_is_author: false,
+        message_editable: true,
+        recipient_turn_active: true,
+        carrier_queue_fallback: true,
+        cross_project: false,
+        paused: false,
+        target_has_active_native_task: false,
+        recent_interrupts_pair: 0,
+        recent_interrupts_target: 0,
+        now: NOW,
+        last_interrupt_pair_at: None,
+        third_latest_interrupt_target_at: None,
+    };
+    store
+        .conn
+        .execute("UPDATE control_state SET paused=1 WHERE id=1", [])
+        .unwrap();
+    let (receipt, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-edit",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(receipt.refusal.as_deref(), Some("referent_paused"));
+    assert_eq!(effect, None);
+    assert_eq!(delivery_phase(&store, "delivery-promote"), "held");
+    // Même oracle, même autorité : priorité de reprise même après pause globale levée.
+    store
+        .conn
+        .execute("UPDATE control_state SET paused=0 WHERE id=1", [])
+        .unwrap();
+    let executions = crate::execution_store::ExecutionStore::open(db.path()).unwrap();
+    let interrupted =
+        bridget_core::BridgetMessage::new("parent", "agent-2", "travail interrompu synthétique");
+    assert!(
+        executions
+            .admit_starting_message(&interrupted, "pause-test", NOW)
+            .unwrap()
+    );
+    executions
+        .record_pause_interruption("pause-test", "agent-2", 1, NOW)
+        .unwrap();
+    drop(executions);
+    assert!(held159_migration_rows(&store.conn, "PRAGMA foreign_key_check").is_empty());
+    let (receipt, effect, _notice) = store
+        .apply_promote(
+            "012_scope_aaaaaaaaaaaa",
+            "promote-pending",
+            b"promote,agent-2,public-promote,null",
+            "parent",
+            "agent-2",
+            "public-promote",
+            &facts,
+            crate::daemon::queue_edit_refusal_code,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(receipt.refusal.as_deref(), Some("referent_paused"));
+    assert_eq!(effect, None);
+    assert_eq!(delivery_phase(&store, "delivery-promote"), "held");
+}

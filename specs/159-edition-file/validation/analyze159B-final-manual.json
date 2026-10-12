@@ -1,0 +1,577 @@
+{
+  "prepared_at_utc": "2026-10-12T20:07:13.001656+00:00",
+  "status": "PASS_STRUCTURAL_0_CRITICAL_0_HIGH_METADATA_CORRECTIONS_CONDITIONAL",
+  "skill": "/Users/moi/.agents/skills/speckit-analyze/SKILL.md",
+  "mode": "READ_ONLY_PROJECT_CACHE_REPORT",
+  "manual_fallback": {
+    "feature_explicit": "159-edition-file",
+    "feature_directory": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file",
+    "check_prerequisites_exists": false,
+    "no_new_primitive_installed_or_resync": true,
+    "extension_hooks_exists": false,
+    "core_files_present": true,
+    "checklist_checked": 16,
+    "checklist_total": 16
+  },
+  "constitution": {
+    "canonical": "/Users/moi/.speckit/constitution.md",
+    "sha256": "0258b90dc1402f6d20881d2766b16552f269742d4f91f9b127b1e752b633fb3f",
+    "project_bridge": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/.specify/memory/constitution.md",
+    "user_overrides": "Only prescribed Rust tests, one FULL then sensitive replays; no pnpm/TS extra tests, no per-case commits or new scenario implied by genericXV."
+  },
+  "sources": {
+    "spec.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/spec.md",
+      "sha256": "acd4d02679e754f655d93b36b9d7e89b57b5d46ec1c21bd16cb3ceb437f7093f"
+    },
+    "plan.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "d4a0ca0268ea77a3ee314bdfa2c9e573b9a9ca4b84e91fdd0727b48d5260b10f"
+    },
+    "tasks.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/tasks.md",
+      "sha256": "44ee6ced8325fa65e3501f24be7d5ff92d27da5fc9065176fc053e07aca462d6"
+    },
+    "contracts/edition159.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "b6e1a43cc1bb3b10ae45700f2ce93d6db8a2e83f7e3e087c8de2759877de4113"
+    },
+    "data-model.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "7f00837c8fdb7d538275ff0d437b84b2f49365d2b3ea9ffe36f4e43811158450"
+    },
+    "research.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/research.md",
+      "sha256": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62"
+    },
+    "reuse-audit.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/reuse-audit.md",
+      "sha256": "77cf8c1d55cbb5f29cfe910d007620912a9b167b6d9f24c086f6b403393e4f6d"
+    },
+    "quickstart.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/quickstart.md",
+      "sha256": "93457ca4cafebc61526c8a947f9a2a6171eadd7f7e0d5d176f3dca466a195f74"
+    },
+    "checklists/requirements.md": {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/checklists/requirements.md",
+      "sha256": "64e21bbd26b6eee1b9cb758a42214e2e8392b86ab33e2dcc3314170bf8d1a920"
+    }
+  },
+  "metrics": {
+    "FR": 26,
+    "SC": 15,
+    "US": 7,
+    "requirements_mapped": 48,
+    "tasks": 28,
+    "checked_at_read": 14,
+    "unmapped_tasks": [],
+    "artifact_coverage_percent": 100,
+    "Critical": 0,
+    "High": 0,
+    "Medium": 2,
+    "Low": 2,
+    "duplication_of_requirements": 0,
+    "new_XIX_XX_gap": 0
+  },
+  "requirements": [
+    {
+      "id": "FR-001",
+      "tasks": [
+        "T005"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-002",
+      "tasks": [
+        "T005"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-003",
+      "tasks": [
+        "T005"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-004",
+      "tasks": [
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-005",
+      "tasks": [
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-006",
+      "tasks": [
+        "T008"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-007",
+      "tasks": [
+        "T003",
+        "T004"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-008",
+      "tasks": [
+        "T004"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-009",
+      "tasks": [
+        "T009",
+        "T028"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-010",
+      "tasks": [
+        "T003",
+        "T011"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-011",
+      "tasks": [
+        "T001",
+        "T010"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-012",
+      "tasks": [
+        "T022"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-013",
+      "tasks": [
+        "T017",
+        "T019",
+        "T021"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-014",
+      "tasks": [
+        "T017",
+        "T018"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-015",
+      "tasks": [
+        "T019"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-016",
+      "tasks": [
+        "T020",
+        "T021"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-017",
+      "tasks": [
+        "T014",
+        "T015",
+        "T017"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-018",
+      "tasks": [
+        "T015",
+        "T017",
+        "T019",
+        "T021",
+        "T023"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-019",
+      "tasks": [
+        "T016",
+        "T020"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-020",
+      "tasks": [
+        "T016",
+        "T022"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-021",
+      "tasks": [
+        "T012",
+        "T024",
+        "T025"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-022",
+      "tasks": [
+        "T005"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-023",
+      "tasks": [
+        "T006"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-024",
+      "tasks": [
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-025",
+      "tasks": [
+        "T006",
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "FR-026",
+      "tasks": [
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-001",
+      "tasks": [
+        "T005",
+        "T013",
+        "T026"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-002",
+      "tasks": [
+        "T004",
+        "T007",
+        "T010"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-003",
+      "tasks": [
+        "T004",
+        "T010"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-004",
+      "tasks": [
+        "T001",
+        "T010"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-005",
+      "tasks": [
+        "T006",
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-006",
+      "tasks": [
+        "T003",
+        "T011"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-007",
+      "tasks": [
+        "T017",
+        "T018"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-008",
+      "tasks": [
+        "T019"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-009",
+      "tasks": [
+        "T020",
+        "T021"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-010",
+      "tasks": [
+        "T015",
+        "T017",
+        "T019",
+        "T021",
+        "T022",
+        "T023"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-011",
+      "tasks": [
+        "T014",
+        "T017",
+        "T019",
+        "T021"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-012",
+      "tasks": [
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-013",
+      "tasks": [
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-014",
+      "tasks": [
+        "T007",
+        "T021"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "SC-015",
+      "tasks": [
+        "T004",
+        "T010"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US1",
+      "tasks": [
+        "T003",
+        "T004",
+        "T005",
+        "T006",
+        "T007"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US2",
+      "tasks": [
+        "T007",
+        "T008",
+        "T010",
+        "T011"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US3",
+      "tasks": [
+        "T009",
+        "T028"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US4",
+      "tasks": [
+        "T014",
+        "T015",
+        "T016",
+        "T017",
+        "T018",
+        "T022",
+        "T023",
+        "T024",
+        "T025"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US5",
+      "tasks": [
+        "T014",
+        "T015",
+        "T016",
+        "T019",
+        "T022",
+        "T023",
+        "T024",
+        "T025"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US6",
+      "tasks": [
+        "T014",
+        "T015",
+        "T016",
+        "T020",
+        "T021",
+        "T022",
+        "T023",
+        "T024",
+        "T025"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    },
+    {
+      "id": "US7",
+      "tasks": [
+        "T001",
+        "T002",
+        "T012",
+        "T013",
+        "T026",
+        "T027"
+      ],
+      "status": "COVERED_ARTIFACTS_NOT_GLOBAL_RUNTIME_CERTIFICATION"
+    }
+  ],
+  "findings": [
+    {
+      "id": "I-META-01",
+      "severity": "MEDIUM",
+      "locations": [
+        "spec.md:9–12",
+        "spec.md:28–33",
+        "tasks.md:5–9"
+      ],
+      "fact": "Current counters/status/base still27/A13/Specified or A shipping; actualIDs28=A14+B14, A delivered53863/b0.",
+      "correction": "Nine-doc conditional metadata patch; zero checkboxes changed."
+    },
+    {
+      "id": "I-REF-02",
+      "severity": "LOW",
+      "locations": [
+        "plan.md:27",
+        "quickstart.md:3–4"
+      ],
+      "fact": "Current runnable paths and preparation labels still reference removed A or soon-removed B.",
+      "correction": "Canonical root for future reproducible commands, WT proof anchors explicitly historical."
+    },
+    {
+      "id": "I-CLK-03",
+      "severity": "MEDIUM",
+      "locations": [
+        "plan.md:84",
+        "plan.md:145"
+      ],
+      "fact": "Plan summaries must be read with FR025/SC005 joint busy-age and silence>90s; simple timeout wording is incomplete.",
+      "correction": "Existing T006 paragraph clarification, no new requirement/code/test. Risk row read under that same paragraph."
+    },
+    {
+      "id": "I-MIN-04",
+      "severity": "LOW",
+      "locations": [
+        "plan.md:111"
+      ],
+      "fact": "60-line historical estimate by removing reorder/promote changes validated behavior; not removable at constant behavior.",
+      "correction": "Qualify history and attribute actualT0270demonstrated suppressible lines on197hunks."
+    }
+  ],
+  "interpretations_not_new_requirements": [
+    "FR017 replay always under FR018 fresh rights and corrected contract100–146; receipt.actor never grant.",
+    "SC001 current FULL failure retained, ROOTdisposition accepts unreproduced fixture; no globalGreen.",
+    "SC004 actual proxy not daemonIdle proof; default closed and scope limit retained.",
+    "SC007 applies after Applied; pausedE2E not a nonpaused retry guarantee."
+  ],
+  "code_read_scope": "Targeted source reads queue_edit_once/three consumers and test helpers in prior proof. Whole diff197/197 attributed to audit_existant151T027, not own whole-body review.",
+  "T027": {
+    "root": "/Users/moi/.cache/bridget-selfreview159B-final-20261012",
+    "hunks": 197,
+    "files": 60,
+    "whole_inherited_bodies_not_covered": true
+  },
+  "audit": {
+    "grade": "A99.75",
+    "C": 0,
+    "H": 0,
+    "M": 0,
+    "L": 3,
+    "coverage_lines_percent": 3.215,
+    "scope": "27/60 partialfiles,5739/178490lines,53/197hunks; independent of T027full-diff reading",
+    "validation_RC0_attributed_ROOT": true
+  },
+  "FULL": {
+    "scope": "97parentCargoTargets,sevenchildPASSexcluded",
+    "passed": 2629,
+    "failed": 1,
+    "ignored": 76,
+    "rc": 101,
+    "seconds": 856.66,
+    "current_E2E_B": "5PASS/1ignoredworker",
+    "sources223identical_full_and_replays": true,
+    "disposition": "/Users/moi/.cache/bridget-tests159B-20261012/T026-disposition-final.json",
+    "disposition_sha256": "bc96203086eb32f5890fbd59bb57280c21426f53e0fb3b9682b0438b85aa71b2"
+  },
+  "metadata_patch": "/Users/moi/.cache/bridget-docs159B-final-metadata-20261012/metadata159B-conditional-after-gates.patch",
+  "metadata_patch_sha256": "c481b343bc96c504cbba56e5f0a520c01c8745d4e04f7983fa8a4ed99fe7c1a9",
+  "not_yet_claimed": [
+    "Converge final verdict",
+    "B14checkboxes",
+    "Implemented actualWT before ROOTgates",
+    "B install/activation/cleanup"
+  ],
+  "task_sha256_before": "44ee6ced8325fa65e3501f24be7d5ff92d27da5fc9065176fc053e07aca462d6",
+  "task_sha256_after": "44ee6ced8325fa65e3501f24be7d5ff92d27da5fc9065176fc053e07aca462d6",
+  "no_project_write": true
+}

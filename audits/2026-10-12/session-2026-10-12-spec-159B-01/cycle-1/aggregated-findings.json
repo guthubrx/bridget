@@ -1,0 +1,2463 @@
+{
+  "meta": {
+    "version": "v14.0",
+    "timestamp": "2026-10-12T19:48:42.407721+00:00",
+    "end_timestamp": "2026-10-12T19:48:42.407721+00:00",
+    "start_timestamp": "2026-10-12T19:46:42.038295+00:00",
+    "duration_ms": null,
+    "audit_scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file",
+    "audit_mode": "fix",
+    "audit_grid": "pre-release",
+    "modules_actifs": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "release_blocked": false,
+    "repository": {
+      "files_count": 293,
+      "language_counts": {
+        ".rs": 218,
+        ".py": 56,
+        ".ts": 19
+      },
+      "languages": [
+        "rust",
+        "python",
+        "typescript"
+      ],
+      "frameworks": [
+        "Rust std",
+        "serde",
+        "rusqlite"
+      ],
+      "type": "local daemon/CLI/MCP/providerwrappers",
+      "has_ui": false,
+      "has_ui_basis": "Trackedinventory no package.json/tsx/UI buildmarker; not an exhaustive UI audit",
+      "has_llm_integration": true,
+      "has_llm_basis": "Codex/Claude providertransport sources in changed scope, not proof active model",
+      "db_type": "sqlite",
+      "ci_system": "No tracked workflow marker detected",
+      "container": false
+    },
+    "source_authority": "/Users/moi/.cache/bridget-audit159B-preparation-20261012/cycle-scoring/capture-final/manifest.json",
+    "source_authority_sha256": "146309c05b4339db99164dab24cf3908d09d860dbfa119be242f24cc40a6175a",
+    "FULL_gate": "ONGOING_ROOT66127; auditgrade isnotFULLPASSor deliveryapproval",
+    "coverage_percent": 3.215
+  },
+  "execution_metrics": {
+    "files_scanned": 27,
+    "files_total": 60,
+    "lines_analyzed": 5739,
+    "tools_used": [
+      "manual_source_read",
+      "Gitreadonlydiff",
+      "officialfingerprintbatch"
+    ],
+    "coverage_estimate_percent": 3.215,
+    "sampling_method": "targetedcriticalpaths+currentSHAguard+exactrangeunion",
+    "phases_completed": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "04",
+      "05",
+      "06",
+      "07",
+      "08",
+      "09",
+      "10",
+      "11",
+      "12"
+    ],
+    "warnings": [
+      "Coveragepercent islinesread/scopedfileslines, nottestcoverage norwholefiles.",
+      "Mechanical26Register34defaults inspectedinpreparation; notwholefilecredit and notaddedcoveragewithoutdatedranges.",
+      "Dates arecompletionupperbounds; no perrangeinventedstart.03/06oldstarted_atestimated excludedtimecalculation.",
+      "Sourcepartial+selfreviewtinyCatalogue+SQLowner declaration retained; crossClaudeR1/R2partialalso.",
+      "FULLuniqueBongoing; noGLOBALGREEN.",
+      "NoCVE/secretGitfullscan/runtimeproviderproof."
+    ],
+    "scope_hunks_total": 197,
+    "hunks_fully_read_new_side": 53
+  },
+  "suppressed": [],
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "present": false,
+    "read_only": true
+  },
+  "positive_findings": [
+    "daemon.rs10765–10936 : identité primaire/auxiliaire et liens actuels alimentent la garde ; aucune autorité viafrom/origin cliente.",
+    "mcp.rs629–635 et1307–1311 : preuve enfant refusée avant connexion puis sur chemin direct, garde courte justifiée deux entrées.",
+    "send_delivery.rs185–366 : SQLparamétré, TXImmediate et effet+receipt committés ensemble, aucun writer sous TX.",
+    "Permutation : positions extraites hors boucles puis deux passes indexées dans la même TX, O(H logN), sans recherche imbriquée.",
+    "Résolution conservatrice public message_id LIMIT2 et coût Bgroup explicite : aucune fausse borne de scan de deux lignes.",
+    "SAVEPOINT et reçu/effet communs : clôture SC014 explicite committée avec refus, refus ordinaire rollback.",
+    "send_delivery.rs:266–367 : transactionImmediate, savepoint et reçu partagent le même commit. Seule la clôtureSC014 explicite reste conservée sur refus.",
+    "daemon.rs:11343–11386 : la mémoire ne change que pour un effet frais committé. Une erreur de projection est journalisée et reste indéterminée, sans fauxACK.",
+    "mcp.rs:637–698 et cli.rs:4722–4769 : les actions sont fermées. Paramètres inconnus, manquants ou dupliqués refusés avant mutation.",
+    "idempotency/tests.rs3993–4105 : triggers SQLite après chacune des cinq écritures annulent remise, ledger, demande, notice et receipt.",
+    "idempotency/tests.rs3585–3637 : basev7sansqueue_edits réouverte, versionconservée et indexcréés, pasmigrationv8.",
+    "daemon.rs25430–25479 : replaypromotion byteidentique, une seulereceipt et socket sanssecondpush ; applied resteunconfirmed.",
+    "Les trois actions utilisent queue_edit_once, au lieu de trois copies de la logique de reçu et transaction.",
+    "unique_held_public_id sert quatre appels dans trois actions. Ce raccord limite la résolution ambiguë sans nouvelle structure générique.",
+    "Les scripts des fournisseurs diffèrent. Les garder séparés évite un couplage artificiel.",
+    "Le COMMIT et la sortie de State précèdent execute_controls et le writer de la notice dans QueueEditRequest.",
+    "Les trois transports conservent leur contrôle de capacité ; steer-or-queue ne déclenche pas d’interruption implicite.",
+    "Le replay rend le reçu sans effet ou notice fresh : pas de deuxième poussée de promotion.",
+    "queue_edit_once sert trois mutations réelles et porte les règles de transaction et rejeu. Ce n’est pas un simple relais.",
+    "queue_edits et ses deux index réemploient le magasin, init_schema et la maintenance existants. Aucune nouvelle file, compteur d’ordre, service ou version8.",
+    "La promotion modifie seulement une copie de remise. Le repli conserve FIFO, saturation et limite applied/unconfirmed."
+  ],
+  "module_inputs_sha256": {
+    "findings_securite.json": "e4a31d1a457cc97f52dbb4bc97420fff7375a1e93e5c5d0750b645f5bbafefd8",
+    "findings_complexite.json": "6cf6b3c454690b764aaeef83bb9dcac18bf97703dee5968d1d26d9d2029531d3",
+    "findings_qualite.json": "88fac9ea2a15e5537471fe9524962f5c92daa3484f186d30326784edc080471d",
+    "findings_tests.json": "6a48f3641d7c503c8076ec9bdde810b060c9880c28b20526f60b12dca23ab78a",
+    "findings_duplication.json": "49802d587df8cfa8c714f7d3407a4f5a0573a4236aeca05279e51f4d08776de8",
+    "findings_performance.json": "c85da71411763890f0efb92df2c2308186faa3fe7f216a152031fc04f0844405",
+    "findings_minimalisme.json": "10008d9fcd0c365a298568c534a8ae314474460cb1e54ebd62dc88f9fa70d273"
+  },
+  "read_manifest": {
+    "current_scope_files": 60,
+    "files_read_partial": 27,
+    "scope_lines_total": 178490,
+    "unique_lines_read": 5739,
+    "coverage_percent": 3.215,
+    "current_hunks_total": 197,
+    "hunks_fully_read_new_side": 53,
+    "ranges": {
+      "crates/bridget-daemon/src/idempotency/send_delivery.rs": [
+        [
+          1,
+          420
+        ],
+        [
+          1440,
+          1610
+        ]
+      ],
+      "crates/bridget-daemon/src/guidance.rs": [
+        [
+          1,
+          240
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon.rs": [
+        [
+          9408,
+          9488
+        ],
+        [
+          10745,
+          10968
+        ],
+        [
+          11058,
+          11080
+        ],
+        [
+          11115,
+          11550
+        ],
+        [
+          18050,
+          18093
+        ],
+        [
+          18360,
+          18410
+        ],
+        [
+          18655,
+          18764
+        ],
+        [
+          24530,
+          24570
+        ],
+        [
+          24613,
+          24650
+        ],
+        [
+          25200,
+          25238
+        ],
+        [
+          25340,
+          25490
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency.rs": [
+        [
+          128,
+          147
+        ],
+        [
+          450,
+          485
+        ],
+        [
+          862,
+          922
+        ],
+        [
+          1017,
+          1038
+        ],
+        [
+          1274,
+          1316
+        ],
+        [
+          1410,
+          1451
+        ]
+      ],
+      "crates/bridget-daemon/src/idempotency/tests.rs": [
+        [
+          3585,
+          3640
+        ],
+        [
+          3700,
+          3898
+        ],
+        [
+          3993,
+          4109
+        ],
+        [
+          4189,
+          4259
+        ],
+        [
+          4574,
+          4625
+        ],
+        [
+          4690,
+          4752
+        ],
+        [
+          5073,
+          5272
+        ]
+      ],
+      "crates/bridget-daemon/src/cli.rs": [
+        [
+          4680,
+          4857
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp_scopes.rs": [
+        [
+          28,
+          52
+        ],
+        [
+          74,
+          96
+        ],
+        [
+          210,
+          230
+        ]
+      ],
+      "crates/bridget-daemon/src/daemon/native_delegation.rs": [
+        [
+          1950,
+          2075
+        ]
+      ],
+      "crates/bridget-daemon/src/delegation_mcp.rs": [
+        [
+          282,
+          320
+        ]
+      ],
+      "crates/bridget-transport/src/codex_app_server.rs": [
+        [
+          890,
+          1065
+        ],
+        [
+          1560,
+          1665
+        ],
+        [
+          1870,
+          2036
+        ],
+        [
+          2060,
+          2120
+        ],
+        [
+          3765,
+          3989
+        ]
+      ],
+      "crates/bridget-transport/src/acp.rs": [
+        [
+          602,
+          684
+        ]
+      ],
+      "crates/bridget-transport/src/protocol.rs": [
+        [
+          206,
+          245
+        ],
+        [
+          2950,
+          2964
+        ],
+        [
+          3080,
+          3095
+        ],
+        [
+          3160,
+          3190
+        ],
+        [
+          3550,
+          3567
+        ],
+        [
+          5600,
+          5665
+        ]
+      ],
+      "crates/bridget-transport/src/claude_stream_json.rs": [
+        [
+          299,
+          357
+        ],
+        [
+          990,
+          1090
+        ],
+        [
+          1130,
+          1198
+        ],
+        [
+          1274,
+          1314
+        ]
+      ],
+      "specs/159-edition-file/research.md": [
+        [
+          173,
+          185
+        ]
+      ],
+      "crates/bridget-daemon/src/wrapper.rs": [
+        [
+          1840,
+          1872
+        ],
+        [
+          11310,
+          11369
+        ]
+      ],
+      "crates/bridget-daemon/tests/edit159_e2e.rs": [
+        [
+          433,
+          489
+        ],
+        [
+          540,
+          620
+        ],
+        [
+          805,
+          900
+        ],
+        [
+          932,
+          950
+        ],
+        [
+          1529,
+          1578
+        ]
+      ],
+      "crates/bridget-daemon/tests/held159_e2e.rs": [
+        [
+          443,
+          499
+        ]
+      ],
+      "crates/bridget-daemon/tests/guidance156_e2e.rs": [
+        [
+          343,
+          399
+        ]
+      ],
+      "crates/bridget-daemon/tests/native_delegation_e2e.rs": [
+        [
+          473,
+          529
+        ]
+      ],
+      "specs/159-edition-file/reuse-audit.md": [
+        [
+          90,
+          148
+        ]
+      ],
+      "crates/bridget-daemon/src/mcp.rs": [
+        [
+          620,
+          710
+        ],
+        [
+          1298,
+          1447
+        ]
+      ],
+      "specs/159-edition-file/contracts/edition159.md": [
+        [
+          100,
+          146
+        ]
+      ],
+      "docs/decisions/159-file-retenue-et-edition.md": [
+        [
+          176,
+          191
+        ]
+      ],
+      "docs/reference-communication.md": [
+        [
+          292,
+          310
+        ]
+      ],
+      "skills/bridget/SKILL.md": [
+        [
+          540,
+          553
+        ]
+      ],
+      "skills/bridget/references/commandes.md": [
+        [
+          1511,
+          1524
+        ]
+      ],
+      "specs/159-edition-file/quickstart.md": [
+        [
+          57,
+          68
+        ]
+      ]
+    },
+    "inherited_sameSHA": [
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            400
+          ],
+          [
+            1447,
+            1598
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+        "ranges": [
+          [
+            1,
+            240
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            10745,
+            10955
+          ],
+          [
+            11115,
+            11430
+          ],
+          [
+            18360,
+            18410
+          ],
+          [
+            18655,
+            18730
+          ],
+          [
+            24530,
+            24570
+          ],
+          [
+            24613,
+            24650
+          ],
+          [
+            25340,
+            25484
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            865,
+            920
+          ],
+          [
+            1415,
+            1445
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+        "ranges": [
+          [
+            3585,
+            3640
+          ],
+          [
+            3700,
+            3885
+          ],
+          [
+            3993,
+            4109
+          ],
+          [
+            4189,
+            4259
+          ],
+          [
+            4574,
+            4625
+          ],
+          [
+            4690,
+            4752
+          ],
+          [
+            5073,
+            5272
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+        "ranges": [
+          [
+            4680,
+            4840
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+        "ranges": [
+          [
+            28,
+            52
+          ],
+          [
+            74,
+            96
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "sha256": "69d6dc4bd0bae2ad81f4e71bc481e73956eb162fa7a0e6014e092462c00f3482",
+        "ranges": [
+          [
+            1950,
+            2075
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+        "sha256": "3d3e0c659620109e8ac9fdbe7926aed7b0505f0d7c6a6048cbce202ab997d055",
+        "ranges": [
+          [
+            282,
+            320
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            906,
+            995
+          ],
+          [
+            1560,
+            1665
+          ],
+          [
+            1870,
+            2025
+          ],
+          [
+            2060,
+            2120
+          ],
+          [
+            3765,
+            3989
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            602,
+            684
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+        "ranges": [
+          [
+            210,
+            245
+          ],
+          [
+            2950,
+            2964
+          ],
+          [
+            3080,
+            3095
+          ],
+          [
+            3160,
+            3190
+          ],
+          [
+            5600,
+            5665
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            9408,
+            9488
+          ],
+          [
+            10904,
+            10925
+          ],
+          [
+            10947,
+            10968
+          ],
+          [
+            11058,
+            11080
+          ],
+          [
+            11115,
+            11413
+          ],
+          [
+            18050,
+            18093
+          ],
+          [
+            18664,
+            18764
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            128,
+            147
+          ],
+          [
+            862,
+            922
+          ],
+          [
+            1017,
+            1038
+          ],
+          [
+            1274,
+            1316
+          ],
+          [
+            1416,
+            1451
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            405
+          ],
+          [
+            1440,
+            1610
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            609,
+            670
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-transport/src/claude_stream_json.rs",
+        "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+        "ranges": [
+          [
+            299,
+            357
+          ],
+          [
+            990,
+            1090
+          ],
+          [
+            1130,
+            1198
+          ],
+          [
+            1274,
+            1314
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            894,
+            1002
+          ],
+          [
+            1888,
+            2014
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "04",
+        "file": "specs/159-edition-file/research.md",
+        "sha256": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62",
+        "ranges": [
+          [
+            173,
+            185
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            420
+          ],
+          [
+            1444,
+            1598
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            11140,
+            11550
+          ],
+          [
+            25200,
+            25238
+          ],
+          [
+            25426,
+            25490
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+        "ranges": [
+          [
+            1,
+            210
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            450,
+            485
+          ],
+          [
+            875,
+            905
+          ],
+          [
+            1410,
+            1448
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+        "ranges": [
+          [
+            206,
+            244
+          ],
+          [
+            3550,
+            3567
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            890,
+            1065
+          ],
+          [
+            1880,
+            1940
+          ],
+          [
+            1980,
+            2036
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-transport/src/claude_stream_json.rs",
+        "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+        "ranges": [
+          [
+            300,
+            357
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            605,
+            677
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "bbf931ee21149e5b69500c07b9e3043e6725f7c48955af39751c9fb23b62ddd0",
+        "ranges": [
+          [
+            1840,
+            1872
+          ],
+          [
+            11310,
+            11369
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+        "ranges": [
+          [
+            4712,
+            4857
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+        "ranges": [
+          [
+            210,
+            230
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+        "ranges": [
+          [
+            3785,
+            3898
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+        "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+        "ranges": [
+          [
+            433,
+            489
+          ],
+          [
+            540,
+            620
+          ],
+          [
+            805,
+            900
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "26cb48cee36d90ec2fd56ff3620e47eac7c9024257cf29dc0e72b326f35b1b1c",
+        "ranges": [
+          [
+            443,
+            499
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "49647e27cccbd3912838c7c5c618a70e4320e0f41f1c0b41a6726f0d060d3216",
+        "ranges": [
+          [
+            343,
+            399
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "84a5cc7f7a4803213b545a91376ada4121e843e867d2d6a2a6383b7e1cc8f21e",
+        "ranges": [
+          [
+            473,
+            529
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "05",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "77cf8c1d55cbb5f29cfe910d007620912a9b167b6d9f24c086f6b403393e4f6d",
+        "ranges": [
+          [
+            90,
+            148
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            400
+          ],
+          [
+            1447,
+            1598
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+        "ranges": [
+          [
+            1,
+            240
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            10745,
+            10955
+          ],
+          [
+            11115,
+            11430
+          ],
+          [
+            18360,
+            18410
+          ],
+          [
+            18655,
+            18730
+          ],
+          [
+            24530,
+            24570
+          ],
+          [
+            24613,
+            24650
+          ],
+          [
+            25340,
+            25484
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            865,
+            920
+          ],
+          [
+            1415,
+            1445
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+        "ranges": [
+          [
+            3585,
+            3640
+          ],
+          [
+            3700,
+            3885
+          ],
+          [
+            3993,
+            4109
+          ],
+          [
+            4189,
+            4259
+          ],
+          [
+            4574,
+            4625
+          ],
+          [
+            4690,
+            4752
+          ],
+          [
+            5073,
+            5272
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+        "ranges": [
+          [
+            4680,
+            4840
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+        "ranges": [
+          [
+            28,
+            52
+          ],
+          [
+            74,
+            96
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/daemon/native_delegation.rs",
+        "sha256": "69d6dc4bd0bae2ad81f4e71bc481e73956eb162fa7a0e6014e092462c00f3482",
+        "ranges": [
+          [
+            1950,
+            2075
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/delegation_mcp.rs",
+        "sha256": "3d3e0c659620109e8ac9fdbe7926aed7b0505f0d7c6a6048cbce202ab997d055",
+        "ranges": [
+          [
+            282,
+            320
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            906,
+            995
+          ],
+          [
+            1560,
+            1665
+          ],
+          [
+            1870,
+            2025
+          ],
+          [
+            2060,
+            2120
+          ],
+          [
+            3765,
+            3989
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            602,
+            684
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+        "ranges": [
+          [
+            210,
+            245
+          ],
+          [
+            2950,
+            2964
+          ],
+          [
+            3080,
+            3095
+          ],
+          [
+            3160,
+            3190
+          ],
+          [
+            5600,
+            5665
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:07.846088+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            420
+          ],
+          [
+            1444,
+            1598
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            11140,
+            11550
+          ],
+          [
+            25200,
+            25238
+          ],
+          [
+            25426,
+            25490
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+        "ranges": [
+          [
+            1,
+            210
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            450,
+            485
+          ],
+          [
+            875,
+            905
+          ],
+          [
+            1410,
+            1448
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+        "ranges": [
+          [
+            206,
+            244
+          ],
+          [
+            3550,
+            3567
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            890,
+            1065
+          ],
+          [
+            1880,
+            1940
+          ],
+          [
+            1980,
+            2036
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-transport/src/claude_stream_json.rs",
+        "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+        "ranges": [
+          [
+            300,
+            357
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            605,
+            677
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "bbf931ee21149e5b69500c07b9e3043e6725f7c48955af39751c9fb23b62ddd0",
+        "ranges": [
+          [
+            1840,
+            1872
+          ],
+          [
+            11310,
+            11369
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+        "ranges": [
+          [
+            4712,
+            4857
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+        "ranges": [
+          [
+            210,
+            230
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+        "ranges": [
+          [
+            3785,
+            3898
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+        "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+        "ranges": [
+          [
+            433,
+            489
+          ],
+          [
+            540,
+            620
+          ],
+          [
+            805,
+            900
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "26cb48cee36d90ec2fd56ff3620e47eac7c9024257cf29dc0e72b326f35b1b1c",
+        "ranges": [
+          [
+            443,
+            499
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "49647e27cccbd3912838c7c5c618a70e4320e0f41f1c0b41a6726f0d060d3216",
+        "ranges": [
+          [
+            343,
+            399
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "84a5cc7f7a4803213b545a91376ada4121e843e867d2d6a2a6383b7e1cc8f21e",
+        "ranges": [
+          [
+            473,
+            529
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "07",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "77cf8c1d55cbb5f29cfe910d007620912a9b167b6d9f24c086f6b403393e4f6d",
+        "ranges": [
+          [
+            90,
+            148
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            9408,
+            9488
+          ],
+          [
+            10904,
+            10925
+          ],
+          [
+            10947,
+            10968
+          ],
+          [
+            11058,
+            11080
+          ],
+          [
+            11115,
+            11413
+          ],
+          [
+            18050,
+            18093
+          ],
+          [
+            18664,
+            18764
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            128,
+            147
+          ],
+          [
+            862,
+            922
+          ],
+          [
+            1017,
+            1038
+          ],
+          [
+            1274,
+            1316
+          ],
+          [
+            1416,
+            1451
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            405
+          ],
+          [
+            1440,
+            1610
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            609,
+            670
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-transport/src/claude_stream_json.rs",
+        "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+        "ranges": [
+          [
+            299,
+            357
+          ],
+          [
+            990,
+            1090
+          ],
+          [
+            1130,
+            1198
+          ],
+          [
+            1274,
+            1314
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            894,
+            1002
+          ],
+          [
+            1888,
+            2014
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "08",
+        "file": "specs/159-edition-file/research.md",
+        "sha256": "65d9f6bd75c1003951515f1c9a9aff7fe0a34132a52636c2b76eb6d283dfff62",
+        "ranges": [
+          [
+            173,
+            185
+          ]
+        ],
+        "read_at": "2026-10-12T19:43:16.313446+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1,
+            420
+          ],
+          [
+            1444,
+            1598
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/daemon.rs",
+        "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "ranges": [
+          [
+            11140,
+            11550
+          ],
+          [
+            25200,
+            25238
+          ],
+          [
+            25426,
+            25490
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/guidance.rs",
+        "sha256": "4e6706a9bdc2c3048218d2b13d3bda7c6a8c549b73db33eba93f6261d338ad42",
+        "ranges": [
+          [
+            1,
+            210
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/idempotency.rs",
+        "sha256": "e72eba79ddef15c22ea8d1a0990dfa72c9d3529aa81eedda6c58bcc84b57279f",
+        "ranges": [
+          [
+            450,
+            485
+          ],
+          [
+            875,
+            905
+          ],
+          [
+            1410,
+            1448
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-transport/src/protocol.rs",
+        "sha256": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990",
+        "ranges": [
+          [
+            206,
+            244
+          ],
+          [
+            3550,
+            3567
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-transport/src/codex_app_server.rs",
+        "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+        "ranges": [
+          [
+            890,
+            1065
+          ],
+          [
+            1880,
+            1940
+          ],
+          [
+            1980,
+            2036
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-transport/src/claude_stream_json.rs",
+        "sha256": "be3c555f29d6fc3dfb456c9df9a9800b445b18229a900d0fe741a475fa1f8edb",
+        "ranges": [
+          [
+            300,
+            357
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-transport/src/acp.rs",
+        "sha256": "6675f6ae0ff19df49c160df91b54444061cf98602e0c05bdc821454bc2bd5fc3",
+        "ranges": [
+          [
+            605,
+            677
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/wrapper.rs",
+        "sha256": "bbf931ee21149e5b69500c07b9e3043e6725f7c48955af39751c9fb23b62ddd0",
+        "ranges": [
+          [
+            1840,
+            1872
+          ],
+          [
+            11310,
+            11369
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/cli.rs",
+        "sha256": "c56ab2d242e1a890e2a85db68dafe0c08f2cee06c7ede0cc50311c75e4eea4f3",
+        "ranges": [
+          [
+            4712,
+            4857
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/mcp_scopes.rs",
+        "sha256": "dc32b1024e98203d8dba88adfea45397b515e16a8296c26f33c7bfbba0eb8f9c",
+        "ranges": [
+          [
+            210,
+            230
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/idempotency/tests.rs",
+        "sha256": "35a0c6b96cdfc49c7554b488dbfcfb38190346bb786a097549c7b514082132ba",
+        "ranges": [
+          [
+            3785,
+            3898
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+        "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+        "ranges": [
+          [
+            433,
+            489
+          ],
+          [
+            540,
+            620
+          ],
+          [
+            805,
+            900
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/tests/held159_e2e.rs",
+        "sha256": "26cb48cee36d90ec2fd56ff3620e47eac7c9024257cf29dc0e72b326f35b1b1c",
+        "ranges": [
+          [
+            443,
+            499
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/tests/guidance156_e2e.rs",
+        "sha256": "49647e27cccbd3912838c7c5c618a70e4320e0f41f1c0b41a6726f0d060d3216",
+        "ranges": [
+          [
+            343,
+            399
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/tests/native_delegation_e2e.rs",
+        "sha256": "84a5cc7f7a4803213b545a91376ada4121e843e867d2d6a2a6383b7e1cc8f21e",
+        "ranges": [
+          [
+            473,
+            529
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      },
+      {
+        "module": "12",
+        "file": "specs/159-edition-file/reuse-audit.md",
+        "sha256": "77cf8c1d55cbb5f29cfe910d007620912a9b167b6d9f24c086f6b403393e4f6d",
+        "ranges": [
+          [
+            90,
+            148
+          ]
+        ],
+        "read_at": "2026-10-12T19:34:55.980410+00:00",
+        "credit": "fullSHAunchanged permits exactpreviousranges only"
+      }
+    ],
+    "excluded_changedSHA": [
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "03",
+        "file": "specs/159-edition-file/contracts/edition159.md",
+        "old_sha256": "edb2d875d570700a3fba50a3714ef926ff1e0a28c1513e7260132a26bf84841d",
+        "current_sha256": "b6e1a43cc1bb3b10ae45700f2ce93d6db8a2e83f7e3e087c8de2759877de4113",
+        "credit": false
+      },
+      {
+        "module": "03",
+        "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+        "old_sha256": "016788d3d935057d46a50796a6122125322bda67242ae9452512ddc69fd951c1",
+        "current_sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+        "credit": false
+      },
+      {
+        "module": "04",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "05",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "05",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "old_sha256": "a1350645807f8546ef821da3d775f46cd130ad7cfb01a49fab081ffae699994e",
+        "current_sha256": "ee41671b9c7f89f53bf46784f90c8dbf58d4902db188765bddefa801a18b5084",
+        "credit": false
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "06",
+        "file": "specs/159-edition-file/contracts/edition159.md",
+        "old_sha256": "edb2d875d570700a3fba50a3714ef926ff1e0a28c1513e7260132a26bf84841d",
+        "current_sha256": "b6e1a43cc1bb3b10ae45700f2ce93d6db8a2e83f7e3e087c8de2759877de4113",
+        "credit": false
+      },
+      {
+        "module": "06",
+        "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+        "old_sha256": "016788d3d935057d46a50796a6122125322bda67242ae9452512ddc69fd951c1",
+        "current_sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+        "credit": false
+      },
+      {
+        "module": "07",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "07",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "old_sha256": "a1350645807f8546ef821da3d775f46cd130ad7cfb01a49fab081ffae699994e",
+        "current_sha256": "ee41671b9c7f89f53bf46784f90c8dbf58d4902db188765bddefa801a18b5084",
+        "credit": false
+      },
+      {
+        "module": "08",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "12",
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "old_sha256": "ed16d7a2f5a29b65891fa6f13a40b8736281ca9959814b5e702ef753361c9525",
+        "current_sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "credit": false
+      },
+      {
+        "module": "12",
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "old_sha256": "a1350645807f8546ef821da3d775f46cd130ad7cfb01a49fab081ffae699994e",
+        "current_sha256": "ee41671b9c7f89f53bf46784f90c8dbf58d4902db188765bddefa801a18b5084",
+        "credit": false
+      }
+    ],
+    "fresh_deltas": [
+      {
+        "file": "crates/bridget-daemon/src/mcp.rs",
+        "sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            620,
+            710
+          ],
+          [
+            1298,
+            1447
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+        "sha256": "93858568f38d56a286e4aa0374fc92672ee366b5655c8dd6c32993e924b3fc59",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            600,
+            616
+          ],
+          [
+            932,
+            950
+          ],
+          [
+            1529,
+            1578
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "specs/159-edition-file/contracts/edition159.md",
+        "sha256": "b6e1a43cc1bb3b10ae45700f2ce93d6db8a2e83f7e3e087c8de2759877de4113",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            100,
+            146
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "docs/decisions/159-file-retenue-et-edition.md",
+        "sha256": "ee41671b9c7f89f53bf46784f90c8dbf58d4902db188765bddefa801a18b5084",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            176,
+            191
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "docs/reference-communication.md",
+        "sha256": "c281c9ddb04f18955d98c301fd1222661164b1cc899ab096f353373e7dd177f2",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            292,
+            310
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "skills/bridget/SKILL.md",
+        "sha256": "1754e574f782b458ac1849cb4312dc6129dc3c43b7f9afdf6f6ea0a17d728984",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            540,
+            553
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "skills/bridget/references/commandes.md",
+        "sha256": "385579cbc5f067763251c669e5f99112553697f46b743a05112cf7fa2878722a",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            1511,
+            1524
+          ]
+        ],
+        "whole_file": false
+      },
+      {
+        "file": "specs/159-edition-file/quickstart.md",
+        "sha256": "93457ca4cafebc61526c8a947f9a2a6171eadd7f7e0d5d176f3dca466a195f74",
+        "read_at": "2026-10-12T19:48:42.407721+00:00",
+        "ranges": [
+          [
+            57,
+            68
+          ]
+        ],
+        "whole_file": false
+      }
+    ],
+    "limitations": [
+      "Coveragepercent islinesread/scopedfileslines, nottestcoverage norwholefiles.",
+      "Mechanical26Register34defaults inspectedinpreparation; notwholefilecredit and notaddedcoveragewithoutdatedranges.",
+      "Dates arecompletionupperbounds; no perrangeinventedstart.03/06oldstarted_atestimated excludedtimecalculation.",
+      "Sourcepartial+selfreviewtinyCatalogue+SQLowner declaration retained; crossClaudeR1/R2partialalso."
+    ]
+  },
+  "external_provenance_findings": [
+    "02367fd85287"
+  ],
+  "crossreview": {
+    "R2": "APPROVEpartial",
+    "path": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-code-r2-terminal.json",
+    "hash": "04de006f542898c5960bdd670a776b02c3ffb6d63b516df04855f097d6a73d2e",
+    "status54vs60": "54tracked+6untracked inauthoritativecapture; no unexplainedinventorydrift"
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 3,
+    "total": 5,
+    "by_category": {
+      "performance": 2,
+      "reliability": 2,
+      "quality": 1
+    }
+  },
+  "findings": [
+    {
+      "id": "PERF-001",
+      "category": "performance",
+      "subcategory": "algorithmic_complexity",
+      "severity": "MEDIUM",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "line": 1302,
+      "title": "Façade execute_queue sans annotation de complexité",
+      "description": "La façade publique modifiée négocie le rôle et la capacité puis peut charger un annuaire pour résoudre un alias. Son commentaire ne décrit ni le coût du parcours et des enveloppes ni la mémoire utilisée. Module04 impose cette annotation pour une fonction publique non triviale ; aucune lenteur n’est prouvée.",
+      "evidence": "/// Façade commune MCP/CLI, sans autostart. La lecture nue garde le rôle Client.\n/// L'édition humaine explicite vient du contexte CLI fermé, puis négocie Attach.\npub(crate) fn execute_queue(\n    identity: Option<&crate::mcp_identity::ResolvedIdentity>,\n    mut request: WrapperToDaemon,\n    socket: &Path,\n) -> Result<Value, ToolError> {",
+      "exploitability": "N/A",
+      "impact": "La branche alias et les limites de la borne algorithmique ne sont pas visibles au point d’entrée partagé. Aucun impact runtime mesuré.",
+      "path_type": "cold",
+      "remediation": "Ajouter deux commentaires : coût local et mémoire O(A+B), A octets de l’annuaire éventuellement chargé et B octets des enveloppes. Nombre d’échanges IPC constant ; délai et coûts du daemon exclus.",
+      "verification": "Relecture des commentaires contre UUID/alias et les échanges existants ; aucun test ou benchmark supplémentaire pour ce commentaire. ROOT annonce le changement postlecture, à vérifier fraîchement au scoring.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "severity_justification": "MEDIUM imposé par module04 pour la fonction publique non triviale non annotée. Constat documentaire non bloquant, chemin administratif froid.",
+      "status": "open",
+      "resolution_candidate": "Deux commentaires ajoutés par ROOT après la lecture historique ; non encore crédités comme relecture fraîche dans C1.",
+      "fingerprint": "2a54f10c16c5"
+    },
+    {
+      "id": "REL-001",
+      "category": "reliability",
+      "subcategory": "contract_replay_current_authority",
+      "severity": "MEDIUM",
+      "file": "specs/159-edition-file/contracts/edition159.md",
+      "line": 108,
+      "title": "Le tableau de rejeu omet la condition de droits actuels",
+      "description": "Le tableau annonce le même résultat pour les mêmes paramètres sans condition de droits actuels. Le code vérifie pourtant les droits avant le reçu, conformément à la décision ROOT. Après purge de la remise, un auteur pair attesté peut perdre sa preuve d’auteur et recevoir un refus avant le reçu conservé sept jours. Le défaut porte sur la formulation documentaire ; le refus fermé du code doit rester conservé.",
+      "evidence": "| Rejeu | Résultat |\n|---|---|\n| mêmes paramètres | même résultat |\n| autres paramètres | `envelope_mismatch` |\n| refus déjà rendu | même refus ; pour réessayer, nouvelle clé |",
+      "exploitability": "N/A",
+      "impact": "Un appelant peut croire à tort que son ancien résultat reste consultable malgré la perte de ses droits ou de sa preuve d’auteur.",
+      "path_type": "cold",
+      "remediation": "Conditionner le tableau de rejeu aux droits actuels et préciser la perte possible de preuve auteur après purge. Ne pas employer receipt.actor comme autorité et ne pas changer les permissions.",
+      "remediation_code": "Le rejeu rend le même résultat uniquement si l’identité et les droits actuels restent vérifiables. Après purge de la remise, la preuve d’auteur peut manquer ; le reçu conservé ne donne aucun droit nouveau.",
+      "verification": "Relire la clarification T024 et vérifier qu’elle conserve l’ordre identité attestée, droits, reçu. Aucun nouvel outil, scénario ou test requis.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "open",
+      "references": [
+        "SPEC159FR018",
+        "contracts/edition159.md:124",
+        "daemon.rs:11155",
+        "ROOT arbitrage2026-10-12"
+      ],
+      "fingerprint": "478a8587c1f5"
+    },
+    {
+      "id": "DUP-001",
+      "category": "quality",
+      "subcategory": "duplication",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+      "line": 433,
+      "title": "Quatrième copie exacte du compilateur de CLI de fixture",
+      "description": "Le nouveau fichier159B copie compile_provider152 déjà présent dans trois fixtures historiques. Les quatre corps sont exactement identiques et comptent57 lignes. Les scripts fournisseur et leurs oracles restent distincts ; aucune refactorisation de livraison ni framework partagé demandé.",
+      "evidence": "fn compile_provider152(root: &Path, script: &str, cli_name: &str) -> PathBuf {\n    // Montage149 : CLI directe du PATH, profil privé et ancêtres bornés par .git.\n    // Le texte Python est incorporé : la SHA du CLI capturé couvre le programme.\n    let program = format!(\n        \"__file__ = {}\\n{script}\",\n        serde_json::to_string(&root.join(\"provider.py\")).unwrap()\n    );\n    let embedded = program",
+      "exploitability": "N/A",
+      "impact": "Une correction future du montage doit être répercutée dans quatre copies. Aucun défaut de production ni coût runtime mesuré établi.",
+      "path_type": "cold",
+      "remediation": "Conserver la duplication froide assumée pour ce lot. Lors d’une maintenance nécessaire, évaluer le déplacement de ce seul corps vers tests/support/idempotent.rs existant, sans importer les tests ou scripts des autres fichiers.",
+      "remediation_code": "",
+      "verification": "Comparer les quatre corps et leurs appels ; toute éventuelle factorisation doit préserver et rejouer les intégrations existantes sans changer les oracles.",
+      "effort": "S",
+      "regression_risk": "LOW",
+      "references": [
+        "SPEC159B T018/T023",
+        "Constitution XIX/XX",
+        "Module01 règle5 coldpath"
+      ],
+      "status": "open",
+      "duplication_type": "STRICT",
+      "duplication_lines": 57,
+      "occurrences_count": 4,
+      "all_locations": [
+        "crates/bridget-daemon/tests/edit159_e2e.rs:433-489",
+        "crates/bridget-daemon/tests/held159_e2e.rs:443-499",
+        "crates/bridget-daemon/tests/guidance156_e2e.rs:343-399",
+        "crates/bridget-daemon/tests/native_delegation_e2e.rs:473-529"
+      ],
+      "block_sha256": "9cd9be91f82e2b5d224720d9ba75acf17f18845dbb93c19ce78a33c01d19a4bc",
+      "severity_justification": "Signal de maintenance froid : seuil MEDIUM de50 lignes abaissé àLOW par module01 ; aucun impact de production démontré.",
+      "fingerprint": "de0a7f09a28c"
+    },
+    {
+      "id": "PERF-002",
+      "category": "performance",
+      "subcategory": "allocations",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/daemon.rs",
+      "line": 11373,
+      "title": "Promotion : le BLOB cloné est immédiatement remplacé",
+      "description": "SendDelivery dérive Clone et possède message_bytes sous forme de Vec. Après sérialisation de la projection, delivery.clone copie donc le BLOB original, puis copy.message_bytes remplace immédiatement cette copie. Cette allocation et cette copie linéaire inutiles ont lieu sous State.",
+      "evidence": "                            let target = target_conn\n                                .as_ref()\n                                .map(|(conn, _)| conn.as_str())\n                                .ok_or_else(|| {\n                                    \"connexion primaire de promotion absente\".to_string()\n                                })?;\n                            let mut copy = delivery.clone();\n                            copy.message_bytes = bytes;\n                            defer_idempotent_delivery(st, target, copy, controls, None, Some(conn))",
+      "exploitability": "N/A",
+      "impact": "Une copie et une allocation supplémentaires de B octets par promotion fraîche. Commande explicite froide ; aucune latence, contention ou saturation mesurée.",
+      "path_type": "cold",
+      "remediation": "Construire SendDelivery avec ses deux identifiants clonés, ses deux scalaires recopiés et message_bytes=bytes. Garder delivery original pour la quarantaine après échec de projection.",
+      "verification": "Si ROOT retient ce nettoyage, relire succès/quarantaine et réemployer les oracles T021 déjà prévus. Aucun scénario ou banc supplémentaire. Une allocation et B octets copiés seraient évités, délai inconnu. Retour arrière : rétablir le clone puis remplacement.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "severity_justification": "LOW : copie redondante prouvée, chemin administratif froid, aucun impact temporel mesuré ni scénario de blocage confirmé.",
+      "status": "open",
+      "metric": "Une copie du Vec original dans ce bloc actuellement ; zéro après construction directe. Déduction du code, pas mesure instrumentée.",
+      "expected_gain": "Une allocation et une copie O(B) évitées ; aucun pourcentage ou gain de latence annoncé.",
+      "rollback": "Rétablir delivery.clone suivi du remplacement ; canon SQL inchangé.",
+      "fingerprint": "8b9b680c6115"
+    },
+    {
+      "id": "REL-002",
+      "category": "reliability",
+      "subcategory": "corrupt_local_storage",
+      "severity": "LOW",
+      "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+      "line": 1458,
+      "title": "Une ligne Held JSON corrompue refuse les éditions de sa cible",
+      "description": "La résolution d’un message public utilise json_extract sans garde json_valid. Une ligne Held corrompue de la cible peut produire une erreur SQLite et une réponse Nack queue_edit_storage_unavailable, sans effet committé. Les octets sont normalement écrits par le daemon ; aucune voie d’écriture non autorisée ni élévation de droits n’est prouvée. ROOT conserve cette limite visible de stockage.",
+      "evidence": "            \"SELECT delivery_id FROM send_deliveries\n        WHERE recipient_agent=?1 AND phase='held'\n          AND json_extract(CAST(message_bytes AS TEXT),'$.id')=?2\n        ORDER BY queue_rank LIMIT 2\",",
+      "exploitability": "THEORETICAL",
+      "impact": "Une corruption locale Held peut empêcher temporairement l’édition de la cible. Le refus reste visible et fermé ; aucun effet silencieux ni gain de droits.",
+      "path_type": "cold",
+      "remediation": "Conserver la limite de stockage explicitement acceptée par ROOT. Ne pas ajouter de correctif, scénario ou test hors périmètre de ce lot.",
+      "verification": "Relire la résolution SQL et sa remontée IdempotencyError vers Nack queue_edit_storage_unavailable ; contre-revue ClaudeR1/R2 et ROOT déjà réalisées.",
+      "effort": "XS",
+      "regression_risk": "LOW",
+      "status": "open",
+      "disposition": "accepted_low_risk_by_ROOT",
+      "external_provenance": {
+        "review": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-code-r2-terminal.json",
+        "ROOT_fresh_read_at": "2026-10-12T19:46:00+00:00",
+        "source_sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+        "ranges": [
+          [
+            1449,
+            1470
+          ]
+        ],
+        "daemon_sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+        "daemon_ranges": [
+          [
+            11203,
+            11215
+          ],
+          [
+            11338,
+            11405
+          ]
+        ],
+        "independence": "Claudemodelreview+ROOT ; auditeur avait aussi lu résolution1447–1470 et puits11338–11405."
+      },
+      "fingerprint": "02367fd85287"
+    }
+  ],
+  "historical_cycle": "C1 source c400+externalLOWappend, immutablemoduleJSONs"
+}

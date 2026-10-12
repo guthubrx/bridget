@@ -1,0 +1,136 @@
+{
+  "created_at": "2026-10-12T19:36:45.552688+00:00",
+  "stage": "PREPARATION_ONLY_NO_SCORING_GATE",
+  "pending": [
+    "modules04/08gel",
+    "REL001docROOTappliquée+lecturetargeted+SHA",
+    "T023privateplannedrecipeFINALreceipt",
+    "ROOTtest/docgatesfinalsignal",
+    "autoritécapturefinaledoc/E2Edeltas"
+  ],
+  "received_module_hashes": {
+    "findings_duplication.json": "49802d587df8cfa8c714f7d3407a4f5a0573a4236aeca05279e51f4d08776de8",
+    "findings_minimalisme.json": "10008d9fcd0c365a298568c534a8ae314474460cb1e54ebd62dc88f9fa70d273",
+    "findings_qualite.json": "88fac9ea2a15e5537471fe9524962f5c92daa3484f186d30326784edc080471d",
+    "findings_securite.json": "e4a31d1a457cc97f52dbb4bc97420fff7375a1e93e5c5d0750b645f5bbafefd8",
+    "findings_tests.json": "6a48f3641d7c503c8076ec9bdde810b060c9880c28b20526f60b12dca23ab78a"
+  },
+  "baseline": {
+    "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/audits/baseline.json",
+    "exists": false,
+    "suppressed": []
+  },
+  "dedup_key": [
+    "file",
+    "line",
+    "category"
+  ],
+  "fingerprint_reference": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/fingerprint.py --batch",
+  "mapping": {
+    "security": {
+      "prefixes": [
+        "SEC",
+        "API"
+      ],
+      "weight": 3
+    },
+    "llm_security": {
+      "prefixes": [
+        "LLM"
+      ],
+      "weight": 2
+    },
+    "supply_chain": {
+      "prefixes": [
+        "SC"
+      ],
+      "weight": 1
+    },
+    "observability": {
+      "prefixes": [
+        "OBS"
+      ],
+      "weight": 1
+    },
+    "reliability": {
+      "prefixes": [
+        "REL"
+      ],
+      "weight": 2
+    },
+    "tests": {
+      "prefixes": [
+        "TEST"
+      ],
+      "weight": 1
+    },
+    "performance": {
+      "prefixes": [
+        "PERF",
+        "FIN"
+      ],
+      "weight": 2
+    },
+    "complexity": {
+      "subcategory": "algorithmic_complexity",
+      "module": "04",
+      "weight": 2
+    },
+    "quality": {
+      "prefixes": [
+        "QUAL"
+      ],
+      "weight": 2
+    },
+    "architecture": {
+      "prefixes": [
+        "ARCH"
+      ],
+      "weight": 1
+    },
+    "ai_hygiene": {
+      "prefixes": [
+        "AI"
+      ],
+      "weight": 1
+    },
+    "duplication": {
+      "prefixes": [
+        "DUP"
+      ],
+      "weight": 1
+    },
+    "minimalism": {
+      "prefixes": [
+        "MIN"
+      ],
+      "weight": 1
+    },
+    "ux": {
+      "prefixes": [
+        "UX"
+      ],
+      "weight": 1,
+      "applicability": "pasUIchanged; déciderN/Aavecmanifesthas_ui"
+    }
+  },
+  "score_rule": "100-25*C-10*H-3*M-L ; >=90A/85A-/80B+/75B/60C/40D/elseF ; moyennedesdomainesapplicablespondérée ; findingsfixedtracéhistoriqueexclufinalscoringactif",
+  "coverage": "Uniondesplagesréellementlues parsourceSHA ; linecountscopediffs distinctwholefiles. Aucun100%inventé. WholesourceSHAchangedpastransfertautomatique ; annexefragmentbyteidentityoulecturefreshrequise.",
+  "final_outputs": [
+    "cycle-1/aggregated-findings.json",
+    "cycle-scoring/aggregated-findings.json",
+    "scoring.md",
+    "grade.json",
+    "fix-report.md",
+    "cycles.log",
+    "validation-session.json"
+  ],
+  "validator": "python3 /Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py /Users/moi/.cache/bridget-audit159B-preparation-20261012",
+  "limits": [
+    "Auditeur nefaitaucunWTwrite/test/scanner/DB/service/Gitwrite ; ROOTapplicationseule",
+    "AUTO_COMMITfalse MAX_CYCLES1 fixROOT puisreadonlyfinal",
+    "DUP001LOW57lignesstrictesfroides assumées,pasrefactorconfort",
+    "FULLuniqueBpasencoreexécuté, A FULLhistoriqueconservé distinct",
+    "REL001resteopen tantquecorrectiondocROOTpreuveabsente"
+  ]
+}

@@ -147,8 +147,8 @@ API : `message_id` + `before_message_id` (ou `null` = fin), comme T3. Transactio
 
 ## R9 - `promote`
 
-- Pré-conditions : droits de `Steer` (156, garde obligatoire), pas de pause pour un agent, destinataire `busy` (sinon `no_active_turn`), porteur ayant déclaré `queue_fallback` (sinon `steer_unavailable`), et les vérifications de R5.3 (demande ouverte, échéance, saga) dans la même transaction.
-- Effet : une transaction passe la ligne `held` à `dispatching` ; la trame de remise porte `intent = SteerCurrent` et la référence `steer-or-queue`. L'enveloppe stockée et le canon ne changent pas.
+- Pré-conditions : identité attestée et droits/gardes de `Steer` de 156 ; phase `held` ; destinataire `busy` avec tour actif recontrôlé (sinon `no_active_turn`) ; porteur ayant déclaré `queue_fallback` (sinon `steer_unavailable`) ; aucune réservation de tour ; saga non expirée ; demande ouverte et non échue si `reply=true`. Ces faits sont recontrôlés dans la transaction. Le tour actif remplace le repos exigé pour une libération ordinaire. Un agent est refusé pendant la pause. L’humain attaché attesté garde l’exception de guidage de 156, sans nouvelle autorité issue du message.
+- Effet : une transaction passe la ligne `held` à `dispatching` et pose la réservation de tour ; la trame de remise porte `intent = SteerCurrent` et la référence `steer-or-queue`. L'enveloppe stockée et le canon ne changent pas.
 - **Ce que la promotion garantit** : le message n'est pas perdu *avant* la libération (il est en base). Un transport qui reçoit `SteerCurrent` avec `steer-or-queue` et ne peut pas guider (pas de tour actif, `steering_open` faux, fournisseur sans guidage) enfile le message en file ordinaire au lieu de le rejeter.
 - **Ce qu'elle ne garantit pas** (ronde 2, point 5, vérifié) :
   - la file ordinaire du porteur peut être pleine : Claude rejette `file Claude pleine` (`claude_stream_json.rs:318-324`), Codex et ACP aussi. Le rejet rend la remise `indeterminate`, sort connu mais message non livré ;
@@ -173,7 +173,7 @@ Origine humaine ou système, alertes de fil, observations, incidents délégués
 | `reorder` | oui | oui | non | non (question 1) | non |
 | `promote` | oui | oui | non | non | non |
 
-`promote` suit `Steer` : refus pendant la pause pour un agent. `cancel` et `reorder` restent admis pendant la pause : ils ne créent pas de travail. Preuve enfant (ADR 044), client nu `from=human`, identité non attestée : refus.
+`promote` suit les droits et gardes de `Steer` de 156 : refus pendant la pause pour un agent, exception pour l’humain attaché attesté. L’identité vient de la connexion validée, pas de `from=human` ni d’une référence. Cette commande humaine explicite n’est pas une libération autonome : la pause et la priorité de reprise continuent à bloquer les libérations automatiques `HeldRelease`, pas cette exception. Si le tour est réellement fermé, `no_active_turn` reste applicable. `cancel` et `reorder` restent admis pendant la pause : ils ne créent pas de travail. Preuve enfant (ADR 044), client nu `from=human`, identité non attestée : refus.
 
 ## R13 - Complexité
 
@@ -231,7 +231,7 @@ Deux pistes, non engagées :
 
 - Le porteur écrit `Seen` avant d'injecter (`receipt_store.rs:147-160`). Un arrêt entre l'écriture et l'injection donne `Indeterminate` au rejeu, sans injection (`wrapper.rs:757-776`). Le message est alors non livré et son état est explicite (`indeterminate`).
 - La file retenue réduit l'exposition : seul un message à la fois est chez le porteur. Elle ne la supprime pas. Une reprise durable du porteur (rejouer un `Seen` non accusé) changerait la sémantique d'injection de toutes les remises : hors périmètre.
-- Les promesses du lot B sont donc : avant la libération, ni perte ni doublon ; après, garanties de toute remise. Les critères SC-002 et SC-009 sont écrits ainsi, avec le point d'arrêt « entre `Seen` et l'injection » dans le tableau de pannes (T010).
+- Les promesses du lot B sont donc : avant la libération, ni perte ni doublon ; après, garanties de toute remise. `applied` dans le reçu d’édition atteste le commit de libération ; `effect: "unconfirmed"` ne prouve pas une consommation par le modèle. Le daemon ne refait pas l’effet au rejeu et ne fabrique ni ACK ni reçu d’injection. Le repli peut être rejeté si la file ordinaire est pleine ; une erreur ambiguë de Codex après application peut créer un doublon, conformément R9. Les critères SC-002 et SC-009 sont écrits ainsi, avec le point d'arrêt « entre `Seen` et l'injection » dans le tableau de pannes (T010).
 
 ## Vérifications ouvertes (levées par T002)
 

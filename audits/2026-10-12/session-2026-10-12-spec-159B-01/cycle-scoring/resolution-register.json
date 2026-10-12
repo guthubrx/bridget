@@ -1,0 +1,88 @@
+{
+  "observed_at": "2026-10-12T19:48:42.407721+00:00",
+  "resolved": {
+    "478a8587c1f5": {
+      "id": "REL-001",
+      "file": "specs/159-edition-file/contracts/edition159.md",
+      "sha256": "b6e1a43cc1bb3b10ae45700f2ce93d6db8a2e83f7e3e087c8de2759877de4113",
+      "fresh_ranges": [
+        [
+          100,
+          146
+        ]
+      ],
+      "proof": "droitsfrais etpreuveauteuraprès purge ; receipt.actortrace sansgrant ; sixdocsalignées parROOT",
+      "code_change": false
+    },
+    "2a54f10c16c5": {
+      "id": "PERF-001",
+      "file": "crates/bridget-daemon/src/mcp.rs",
+      "sha256": "c13be13df05ffd4d1d417c95bd7c897109f0bff3ce494dc5ce393a8084bf21f6",
+      "fresh_ranges": [
+        [
+          1298,
+          1313
+        ]
+      ],
+      "proof": "O(b)clientenveloppe/annuaire ; nombreIPCborné coûtdaemonexclu",
+      "code_change": false
+    }
+  },
+  "external_finding": {
+    "id": "REL-002",
+    "category": "reliability",
+    "subcategory": "corrupt_local_storage",
+    "severity": "LOW",
+    "file": "crates/bridget-daemon/src/idempotency/send_delivery.rs",
+    "line": 1458,
+    "title": "Une ligne Held JSON corrompue refuse les éditions de sa cible",
+    "description": "La résolution d’un message public utilise json_extract sans garde json_valid. Une ligne Held corrompue de la cible peut produire une erreur SQLite et une réponse Nack queue_edit_storage_unavailable, sans effet committé. Les octets sont normalement écrits par le daemon ; aucune voie d’écriture non autorisée ni élévation de droits n’est prouvée. ROOT conserve cette limite visible de stockage.",
+    "evidence": "            \"SELECT delivery_id FROM send_deliveries\n        WHERE recipient_agent=?1 AND phase='held'\n          AND json_extract(CAST(message_bytes AS TEXT),'$.id')=?2\n        ORDER BY queue_rank LIMIT 2\",",
+    "exploitability": "THEORETICAL",
+    "impact": "Une corruption locale Held peut empêcher temporairement l’édition de la cible. Le refus reste visible et fermé ; aucun effet silencieux ni gain de droits.",
+    "path_type": "cold",
+    "remediation": "Conserver la limite de stockage explicitement acceptée par ROOT. Ne pas ajouter de correctif, scénario ou test hors périmètre de ce lot.",
+    "verification": "Relire la résolution SQL et sa remontée IdempotencyError vers Nack queue_edit_storage_unavailable ; contre-revue ClaudeR1/R2 et ROOT déjà réalisées.",
+    "effort": "XS",
+    "regression_risk": "LOW",
+    "status": "open",
+    "disposition": "accepted_low_risk_by_ROOT",
+    "external_provenance": {
+      "review": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-code-r2-terminal.json",
+      "ROOT_fresh_read_at": "2026-10-12T19:46:00+00:00",
+      "source_sha256": "2ee9da9a7d1d07e77e4195546809daeae66c72f24df7ce6263414d5ca3b659d8",
+      "ranges": [
+        [
+          1449,
+          1470
+        ]
+      ],
+      "daemon_sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "daemon_ranges": [
+        [
+          11203,
+          11215
+        ],
+        [
+          11338,
+          11405
+        ]
+      ],
+      "independence": "Claudemodelreview+ROOT ; auditeur avait aussi lu résolution1447–1470 et puits11338–11405."
+    },
+    "fingerprint": "02367fd85287"
+  },
+  "module_inputs_guard": {
+    "findings_securite.json": "e4a31d1a457cc97f52dbb4bc97420fff7375a1e93e5c5d0750b645f5bbafefd8",
+    "findings_complexite.json": "6cf6b3c454690b764aaeef83bb9dcac18bf97703dee5968d1d26d9d2029531d3",
+    "findings_qualite.json": "88fac9ea2a15e5537471fe9524962f5c92daa3484f186d30326784edc080471d",
+    "findings_tests.json": "6a48f3641d7c503c8076ec9bdde810b060c9880c28b20526f60b12dca23ab78a",
+    "findings_duplication.json": "49802d587df8cfa8c714f7d3407a4f5a0573a4236aeca05279e51f4d08776de8",
+    "findings_performance.json": "c85da71411763890f0efb92df2c2308186faa3fe7f216a152031fc04f0844405",
+    "findings_minimalisme.json": "10008d9fcd0c365a298568c534a8ae314474460cb1e54ebd62dc88f9fa70d273"
+  },
+  "source_guard_ALL223": true,
+  "FULL_status": "ongoing",
+  "fixed_commit_sha": null,
+  "AUTO_COMMIT": false
+}

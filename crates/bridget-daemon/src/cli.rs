@@ -694,6 +694,7 @@ fn print_usage() {
            send --to <N> [--] <MSG> Envoie un message\n  \
            reply [--] <MSG>       Répond au dernier expéditeur\n  \
            queue --target <N>     Lit les remises en attente, filtrées par droits\n  \
+           queue cancel|reorder|promote --target <N> --message <ID> --request <clé> [--before <ID>]\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
@@ -4651,6 +4652,7 @@ fn cli_register(_usage: &str) -> WrapperToDaemon {
         turn_in_progress: false,
         journal_available: None,
         turn_attest: false,
+        queue_fallback: false,
     }
 }
 
@@ -4717,30 +4719,106 @@ fn parse_cancel_args(args: &[String]) -> Result<CancelArgs, String> {
     Ok(CancelArgs { id, reason })
 }
 
-fn parse_queue_args(args: &[String]) -> Result<String, String> {
-    match args {
-        [option, target]
-            if option == "--target" && !target.is_empty() && !target.starts_with("--") =>
-        {
-            Ok(target.clone())
-        }
-        _ => Err("queue : attendu --target <cible>, sans autre argument".into()),
+fn parse_queue_args(args: &[String]) -> Result<WrapperToDaemon, String> {
+    use bridget_transport::protocol::QueueEditAction;
+    let usage = "queue : attendu --target <cible> ; édition : cancel|reorder|promote --target <cible> --message <id> --request <clé> [--before <id>]";
+    if let [option, target] = args
+        && option == "--target"
+        && !target.is_empty()
+        && !target.starts_with("--")
+    {
+        return Ok(WrapperToDaemon::QueueList {
+            target: target.clone(),
+        });
     }
+    let action = match args.first().map(String::as_str) {
+        Some("cancel") => QueueEditAction::Cancel,
+        Some("reorder") => QueueEditAction::Reorder,
+        Some("promote") => QueueEditAction::Promote,
+        _ => return Err(usage.into()),
+    };
+    let mut target = None;
+    let mut message_id = None;
+    let mut request_id = None;
+    let mut before_message_id = None;
+    let pairs = &args[1..];
+    if pairs.len() % 2 != 0 {
+        return Err(usage.into());
+    }
+    for pair in pairs.chunks_exact(2) {
+        if pair[1].is_empty() || pair[1].starts_with("--") {
+            return Err(usage.into());
+        }
+        let field = match pair[0].as_str() {
+            "--target" => &mut target,
+            "--message" => &mut message_id,
+            "--request" => &mut request_id,
+            "--before" if action == QueueEditAction::Reorder => &mut before_message_id,
+            _ => return Err(usage.into()),
+        };
+        if field.replace(pair[1].clone()).is_some() {
+            return Err(usage.into());
+        }
+    }
+    Ok(WrapperToDaemon::QueueEditRequest {
+        target: target.ok_or_else(|| usage.to_string())?,
+        action,
+        message_id: message_id.ok_or_else(|| usage.to_string())?,
+        request_id: request_id.ok_or_else(|| usage.to_string())?,
+        before_message_id,
+    })
 }
 
 fn cmd_queue(args: &[String]) {
-    let target = parse_queue_args(args).unwrap_or_else(|error| exit_argument_error(&error));
-    let identity = match crate::mcp_identity::resolve_current_identity() {
+    let request = parse_queue_args(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let editing = matches!(&request, WrapperToDaemon::QueueEditRequest { .. });
+    let resolved = if editing {
+        crate::mcp_identity::resolve_current_mcp_identity()
+    } else {
+        crate::mcp_identity::resolve_current_identity()
+    };
+    let identity = match resolved {
         Ok(identity) => Some(identity),
         Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly) => {
             eprintln!(
-                "bridget queue : delegated_tool_forbidden : une preuve enfant ne peut pas consulter la file"
+                "bridget queue : delegated_tool_forbidden : une preuve enfant ne peut pas consulter ni éditer la file"
             );
             std::process::exit(1);
         }
-        Err(_) => None, // même client humain nu que l'envoi ordinaire.
+        Err(error) if editing => {
+            let namespace =
+                crate::environment::Namespace::from_environment().unwrap_or_else(|_| {
+                    eprintln!("bridget queue : identity_not_found : contexte local non vérifiable");
+                    std::process::exit(1);
+                });
+            let context = [
+                "BRIDGET_AGENT_ID_FILE",
+                "BRIDGET_AGENT_INSTANCE_ID",
+                "BRIDGET_T3_MCP_ENDPOINT",
+                "BRIDGET_T3_MCP_AUTHORIZATION",
+            ]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some())
+                || crate::mcp_identity::has_delegated_marker(
+                    &namespace.root.join("agent-pids"),
+                    std::process::id(),
+                    &crate::mcp_identity::SystemProcessTree,
+                )
+                || crate::mcp_identity::has_delegated_marker(
+                    &namespace.root.join("delegated-pids"),
+                    std::process::id(),
+                    &crate::mcp_identity::SystemProcessTree,
+                );
+            if context || error != crate::mcp_identity::IdentityError::IdentityNotFound {
+                eprintln!("bridget queue : {} : {}", error.code(), error.remediation());
+                std::process::exit(1);
+            }
+            // Aucun contexte agent : commande humaine locale explicite, via Attach.
+            None
+        }
+        Err(_) => None, // la lecture humaine nue historique reste inchangée.
     };
-    match crate::mcp::execute_queue(identity.as_ref(), &target, &socket_path()) {
+    match crate::mcp::execute_queue(identity.as_ref(), request, &socket_path()) {
         Ok(result) => println!("{}", serde_json::to_string(&result).unwrap()),
         Err(error) => {
             eprintln!("bridget queue : {error}");
@@ -9043,6 +9121,7 @@ mod hook_tests {
             turn_in_progress: false,
             journal_available: None,
             turn_attest: false,
+            queue_fallback: false,
         };
         writeln!(referent_writer, "{}", encode(&register).unwrap()).unwrap();
         referent_writer.flush().unwrap();
@@ -10791,6 +10870,96 @@ mod guidance156_tests {
             expected,
             "trame historique complète inchangée"
         );
+    }
+
+    #[test]
+    fn edit159_cli_parse() {
+        let list = ["--target", "agent"].map(str::to_owned).to_vec();
+        let parsed = parse_queue_args(&list).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap(),
+            serde_json::json!({"type":"QueueList","target":"agent"})
+        );
+        for action in ["cancel", "reorder", "promote"] {
+            let mut args = [
+                action,
+                "--target",
+                "agent",
+                "--message",
+                "m159",
+                "--request",
+                "r159",
+            ]
+            .map(str::to_owned)
+            .to_vec();
+            if action == "reorder" {
+                args.extend(["--before".into(), "avant159".into()]);
+            }
+            let parsed = parse_queue_args(&args).unwrap();
+            assert_eq!(
+                serde_json::to_value(parsed).unwrap(),
+                serde_json::json!({
+                    "type":"QueueEditRequest","request_id":"r159","target":"agent","action":action,
+                    "message_id":"m159","before_message_id":if action=="reorder" {Some("avant159")} else {None}
+                })
+            );
+            let missing_id = [action, "--target", "agent", "--message", "m159"]
+                .map(str::to_owned)
+                .to_vec();
+            assert!(parse_queue_args(&missing_id).is_err());
+        }
+        let end = [
+            "reorder",
+            "--target",
+            "agent",
+            "--message",
+            "m159",
+            "--request",
+            "r159",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            serde_json::to_value(parse_queue_args(&end).unwrap()).unwrap()["before_message_id"],
+            serde_json::Value::Null
+        );
+        for args in [
+            vec![
+                "cancel",
+                "--target",
+                "agent",
+                "--message",
+                "m159",
+                "--request",
+                "",
+            ],
+            vec![
+                "cancel",
+                "--target",
+                "agent",
+                "--message",
+                "m159",
+                "--request",
+                "r159",
+                "--before",
+                "avant159",
+            ],
+            vec![
+                "promote",
+                "--target",
+                "agent",
+                "--message",
+                "m159",
+                "--request",
+                "r159",
+                "--unknown",
+                "x",
+            ],
+        ] {
+            assert!(
+                parse_queue_args(&args.into_iter().map(str::to_owned).collect::<Vec<_>>()).is_err()
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,15 @@
+{
+  "observed_at": "2026-10-12T19:30:19.222994+00:00",
+  "historical_capture": "capture-final19-25/manifest.json",
+  "changed_file": "crates/bridget-daemon/tests/edit159_e2e.rs",
+  "current_sha256": "943b45c4b6da509b38c9bc7d5e8fce2c6835140434d260fd464ce453f4f6005c",
+  "fresh_read_ranges": [
+    [
+      600,
+      618
+    ]
+  ],
+  "excerpt": "600:         record(\"turn156\", params=params, turn_id=turn_id, prompt=prompt, turn_number=turn_number, monotonic_ns=started_ns)\n601:         emit(dict(id=frame[\"id\"], result=dict(turn=dict(id=turn_id), approvalPolicy=\"on-request\", approvalsReviewer=\"user\", sandboxPolicy=sandbox)))\n602:         active_turn = (turn_number, turn_id)\n603:     elif method == \"turn/steer\":\n604:         params = frame[\"params\"]\n605:         assert params[\"threadId\"] == thread_id\n606:         assert params[\"expectedTurnId\"] == turn_id\n607:         record(\"steer156\", params=params, turn_id=turn_id)\n608:         emit(dict(id=frame[\"id\"], result={}))\n609:         # La complétion corrélée atteste la consommation ; le seul result ne la prouve pas.\n610:         emit(dict(method=\"item/completed\", params=dict(threadId=thread_id, turnId=turn_id,\n611:              item=dict(id=\"steered159-\" + params[\"clientUserMessageId\"], clientId=params[\"clientUserMessageId\"], type=\"userMessage\", content=params[\"input\"]))))\n612:     elif method == \"turn/interrupt\":\n613:         record(\"interrupt156\", turn_id=turn_id)\n614:         emit(dict(id=frame[\"id\"], result={}))\n615:         emit(dict(method=\"turn/completed\", params=dict(threadId=thread_id, turn=dict(id=turn_id, status=\"interrupted\", items=[]))))\n616: \"#.replace(\"FIXTURE_SANDBOX155\", &json!({\"type\":\"dangerFullAccess\"}).to_string())\n617: }\n618: ",
+  "production_delta": false,
+  "test_status": "24negativefacade assertions PASS reached,overall notGREEN; currentreplaypending"
+}

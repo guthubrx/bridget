@@ -56,7 +56,7 @@ de couverture.
 | `send` | MCP exposé | `bridget_send` | Envoi ou réponse corrélée ; viser l'UUID attesté et conserver exactement la clé de rejeu et l'enveloppe. |
 | `reply` | Équivalence MCP | `bridget_send` avec `in_reply_to` | Commodité CLI vers le dernier expéditeur ; l'outil structuré évite l'ambiguïté quand plusieurs demandes coexistent. |
 | `cancel` | MCP exposé | `bridget_cancel` | Annule sa demande suivie et retire sa remise en attente ; interruption active seulement sous garde156, aucune preuve de fin de mission. |
-| `queue` | MCP exposé (156) | `bridget_queue` | Lit les remises idempotentes held/released visibles de target (159A) ; aucune édition en A, capacité QueueListV1 requise. |
+| `queue` | MCP exposé (156) | `bridget_queue` | Liste les held/released avec QueueListV1 ; contrat B cancel/reorder/promote avec QueueEditV1 et request_id obligatoire, validation en cours. |
 | `requests` | Équivalence MCP | `bridget_ledger` avec `view=requests` | Consulte les demandes de l'appelant, ou la projection globale autorisée ; aucun outil synonyme n'est créé. |
 | `rename` | MCP exposé | `bridget_rename` | Change seulement le nom d'affichage de l'identité propre ; UUID, instance, historique et rejeux restent liés à la même identité. |
 | `control` | Équivalence MCP pour control status ; CLI humain pour la vue globale et les mutations | `bridget_control_status` remplace `control status`; `pause`, `resume`, `budget`, `posture` et le contrôle global158A restent sans MCP | Le statut est observable ; les mutations appartiennent au référent humain et ne sont pas déléguées par 094. |
@@ -137,7 +137,7 @@ Pairs, clients nus et valeur absente attendent. Les critères de lot restent.
 REST/V1 refuse steer/interrupt localement avant émission, faute de capacité ;
 None ordinaire reste stable. Le paquet installé149 utilise V2.
 
-`bridget_queue` prend seulement `target`. La réponse a `entries` et `queue_bound`.
+La lecture `bridget_queue` prend `target`, avec action list ou absente. La réponse a `entries` et `queue_bound`.
 Chaque entrée porte message_id/from/intent/reply/age_secs/preview/position/state.
 Preview :120 caractères ; au plus200 entrées ; state=held/released selon 159A.
 Queue_bound : queue_capacity du type quand held_queue est ouvert, null sinon. Cible/parent/Attach/UI Client attestée voient la projection
@@ -182,7 +182,7 @@ Migration v7, mesure SC004, procédure et preuve T011 sont détaillées dans :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md
 Décision et limites :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md
-Cancel/reorder/promote de file restent le lot B ; aucune installation déduite.
+Les actions d’édition sont décrites ci-dessous ; les reçus de session attestent la livraison.
 
 ## Catalogue et remplacement157
 
@@ -397,7 +397,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 
 - `bridget_send` — envoyer ou répondre avec corrélation et rejeu explicite.
 - `bridget_cancel` — annuler sa propre demande suivie ; interruption active sous garde156.
-- `bridget_queue` — lire les remises visibles de `target`, sans action d’édition (156).
+- `bridget_queue` — list par défaut ; contrat B cancel/reorder/promote, request_id obligatoire, QueueEditV1 (validation B en cours).
 - `bridget_who` — lire l'annuaire visible.
 - `bridget_ledger` — lire messages et demandes bornés (`recent`), chercher une page reprenable dans ses échanges ou un fil (`search`), relire un message exact par fragments (`read`).
 - `bridget_journal` — lire ou partager un extrait sourcé, sans lecture arbitraire du disque.
@@ -1500,3 +1500,29 @@ automatique Bridget, aucun force. Voir la recette complète dans
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md
 
 Les sources et ce guide ne prouvent pas le chargement du contrat 154.
+
+
+### Édition de file — lot 159B
+
+Contrat d’édition de la file retenue.
+`bridget_queue` garde `list` par défaut.
+Écritures : `action: "cancel"|"reorder"|"promote"`, `target`, `message_id`,
+`request_id` non vide. Reorder exige `before_message_id` (UUID ou `null` = fin).
+Cancel : auteur, parent ou humain Attach attesté ; aucun interrupt. Reorder :
+parent ou humain Attach attesté. Promote : Steer156, tour actif, held sans
+réservation, demande valide, porteur `queue_fallback` ; pause agent refusée.
+Preuve enfant refusée avant connexion ; aucun acteur fourni dans les arguments.
+Mutation négociée par `QueueEditV1`. Reçu sept jours, sous droits frais :
+mêmes paramètres = même résultat ; autres paramètres = `envelope_mismatch`.
+Nouvelle clé après refus. Auteur cancel : si l’envoi a été purgé ou ses octets
+sont absents, auteur non vérifiable = `intent_not_permitted` avant le reçu ;
+`receipt.actor` n’accorde aucun droit persistant.
+`applied` prouve le commit. Promote porte `effect: "unconfirmed"` : repli FIFO,
+rejet si pleine et doublon Codex possible après erreur ambiguë. Aucun avis
+universel neuf pour `reply=false`, aucun rejeu d'effet. Le défaut held reste fermé.
+Référence, exemples CLI et limites complètes :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md
+Décision :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/159-file-retenue-et-edition.md
+
+CLI T022 confirmée dans le code des façades : `bridget queue cancel|reorder|promote --target <cible> --message <UUID> --request <clé>` ; reorder accepte `--before <UUID>`, omis = fin.

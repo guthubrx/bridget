@@ -595,6 +595,7 @@ impl Peer {
             turn_in_progress: false,
             journal_available: None,
             turn_attest: false,
+            queue_fallback: false,
         });
         match peer.recv() {
             DaemonToWrapper::Registered {

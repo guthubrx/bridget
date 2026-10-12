@@ -1975,6 +1975,12 @@ fn handle_locked_with_project(
             Ok(json!({"version":1,"caller_read_only":caller_read_only}))
         }
         NativeDelegationRequest::Catalogue => {
+            // Métadonnée du type attesté ; aucun droit ni état runtime inféré.
+            let caller_held_queue = st
+                .presences
+                .get(&instance)
+                .and_then(|presence| st.registry.get(&presence.agent_type).ok())
+                .is_some_and(|definition| definition.held_queue);
             let permission = root_permission(st, &owner, &instance)?;
             let fact = parent_fact(st, &owner, &instance, None, attested)?;
             let halted = st
@@ -2050,7 +2056,10 @@ fn handle_locked_with_project(
                             && definition.protocol == "claude_stream_json" => Some("workspace_inheritance_unavailable".to_owned()),
                         Ok(_) => None,
                     };
+                    // resolved_definitions conserve la clé du registre, pas un alias de protocole.
+                    let held_queue = st.registry.get(&name).is_ok_and(|definition| definition.held_queue);
                     json!({"agent_type":name,"protocol":definition.protocol,"models":definition.capabilities.models,
+                        "queue":{"held":held_queue},
                         "child_requests_supported":definition.protocol == "codex_app_server",
                         "worktree":worktree_refusal.is_none(),"worktree_refusal":worktree_refusal,
                         "inherit":inherited.is_ok(),"inherit_refusal":inherited.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),
@@ -2058,7 +2067,7 @@ fn handle_locked_with_project(
                         "development_refusal":development.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),"can_run":can_run,"constraints":constraints,"quota":quota})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
+                json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -11246,7 +11255,7 @@ mod tests {
     #[test]
     fn native148_glm_catalogue_uses_native_registry_and_discovery_permissions() {
         let (mut st, config, rx, _reader) = fixture("glm");
-        st.registry=AgentRegistry::from_json(r#"{"agents":{"glm-fake":{"command":"/bin/sh","args":["--model","glm.old","--dangerously-skip-permissions"],"protocol":"claude_stream_json","capabilities":{"execution_paths":["claude_stream_json"],"models":{"glm/custom-exact":{"efforts":[]}}}}}}"#,"/tmp/native-glm148.json").unwrap();
+        st.registry=AgentRegistry::from_json(r#"{"agents":{"glm-fake":{"held_queue":true,"command":"/bin/sh","args":["--model","glm.old","--dangerously-skip-permissions"],"protocol":"claude_stream_json","capabilities":{"execution_paths":["claude_stream_json"],"models":{"glm/custom-exact":{"efforts":[]}}}}}}"#,"/tmp/native-glm148.json").unwrap();
         let catalogue =
             handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
         let glm = catalogue["providers"]
@@ -11255,6 +11264,14 @@ mod tests {
             .iter()
             .find(|entry| entry["agent_type"] == "glm-fake")
             .unwrap();
+        assert_eq!(
+            catalogue["queue"]["held"], false,
+            "réglage du type de l’appelant attesté"
+        );
+        assert_eq!(
+            glm["queue"]["held"], true,
+            "réglage de la clé glm-fake, pas celui du protocole Claude"
+        );
         assert!(glm["models"]["glm/custom-exact"].is_object());
         assert_eq!(glm["discovery"], true);
         assert_eq!(glm["development"], false);

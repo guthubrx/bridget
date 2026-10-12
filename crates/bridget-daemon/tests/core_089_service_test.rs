@@ -381,6 +381,7 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
                 turn_in_progress: false,
                 journal_available: None,
                 turn_attest: false,
+                queue_fallback: false,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -484,6 +485,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
                 turn_in_progress: false,
                 journal_available: None,
                 turn_attest: false,
+                queue_fallback: false,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -695,6 +697,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
                 turn_in_progress: false,
                 journal_available: None,
                 turn_attest: false,
+                queue_fallback: false,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -719,6 +722,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
                 turn_in_progress: false,
                 journal_available: None,
                 turn_attest: false,
+                queue_fallback: false,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -1060,6 +1064,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
                 turn_in_progress: false,
                 journal_available: None,
                 turn_attest: false,
+                queue_fallback: false,
             },
         ),
         DaemonToWrapper::Registered { .. }
@@ -1084,6 +1089,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
                 turn_in_progress: false,
                 journal_available: None,
                 turn_attest: false,
+                queue_fallback: false,
             },
         ),
         DaemonToWrapper::Registered { .. }

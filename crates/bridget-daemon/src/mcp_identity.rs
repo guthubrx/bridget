@@ -305,7 +305,11 @@ pub(crate) fn resolve_current_mcp_identity() -> Result<ResolvedIdentity, Identit
     combine_session_identity(session_identity, native_identity, delegated_marker_present)
 }
 
-fn has_delegated_marker(directory: &Path, pid: u32, processes: &impl ProcessTree) -> bool {
+pub(crate) fn has_delegated_marker(
+    directory: &Path,
+    pid: u32,
+    processes: &impl ProcessTree,
+) -> bool {
     let mut current = Some(pid);
     for _ in 0..MAX_ANCESTORS {
         let Some(candidate) = current else { break };
@@ -353,7 +357,7 @@ pub fn resolve_current_instance_id() -> Result<String, IdentityError> {
     resolve_current_identity().map(|identity| identity.instance_id)
 }
 
-struct SystemProcessTree;
+pub(crate) struct SystemProcessTree;
 impl ProcessTree for SystemProcessTree {
     fn birth(&self, pid: u32) -> Option<u64> {
         crate::managed_process::process_birth(pid).ok()

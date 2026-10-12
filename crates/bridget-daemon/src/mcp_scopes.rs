@@ -88,8 +88,8 @@ pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
     },
     ToolScope {
         tool: "bridget_queue",
-        base: Scope::Reads,
-        read_actions: &[],
+        base: Scope::Sends,
+        read_actions: &["list"],
         own_state_actions: &[],
     },
     ToolScope {
@@ -212,6 +212,9 @@ pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
 /// Un outil inconnu ne reçoit aucune portée implicite.
 pub(crate) fn scope_of(tool: &str, arguments: &Map<String, Value>) -> Option<Scope> {
     let entry = TOOL_SCOPES.iter().find(|entry| entry.tool == tool)?;
+    if tool == "bridget_queue" && !arguments.contains_key("action") {
+        return Some(Scope::Reads);
+    }
     if tool == "bridget_wake"
         && arguments.get("action").and_then(Value::as_str) == Some("schedule")
         && arguments
@@ -263,6 +266,23 @@ mod tests {
         );
         for tool in tools {
             assert!(scope_of(tool["name"].as_str().unwrap(), &Map::new()).is_some());
+        }
+        assert_eq!(scope_of("bridget_queue", &Map::new()), Some(Scope::Reads));
+        assert_eq!(
+            scope_of(
+                "bridget_queue",
+                serde_json::json!({"action":"list"}).as_object().unwrap()
+            ),
+            Some(Scope::Reads)
+        );
+        for action in ["cancel", "reorder", "promote"] {
+            assert_eq!(
+                scope_of(
+                    "bridget_queue",
+                    serde_json::json!({"action":action}).as_object().unwrap()
+                ),
+                Some(Scope::Sends)
+            );
         }
         assert_eq!(
             scope_of(

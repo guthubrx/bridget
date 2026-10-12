@@ -1,0 +1,343 @@
+{
+  "kind": "159B_preflight_documentary_receipt_only",
+  "checkpoint_ROOT": "2026-10-12 20:03 CEST ; GO fondations ensuite enregistré20:04:05CEST",
+  "status": "PREFLIGHT_CLOSED_FOUNDATIONS_TARGETED_GREEN_B_IN_PROGRESS",
+  "feature": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file",
+  "base_source_A": "53863bd09a4ff364dc2b412519b343c77e163685",
+  "base_HEAD_metadata": "b0a165edfc6fc5476b2330193c7822e0faecef33",
+  "A_release_proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/validation/livraison159A.json",
+  "A_release_proof_sha256": "e3271ff77938198980f4e8176a86477db47061286e2e322ebe2b5f5d4ee9f6ae",
+  "A_checked": 14,
+  "B_open": 14,
+  "Analyze": {
+    "initial_final": "PASS_TARGETED",
+    "annex_R2": "PASS_TARGETED",
+    "critical": 0,
+    "high": 0,
+    "I1": "résolu par modèlepromotion ligne78",
+    "R1_six_points": "correctifsdocumentairesappliqués",
+    "R2_ABCD": {
+      "two_controls_false_before_rejects": true,
+      "queue_messages_saturation": true,
+      "DDL_init_schema_already_v7": true,
+      "A_delivered_14of14_source538": true,
+      "automatic_reply_actual_state_documented": true
+    },
+    "requirements_mapped": 18,
+    "B_tasks_mapped": 14,
+    "mapping_definition": "Couverture d’artefacts seulement ; T016 deuxPASS ciblés distincts, aucun lotB déclaré Implémenté"
+  },
+  "ROOT_GO": {
+    "receipt": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-GO159B-foundations.json",
+    "sha256": "5e504f3484e94a4719bbed8f5850ebdce7b2cf35fe77ad3d79234ea276330372",
+    "at_utc": "2026-10-12T18:04:05.530737+00:00",
+    "scope": "159B foundations T014/T015/T016 authorized; all B remains In Progress",
+    "planned_tests_only": true
+  },
+  "reviews": {
+    "r1": {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-plan-r1-terminal.json",
+      "sha256": "3b9dd590fe92d485ae1607016a0b79f78a4baf9f8b6cd3eac523d47ada3098a4",
+      "provider": "claudeAgent",
+      "model": "claude-haiku-5-5",
+      "task": "node:delegated-task:command%3Amcp%3A36bf308a-6b4f-49a5-a2c2-541bffd8e74f%3Adelegate-task%3A159B-plan-review-20261012-r1",
+      "verdict": "APPROVE_WITH_CHANGES",
+      "terminal_status": "completed",
+      "work_state": "result_available",
+      "pending_child_runs": false,
+      "raw_summary_read": true,
+      "reviewer_tests": false
+    },
+    "r2": {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-plan-r2-terminal.json",
+      "sha256": "bb7cb018c494d7362361db46a1a96b270d295491a6bda75960c3b4127d4c4f1e",
+      "provider": "claudeAgent",
+      "model": "claude-haiku-5-5",
+      "task": "node:delegated-task:command%3Amcp%3A36bf308a-6b4f-49a5-a2c2-541bffd8e74f%3Adelegate-task%3A159B-plan-review-20261012-r2",
+      "verdict": "APPROVE_WITH_CHANGES",
+      "terminal_status": "completed",
+      "work_state": "result_available",
+      "pending_child_runs": false,
+      "raw_summary_read": true,
+      "reviewer_tests": false
+    }
+  },
+  "reuse": {
+    "verdict": "PASS_TARGETED_B_documentary",
+    "three_mutations_planned": [
+      "apply_cancel",
+      "apply_reorder",
+      "apply_promote"
+    ],
+    "shared_receipt_helper_ROOT_named": "queue_edit_once",
+    "shared_helper_real_consumers": {
+      "apply_cancel": "effet retrait et reçu dans même transaction",
+      "apply_reorder": "permutation rangs et reçu dans même transaction",
+      "apply_promote": "gardes/dispatching/réservation et reçu dans même transaction"
+    },
+    "implemented_claim": false,
+    "existing": [
+      {
+        "responsibility": "Retrait SQL atomique partagé",
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/idempotency/send_delivery.rs",
+        "line": 1093,
+        "item": "settle_held_in_transaction",
+        "rule": "apply_cancel réemploie ce helper dans sa propre TX reçue ; ne pas appeler settle_held qui ouvre une deuxième transaction."
+      },
+      {
+        "responsibility": "Droits et exception humaine de pause",
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/guidance.rs",
+        "line": 60,
+        "item": "authorize",
+        "rule": "QueuePromote réemploie Steer ; aucun flaghuman ni autorité depuispayload."
+      },
+      {
+        "responsibility": "Liste durable et rang",
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/crates/bridget-daemon/src/daemon.rs",
+        "line": 11111,
+        "item": "handle_guidance_queue",
+        "rule": "Réemploie QueueList ; reorder permute rangs en mêmeTX, sans file/parallèle compteur."
+      }
+    ],
+    "DDL": "queue_edits et deux index dans IdempotencyStore::init_schema, chaque open/in_memory, même basev7 sansv8",
+    "lock_order": "State→TXImmediate→commit→relâchementState→writer/push, gardes SQL aprèsBEGIN",
+    "limitations": [
+      "queue_edit_once est le nom commun retenu par ROOT pour le code à préparer, pas une primitive déjà attestée livrée.",
+      "applied atteste le commit du daemon, pas injection fournisseur ; saturation queue.messages/issue indéterminée restent possibles.",
+      "Avis existants bornés : ordinary reply=false n’acquiert pas un avis universel.",
+      "Marqueur de repli ne devient pas une autorité : droits Steer156 et identité de connexion restent nécessaires.",
+      "Mapping18/18 et14tâches est documentaire, pas couverture de code ou de tests."
+    ]
+  },
+  "tasks_guard": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/tasks.md",
+    "sha256": "44ee6ced8325fa65e3501f24be7d5ff92d27da5fc9065176fc053e07aca462d6",
+    "unchanged_during_analyze": true,
+    "no_checkbox_by_this_owner": true
+  },
+  "proofs": [
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/analyze159B-final.json",
+      "sha256": "48c29d82567b20076db5bde1d1142ac59c27b82768108ff3e67e20ce293c4e92"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/analyze159B-final.md",
+      "sha256": "1089cbe05428fb6fa574b7d0c2142a0d9b1a4a52d7e0e76d1aec97a504d53287"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/analyze159B-R2-annexe.json",
+      "sha256": "cdcce9be8422cf97a89044b4428e3346995cf6e672dc56b10e450e5ab80d7d38"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/analyze159B-R2-annexe.md",
+      "sha256": "21eba8b82d6e31811c3efa660172158d03a729ea9aac5c3895c8b2f59ed09fe8"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-GO159B-foundations.json",
+      "sha256": "5e504f3484e94a4719bbed8f5850ebdce7b2cf35fe77ad3d79234ea276330372"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-plan-r1-terminal.json",
+      "sha256": "3b9dd590fe92d485ae1607016a0b79f78a4baf9f8b6cd3eac523d47ada3098a4"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/ROOT-review159B-plan-r2-terminal.json",
+      "sha256": "bb7cb018c494d7362361db46a1a96b270d295491a6bda75960c3b4127d4c4f1e"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/R1-docs-points12356.patch",
+      "sha256": "46073eed7dcdfe3d09a72b0a573ac166de5b26dd57a08f809b3520241624e077"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/R1-docs-manifest.json",
+      "sha256": "f7fdcda51877eb8f6c64f6dff41bd46c0058d0acd2578cd09c0b4ed0ee0c63be"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/R1-point4-ancres-plan.patch",
+      "sha256": "d0d115999d3c0539a29fba956e8a15aa966770738681646134d63a9a603b533a"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/R1-point4-manifest.json",
+      "sha256": "d88b59df0fbabbae44c43f2933f348f9c7facbd302950f6cc56bea5cc01ca31b"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/R2-docs-final-ABCD.patch",
+      "sha256": "c337553361e4aea1817118a6fd395d07b9972c22c2b5e8f7a21654153ad4eb62"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-analysis159B-20261012/R2-docs-final-manifest.json",
+      "sha256": "47fcb19035bd883c873209fd9c487f865fb824578308cfb4c1944f85d462c328"
+    },
+    {
+      "file": "/Users/moi/.cache/bridget-anchors159B-20261012/fresh-anchors159B.md",
+      "sha256": "d7242173745d48cca105430fc3f7bc25d1a6c612e2d913fabee330544de3aa39",
+      "read_credit": "Carte de repères du lecteur dédié ; pas lecture globale Rust par cet owner."
+    }
+  ],
+  "ETA_ROOT_historical": {
+    "published": "19:48 CEST",
+    "estimate_B_minutes": [
+      95,
+      175
+    ],
+    "completion_window": [
+      "21:23 CEST",
+      "22:43 CEST"
+    ],
+    "preparation_about_minutes": 15,
+    "no_success_inferred_from_time": true
+  },
+  "limits": [
+    "Targeted requirements FR012–021/SC007–014 and14tasks; taskmapping100% is not code/test coverage.",
+    "All targeted CACHE patches fully reread; current applied docs clauses reread, threewholeSHA candidates matched.",
+    "Broad initial outputs truncated; no exhaustive constitution/daemon/transport audit claimed.",
+    "No WT/code/tasks edits, Cargo/test/build/scanner/DB/service/Gitmutation.",
+    "No new taskID/testscenario; missing prerequisite shellscript handled by manualfallback explicitly authorized ROOT.",
+    "R2review, RED evidence and implementation GO remain ROOT; no B test/runtime success inferred.",
+    "Annexe de relecture ciblée des textes effectivement appliqués ; pas nouveau cycle, Converge ou contre-revue R3.",
+    "Aucun test/Cargo/WTcode/docwrite/Gitmutation/service. Aucun nouveau nom/scénario.",
+    "Les cinq oracles T014 et les cas T020 restent à exécuter par ROOT ; aucune preuve de réussite159B déduite.",
+    "D est une lecture source6635, automatic_reply et état réel, pas un rerunT006.",
+    "Les résultatsR2externes restent archivés par ROOT ; cette annexe ferme uniquement les clarifications appliquées."
+  ],
+  "operations_executed_by_this_owner": "Lecture/empreinte/écriture CACHE uniquement ; aucun WT/Cargo/test/Git/DB/service/modèle.",
+  "future_T024_T025": "Hunks préparés en CACHE contre les documents actuels ; application ROOT et validation des mutations/façades/E2E non créditées.",
+  "manual_ROOT_delta": {
+    "model": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/data-model.md",
+    "sha256": "f28f2e0b6d2194b223c47fca8e1f29ef1faec249ce332fcf8a264b1effa5d23b",
+    "decision": "queue_edits.delivery_id TEXT nullable pour refus de message public inconnu sans delivery_id interne ; canonical_bytes conserve argument public, aucun faux UUID.",
+    "analyze_R2_guard_previous": "Le modèle précédent de l’annexe reste une preuve datée ; ce delta minimal est arbitréROOT puis revérifié en lecture seule avant sa copie.",
+    "no_new_task_or_review_required": "ROOT, fermeture documentaire manuelle, pas nouveauR3"
+  },
+  "foundations_results": [
+    {
+      "receipt": "/Users/moi/.cache/bridget-tests159B-20261012/T016-protocol-RED.json",
+      "sha256": "7e6c43db1e38a1afefc0a1b11099575b4b121a468d69a1e637b965fc51805c97",
+      "rc": 101,
+      "seconds": 16.36,
+      "target_summaries": [
+        [
+          "FAILED",
+          "0",
+          "2",
+          "0"
+        ]
+      ],
+      "sources_before_after_equal": true,
+      "source_files_count": 222,
+      "log": "/Users/moi/.cache/bridget-tests159B-20261012/T016-protocol-RED.log",
+      "log_sha256": "4ee5ef0bb65bb29dd1d13c8a2cfbf46aeef52db53ea20f9d2383554ad070cb5b",
+      "executed_by": "ROOT",
+      "counts_are_targeted_not_wholeB": true
+    },
+    {
+      "receipt": "/Users/moi/.cache/bridget-tests159B-20261012/T016-protocol-GREEN.json",
+      "sha256": "a06fa1eca3a015228eff16661b07cc6105889b14ddf6f4071f23139072957706",
+      "rc": 0,
+      "seconds": 16.19,
+      "target_summaries": [
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ]
+      ],
+      "sources_before_after_equal": true,
+      "source_files_count": 222,
+      "log": "/Users/moi/.cache/bridget-tests159B-20261012/T016-protocol-GREEN.log",
+      "log_sha256": "2d57fbc0a31ca52f6dbe7bf8f060fd03b16dfabf01aba1d4b3fd1e4269cb4ff0",
+      "executed_by": "ROOT",
+      "counts_are_targeted_not_wholeB": true
+    },
+    {
+      "receipt": "/Users/moi/.cache/bridget-tests159B-20261012/T014-schema-T015-rights-RED.json",
+      "sha256": "41765dd14ae09d54443f72334e5b440286af209ec88bef98d189d6bdb703ee52",
+      "rc": 101,
+      "seconds": 51.24,
+      "target_summaries": [
+        [
+          "FAILED",
+          "0",
+          "7",
+          "0"
+        ]
+      ],
+      "sources_before_after_equal": true,
+      "source_files_count": 222,
+      "log": "/Users/moi/.cache/bridget-tests159B-20261012/T014-schema-T015-rights-RED.log",
+      "log_sha256": "b35b4c3026e50926e6e4bab5842679579c28dcdaa25a0cc610e9b81020935fe1",
+      "executed_by": "ROOT",
+      "counts_are_targeted_not_wholeB": true
+    }
+  ],
+  "document_source_guards_R2_checkpoint": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "d4a0ca0268ea77a3ee314bdfa2c9e573b9a9ca4b84e91fdd0727b48d5260b10f",
+      "matches_analyze_R2_annex": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "fb2e35054fa06d18bafdae55da59c3f8f3804ad4ea7fe604d63c98de97d225b2",
+      "matches_analyze_R2_annex": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "6051e37e4f74c657a65d1aaaf5748a6431d054e843bd771b990f8756828e6a16",
+      "matches_analyze_R2_annex": true
+    }
+  ],
+  "document_sources_current": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/plan.md",
+      "sha256": "d4a0ca0268ea77a3ee314bdfa2c9e573b9a9ca4b84e91fdd0727b48d5260b10f",
+      "R2_checkpoint_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/contracts/edition159.md",
+      "sha256": "fb2e35054fa06d18bafdae55da59c3f8f3804ad4ea7fe604d63c98de97d225b2",
+      "R2_checkpoint_unchanged": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file/specs/159-edition-file/data-model.md",
+      "sha256": "f28f2e0b6d2194b223c47fca8e1f29ef1faec249ce332fcf8a264b1effa5d23b",
+      "R2_checkpoint_unchanged": false
+    }
+  ],
+  "foundations_green_update": {
+    "receipt": "/Users/moi/.cache/bridget-tests159B-20261012/T014-T015-foundations-GREEN.json",
+    "receipt_sha256": "ed99d0e4706e5462e869ddacb1a9bf1d84b864b0d04e36b1884abdffc59542a9",
+    "log": "/Users/moi/.cache/bridget-tests159B-20261012/T014-T015-foundations-GREEN.log",
+    "log_sha256": "02feb04a3f1024527dbc1511cb616cb87e36e27333651ef294f2745cc038b979",
+    "rc": 0,
+    "seconds": 20.99,
+    "test_results": [
+      [
+        "ok",
+        "7",
+        "0",
+        "0"
+      ]
+    ],
+    "status": "TARGETED_GREEN_ONLY",
+    "limitation": "T014/T015 7 PASS et T016 2 PASS distincts ; mutations/façades/E2E non crédités ; aucune case modifiée",
+    "sources_before_after_equal": true,
+    "source_files_count": 222,
+    "passed_test_names": [
+      "guidance::tests::edit159_rights_pause_et_gardes",
+      "guidance::tests::edit159_rights_matrix",
+      "idempotency::tests::edit159_receipt_store_effet_et_recu_atomiques",
+      "idempotency::tests::edit159_receipt_store_autres_parametres_envelope_mismatch",
+      "idempotency::tests::edit159_receipt_store_refus_memorise",
+      "idempotency::tests::edit159_receipt_store_purge_apres_horizon_seulement",
+      "idempotency::tests::edit159_receipt_store_reserver_puis_rejouer_meme_resultat"
+    ]
+  },
+  "deterministic_public_resolution": {
+    "status": "ROOT_NORMATIVE_ARBITRATION_MUTATION_TESTS_PENDING",
+    "rule": "Exactly one held matching target/public ID via LIMIT 2; zero/ambiguous => refused/not_held with delivery_id NULL",
+    "source_evidence_read": "idempotency.rs:528–558 key and unique index scoped by issuer; normalization/resolution path not yet credited by this documentary reader",
+    "no_new_id_index_scenario": true
+  }
+}

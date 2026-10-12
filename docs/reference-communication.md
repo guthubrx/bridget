@@ -248,7 +248,7 @@ REST/V1 ne sait pas porter l’intention explicite : steer/interrupt sont refus�
 localement avant émission, par les erreurs existantes. L’envoi ordinaire reste
 inchangé ; le trajet installé149 est V2.
 
-`bridget_queue` prend seulement `target`, comme `bridget_send`.
+La lecture `bridget_queue` prend `target`, comme `bridget_send`.
 CLI : `bridget queue --target '<UUID>'`. La capacité `QueueListV1` est requise.
 Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1].
 Son rôle reste Attach, sans identité agent/conn_names ni autres capacités.
@@ -264,6 +264,63 @@ guidage, écriture de pause ou consommation de quota. LIMIT200 borne la sortie,
 pas le scan : coût O(log n + s), avec jointures indexées en plus et s candidats
 examinés, dont expirés. Cette vue ne prouve pas la position interne fournisseur.
 
+
+
+### Édition de file — contrat 159B
+
+Cette section décrit le contrat d’édition de file. `held_queue` reste fermé
+par défaut. Les preuves et les checkpoints de livraison sont consignés dans
+les reçus de session159 ; le contrat d’usage ci-dessous ne remplace pas ces reçus.
+
+`bridget_queue` conserve la lecture sans `action`, ou avec `action: "list"`.
+Les écritures `cancel`, `reorder`, `promote` exigent `target`, `message_id` et
+un `request_id` non vide. `reorder` exige aussi `before_message_id` : identifiant
+d'un autre retenu de la même cible, ou `null` pour la fin. Les arguments sont
+fermés ; aucun acteur ni gain de droit ne vient des arguments.
+
+| Action | Droit et effet |
+|---|---|
+| `cancel` | Humain Attach attesté, parent ou auteur ; retire un message held, ferme son suivi et écrit sa notice durable. Aucun interrupt. |
+| `reorder` | Humain Attach attesté ou parent ; déplace un message held parmi les held de la même cible. Les rangs existants sont permutés dans une transaction. |
+| `promote` | Droits Steer156 et tour actif ; held, absence de réservation, saga et demande encore valides. Un agent est refusé pendant la pause ; l'humain Attach attesté conserve son exception. |
+
+La preuve enfant est refusée à la frontière MCP/CLI avant connexion. Une CLI
+humaine explicite sans contexte agent négocie une vraie connexion Attach ; un
+contexte agent invalide ne donne aucun repli humain. La lecture négocie
+`QueueListV1`, les mutations `QueueEditV1`. `queue.actions` annonce les quatre
+actions ; `queue.held` décrit le réglage, sans l'ouvrir.
+
+Le reçu final porte `request_id`, `state: "applied"` ou `"refused"`, puis
+`refusal` si nécessaire. Promotion appliquée : `effect: "unconfirmed"`.
+Le reçu reste sept jours : après vérification des droits frais, mêmes
+paramètres, même résultat ; autres paramètres,
+`envelope_mismatch`. Un refus mémorisé exige une nouvelle clé pour réessayer.
+L'identité et les droits sont recontrôlés avant le reçu. Le commit précède le
+push hors State et hors transaction ; le rejeu ne réémet aucun effet.
+
+Les droits restent frais avant toute lecture du reçu. Si l’auteur ne peut
+plus être vérifié parce que l’envoi d’origine a été purgé ou que message_bytes
+est absent, son seul statut d’auteur ne permet plus cancel : refus
+`intent_not_permitted` avant le reçu. `receipt.actor` est une trace, pas un
+grant persistant. Les autres droits exigent toujours leur propre preuve fraîche.
+
+Promotion exige `queue_fallback`. `no_active_turn`, `steer_unavailable` ou
+`not_held` refusent l'édition sans libérer le message. Après commit, la copie
+`steer-or-queue` peut rejoindre la FIFO ordinaire si le guidage est indisponible.
+FIFO pleine : rejet explicite et remise indéterminée. Erreur Codex ambiguë après
+guidage : doublon possible. `applied` prouve le commit, jamais l'injection ou la
+consommation du modèle. Aucun avis universel nouveau pour un envoi `reply=false`.
+`edit` du corps, les fils T3 et l'extension 159c restent différés.
+
+CLI T022, syntaxe confirmée dans le code des façades :
+
+```sh
+bridget queue --target '<UUID_CIBLE>'
+bridget queue cancel --target '<UUID_CIBLE>' --message '<UUID_MESSAGE>' --request '<CLE_RETRAIT>'
+bridget queue reorder --target '<UUID_CIBLE>' --message '<UUID_MESSAGE>' --request '<CLE_ORDRE>' --before '<UUID_AVANT>'
+# Omettre --before place le message en fin de file.
+bridget queue promote --target '<UUID_CIBLE>' --message '<UUID_MESSAGE>' --request '<CLE_PROMOTION>'
+```
 
 ### File retenue par le daemon — contrat 159A
 
@@ -309,7 +366,7 @@ Ce raccord ne transforme pas incidents, notices ou missions natives en
 messages ordinaires. La reprise reste celle de 099. Aucun ACK ni signal
 terminal 149/152 n'est fabriqué ou relancé pour provoquer une libération.
 
-`bridget_queue` reste une lecture, avec les droits156 et 200 entrées au plus.
+L’action list de `bridget_queue` reste une lecture, avec les droits156 et 200 entrées au plus.
 La CLI reste `bridget queue --target '<UUID_DESTINATAIRE>'`. Les files internes
 du porteur et les envois historiques sont exclus. Le contrat 159A rend
 `queue_bound` égal à `queue_capacity` du type quand le réglage est ouvert,

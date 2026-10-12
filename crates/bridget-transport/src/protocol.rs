@@ -209,10 +209,33 @@ pub enum ClientCapability {
     ExecutionControlV1,
     /// Lecture de file filtrée par les droits ; aucune mutation implicite.
     QueueListV1,
+    QueueEditV1,
     ProjectRoundPolicyV1,
     /// Lecture et mutation de l'état de contrôle du référent, lecture et
     /// résolution de la boîte de réception. La façade MCP ne la demande jamais.
     ControlStateV1,
+}
+
+/// Édition finale de file159B ; aucune phase intermédiaire n'est publique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueEditAction {
+    Cancel,
+    Reorder,
+    Promote,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueEditState {
+    Applied,
+    Refused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueEditEffect {
+    Unconfirmed,
 }
 
 /// Commande neutre et versionnée du plan de contrôle.
@@ -3147,6 +3170,15 @@ pub enum WrapperToDaemon {
     QueueList {
         target: String,
     },
+    /// Commande159B finale, négociée par QueueEditV1.
+    QueueEditRequest {
+        request_id: String,
+        target: String,
+        action: QueueEditAction,
+        message_id: String,
+        #[serde(default)]
+        before_message_id: Option<String>,
+    },
     /// Session 102 : opération sur un fil, réservée à une identité attestée.
     ThreadRequest {
         request: ThreadRequest,
@@ -3526,6 +3558,9 @@ pub enum WrapperToDaemon {
         /// Attestation périodique de tour ; une absence historique reste fausse.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         turn_attest: bool,
+        /// Le porteur peut enfiler un guidage si le tour devient indisponible.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        queue_fallback: bool,
         /// `Some(false)` est envoyé par les wrappers qui connaissent
         /// `JournalReady`. L'absence est réservée à la transition des
         /// wrappers historiques, dont le journal ACP est déjà une garantie du
@@ -4073,6 +4108,15 @@ pub enum DaemonToWrapper {
         entries: Vec<serde_json::Value>,
         /// null hors fil T3 : la clé reste présente.
         queue_bound: Option<usize>,
+    },
+    /// Résultat final159B ; refusal garde les codes métier et motifs156.
+    QueueEditResult {
+        request_id: String,
+        state: QueueEditState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effect: Option<QueueEditEffect>,
     },
     ChildRequestAnswer {
         answer: ChildRequestAnswer,
@@ -5577,6 +5621,47 @@ mod tests {
         ));
     }
 
+    // T016 : JSON public compilable avant les nouveaux variants.
+    #[test]
+    fn edit159_protocol_trames_et_capacite_allers_retours() {
+        let capability: ClientCapability = decode(r#""queue_edit_v1""#).unwrap();
+        assert_eq!(encode(&capability).unwrap(), r#""queue_edit_v1""#);
+        for action in ["cancel", "reorder", "promote"] {
+            for before in [serde_json::Value::Null, serde_json::json!("avant")] {
+                let wire = serde_json::json!({"type":"QueueEditRequest","request_id":"r159",
+                    "target":"agent","action":action,"message_id":"message159","before_message_id":before});
+                let request: WrapperToDaemon = serde_json::from_value(wire.clone()).unwrap();
+                assert_eq!(serde_json::to_value(request).unwrap(), wire);
+            }
+        }
+        for wire in [
+            serde_json::json!({"type":"QueueEditResult","request_id":"r159","state":"applied"}),
+            serde_json::json!({"type":"QueueEditResult","request_id":"r159","state":"refused","refusal":"not_held"}),
+            serde_json::json!({"type":"QueueEditResult","request_id":"r159","state":"applied","effect":"unconfirmed"}),
+        ] {
+            let result: DaemonToWrapper = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(result).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn edit159_protocol_trames_historiques_et_register_octets_inchanges() {
+        let legacy = r#"{"type":"Register","identity_version":2,"agent_type":"codex","agent_id":"550e8400-e29b-41d4-a716-446655440000","host":"test-host","transport":"unix","channel":"unix","mode":"acp","location":null,"os":"Linux","instance_id":"instance-test","domain":"bridget","turn_in_progress":false,"journal_available":false}"#;
+        let old: WrapperToDaemon = decode(legacy).unwrap();
+        assert_eq!(encode(&old).unwrap(), legacy);
+        let mut wire: serde_json::Value = serde_json::from_str(legacy).unwrap();
+        wire["queue_fallback"] = serde_json::json!(false);
+        let old: WrapperToDaemon = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(encode(&old).unwrap(), legacy);
+        wire["queue_fallback"] = serde_json::json!(true);
+        let new: WrapperToDaemon = serde_json::from_value(wire).unwrap();
+        assert_eq!(serde_json::to_value(new).unwrap()["queue_fallback"], true);
+        let list = r#"{"type":"QueueList","target":"codex-1"}"#;
+        let unchanged: WrapperToDaemon = decode(list).unwrap();
+        assert_eq!(encode(&unchanged).unwrap(), list);
+        guidance156_protocol_trames_historiques_byte_identiques();
+    }
+
     #[test]
     fn held159_turnstate_register_sans_turn_attest_octets_inchanges() {
         // API JSON publique : absence/faux conservent les octets158B, vrai reste attesté.
@@ -5614,6 +5699,7 @@ mod tests {
             turn_in_progress: false,
             journal_available: Some(false),
             turn_attest: false,
+            queue_fallback: false,
         };
         let json = encode(&msg).unwrap();
         assert!(json.contains("\"type\":\"Register\""));
@@ -5634,6 +5720,7 @@ mod tests {
                 turn_in_progress,
                 journal_available,
                 turn_attest,
+                queue_fallback,
             } => {
                 assert_eq!(identity_version, 2);
                 assert_eq!(agent_type, "codex");
@@ -5649,6 +5736,7 @@ mod tests {
                 assert!(!turn_in_progress);
                 assert_eq!(journal_available, Some(false));
                 assert!(!turn_attest);
+                assert!(!queue_fallback);
             }
             _ => panic!("mauvais type"),
         }

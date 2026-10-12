@@ -753,6 +753,7 @@ fn native149_catalogue_avec_fait_ouvre_le_developpement_sans_grant_humain() {
             "mission_reply_max_secs",
             "mission_reply_min_secs",
             "providers",
+            "queue",
             "verdict_context",
             "version",
             "wait_timeout_default_secs",

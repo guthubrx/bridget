@@ -18,6 +18,7 @@ const MIN_ISSUER_SCOPE_LEN: usize = 22;
 const MAX_ISSUER_SCOPE_LEN: usize = 128;
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 256;
 const MAX_CANONICAL_BYTES: usize = 1024 * 1024;
+const QUEUE_EDIT_RETENTION_SECS: i64 = 7 * 86_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationKind {
@@ -464,6 +465,14 @@ pub struct IdempotencyStore {
     conn: Connection,
 }
 
+/// Issue159B finale ; un rejeu n'emporte jamais de second effet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueueEditReceipt {
+    pub state: bridget_transport::protocol::QueueEditState,
+    pub refusal: Option<String>,
+    pub effect: Option<bridget_transport::protocol::QueueEditEffect>,
+}
+
 /// Remise devenue orpheline après purge de la présence destinataire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrphanedDeliveryNotice {
@@ -866,6 +875,27 @@ impl IdempotencyStore {
         tx.execute(
             "INSERT OR IGNORE INTO idempotency_schema_migrations(version) VALUES (5)",
             [],
+        )?;
+
+        //159B : objet additif sur toute base v7, sans version8 ni clé étrangère.
+        // delivery_id reste NULL lorsque le message public ne résout aucune remise.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS queue_edits (
+                issuer_scope TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                canonical_bytes BLOB NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('cancel','reorder','promote')),
+                actor TEXT NOT NULL,
+                delivery_id TEXT,
+                before_delivery_id TEXT,
+                state TEXT NOT NULL CHECK (state IN ('applied','refused')),
+                refusal TEXT,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (issuer_scope,request_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_queue_edits_expires ON queue_edits(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_queue_edits_delivery ON queue_edits(delivery_id);",
         )?;
 
         // Session156 : objets additifs APRÈS la reconstructionv4 éventuelle.
@@ -1391,13 +1421,21 @@ impl IdempotencyStore {
             .map_err(Into::into)
     }
 
-    pub fn purge_expired(&self, now: i64) -> Result<usize, IdempotencyError> {
+    /// O(log E + K log E), E reçus, K suppressions indexées ; mémoire O(1).
+    /// L'horizon exact reste rejouable ; maintenance horaire après sept jours.
+    pub(crate) fn purge_queue_edits(&self, now: i64) -> Result<usize, IdempotencyError> {
         self.conn
-            .execute(
-                "DELETE FROM idempotency_records WHERE expires_at <= ?1",
-                params![now],
-            )
+            .execute("DELETE FROM queue_edits WHERE expires_at<?1", params![now])
             .map_err(Into::into)
+    }
+
+    pub fn purge_expired(&self, now: i64) -> Result<usize, IdempotencyError> {
+        let records = self.conn.execute(
+            "DELETE FROM idempotency_records WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        // Même relève horaire existante ; deux purges, sans atomicité métier promise.
+        Ok(records + self.purge_queue_edits(now)?)
     }
 
     fn load_record(&self, key: &IdempotencyKey) -> Result<Option<Record>, IdempotencyError> {

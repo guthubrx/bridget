@@ -295,6 +295,7 @@ impl Peer {
             turn_in_progress: false,
             journal_available: None,
             turn_attest: false,
+            queue_fallback: false,
         });
         assert!(matches!(self.receive(), DaemonToWrapper::Registered { .. }));
     }
