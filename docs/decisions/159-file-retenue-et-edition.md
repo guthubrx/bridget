@@ -3,8 +3,8 @@
 Date : 12 octobre 2026.
 Statut A : livré sous le source 53863bd09a4ff364dc2b412519b343c77e163685.
 Les preuves de conception, SC004 et T011 ci-dessous restent historiques.
-Statut B : décision adoptée et implémentation validée après gates ROOT ;
-la livraison B reste attestée séparément par son reçu.
+Statut B : adoptée, implémentée et livrée le 12 octobre 2026 ; source 928631df00ac, activation et nettoyage attestés par le reçu canonique.
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159B.md
 
 ## Contexte
 
@@ -147,7 +147,7 @@ Reçu canonique et diagnostic :
 
 ## Décision B — édition des retenus
 
-Statut B : adoptée et implémentée après gates ROOT ; livraison séparée.
+Statut B : adoptée, implémentée et livrée ; le reçu distingue code, activation et métadonnées.
 Les preuves A ci-dessus sont historiques. A est livrée sous le source
 53863bd09a4ff364dc2b412519b343c77e163685 ; sa migration v7 et sa restauration
 T011 ne deviennent pas une nouvelle migration B.

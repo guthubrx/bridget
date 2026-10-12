@@ -5,7 +5,7 @@
 
 Spec: 159-edition-file
 Titre: File de remise tenue par le daemon (159a) et édition de cette file (159b)
-Statut: Implémentée — validation technique A14/B14 close après gates ROOT ; livraison B distincte
+Statut: Livrée — A14/B14, 28/28 ; source 928631df00ac, activation et nettoyage attestés le 12 octobre 2026
 Priorité: P1
 Tâches: 28 (159a : 14, 159b : 14 ; cochage exclusivement par ROOT)
 Tests: FULL unique RC101 puis ciblés PASS distincts ; résultats et arbitrage dans validation/tests-159.md, aucun GREEN global
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch utilisée pour B**: `session-159B-edition-file`
 **Created**: 2026-10-11
-**Status**: Implémentée ; livraison B en attente du reçu ROOT
+**Status**: Livrée ; reçu canonique validation/livraison159B.md
 **Priority**: P1
 **Base livrée pour159B** : 159A source 53863bd09a4ff364dc2b412519b343c77e163685, métadonnées b0a165edfc6fc5476b2330193c7822e0faecef33 ; A14 livrées. Les références 158B/candidat2124 sont historiques.
 **Dependencies**: SPEC-156 (livrée), SPEC-150 ; base opérationnelle159A livrée

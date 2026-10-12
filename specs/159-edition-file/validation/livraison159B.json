@@ -1,0 +1,162 @@
+{
+  "status": "LIVRE",
+  "feature": "159B-edition-file",
+  "date_activation": "2026-10-12T22:16:48.203247+02:00",
+  "date_cleanup": "2026-10-12T22:17:39.363783+02:00",
+  "tasks": {
+    "A": 14,
+    "B": 14,
+    "total": 28,
+    "checked": 28
+  },
+  "source_commit": "928631df00acfb4293c55b5a47745d358d9b0c71",
+  "main_github_verified_by_ROOT": true,
+  "metadata_commit": "not part of this source receipt; ROOT publishes separately later, no future SHA invented",
+  "converge": {
+    "status": "CONVERGED",
+    "proof": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/converge159B-final.json",
+    "sha256": "51b18f1974081f244a1396851ebe69586cb5afe0ac949ddcdc7de0dec327a328"
+  },
+  "review": {
+    "R1": "APPROVE_WITH_CHANGES",
+    "R2": "APPROVE",
+    "scope": "US4/5/6 partial; T027197/197hunks60files separate"
+  },
+  "audit": {
+    "grade": "A99.75",
+    "Critical": 0,
+    "High": 0,
+    "Medium": 0,
+    "Low": 3,
+    "validator_rc": 0,
+    "coverage_percent": 3.215,
+    "scope": "partial reading, not test coverage or whole-code certification"
+  },
+  "tests": {
+    "full_once": {
+      "targets": 97,
+      "passed": 2629,
+      "failed": 1,
+      "ignored": 76,
+      "excluded_child_PASS": 7,
+      "rc": 101,
+      "seconds": 856.66
+    },
+    "disposition": {
+      "failed_test": "claude_gere_recoit_mcp_identite_et_path",
+      "failure": "Darwin EINVAL22 mock cleanup; not a previously observed A failure",
+      "exact_replay_passed": 1,
+      "exact_replay_seconds": 6.36,
+      "four_existing_cases_passed": 4,
+      "four_existing_cases_seconds": 6.33,
+      "all_223_sources_unchanged": true,
+      "global_full_green": false,
+      "no_second_full_run": true
+    },
+    "E2E_current_FULL": {
+      "passed": 5,
+      "ignored_worker": 1,
+      "includes": "three cancel +two recipes,24privateSC010facadeassertions"
+    }
+  },
+  "build": {
+    "rc": 0,
+    "seconds": 121.66095870791469,
+    "binary_sha256": "b34fa7171d697b708e43eb802df9f106450b0f12e1f0a4eaa0a4b00d85d29304",
+    "signature_verified": true
+  },
+  "activation": {
+    "phase": "activated_verified",
+    "binary_path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+    "runtime": [
+      {
+        "label": "com.bridget.daemon",
+        "pid": 34126,
+        "birth": "Mon Oct 12 22:16:41 2026",
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+      },
+      {
+        "label": "com.bridget.t3",
+        "pid": 34291,
+        "birth": "Mon Oct 12 22:16:44 2026",
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+      }
+    ],
+    "native_nonterminal_before_replace": 0,
+    "native_nonterminal_before_each_SIGTERM": 0,
+    "native_nonterminal_final": 0,
+    "T3_snapshots_unchanged": true,
+    "T3": [
+      {
+        "pid": 60116,
+        "birth": "Sun Oct 11 01:13:35 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      },
+      {
+        "pid": 60228,
+        "birth": "Sun Oct 11 01:13:36 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      }
+    ],
+    "schema": 7,
+    "quick_check": "ok",
+    "foreign_key_violations": 0
+  },
+  "cleanup": {
+    "TMP_roots_removed": 36,
+    "TMP_logical_bytes_removed": 1565630137,
+    "physical_gain_claimed": false,
+    "worktree_removed": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/159B-edition-file",
+    "branch_removed": "session-159B-edition-file",
+    "stage_removed": "/Users/moi/.cache/bridget-build-159B.uap9naaz",
+    "ignored_memories_saved": 4,
+    "force_used": false,
+    "archive": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/proofs159B-source.tar.gz",
+    "archive_sha256": "2202453d3b70248dfd14ac8dba12b6b96d36fb744eb0657b455570f8822307d0",
+    "archive_members": 188,
+    "all_members_SHA_verified_by_ROOT": true,
+    "private_backups_excluded_from_archive": true
+  },
+  "retained_private_backup": {
+    "db_path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/rollback159A-prod-v7.db",
+    "db_sha256": "1daab9030caf8245514a8c5a270af0b9bdcde5f7d2f166d34b087adf9cc85000",
+    "binary_path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/rollback159A-bridget",
+    "binary_sha256": "905ae6e888476cf21138a222386a9920621a9c20c5cdb90a833913fac54a6de9",
+    "no_snapshot_or_body_embedded": true,
+    "prior158B_backups_preserved": true
+  },
+  "limits": {
+    "held_queue_default": false,
+    "SC004_B_proxy_p95_ms": {
+      "closed": 41.385,
+      "open": 1026.412,
+      "daemon_idle_measured": false
+    },
+    "cancel_E2E": "paused recovery; SC007 after Applied, not a nonpaused retry guarantee",
+    "promotion": "applied means commit, effect unconfirmed, FIFO-full rejection/indeterminate and ambiguous Codex duplicate possible",
+    "real_T3_model_interop_certified": false
+  },
+  "proofs": [
+    {
+      "path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/build159B.json",
+      "sha256": "430e1a769f509e0e7b9a42387c6a54c27926e96609d251469c2d859f30fea5a8"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/install159B.json",
+      "sha256": "7e14e277821640d127260bb4365b7db082defc97fb75ef5a54c29a69e7398a48"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/ROOT-cleanup-TMP159B.json",
+      "sha256": "cb0cdf8b5649bb68ad61ce15dbd105d4e1135a67f0a548610004e8a9420ff845"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/ROOT-cleanup-worktree-stage159B.json",
+      "sha256": "a890326b8cb9b52b94f3304d691d470dbf9c4abcbc8e45ee406810eeb050bee3"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery159B-preparation-20261012/ROOT-proof-archive159B.json",
+      "sha256": "4a09946d9233268a3699ba56f91280533efac59bf4ef172ed82590bcf2b7bfc8"
+    }
+  ],
+  "date_installation": "2026-10-12T22:16:41.706628+02:00"
+}

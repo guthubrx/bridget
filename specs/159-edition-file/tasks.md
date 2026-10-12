@@ -7,7 +7,7 @@
 **Recette de test** : `quickstart.md` (`umask 077`, racine `/tmp/b.XXXX`,
 `BRIDGET_HOME` privé, `--features test-support`).
 **Prérequis** : livraison158B attestée par ROOT ; session156 déjà livrée (`guidance.rs`, origine fabriquée, `bridget_queue` en lecture).
-**Base 159B confirmée** : A14 livrées, source 53863bd09a4ff364dc2b412519b343c77e163685, métadonnées b0a165edfc6fc5476b2330193c7822e0faecef33. La validation technique B14 est close après FULL/disposition, Converge et gates ROOT ; le cochage appartient exclusivement à ROOT. held_queue reste fermé. Les checkpoints e52a/b235/candidat2124 sont historiques.
+**Base 159B confirmée** : A14 livrées, source 53863bd09a4ff364dc2b412519b343c77e163685, métadonnées b0a165edfc6fc5476b2330193c7822e0faecef33. La validation technique B14 est close après FULL/disposition, Converge et gates ROOT ; le cochage appartient exclusivement à ROOT. B14 livrées sur source 928631df00ac ; activation et nettoyage terminés le 12 octobre 2026. held_queue reste fermé. Les checkpoints e52a/b235/candidat2124 sont historiques.
 
 Règle : une tâche n'est cochée qu'après son test vert. Les tâches « Rouge
 d'abord » sont écrites et vues en échec avant le code. Exécution séquentielle

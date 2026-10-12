@@ -1,7 +1,8 @@
 # Implémentation159B — preuve T027 et clôture technique
 
 Lecture achevée le 2026-10-12T19:52:40.439681+00:00. Sources gelées, aucune écriture dans le worktree par le lecteur.
-Statut après validation ROOT/Converge : Implémentée, A14/B14 ; livraison B distincte.
+Statut : Livrée, A14/B14, 28/28. Source 928631df00ac intégrée/poussée, installée et active ; nettoyage B achevé. Reçu :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159B.md
 
 ## Périmètre vérifié
 
