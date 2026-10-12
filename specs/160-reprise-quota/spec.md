@@ -5,10 +5,10 @@
 
 Spec: 160-reprise-quota
 Titre: Reprise d'une mission native après une limite d'usage du fournisseur
-Statut: Spécifiée
+Statut: Implemented
 Priorité: P1
-Tâches: à exécuter (37 tâches générées, 0 faite)
-Tests: à écrire en rouge d'abord (voir tasks.md)
+Tâches: 37/37 vérifiées ; audit final, Converge final et livraison restent des gates distinctes
+Tests: 59 noms ciblés PASS cumulés ; T027 276 PASS, 0 FAIL, 2 ignored. FULL unique historique : 2683 PASS, 6 FAIL, 76 ignored (RC101) ; sept PASS enfants exclus. Six oracles corrigés puis replays exacts 1+5 PASS ; aucune seconde suite ni GREEN global.
 
 Résumé:
 - Contexte: quand le quota d'un fournisseur est épuisé au milieu d'une mission native, la mission échoue pour de bon et le parent reçoit un avis d'échec. T3 reprend un fil limité à l'heure de réinitialisation. Bridget ne le fait pas. Une première conception de cette reprise (session 157) a été retirée après deux rondes de contre-revue : six défauts, tous dans la reprise.
@@ -21,9 +21,9 @@ Fichiers:
 - tasks.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-150-socle-delegation` (exécution séquentielle dans le worktree unique, sans commit automatique, décision 150b)
+**Feature Branch**: `session-160-reprise-quota` (worktree isolé, sans commit automatique ; livraison Git par ROOT après les gates)
 **Created**: 2026-10-11
-**Status**: Spécifiée
+**Status**: Implemented
 **Priority**: P1
 **Dependencies**: SPEC-150, SPEC-152, SPEC-157
 
@@ -159,6 +159,9 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   heure de retour dans `(maintenant, maintenant + 6 h]`, et si la tâche a fait
   moins de 2 rondes. Une limite Codex globale sans fenêtre attestée ne qualifie
   jamais.
+
+FR003 est une politique de corrélation temporelle, pas une preuve que le quota cause cet échec. Un fait admissible antérieur à l’échec peut qualifier une panne sans rapport et faire répéter des effets de la mission. L’opt-in, les bornes6h/2rondes et l’idempotence de la relance ne garantissent ni causalité ni exactly-once des effets externes. Aucune fenêtre W60 ou test supplémentaire n’est ajouté.
+
 - **FR-004** : Le fait de quota et l'échec n'arrivent pas dans un ordre garanti.
   Si aucun fait ne qualifie à l'instant de l'échec, la tâche `working` garde une
   décision en attente (`quota_hold`). C'est une politique bornée à 5 s, pas une
@@ -166,6 +169,8 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   commence à l'instant de l'échec. Sinon, la tâche échoue avec son erreur
   d'origine. Un fait qui arrive après les 5 s ne change rien : l'échec explicite
   est le comportement prévu.
+La borne porte sur l’observation du fait : `observed_at <= quota_hold.since + 5`. Un tick retardé peut résoudre le hold plus tard, mais ne rend jamais admissible un fait observé après cette borne. La classification emploie `now` réel au tick de décision, pas `hold.since+5` comme horloge fictive. La borne observée s’applique à chaque fenêtre avant sélection : observed_at<=since+5. Un résultat différent quand now change est prévu ; un fait observé à10:42 pour un hold commencé à10:40 dépasse5s et est exclu.
+
 - **FR-004b** : Ordre fixe dans `tick`, pour une tâche donnée : annulation, puis
   résolution du `quota_hold`, puis saut de pause de 152, puis expiration de
   l'échéance, puis relance. La résolution du hold passe donc avant la pause. Pendant
@@ -174,8 +179,11 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   la pause : passer à l'attente est une écriture d'état, passer à l'échec garde
   l'avis durable de l'article FR-006.
 - **FR-005** : Si l'épuisement est attesté mais la reprise impossible (retour à
-  plus de 6 h, retour passé, 2 rondes faites), la tâche échoue avec l'erreur
+  plus de 6 h, retour passé admissible seulement pour un fait frais observé pendant le hold, 2 rondes faites), la tâche échoue avec l'erreur
   `usage_limit` et l'heure de retour dans `limit_reset_at`.
+
+
+Lecture160 conservatrice : `attested_exhausted_since(type,since,now,past_since:Option<i64>)` garde la preuve enregistrée par157 et son admission inchangée. Observation strictement après `since`, puis reset futur OU (`past_since=hold.since` et observation>=past_since). Hors résolution du hold, past_since=None ; ancienne observation expirée=NoFact. Le cas fait observé pendant le hold puis expiré à la décision donne `Past{reset_at}`/usage_limit. Une fenêtre rejetée à son enregistrement n’est jamais inventée.
 
 **Gestionnaire et silence**
 
@@ -203,6 +211,9 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   transition d'exécution) et la réponse vide (transition `completed` puis refus)
   ne sont jamais repris : la tâche échoue avec son erreur d'origine. Limite
   assumée, à revoir si T002 montre qu'un vrai refus de quota passe par là.
+
+La corrélation FR006b précède toute classification FR006c/quota. Après une relance, des champs absents donnent donc `native_refusal_uncorrelated`, même pour un refus synchrone. Une réponse vide termine l’Execution en `completed`, tandis que la Task demeure `working` jusqu’au refus : elle échoue avec l’erreur d’origine si le refus est corrélé. Les Task déjà `result_available` ou `cancelled` sont préservées ; une Task déjà `failed` ne reçoit pas de nouvel avis.
+
 - **FR-007** : Pendant la décision en attente et pendant l'attente, aucun avis
   d'échec n'est envoyé et la tâche n'apparaît pas dans les échecs à notifier.
 
@@ -212,9 +223,7 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   où l'on ajoute sans jamais retirer. Le nombre de rondes est la longueur de la
   liste. Il survit à la fin de l'attente et au redémarrage.
 - **FR-009** : La qualification est enregistrée sur l'exécution échouée avant
-  l'entrée de la tâche (deux magasins, dans cet ordre). Une qualification sans
-  entrée de tâche ne sert jamais. Une entrée de tâche sans qualification ne peut
-  pas relancer.
+  l'entrée de la tâche (deux magasins, dans cet ordre). Si Task.save échoue après cette qualification, réutiliser sa même identité et son reset pour finir le même intent Task au retry ; aucun calcul d'une identité nouvelle. Une qualification sans TaskQuotaWait ne peut jamais reconstruire. Une entrée sans qualification ne peut pas relancer. Si le stockage est indisponible, conserver le checkpoint, propager l'erreur et réessayer ; ne jamais annoncer une clôture de hold non écrite.
 - **FR-010** : La cause quota est distincte de la panne : la continuation porte
   la raison `usage_limit_reset`, et `restart_resumes` de 152 n'est jamais
   incrémenté par une relance de quota.
@@ -225,10 +234,10 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   (`NativeMissionDispatch` de 152), la tâche `working` non annulée, dont l'enfant
   est connecté, est relancée. La relance suit des étapes durables dans cet
   ordre : l'entrée passe à `relaunching` (tâche) ; la reconstruction est faite
-  (exécution) ; la remise du message est réservée puis gravée ; seulement alors
-  l'entrée est soldée (tâche). Une continuation créée ne vaut pas remise : tant
-  que la remise n'est pas gravée, l'entrée reste `relaunching` et chaque tick
-  reprend la remise existante.
+  (exécution) ; la remise du message est réservée puis gravée ; l'entrée n'est soldée
+  (tâche) qu'après lecture de la phase `acked`. Une continuation créée ou une
+  remise gravée `dispatching` ne vaut pas accusé : l'entrée reste `relaunching`
+  et chaque tick relit la remise existante. Le chemin waiting doit atteindre retour+30 ; le chemin déjà relaunching est repris à chaque tick sans nouvelle condition horaire. Les gardes de pause, annulation et échéance restent prioritaires.
 - **FR-011b** : La remise est déterministe. La date d'émission du message
   canonique est figée (date d'observation de la continuation), pas `now`. États
   lus et reprise : réservation absente (réserver, graver) ; réservée sans remise
@@ -241,6 +250,9 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   gravure et l'émission peut donc faire que le message ne parte jamais. Soit le
   message est remis une fois, soit la tâche échoue explicitement. Une remise
   non reprenable (enveloppe différente) échoue de même.
+
+Toute sortie d’échec depuis `relaunching` réconcilie la feuille et la remise avant Task.failed/cleanup, en réemployant `close_lost_execution` et T024 : cible child vérifiée, CAS de la feuille vers `unreachable`, remise dispatching mise en quarantaine. Une erreur de clôture se propage ; l’entrée reste `relaunching` pour réessayer le settlement. Aucun nouvel arrêt physique. Les résultats reçus pour Task.failed sont déjà ignorés par capture_reply (ACK transport seulement). Cela ne garantit pas l’unicité des effets externes.
+
 - **FR-011c** : Une chaîne d'exécutions dont l'entrée de quota est ouverte est
   réservée à la relance de quota. La reprise ordinaire (`may_resume`,
   `schedule_execution_recovery`) la refuse, y compris après la création de la
@@ -268,7 +280,7 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   que la pause dure. L'échéance effective, le suivi de la demande (paliers, expiration,
   `frozen_secs`) et la décision de reprise de 152 utilisent cette union. Un
   intervalle commun n'est compté qu'une fois.
-- **FR-017** : L'annulation pendant l'attente est exécutée, ferme l'entrée et
+- **FR-017** : L'annulation pendant un `quota_hold` ferme le hold, sans relance, par T024. L'annulation pendant l'attente est exécutée, ferme l'entrée et
   empêche toute relance. Pendant `relaunching`, elle réconcilie d'abord la
   continuation et la remise : elle relit l'identifiant de l'exécution reprise,
   clôt la feuille de la chaîne, marque la remise non livrée (indéterminée) si
@@ -279,7 +291,7 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
 - **FR-018** : Un redémarrage du daemon pendant l'attente garde la tâche
   `working`, ne reconstruit pas l'enfant avant l'heure, n'incrémente pas
   `restart_resumes` et applique l'échéance effective. Un redémarrage pendant la
-  décision en attente la résout en échec normal.
+  décision en attente la résout en échec normal, même si un fait avait été vu dans la mémoire volatile avant le redémarrage ; cette mémoire n’est pas une autorisation durable de reprise.
 
 **Compatibilité et documentation**
 
@@ -300,15 +312,9 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   échéance imminente, une pause qui commence, ou un parent déconnecté.
 - **SC-003** : Après 10 échecs de quota consécutifs avec la même heure de retour,
   il y a au plus 2 relances, puis `usage_limit`. 0 boucle.
-- **SC-004** : À chacune des frontières de crash de la relance (qualification
-  sans entrée, entrée `waiting`, `relaunching` sans reconstruction, continuation
-  sans réservation, réservation sans remise, remise gravée sans émission, remise
-  émise sans accusé), 0 seconde continuation, 0 attente orpheline, et l'une de
-  ces deux issues, jamais une troisième : le message d'origine est remis
-  exactement une fois, ou la tâche échoue avec `native_relaunch_failed` et
-  l'avis durable. Un message jamais envoyé avec une attente soldée est interdit.
-- **SC-005** : Après 2 rondes de quota, 2 redémarrages du daemon sont survécus et
-  le troisième échoue avec `native_resume_exhausted`.
+- **SC-004** : Aux huit frontières a–h de T008 : (a) qualification sans TaskWait ; (b) waiting ; (c) relaunching sans reconstruction ; (d) continuation sans réservation ; (e) réservation sans remise ; (f) dispatching gravé sans émission ; (g) acked sans solde ; (h) orphaned. Zéro seconde continuation et zéro attente orpheline. Le message d’origine est remis exactement une fois, ou la Task échoue avec native_relaunch_failed et avis durable. Seule une remise acked permet le solde ; une remise perdue/non reprenable donne cet échec explicite. Un message jamais envoyé avec attente soldée est interdit. Cette idempotence ne garantit pas l’unicité des effets externes.
+
+- **SC-005** : Après2rondes de quota, les pannes ordinaires APRÈS relance utilisent le compteur `restart_resumes` de152 : deux redémarrages survécus, puis `native_resume_exhausted`. Les redémarrages pendant `waiting` ne l’incrémentent pas.
 - **SC-006** : Pause de 600 s dans une attente de 1800 s : l'échéance effective
   augmente de 1800 s, pas de 2400 s (à 2 s près). Le suivi de la demande suit la
   même mesure.
@@ -324,7 +330,7 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   feuille) reçu après le solde d'une relance : 0 effet, même quand la nouvelle
   feuille est déjà `failed`. Un refus sans corrélation reçu après une relance :
   échec explicite `native_refusal_uncorrelated`, jamais ignoré. Injection
-  synchrone refusée et réponse vide : échec avec l'erreur d'origine, sans reprise.
+  synchrone refusée et réponse vide avec DeliveryRejected courant corrélé : erreur d'origine sans reprise. Champs absents : erreur d'origine seulement si la Task n'a jamais été relancée ; sinon native_refusal_uncorrelated prioritaire. Si aucun DeliveryRejected n'arrive après une réponse vide, la Task attend le timeout de mission existant ; aucun refus n'est inventé.
 - **SC-013** : Pour tout échec d'une tâche opt-in, le parent reçoit exactement un
   avis (l'avis durable) et aucun message direct, y compris pour un refus
   immédiat (`TooFar`, `Past`, `RoundsDone`) et pour un refus tardif après la fin
@@ -349,6 +355,7 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
 
 - Les sessions 150, 152 et 157 sont livrées. La porte T001 prouve chaque
   primitive utilisée sur le code livré. Sinon, la session s'arrête.
+- Limite fournisseur : une limite Codex globale sans fenêtre attestée ne qualifie pas ; T002 n’a vu aucun refus de quota réel. Déclenchement réel Codex non prouvé, sans gate fournisseur supplémentaire ; limite reprise dans ADR T029.
 - Un vrai refus de quota est visible par l'un des deux chemins A ou B, et le
   fait de quota est enregistré par la 157. Cela n'a pas été vu en réel. T002
   cherche un exemple dans le journal. Sans exemple, la validation le dit.
@@ -365,8 +372,7 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
   avant l'enfant, l'annulation en cascade de 152 s'applique (limite notée).
 - Les tests suivent la règle du projet : `umask 077`, environnement privé,
   racine temporaire courte (voir `quickstart.md`).
-- La livraison suit les sessions 147 à 157 : fichiers sur disque, sans relance
-  automatique des services.
+- Base livrée : `6907df9ba15b58df05c2041631005beb57a1bed6` (159B). Livraison Git/disque/activation Bridget par ROOT après les gates et absence de mission non terminale ; pas de redémarrage T3. Les anciennes bases et lignes sont des références historiques à revalider par nom.
 
 ## Questions pour l'utilisateur
 
@@ -381,3 +387,5 @@ comportement qu'avant. La vue Lineage T3 ne change pas : la tâche reste
    statut (`quota_wait`) suffit, et la règle « jamais d'avis d'échec pendant
    l'attente » reste simple. L'avis pourra venir avec la boîte de fin de tâche
    (151).
+
+Priorité SC011 : après une relance, un refus sans corrélation donne native_refusal_uncorrelated avant toute règle d’erreur d’origine. L’erreur d’origine du refus synchrone/réponse vide ne vaut que pour un refus courant corrélé, ou une tâche jamais relancée.

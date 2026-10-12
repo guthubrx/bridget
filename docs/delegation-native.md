@@ -100,7 +100,8 @@ detail.resets_at ; fallback_exhausted rend detail.tried si toutes les cibles
 échouent. Aucune tâche ni consommation de clé pour ces deux refus. Le MCP rend
 code suivi du JSON de detail. Sans fallback, les codes restent ceux du contrat,
 avec les refus précoces annoncés. Aucun remplacement après admission ni reprise
-sur quota en157 ; la reprise est reportée en160. checks.auth:false reste explicite.
+sur quota dans le seul contrat157. L’opt-in160 est décrit ci-dessous.
+checks.auth:false reste explicite.
 Le préflight partagé passe avant le contrôle du cwd des lancements existants.
 Si le cwd et l'environnement sont invalides ensemble, env_unfit peut donc
 précéder cwd_gone.
@@ -137,6 +138,73 @@ des descendants avant sa remise. Rejouer la demande retrouve la même tâche.
 La vue courante donne `resume_attempts`, le nombre de décisions de reprise après panne.
 Ce compteur est sauvegardé avant la reprise. Un crash peut donc consommer une
 tentative avant son effet ; il ne permet jamais de dépasser la borne.
+
+## Reprise sur limite d’usage (160)
+
+Vérifier les capacités du binaire chargé avant d’utiliser ce contrat.
+Cette documentation ne prouve pas l’installation ni l’activation de 160.
+La lecture T002 n’a observé aucun quota réel. Elle ne prouve ni la raison du
+refus fournisseur ni l’ordre réel entre son fait de quota et son échec.
+
+`bridget_delegate` accepte le booléen facultatif `resume_on_limit`. Au MCP,
+`null`, chaîne, nombre et objet sont refusés en `InvalidParams`.
+Seul `true` active la reprise. Absent et `false` la désactivent, mais forment
+deux enveloppes différentes : les intervertir avec la même clé produit
+`envelope_mismatch`. Sans ce champ, le contrat conserve les octets et le
+comportement précédents. Le catalogue annonce `features.resume_on_limit:true`,
+`resume_max_wait_secs:21600` et `resume_max_rounds:2` ; ce sont des capacités,
+pas une activation automatique pour chaque mission.
+
+Une tâche opt-in `working` peut attendre une fenêtre épuisée attestée par 157.
+Le fait doit être récent pour la mission ou sa dernière attente. Le retour doit
+être futur et au plus à 6 heures ; deux rondes au maximum sont conservées
+même après leur solde ou un redémarrage. Le statut Codex global seul ne suffit
+pas. Après un échec sans fait connu, seules les observations faites au plus
+5 secondes après le début du hold sont admissibles. La résolution au tick
+peut arriver plus tard ; elle utilise l’heure réelle de décision. Un fait
+observé après cette borne ne qualifie pas l’échec et ne rouvre pas une tâche
+échouée. Cette règle ne garantit pas l’arrivée d’un fait fournisseur à temps.
+La pause 152 garde sa priorité.
+
+Le statut ajoute `quota_wait:null` ou `{round,phase,resumes_at}`.
+La tâche reste `working` ; `waiting` attend le retour plus 30 secondes et
+`relaunching` attend le solde de la remise. Aucun avis d’échec pendant la
+décision et l’attente ; la demande suivie reste conservée. Les rappels sont
+suspendus pendant le hold et la part gelée de l’attente, jusqu’au retour + 30 s.
+Un échec final opt-in utilise le seul avis durable existant. Il n’envoie pas
+en plus le message direct d’échec de livraison.
+
+La relance garde tâche, mission, fournisseur, modèle, effort, permissions
+héritées et définition épinglée. Elle ne crée aucun droit supplémentaire. Elle ne réévalue pas le fallback 157. Son identité est
+`limit-resume:<task_id>:<ronde>:<retour>`. La pause diffère le départ ; l’enfant
+doit être connecté et libre. Seul l’ACK solde l’attente : réserver, graver ou
+écrire la remise ne suffit pas. Une remise en vol reste `relaunching`.
+L’ACK ne prouve pas le résultat métier ni la mémoire d’un modèle réel.
+
+Le gel ne concerne que le délai de l’enfant. Il utilise l’union des intervalles
+de pause et de quota, sans compter deux fois leur chevauchement. Le gel quota
+s’arrête au retour plus 30 secondes, même si l’enfant reste absent ; son délai
+peut ensuite expirer avec `mission_reply_timeout`. Le délai du parent n’est
+pas prolongé. Les faits de quota 157 restent volatils au redémarrage ; les
+attentes qualifiées et leurs rondes sont durables. Un hold encore ouvert
+au redémarrage échoue avec son erreur d’origine et l’avis durable.
+
+| Erreur finale | Lecture |
+|---|---|
+| `usage_limit` | Retour passé, à plus de 6 heures, ou deux rondes faites ; `detail.limit_reset_at` donne le retour dans la vue de statut détaillée. |
+| `native_relaunch_failed` | Remise incertaine, orpheline ou non reprenable ; aucune réussite supposée. |
+| `native_refusal_uncorrelated` | Après une relance, le refus ne peut pas être rattaché à l’exécution courante. |
+
+Ces rondes quota ne consomment pas les deux reprises après panne de 152.
+La reconstruction quota qualifiée reste distincte de sa reprise ordinaire.
+L’annulation interdit toute relance ; une réconciliation non vérifiable garde
+`cancelling`, avec `native_cancel_unverifiable:quota_relaunch`.
+La corrélation temporelle ne prouve pas que le quota a causé cet échec.
+Un fait admissible antérieur peut qualifier une panne sans rapport. Reprendre
+la mission peut donc répéter ses effets externes. L’identité de relance, ses
+bornes et l’ACK ne garantissent pas l’unicité des effets métier.
+Décision et ordre durable :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/160-reprise-sur-limite-d-usage.md.
 
 ## Contrôle humain global et plafond MCP — 158A
 

@@ -71,7 +71,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     ]});
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. can_run et constraints donnent le verdict de lancement au dossier verdict_context.cwd, avec les droits attestés de la session. Les faits limités à une demande et les autres dossiers restent soumis à l’admission. Les binaires sont vérifiés ; aucune connexion fournisseur ni authentification n’est testée. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
@@ -106,6 +106,7 @@ pub(crate) fn execute(
             "keep_alive_secs",
             "brief",
             "fallback",
+            "resume_on_limit",
         ],
         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
         "bridget_task_respond" => &["task_id", "request_id", "decision", "answer"],
@@ -130,6 +131,15 @@ pub(crate) fn execute(
         "bridget_capabilities" => NativeDelegationRequest::Catalogue,
         "bridget_delegate" => NativeDelegationRequest::Delegate {
             // O(1) : au plus trois candidats, sans résolution ni gain de droits.
+            resume_on_limit: match args.get("resume_on_limit") {
+                None => None,
+                Some(Value::Bool(value)) => Some(*value),
+                _ => {
+                    return Err(ClientError::InvalidParams(
+                        "resume_on_limit doit être un booléen".into(),
+                    ));
+                }
+            },
             fallback: match args.get("fallback") {
                 None => Vec::new(),
                 Some(Value::Array(values)) if (1..=3).contains(&values.len()) => {
@@ -305,6 +315,9 @@ pub(crate) fn execute(
         }
         DaemonToWrapper::NativeDelegationResult { mut result } => {
             if name == "bridget_capabilities" {
+                result["features"]["resume_on_limit"] = json!(true);
+                result["features"]["resume_max_wait_secs"] = json!(21600);
+                result["features"]["resume_max_rounds"] = json!(2);
                 // Conserve le booléen held attesté par le daemon et les métadonnées par type.
                 result["queue"]["actions"] = json!(["list", "cancel", "reorder", "promote"]);
                 result["guidance"] = json!({
@@ -410,12 +423,17 @@ mod tests {
 
         // Réemploi du faux daemon MCP : absence byte-identique et liste bornée
         // transmise telle quelle, sans appeler de fournisseur.
-        for fallback in [
-            None,
-            Some(json!([{"agent_type":"b","model":"n"}])),
-            Some(json!([{"agent_type":"b","model":"n"},
+        for (fallback, resume_on_limit) in [
+            (None, None),
+            (Some(json!([{"agent_type":"b","model":"n"}])), None),
+            (
+                Some(json!([{"agent_type":"b","model":"n"},
                 {"agent_type":"c","model":"p","effort":"high"},
                 {"agent_type":"d","model":"q"}])),
+                None,
+            ),
+            (None, Some(false)),
+            (None, Some(true)),
         ] {
             let socket = crate::mcp_identity::mock_socket("fallback157-valid");
             let listener = UnixListener::bind(&socket).unwrap();
@@ -462,6 +480,9 @@ mod tests {
             if let Some(value) = &fallback {
                 args["fallback"] = value.clone();
             }
+            if let Some(value) = resume_on_limit {
+                args["resume_on_limit"] = json!(value);
+            }
             let result = execute(&identity, "bridget_delegate", &args, &socket);
             let request = backend.join().unwrap();
             let _ = std::fs::remove_dir_all(socket.parent().unwrap());
@@ -472,6 +493,14 @@ mod tests {
             let request = request.expect("requête transmise");
             if let Some(value) = fallback {
                 assert_eq!(serde_json::to_value(request).unwrap()["fallback"], value);
+            } else if let Some(expected) = resume_on_limit {
+                let NativeDelegationRequest::Delegate {
+                    resume_on_limit, ..
+                } = request
+                else {
+                    panic!("Delegate attendu")
+                };
+                assert_eq!(resume_on_limit, Some(expected));
             } else {
                 let historical = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/tmp","posture":null}"#;
                 assert_eq!(serde_json::to_vec(&request).unwrap(), historical);
@@ -703,6 +732,11 @@ mod tests {
         use std::os::unix::net::UnixListener;
         for (returned, expected_code, expected_detail) in [
             (
+                json!({"status":"accepted","features":{"native_delegation":true}}),
+                "catalogue160",
+                None,
+            ),
+            (
                 json!({"status":"refused","code":"provider_quota_exhausted","detail":{"resets_at":1_900_000_000}}),
                 "provider_quota_exhausted",
                 Some(json!({"resets_at":1_900_000_000})),
@@ -761,8 +795,30 @@ mod tests {
                 delegated_origin: None,
             };
             let args = json!({"request_id":"quota157","agent_type":"codex","model":"fixture","task":"fixture","cwd":socket.parent().unwrap()});
-            let result = execute(&identity, "bridget_delegate", &args, &socket);
+            let catalogue = expected_code == "catalogue160";
+            let catalogue_args = json!({});
+            let result = execute(
+                &identity,
+                if catalogue {
+                    "bridget_capabilities"
+                } else {
+                    "bridget_delegate"
+                },
+                if catalogue { &catalogue_args } else { &args },
+                &socket,
+            );
             let request = backend.join().unwrap();
+            if catalogue {
+                assert_eq!(request["request"]["operation"], "catalogue");
+                let result = result.unwrap();
+                assert_eq!(
+                    result["features"],
+                    json!({"native_delegation":true,
+                    "resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2})
+                );
+                let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+                continue;
+            }
             assert_eq!(request["request"]["agent_type"], "codex");
             let Err(ClientError::Technical { code, message }) = result else {
                 panic!("refus technique MCP attendu : {result:?}")
@@ -782,5 +838,114 @@ mod tests {
             }
             let _ = std::fs::remove_dir_all(socket.parent().unwrap());
         }
+    }
+
+    #[test]
+    fn native160_optin_sans_champ_octets_identiques() {
+        use std::os::unix::net::UnixListener;
+        let tool = tools(&json!({}))
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_delegate")
+            .unwrap();
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["properties"]["resume_on_limit"]["type"], "boolean");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "resume_on_limit")
+        );
+        assert_eq!(
+            schema["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "agent_type",
+                "brief",
+                "child_requests",
+                "cwd",
+                "effort",
+                "fallback",
+                "keep_alive_secs",
+                "model",
+                "posture",
+                "reply_timeout",
+                "request_id",
+                "resume_on_limit",
+                "task",
+                "workspace"
+            ]
+        );
+        let historical = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/tmp","posture":null}"#;
+        let request: NativeDelegationRequest = serde_json::from_slice(historical).unwrap();
+        assert_eq!(serde_json::to_vec(&request).unwrap(), historical);
+        let socket = crate::mcp_identity::mock_socket("resume160-invalid");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for value in [
+            json!(null),
+            json!(0),
+            json!(1),
+            json!(0.5),
+            json!("true"),
+            json!([]),
+            json!({}),
+        ] {
+            let args = json!({"request_id":"k","agent_type":"a","model":"m","task":"t","cwd":"/tmp","resume_on_limit":value});
+            assert!(
+                matches!(
+                    execute(&identity, "bridget_delegate", &args, &socket),
+                    Err(ClientError::InvalidParams(_))
+                ),
+                "{args}"
+            );
+            assert!(
+                matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock)
+            );
+        }
+        drop(listener);
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+    }
+
+    #[test]
+    fn native160_optin_absent_et_faux_deux_enveloppes() {
+        let historical = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/tmp","posture":null}"#;
+        let absent: NativeDelegationRequest = serde_json::from_slice(historical).unwrap();
+        let mut explicit_false = absent.clone();
+        let NativeDelegationRequest::Delegate {
+            resume_on_limit, ..
+        } = &mut explicit_false
+        else {
+            panic!("Delegate attendu")
+        };
+        *resume_on_limit = Some(false);
+        let absent_canonical = serde_json::to_vec(&absent).unwrap();
+        let false_canonical = serde_json::to_vec(&explicit_false).unwrap();
+        assert_ne!(absent_canonical, false_canonical);
+        let store = crate::delegation::DelegationStore::open(Path::new(":memory:")).unwrap();
+        store
+            .record_refusal("owner", "k", &absent_canonical, "model_unavailable", 100)
+            .unwrap();
+        assert_eq!(
+            store
+                .by_agent_request("owner", "k", &false_canonical)
+                .unwrap_err(),
+            "envelope_mismatch"
+        );
+        assert_eq!(
+            store
+                .by_agent_request("owner", "k", &absent_canonical)
+                .unwrap_err(),
+            "model_unavailable"
+        );
     }
 }

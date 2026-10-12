@@ -67,8 +67,8 @@ citées sont celles de cette base. Les sessions 150, 152 et 157 les déplacent.
   servi. Le parent reste `failed`. Une continuation `reconstructed` de raison
   `usage_limit_reset` est insérée, et l'identité est reliée à la continuation.
   Tout est dans une transaction.
-- Complexité : O(1) (clés primaires), plus le test de feuille O(c) comme
-  `latest_in_chain` de 152.
+- Complexité : accès SQLite par clé O(log N), plus coût de feuille de chaîne
+  de `latest_in_chain` livré ; voir le plan actuel.
 
 ## R5 - Défaut 3 : qualification, identité et frontières de crash
 
@@ -250,9 +250,9 @@ citées sont celles de cette base. Les sessions 150, 152 et 157 les déplacent.
 
 ## R13 - Complexité et coût
 
-- Qualification : O(1) (lecture de la mémoire par type d'agent, 157).
-- Relance : O(1) plus O(c) pour la feuille de chaîne.
-- Gel : O(P + Q log Q), seulement quand le résultat sert.
+- Qualification : O(log A + F), A types et F fenêtres bornées par157.
+- Relance : accès SQLite O(log N) et coût de feuille de chaîne du plan.
+- Gel : lecture du journal H, tri/union O((P + Q) log(P + Q)), espace O(P + Q), Q au plus2.
 - Une table, un champ de liste, aucun module : aucune extraction sans deux
   usages (`deliver_reconstructed`, `pause_intervals`).
 

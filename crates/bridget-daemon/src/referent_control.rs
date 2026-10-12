@@ -348,12 +348,16 @@ pub fn read(conn: &Connection) -> rusqlite::Result<ControlStateFrame> {
     )
 }
 
-/// Secondes de pause dans [from, to), sans modifier le journal ni l'échéance.
+/// Intervalles de pause dans [from, to), sans modifier le journal ni l'échéance.
 /// O(log N + P) : l'index temporel sert au prédécesseur et aux P événements
 /// de la fenêtre, parmi N événements durables. `id` départage une même seconde.
-pub fn pause_overlap(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<i64> {
+pub(crate) fn pause_intervals(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+) -> rusqlite::Result<Vec<(i64, i64)>> {
     if to <= from {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let state = read(conn)?;
     let previous: Option<bool> = conn
@@ -376,23 +380,79 @@ pub fn pause_overlap(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<
     let events = statement.query_map(params![from, to], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
     })?;
-    let mut total: i64 = 0;
+    let mut intervals = Vec::new();
     for event in events {
         let (at, paused) = event?;
         if paused {
             paused_since.get_or_insert(at);
         } else if let Some(since) = paused_since.take() {
-            total = total.saturating_add(at.saturating_sub(since).max(0));
+            intervals.push((since, at));
         }
     }
-    let journal_tail = paused_since.map_or(0, |since| to.saturating_sub(since).max(0));
-    let state_tail = if state.paused {
-        to.saturating_sub(state.paused_since.unwrap_or(to).max(from))
-            .max(0)
-    } else {
-        0
+    let state_since = state
+        .paused
+        .then(|| state.paused_since.unwrap_or(to).max(from))
+        .filter(|since| *since < to);
+    // Même maximum des deux durées ouvertes que pause_overlap avant extraction.
+    let tail_since = match (paused_since, state_since) {
+        (Some(journal), Some(state)) => Some(journal.min(state)),
+        (journal, state) => journal.or(state),
     };
-    Ok(total.saturating_add(journal_tail.max(state_tail)))
+    if let Some(since) = tail_since {
+        intervals.push((since, to));
+    }
+    Ok(intervals)
+}
+
+/// Secondes de pause dans [from, to), comportement 152 inchangé.
+/// O(log N + P), parmi N événements durables et P événements de la fenêtre.
+pub fn pause_overlap(conn: &Connection, from: i64, to: i64) -> rusqlite::Result<i64> {
+    Ok(pause_intervals(conn, from, to)?
+        .into_iter()
+        .fold(0_i64, |total, (since, until)| {
+            total.saturating_add(until.saturating_sub(since).max(0))
+        }))
+}
+
+/// Secondes gelées dans [from, to) : union des pauses et des attentes quota.
+/// Lecture SQL O(log N + P), puis union O((P + Q) log(P + Q)) ; Q <= 2.
+/// Chaque attente s'arrête au plus tard à reset_at + 30, enfant connecté ou non.
+pub(crate) fn frozen_overlap(
+    conn: &Connection,
+    task: &crate::delegation::Task,
+    from: i64,
+    to: i64,
+) -> rusqlite::Result<i64> {
+    if to <= from {
+        return Ok(0);
+    }
+    let mut intervals = pause_intervals(conn, from, to)?;
+    for wait in &task.quota_waits {
+        let since = wait.since.max(from);
+        let until = wait
+            .until
+            .unwrap_or(to)
+            .min(to)
+            .min(wait.reset_at.saturating_add(30));
+        if until > since {
+            intervals.push((since, until));
+        }
+    }
+    intervals.sort_unstable();
+    let Some((mut since, mut until)) = intervals.first().copied() else {
+        return Ok(0);
+    };
+    let mut total = 0_i64;
+    for (next_since, next_until) in intervals.into_iter().skip(1) {
+        if next_since <= until {
+            until = until.max(next_until);
+        } else {
+            total = total.saturating_add(until.saturating_sub(since));
+            since = next_since;
+            until = next_until;
+        }
+    }
+    Ok(total.saturating_add(until.saturating_sub(since)))
 }
 
 /// Applique une mutation. Un rejeu du même `command_id` rend l'état courant
@@ -1012,6 +1072,121 @@ mod tests {
                 .unwrap();
             }
             assert_eq!(pause_overlap(&conn, from, to).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn native160_gel_union_intervalles() {
+        for (name, events, waits, from, to, expected) in [
+            ("aucune_attente", vec![], vec![], 0, 50, 0),
+            (
+                "attente_seule",
+                vec![],
+                vec![(10, 10, None::<i64>)],
+                0,
+                50,
+                30,
+            ),
+            (
+                "pause_seule",
+                vec![(10, true), (30, false)],
+                vec![],
+                0,
+                50,
+                20,
+            ),
+            (
+                "pause_dans_attente",
+                vec![(600, true), (1200, false)],
+                vec![(0, 1770, Some(1800))],
+                0,
+                1800,
+                1800,
+            ),
+            (
+                "chevauchement_partiel",
+                vec![(0, true), (30, false)],
+                vec![(20, 20, None)],
+                0,
+                60,
+                50,
+            ),
+            (
+                "ouverte_avant_borne",
+                vec![],
+                vec![(10, 20, None)],
+                0,
+                40,
+                30,
+            ),
+            (
+                "ouverte_apres_borne",
+                vec![],
+                vec![(10, 20, None)],
+                0,
+                90,
+                40,
+            ),
+            (
+                "entrees_closes",
+                vec![],
+                vec![(10, 100, Some(30)), (40, 100, Some(50))],
+                0,
+                200,
+                30,
+            ),
+        ] {
+            let conn = conn();
+            for (index, (at, paused)) in events.into_iter().enumerate() {
+                let command_id = format!("pause-160-{index}");
+                set(
+                    &conn,
+                    ControlMutation {
+                        paused: Some(paused),
+                        now: at,
+                        ..mutation(&command_id, index as u64)
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            }
+            // Forme du payload historique151, déjà utilisée par legacy_task151.
+            let mut task: crate::delegation::Task = serde_json::from_value(serde_json::json!({
+                "task_id":"gel160", "owner":"parent", "owner_instance":"parent-instance",
+                "origin_owner_instance":"parent-instance",
+                "request":{"operation":"delegate","request_id":"gel160", "agent_type":"fixture",
+                    "model":"fixture","task":"mission","cwd":"/tmp"},
+                "definition":{"command":"fixture","args":[],"protocol":"acp","forbidden_env":[],
+                    "pass_env":[],"permissions":"allow","queue_capacity":32,"notify_timeout_secs":600,
+                    "mcp":{"interactive":"none","acp_session":false},"digest":"fixture"},
+                "cwd":"/tmp","child":"child","child_instance":null,"mission":"mission160",
+                "created_at":0,"state":"working","result":null,"error":null,"result_sent":false
+            })).unwrap();
+            task.quota_waits = waits
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(index, (since, reset_at, until))| crate::delegation::QuotaWait {
+                        since,
+                        reset_at,
+                        round: (index + 1) as u8,
+                        identity: format!("limit-resume:gel160:{}:{reset_at}", index + 1),
+                        execution_id: format!("execution-{index}"),
+                        phase: if until.is_some() {
+                            crate::delegation::QuotaWaitPhase::Done
+                        } else {
+                            crate::delegation::QuotaWaitPhase::Waiting
+                        },
+                        until,
+                        resume_execution_id: None,
+                    },
+                )
+                .collect();
+            assert_eq!(
+                frozen_overlap(&conn, &task, from, to).unwrap(),
+                expected,
+                "{name}"
+            );
         }
     }
 

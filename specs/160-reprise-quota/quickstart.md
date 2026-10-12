@@ -1,7 +1,7 @@
 # Vérification rapide - Session160
 
 Toutes les commandes partent du worktree
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/150-socle-delegation`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota`.
 Aucun test n'appelle un vrai fournisseur. Les faits de quota sont synthétiques.
 
 ## Environnement de test (obligatoire)
@@ -22,7 +22,7 @@ Suite complète avant clôture : même environnement,
 
 1. Tests rouges des six exigences : filtre `native160_rouge`.
 2. Qualification, décision en attente, silence : filtre `native160_attente`.
-3. Reconstruction ciblée et relance unique (quatre frontières de crash) : filtre
+3. Reconstruction ciblée et relance unique (huit frontières a–h de crash) : filtre
    `native160_relance`.
 4. Bornes et compteur durable : filtre `native160_bornes`.
 5. Gel cumulé, annulation, pause : filtre `native160_gel`.
@@ -34,3 +34,5 @@ Les fixtures rejouent les événements du wrapper (fait de quota, transition
 d'exécution `failed`, `DeliveryRejected`) par le gestionnaire complet du daemon,
 dans les deux ordres. Les sorties sont consignées dans
 `specs/160-reprise-quota/validation/`.
+
+Base160 : `6907df9ba15b58df05c2041631005beb57a1bed6`. T001 baseline attestée par ROOT :276PASS/0FAIL/2ignored sur les sept filtres prescrits ; ce reçu n’est pas un FULL ni une preuve160. Livraison : ROOT assure Git/build/installation/activation Bridget après les gates et absence de mission non terminale ; pas de redémarrage T3.

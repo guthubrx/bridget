@@ -773,13 +773,13 @@ fn native155_lifecycle_plantage_entre_sent_et_envoi() {
     let row = fixture.row(&request);
     fixture.decide(&row);
     {
-        let st = fixture.state.lock().unwrap();
+        let mut st = fixture.state.lock().unwrap();
         assert!(
             st.delegation_store
                 .claim_child_request(&row.request_id, unix_timestamp())
                 .unwrap()
         );
-        native_delegation::prepare_restart(&st).unwrap();
+        native_delegation::prepare_restart(&mut st).unwrap();
     }
     let persisted = fixture.row(&request);
     assert_eq!(persisted.delivery_state, "unknown");
@@ -880,7 +880,7 @@ fn native155_lifecycle_invalidations_avant_renvoi_et_finalisation() {
                 fixture.frames();
             }
             {
-                let st = fixture.state.lock().unwrap();
+                let mut st = fixture.state.lock().unwrap();
                 let mut task = st
                     .delegation_store
                     .get(&fixture.task.task_id)
@@ -930,7 +930,7 @@ fn native155_lifecycle_invalidations_avant_renvoi_et_finalisation() {
                         st.delegation_store.save(&task).unwrap();
                     }
                     "restart" => {
-                        native_delegation::prepare_restart(&st).unwrap();
+                        native_delegation::prepare_restart(&mut st).unwrap();
                     }
                     _ => unreachable!(),
                 }

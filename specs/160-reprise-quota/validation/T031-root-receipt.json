@@ -1,0 +1,7 @@
+{
+  "tasks": "36/37T030open",
+  "diff_sha256": "a134b9fe875bc0842ec45e093c27261015ba49cb813e5de0e9a50f5774432e84",
+  "ADR_R2_clarification_sha256": "62029cb351f2576b221ad4987a4740eee4c6e786c0862a39b29c90150dc5c5ae",
+  "limits": "Full diff accounted; native old formatting mechanical, not whole-file human reread",
+  "T035": "1PASS RC0"
+}

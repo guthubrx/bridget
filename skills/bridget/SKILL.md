@@ -41,8 +41,31 @@ initiale ne sont pas contournés. Probe épingle une cible ; Commit la revalide
 sans resélection. Substitution durable rend requested/selected/reason/tried ;
 request effectif et canonical original restent distincts. Un rejeu garde la
 liste et la substitution exactes. Aucune bascule après admission ou reprise
-quota157 ; report160. La référence des commandes précise les motifs fermés,
+quota dans le seul contrat157. L’opt-in160 est décrit ci-dessous.
+La référence des commandes précise les motifs fermés,
 refus précoces, detail.resets_at/detail.tried et la limite auth:false.
+
+### Attendre un retour de quota (160)
+
+`resume_on_limit:true` active cette option par mission. Absent et `false`
+la désactivent mais ne sont pas interchangeables au rejeu d’une même clé.
+Au MCP, seul un booléen explicite est accepté ; `null` est refusé.
+Vérifier les capacités chargées ; aucune activation 160 n’est prouvée ici.
+Une fenêtre épuisée attestée permet au plus deux rondes, avec retour futur
+à 6 heures au plus. L’observation du fait est bornée à 5 secondes ;
+la résolution au tick peut être retardée et utilise son heure réelle.
+Aucun avis d’échec pendant la décision et l’attente. Les rappels restent
+suspendus pendant le hold et jusqu’au retour + 30 secondes pour l’attente.
+`quota_wait` rend `waiting` ou `relaunching` ; la tâche reste `working`.
+Le départ attend retour + 30 secondes ; seul l’ACK solde la remise.
+La relance conserve mission, fournisseur, modèle et permissions, sans nouveau
+fallback ni gain de droits. Ses effets externes peuvent être répétés.
+Le gel concerne l’enfant seul et réunit pause et quota sans double comptage.
+Les rondes quota restent distinctes des reprises 152. Les faits 157 sont
+volatils ; un hold encore ouvert au redémarrage échoue. T002 n’a pas observé
+de quota réel. `usage_limit` expose `detail.limit_reset_at` au statut détaillé.
+Codes, identité de relance et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md.
 
 ### Arrêt des délégations et plafond discovery (158A)
 

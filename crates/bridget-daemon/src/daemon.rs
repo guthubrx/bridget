@@ -6433,55 +6433,145 @@ fn schedule_execution_recovery(
         }
     };
 
-    let issuer_scope = match state.idempotency.supervisor_scope() {
-        Ok(scope) => scope,
-        Err(error) => {
-            error!("identité du superviseur pour la reprise: {error}");
-            return;
+    if let Err(error) =
+        deliver_reconstructed(state, conn_id, instance_id, &reconstructed, now, false)
+    {
+        error!("remise de reprise non préparée: {error}");
+    }
+}
+
+// Erreur interne de l’extraction : le tick ne confond pas SQL et refus de remise.
+#[derive(Debug)]
+pub(super) enum ReconstructedDeliveryError {
+    Storage(String),
+    NonReprenable(String),
+}
+
+impl std::fmt::Display for ReconstructedDeliveryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Storage(reason) | Self::NonReprenable(reason) => formatter.write_str(reason),
         }
-    };
-    let idempotency_key = format!("recovery-{}", reconstructed.snapshot.execution_id);
-    let key = match IdempotencyKey::new(issuer_scope, OperationKind::Send, idempotency_key) {
-        Ok(key) => key,
-        Err(error) => {
-            error!("clé interne de reprise invalide: {error}");
-            return;
+    }
+}
+
+impl From<crate::idempotency::IdempotencyError> for ReconstructedDeliveryError {
+    fn from(error: crate::idempotency::IdempotencyError) -> Self {
+        if matches!(
+            &error,
+            crate::idempotency::IdempotencyError::Sqlite(_)
+                | crate::idempotency::IdempotencyError::Schema(_)
+        ) {
+            Self::Storage(error.to_string())
+        } else {
+            Self::NonReprenable(error.to_string())
         }
+    }
+}
+
+/// T019 : O(log E+log D+log X+B), E ledger, D remises, X exécutions, B octets ; mémoire O(B).
+/// Le caller garde State et les gardes jusqu’à la gravure. Les contrôles sont différés hors State.
+/// Ordinary=false n’accepte que Prepared ; quota=true fige issued_at et ne repousse pas au rejeu.
+pub(super) fn deliver_reconstructed(
+    state: &mut DaemonState,
+    conn_id: &str,
+    instance_id: &str,
+    reconstructed: &crate::execution_store::ReconstructedExecution,
+    issued_at: i64,
+    quota_relaunch: bool,
+) -> Result<&'static str, ReconstructedDeliveryError> {
+    use ReconstructedDeliveryError::{NonReprenable, Storage};
+    // Ordinary conserve exactement son ancien now. Quota relit l’horloge réelle
+    // pour l’expiration, sans l’introduire dans le canonique de la continuation.
+    let now = if quota_relaunch {
+        unix_now_secs()
+    } else {
+        issued_at
     };
+    let issuer_scope = state.idempotency.supervisor_scope()?;
+    let key = IdempotencyKey::new(
+        issuer_scope,
+        OperationKind::Send,
+        format!("recovery-{}", reconstructed.snapshot.execution_id),
+    )?;
     let canonical = canonical_send(
         &key.issuer_scope,
         &key.idempotency_key,
         &reconstructed.message,
-        now,
+        issued_at,
     );
     let expires_at = match state.idempotency.reserve(
         &key,
         &canonical,
-        now,
+        issued_at,
         CLIENT_IDEMPOTENCY_HORIZON_SECS,
         now,
         CLIENT_ISSUED_AT_TOLERANCE_SECS,
-    ) {
-        Ok(Reservation::Prepared { expires_at }) => expires_at,
-        Ok(other) => {
-            error!(
-                "réservation interne inattendue pour {}: {:?}",
-                reconstructed.snapshot.execution_id, other
-            );
-            return;
+    )? {
+        Reservation::Prepared { expires_at } => expires_at,
+        Reservation::Replayed(_) if quota_relaunch => {
+            if let Some(phase) = state.idempotency.send_delivery_phase(&key)? {
+                let stored = state
+                    .idempotency
+                    .stored_send_delivery(&key)?
+                    .ok_or_else(|| {
+                        NonReprenable("remise de relance absente après lecture de phase".into())
+                    })?;
+                if stored.delivery_id
+                    != format!("delivery-recovery-{}", reconstructed.snapshot.execution_id)
+                    || stored.phase != phase
+                {
+                    return Err(NonReprenable(
+                        "identité ou phase de relance divergente".into(),
+                    ));
+                }
+                let message = state
+                    .idempotency
+                    .stored_send_message(&key)?
+                    .ok_or_else(|| NonReprenable("enveloppe de relance absente".into()))?;
+                if message
+                    != serde_json::to_value(&reconstructed.message)
+                        .map_err(|error| NonReprenable(error.to_string()))?
+                {
+                    return Err(NonReprenable("enveloppe de relance divergente".into()));
+                }
+                let link = state
+                    .idempotency
+                    .delivery_execution_link(&stored.delivery_id)?
+                    .ok_or_else(|| NonReprenable("lien de relance absent".into()))?;
+                if link.execution_id != reconstructed.snapshot.execution_id
+                    || link.submission_id != reconstructed.message.id
+                {
+                    return Err(NonReprenable("lien causal de relance divergent".into()));
+                }
+                // Aucune écriture, génération nouvelle ou émission dans ces quatre branches.
+                return match phase.as_str() {
+                    "dispatching" => Ok("dispatching"),
+                    "acked" => Ok("acked"),
+                    "indeterminate" => Ok("indeterminate"),
+                    "orphaned" => Ok("orphaned"),
+                    _ => Err(NonReprenable(format!(
+                        "phase de relance non reprenable: {phase}"
+                    ))),
+                };
+            }
+            // Réservation préparée survivante : expiry initiale, aucun upsert ni nouveau canonique.
+            state
+                .idempotency
+                .prepared_expiry(&key, now)?
+                .ok_or_else(|| {
+                    NonReprenable("réservation de relance non préparée ou expirée".into())
+                })?
         }
-        Err(error) => {
-            error!("réservation interne de reprise: {error}");
-            return;
+        other => {
+            return Err(NonReprenable(format!(
+                "réservation interne inattendue pour {}: {other:?}",
+                reconstructed.snapshot.execution_id
+            )));
         }
     };
-    let message_bytes = match serde_json::to_vec(&reconstructed.message) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            error!("sérialisation de l'enveloppe reprise: {error}");
-            return;
-        }
-    };
+    let message_bytes = serde_json::to_vec(&reconstructed.message)
+        .map_err(|error| NonReprenable(error.to_string()))?;
     let delivery = SendDelivery {
         delivery_id: format!("delivery-recovery-{}", reconstructed.snapshot.execution_id),
         recipient_instance_id: instance_id.to_string(),
@@ -6494,32 +6584,31 @@ fn schedule_execution_recovery(
         submission_id: reconstructed.message.id.clone(),
         execution_id: reconstructed.snapshot.execution_id.clone(),
     };
-    if let Err(error) = state
+    state
         .idempotency
-        .begin_send_delivery_with_execution(&key, &delivery, None, &link)
-    {
-        error!("gravure de la remise de reprise: {error}");
-        return;
-    }
+        .begin_send_delivery_with_execution(&key, &delivery, None, &link)?;
     get_metrics().record_execution_admitted();
-
     let mut controls = Vec::new();
     if let Err(error) =
         defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls, None, None)
     {
-        error!("remise de reprise non sérialisable: {error}");
-        let _ = state.idempotency.mark_delivery_indeterminate(
-            &delivery.delivery_id,
-            &delivery.recipient_instance_id,
-            delivery.delivery_generation,
-        );
-        return;
+        // L’ancien chemin garde sa quarantaine. Le contrat String de defer ne
+        // permet pas d’inventer une classification métier d’une erreur SQL.
+        if !quota_relaunch {
+            let _ = state.idempotency.mark_delivery_indeterminate(
+                &delivery.delivery_id,
+                &delivery.recipient_instance_id,
+                delivery.delivery_generation,
+            );
+        }
+        return Err(Storage(error));
     }
     state
         .pending_post_response_controls
         .entry(conn_id.to_string())
         .or_default()
         .extend(controls);
+    Ok("dispatching")
 }
 
 /// Lance le daemon.
@@ -9044,15 +9133,35 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         .map(|pending| {
             (
                 pending.msg_id.clone(),
-                native_delegation::request_frozen_secs(state, &pending.msg_id, unix_timestamp()),
+                native_delegation::request_frozen_secs(state, &pending.msg_id, unix_timestamp())
+                    .and_then(|frozen| match frozen {
+                        None => Ok(None),
+                        Some(secs) => {
+                            state
+                                .delegation_store
+                                .for_mission(&pending.msg_id)
+                                .map(|task| {
+                                    let quota_waiting = task.is_some_and(|task| {
+                                        task.quota_hold.is_some()
+                                            || task.quota_waits.last().is_some_and(|wait| {
+                                                wait.phase
+                                                    != crate::delegation::QuotaWaitPhase::Done
+                                                    && unix_timestamp()
+                                                        < wait.reset_at.saturating_add(30)
+                                            })
+                                    });
+                                    Some((secs, quota_waiting))
+                                })
+                        }
+                    }),
             )
         })
         .collect();
     for pending in state.pending_replies.iter_mut() {
         match frozen.get(&pending.msg_id) {
-            Some(Ok(Some(secs))) => {
+            Some(Ok(Some((secs, quota_waiting)))) => {
                 pending.frozen_secs = *secs;
-                if paused {
+                if paused || *quota_waiting {
                     continue;
                 }
             }
@@ -22371,11 +22480,27 @@ fn handle_wrapper_message_with_peer(
             Some(result)
         }
 
-        WrapperToDaemon::DeliveryRejected { id, reason } => {
+        WrapperToDaemon::DeliveryRejected {
+            id,
+            reason,
+            execution_id,
+            generation,
+        } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            match native_delegation::rejected(&st, conn_id, &id, &reason) {
-                Ok(true) => return None,
-                Ok(false) => {}
+            match native_delegation::rejected(
+                &mut st,
+                conn_id,
+                &id,
+                &reason,
+                execution_id.as_deref(),
+                generation,
+            ) {
+                Ok(native_delegation::NativeRejection::Pass) => {}
+                Ok(native_delegation::NativeRejection::NativeFailed) => {
+                    st.pending_replies.retain(|pending| pending.msg_id != id);
+                    return None;
+                }
+                Ok(_) => return None,
                 Err(error) => {
                     error!("refus de mission native non qualifié ou non persisté: {error}");
                     return None;
@@ -41997,6 +42122,8 @@ mod presence_tests {
         handle_wrapper_message(
             "conn-1",
             WrapperToDaemon::DeliveryRejected {
+                execution_id: None,
+                generation: None,
                 id: "message-humain".to_string(),
                 reason: "adaptateur refusé".to_string(),
             },
@@ -45588,6 +45715,8 @@ mod presence_tests {
         handle_wrapper_message(
             "conn-1",
             WrapperToDaemon::DeliveryRejected {
+                execution_id: None,
+                generation: None,
                 id: "request-timeout".to_string(),
                 reason: "échéance de livraison dépassée".to_string(),
             },
@@ -47427,6 +47556,711 @@ mod presence_tests {
             expires,
             vec!["vers-agent"],
             "la garde doit rester entière vers un agent, reçu {expires:?}"
+        );
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    // T019 : quatre checkpoints durables et Prepared-only ordinaire.
+    #[test]
+    fn native160_relance_remise_reservation_absente() {
+        let (mut state, config) = state_with_registered_agent("n160-remise-absente");
+        let (writer, mut reader) = control_socket("n160-remise-absente");
+        state.connections.insert("conn-1".into(), writer);
+        let issued_at = unix_now_secs() - 7;
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "reprends ce corps exact",
+        );
+        message.id = "n160-remise-absente-message".into();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "n160-remise-absente-parent", issued_at)
+            .unwrap();
+        let crate::execution_store::ExecutionRecoveryOutcome::Reconstructed(reconstructed) = state
+            .execution_store
+            .reconstruct_active_for_agent(
+                &message.to,
+                "instance-1",
+                "n160-remise-absente-child",
+                issued_at,
+            )
+            .unwrap()
+        else {
+            panic!("reconstruction durable attendue");
+        };
+        let scope = state.idempotency.supervisor_scope().unwrap();
+        let key = IdempotencyKey::new(
+            scope,
+            OperationKind::Send,
+            format!("recovery-{}", reconstructed.snapshot.execution_id),
+        )
+        .unwrap();
+        assert!(
+            state
+                .idempotency
+                .stored_send_delivery(&key)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            deliver_reconstructed(
+                &mut state,
+                "conn-1",
+                "instance-1",
+                &reconstructed,
+                issued_at,
+                true
+            )
+            .unwrap(),
+            "dispatching"
+        );
+        let stored = state
+            .idempotency
+            .stored_send_delivery(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.delivery_id,
+            format!("delivery-recovery-{}", reconstructed.snapshot.execution_id)
+        );
+        assert_eq!(stored.recipient_instance_id, "instance-1");
+        let link = state
+            .idempotency
+            .delivery_execution_link(&stored.delivery_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.execution_id, reconstructed.snapshot.execution_id);
+        assert_eq!(link.submission_id, message.id);
+        let controls = state
+            .pending_post_response_controls
+            .remove("conn-1")
+            .unwrap();
+        assert_eq!(controls.len(), 1);
+        assert!(execute_controls(controls).is_empty());
+        let frame = read_control(&mut reader);
+        assert!(
+            matches!(frame, DaemonToWrapper::DeliverIdempotent {
+            ref delivery_id, ref message, execution: Some(ref execution), ..
+        } if delivery_id == &stored.delivery_id && message.id == reconstructed.message.id
+            && message.body == reconstructed.message.body && message.origin == reconstructed.message.origin
+            && message.intent == reconstructed.message.intent
+            && execution.execution_id == reconstructed.snapshot.execution_id && execution.generation == 2),
+            "{frame:?}"
+        );
+        let before: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+        assert_eq!(
+            before.0,
+            canonical_send(
+                &key.issuer_scope,
+                &key.idempotency_key,
+                &reconstructed.message,
+                issued_at
+            )
+        );
+        assert_eq!(
+            before.1,
+            serde_json::to_vec(&reconstructed.message).unwrap()
+        );
+        assert_eq!(before.5, "dispatching");
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native160_relance_remise_reservation_sans_gravure() {
+        let (mut state, config) = state_with_registered_agent("n160-remise-preparee");
+        let (writer, mut reader) = control_socket("n160-remise-preparee");
+        state.connections.insert("conn-1".into(), writer);
+        let issued_at = unix_now_secs() - 7;
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "reprends ce corps exact",
+        );
+        message.id = "n160-remise-preparee-message".into();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "n160-remise-preparee-parent", issued_at)
+            .unwrap();
+        let crate::execution_store::ExecutionRecoveryOutcome::Reconstructed(reconstructed) = state
+            .execution_store
+            .reconstruct_active_for_agent(
+                &message.to,
+                "instance-1",
+                "n160-remise-preparee-child",
+                issued_at,
+            )
+            .unwrap()
+        else {
+            panic!("reconstruction durable attendue");
+        };
+        let scope = state.idempotency.supervisor_scope().unwrap();
+        let key = IdempotencyKey::new(
+            scope,
+            OperationKind::Send,
+            format!("recovery-{}", reconstructed.snapshot.execution_id),
+        )
+        .unwrap();
+        let canonical = canonical_send(
+            &key.issuer_scope,
+            &key.idempotency_key,
+            &reconstructed.message,
+            issued_at,
+        );
+        let Reservation::Prepared { expires_at } = state
+            .idempotency
+            .reserve(
+                &key,
+                &canonical,
+                issued_at,
+                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                unix_now_secs(),
+                CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            )
+            .unwrap()
+        else {
+            panic!("réservation préparée attendue");
+        };
+        assert_eq!(
+            state
+                .idempotency
+                .prepared_expiry(&key, unix_now_secs())
+                .unwrap(),
+            Some(expires_at)
+        );
+        assert!(
+            state
+                .idempotency
+                .send_delivery_phase(&key)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            deliver_reconstructed(
+                &mut state,
+                "conn-1",
+                "instance-1",
+                &reconstructed,
+                issued_at,
+                true
+            )
+            .unwrap(),
+            "dispatching"
+        );
+        let stored = state
+            .idempotency
+            .stored_send_delivery(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.delivery_id,
+            format!("delivery-recovery-{}", reconstructed.snapshot.execution_id)
+        );
+        assert_eq!(stored.recipient_instance_id, "instance-1");
+        let link = state
+            .idempotency
+            .delivery_execution_link(&stored.delivery_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.execution_id, reconstructed.snapshot.execution_id);
+        assert_eq!(link.submission_id, message.id);
+        let controls = state
+            .pending_post_response_controls
+            .remove("conn-1")
+            .unwrap();
+        assert_eq!(controls.len(), 1);
+        assert!(execute_controls(controls).is_empty());
+        let frame = read_control(&mut reader);
+        assert!(
+            matches!(frame, DaemonToWrapper::DeliverIdempotent {
+            ref delivery_id, ref message, execution: Some(ref execution), ..
+        } if delivery_id == &stored.delivery_id && message.id == reconstructed.message.id
+            && message.body == reconstructed.message.body && message.origin == reconstructed.message.origin
+            && message.intent == reconstructed.message.intent
+            && execution.execution_id == reconstructed.snapshot.execution_id && execution.generation == 2),
+            "{frame:?}"
+        );
+        let before: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+        assert_eq!(
+            before.0,
+            canonical_send(
+                &key.issuer_scope,
+                &key.idempotency_key,
+                &reconstructed.message,
+                issued_at
+            )
+        );
+        assert_eq!(
+            before.1,
+            serde_json::to_vec(&reconstructed.message).unwrap()
+        );
+        assert_eq!(before.5, "dispatching");
+        assert_eq!(
+            before.3, expires_at,
+            "le rejeu ne prolonge pas la réservation"
+        );
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native160_relance_remise_dispatching_rejeu_sans_emission() {
+        let (mut state, config) = state_with_registered_agent("n160-remise-dispatching");
+        let (writer, mut reader) = control_socket("n160-remise-dispatching");
+        state.connections.insert("conn-1".into(), writer);
+        let issued_at = unix_now_secs() - 7;
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "reprends ce corps exact",
+        );
+        message.id = "n160-remise-dispatching-message".into();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "n160-remise-dispatching-parent", issued_at)
+            .unwrap();
+        let crate::execution_store::ExecutionRecoveryOutcome::Reconstructed(reconstructed) = state
+            .execution_store
+            .reconstruct_active_for_agent(
+                &message.to,
+                "instance-1",
+                "n160-remise-dispatching-child",
+                issued_at,
+            )
+            .unwrap()
+        else {
+            panic!("reconstruction durable attendue");
+        };
+        let scope = state.idempotency.supervisor_scope().unwrap();
+        let key = IdempotencyKey::new(
+            scope,
+            OperationKind::Send,
+            format!("recovery-{}", reconstructed.snapshot.execution_id),
+        )
+        .unwrap();
+        assert_eq!(
+            deliver_reconstructed(
+                &mut state,
+                "conn-1",
+                "instance-1",
+                &reconstructed,
+                issued_at,
+                true
+            )
+            .unwrap(),
+            "dispatching"
+        );
+        let stored = state
+            .idempotency
+            .stored_send_delivery(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.delivery_id,
+            format!("delivery-recovery-{}", reconstructed.snapshot.execution_id)
+        );
+        assert_eq!(stored.recipient_instance_id, "instance-1");
+        let link = state
+            .idempotency
+            .delivery_execution_link(&stored.delivery_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.execution_id, reconstructed.snapshot.execution_id);
+        assert_eq!(link.submission_id, message.id);
+        let controls = state
+            .pending_post_response_controls
+            .remove("conn-1")
+            .unwrap();
+        assert_eq!(controls.len(), 1);
+        assert!(execute_controls(controls).is_empty());
+        let frame = read_control(&mut reader);
+        assert!(
+            matches!(frame, DaemonToWrapper::DeliverIdempotent {
+            ref delivery_id, ref message, execution: Some(ref execution), ..
+        } if delivery_id == &stored.delivery_id && message.id == reconstructed.message.id
+            && message.body == reconstructed.message.body && message.origin == reconstructed.message.origin
+            && message.intent == reconstructed.message.intent
+            && execution.execution_id == reconstructed.snapshot.execution_id && execution.generation == 2),
+            "{frame:?}"
+        );
+        let before: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+        assert_eq!(
+            before.0,
+            canonical_send(
+                &key.issuer_scope,
+                &key.idempotency_key,
+                &reconstructed.message,
+                issued_at
+            )
+        );
+        assert_eq!(
+            before.1,
+            serde_json::to_vec(&reconstructed.message).unwrap()
+        );
+        assert_eq!(before.5, "dispatching");
+        for _ in 0..2 {
+            assert_eq!(
+                deliver_reconstructed(
+                    &mut state,
+                    "conn-1",
+                    "instance-1",
+                    &reconstructed,
+                    issued_at,
+                    true
+                )
+                .unwrap(),
+                "dispatching"
+            );
+            assert!(
+                state
+                    .pending_post_response_controls
+                    .get("conn-1")
+                    .is_none_or(Vec::is_empty)
+            );
+            let after: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+            assert_eq!(
+                after, before,
+                "canonique, corps, génération, échéance et instance restent figés"
+            );
+        }
+        reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(
+            reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native160_relance_remise_acked_seule_phase_de_solde() {
+        let (mut state, config) = state_with_registered_agent("n160-remise-acked");
+        let (writer, mut reader) = control_socket("n160-remise-acked");
+        state.connections.insert("conn-1".into(), writer);
+        let issued_at = unix_now_secs() - 7;
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "reprends ce corps exact",
+        );
+        message.id = "n160-remise-acked-message".into();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "n160-remise-acked-parent", issued_at)
+            .unwrap();
+        let crate::execution_store::ExecutionRecoveryOutcome::Reconstructed(reconstructed) = state
+            .execution_store
+            .reconstruct_active_for_agent(
+                &message.to,
+                "instance-1",
+                "n160-remise-acked-child",
+                issued_at,
+            )
+            .unwrap()
+        else {
+            panic!("reconstruction durable attendue");
+        };
+        let scope = state.idempotency.supervisor_scope().unwrap();
+        let key = IdempotencyKey::new(
+            scope,
+            OperationKind::Send,
+            format!("recovery-{}", reconstructed.snapshot.execution_id),
+        )
+        .unwrap();
+        assert_eq!(
+            deliver_reconstructed(
+                &mut state,
+                "conn-1",
+                "instance-1",
+                &reconstructed,
+                issued_at,
+                true
+            )
+            .unwrap(),
+            "dispatching"
+        );
+        let stored = state
+            .idempotency
+            .stored_send_delivery(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.delivery_id,
+            format!("delivery-recovery-{}", reconstructed.snapshot.execution_id)
+        );
+        assert_eq!(stored.recipient_instance_id, "instance-1");
+        let link = state
+            .idempotency
+            .delivery_execution_link(&stored.delivery_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.execution_id, reconstructed.snapshot.execution_id);
+        assert_eq!(link.submission_id, message.id);
+        let controls = state
+            .pending_post_response_controls
+            .remove("conn-1")
+            .unwrap();
+        assert_eq!(controls.len(), 1);
+        assert!(execute_controls(controls).is_empty());
+        let frame = read_control(&mut reader);
+        assert!(
+            matches!(frame, DaemonToWrapper::DeliverIdempotent {
+            ref delivery_id, ref message, execution: Some(ref execution), ..
+        } if delivery_id == &stored.delivery_id && message.id == reconstructed.message.id
+            && message.body == reconstructed.message.body && message.origin == reconstructed.message.origin
+            && message.intent == reconstructed.message.intent
+            && execution.execution_id == reconstructed.snapshot.execution_id && execution.generation == 2),
+            "{frame:?}"
+        );
+        // Vrai handler d’ACK : instance de connexion et génération de la remise vérifiées.
+        assert!(
+            handle_delivery_ack(
+                "conn-1",
+                stored.delivery_id.clone(),
+                stored.delivery_generation,
+                &mut state
+            )
+            .is_none()
+        );
+        let before: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+        assert_eq!(
+            before.0,
+            canonical_send(
+                &key.issuer_scope,
+                &key.idempotency_key,
+                &reconstructed.message,
+                issued_at
+            )
+        );
+        assert_eq!(
+            before.1,
+            serde_json::to_vec(&reconstructed.message).unwrap()
+        );
+        assert_eq!(before.5, "acked");
+        for _ in 0..2 {
+            // Ancien ACK conservé, sans réaffectation. Gardes du caller hors de cet oracle.
+            assert_eq!(
+                deliver_reconstructed(
+                    &mut state,
+                    "conn-1",
+                    "instance-after-reconnect",
+                    &reconstructed,
+                    issued_at,
+                    true
+                )
+                .unwrap(),
+                "acked"
+            );
+            assert!(
+                state
+                    .pending_post_response_controls
+                    .get("conn-1")
+                    .is_none_or(Vec::is_empty)
+            );
+            let after: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+            assert_eq!(
+                after, before,
+                "canonique, corps, génération, échéance et instance restent figés"
+            );
+        }
+        reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(
+            reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn native160_relance_remise_ordinaire_prepared_only() {
+        let (mut state, config) = state_with_registered_agent("n160-remise-ordinary");
+        let (writer, mut reader) = control_socket("n160-remise-ordinary");
+        state.connections.insert("conn-1".into(), writer);
+        let issued_at = unix_now_secs() - 7;
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "reprends ce corps exact",
+        );
+        message.id = "n160-remise-ordinary-message".into();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "n160-remise-ordinary-parent", issued_at)
+            .unwrap();
+        let crate::execution_store::ExecutionRecoveryOutcome::Reconstructed(reconstructed) = state
+            .execution_store
+            .reconstruct_active_for_agent(
+                &message.to,
+                "instance-1",
+                "n160-remise-ordinary-child",
+                issued_at,
+            )
+            .unwrap()
+        else {
+            panic!("reconstruction durable attendue");
+        };
+        let scope = state.idempotency.supervisor_scope().unwrap();
+        let key = IdempotencyKey::new(
+            scope,
+            OperationKind::Send,
+            format!("recovery-{}", reconstructed.snapshot.execution_id),
+        )
+        .unwrap();
+        assert_eq!(
+            deliver_reconstructed(
+                &mut state,
+                "conn-1",
+                "instance-1",
+                &reconstructed,
+                issued_at,
+                false
+            )
+            .unwrap(),
+            "dispatching"
+        );
+        let stored = state
+            .idempotency
+            .stored_send_delivery(&key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.delivery_id,
+            format!("delivery-recovery-{}", reconstructed.snapshot.execution_id)
+        );
+        assert_eq!(stored.recipient_instance_id, "instance-1");
+        let link = state
+            .idempotency
+            .delivery_execution_link(&stored.delivery_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.execution_id, reconstructed.snapshot.execution_id);
+        assert_eq!(link.submission_id, message.id);
+        let controls = state
+            .pending_post_response_controls
+            .remove("conn-1")
+            .unwrap();
+        assert_eq!(controls.len(), 1);
+        assert!(execute_controls(controls).is_empty());
+        let frame = read_control(&mut reader);
+        assert!(
+            matches!(frame, DaemonToWrapper::DeliverIdempotent {
+            ref delivery_id, ref message, execution: Some(ref execution), ..
+        } if delivery_id == &stored.delivery_id && message.id == reconstructed.message.id
+            && message.body == reconstructed.message.body && message.origin == reconstructed.message.origin
+            && message.intent == reconstructed.message.intent
+            && execution.execution_id == reconstructed.snapshot.execution_id && execution.generation == 2),
+            "{frame:?}"
+        );
+        let before: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+        assert_eq!(
+            before.0,
+            canonical_send(
+                &key.issuer_scope,
+                &key.idempotency_key,
+                &reconstructed.message,
+                issued_at
+            )
+        );
+        assert_eq!(
+            before.1,
+            serde_json::to_vec(&reconstructed.message).unwrap()
+        );
+        assert_eq!(before.5, "dispatching");
+        for _ in 0..2 {
+            assert!(
+                matches!(
+                    deliver_reconstructed(
+                        &mut state,
+                        "conn-1",
+                        "instance-1",
+                        &reconstructed,
+                        issued_at,
+                        false
+                    ),
+                    Err(ReconstructedDeliveryError::NonReprenable(_))
+                ),
+                "ordinary refuse Replayed"
+            );
+            assert!(
+                state
+                    .pending_post_response_controls
+                    .get("conn-1")
+                    .is_none_or(Vec::is_empty)
+            );
+            let after: (Vec<u8>, Vec<u8>, u64, i64, String, String) = state.store.connection().query_row(
+            "SELECT r.canonical_bytes,d.message_bytes,d.delivery_generation,d.expires_at,d.recipient_instance_id,d.phase
+             FROM send_deliveries d JOIN idempotency_records r USING(issuer_scope,operation_kind,idempotency_key)
+             WHERE d.issuer_scope=?1 AND d.idempotency_key=?2",
+            rusqlite::params![key.issuer_scope,key.idempotency_key],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+        ).unwrap();
+            assert_eq!(
+                after, before,
+                "canonique, corps, génération, échéance et instance restent figés"
+            );
+        }
+        reader.get_ref().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(
+            reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
         );
         drop(state);
         let _ = std::fs::remove_file(config.db_path);

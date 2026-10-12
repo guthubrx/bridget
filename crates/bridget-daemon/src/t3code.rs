@@ -1907,6 +1907,8 @@ impl LinkWorker {
                 WrapperToDaemon::DeliveryRejected {
                     id: message.id.clone(),
                     reason,
+                    execution_id: None,
+                    generation: None,
                 },
             );
         }
@@ -4970,7 +4972,7 @@ mod tests {
 
     fn rejection113<'a>(frames: &'a [WrapperToDaemon], message_id: &str) -> Option<&'a str> {
         frames.iter().find_map(|frame| match frame {
-            WrapperToDaemon::DeliveryRejected { id, reason } if id == message_id => {
+            WrapperToDaemon::DeliveryRejected { id, reason, .. } if id == message_id => {
                 Some(reason.as_str())
             }
             _ => None,

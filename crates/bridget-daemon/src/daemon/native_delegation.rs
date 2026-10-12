@@ -1,6 +1,8 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
 use super::*;
-use crate::delegation::{Task, WorkspaceRecord, WorkspaceState};
+use crate::delegation::{
+    QuotaHold, QuotaWait, QuotaWaitPhase, Task, WorkspaceRecord, WorkspaceState,
+};
 use bridget_transport::protocol::{
     NativeDelegationRequest, SpawnOwnership, SpawnPosture, WorkspaceRequest,
 };
@@ -186,7 +188,12 @@ pub(super) fn may_resume(
     execution: &str,
     instance: &str,
 ) -> Result<bool, String> {
-    if task.state != "working" {
+    if task.state != "working"
+        || task
+            .quota_waits
+            .last()
+            .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+    {
         return Ok(false);
     }
     let identity = restart_identity(st, task)?;
@@ -222,7 +229,7 @@ fn effective_deadline(st: &DaemonState, task: &Task, now: i64) -> Result<Option<
         .map(|deadline| {
             let from =
                 deadline.saturating_sub(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
-            crate::referent_control::pause_overlap(st.store.connection(), from, now)
+            crate::referent_control::frozen_overlap(st.store.connection(), task, from, now)
                 .map(|frozen| deadline.saturating_add(frozen))
                 .map_err(|error| error.to_string())
         })
@@ -236,15 +243,15 @@ pub(super) fn request_frozen_secs(
     id: &str,
     now: i64,
 ) -> Result<Option<u64>, String> {
-    if st.delegation_store.for_mission(id)?.is_none() {
+    let Some(task) = st.delegation_store.for_mission(id)? else {
         return Ok(None);
-    }
+    };
     let request = st
         .store
         .get_request(id)
         .map_err(|error| error.to_string())?
         .ok_or("request_unavailable")?;
-    crate::referent_control::pause_overlap(st.store.connection(), request.created_at, now)
+    crate::referent_control::frozen_overlap(st.store.connection(), &task, request.created_at, now)
         .map(|frozen| Some(frozen.max(0) as u64))
         .map_err(|error| error.to_string())
 }
@@ -380,12 +387,26 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
         "mission_deadline_at":task.mission_deadline_at,
         "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.continuable(),
-        "result":if full {body} else {None},"error":task.error,
+        "result":if full {body} else {None},"error":task.projected_error(),
         "work_state":work_state,"summary":summary,
         "summary_truncated":body.zip(summary).is_some_and(|(body, summary)| body.len() > summary.len()),
         "result_bytes":body.map(str::len),
         "detail":(workspace_report_ready(task) && matches!(task.state.as_str(),"result_available"|"failed")).then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
         "mailbox":mailbox});
+    view["quota_wait"] = task.quota_waits.last().filter(|wait| task.state == "working" && wait.phase != QuotaWaitPhase::Done)
+        .map(|wait| json!({"round":wait.round,"phase":wait.phase,"resumes_at":wait.reset_at.saturating_add(30)}))
+        .unwrap_or(Value::Null);
+    if let Some(error) = task.error.as_deref()
+        && let Ok(Value::Object(encoded)) = serde_json::from_str::<Value>(error)
+        && encoded.len() == 2
+        && encoded.get("code").and_then(Value::as_str) == Some("usage_limit")
+        && let Some(reset_at) = encoded.get("limit_reset_at").and_then(Value::as_i64)
+    {
+        view["error"] = json!("usage_limit");
+        if let Some(detail) = view["detail"].as_object_mut() {
+            detail.insert("limit_reset_at".into(), json!(reset_at));
+        }
+    }
     view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
         view["workspace"] = json!({"strategy":workspace.strategy,"state":workspace.state,
@@ -1349,6 +1370,7 @@ fn admit_delegate(
         workspace,
         keep_alive_secs,
         brief,
+        ..
     } = request
     else {
         return Err("invalid_request".into());
@@ -1841,6 +1863,8 @@ fn admit_delegate(
             guarded: keep_alive_secs.is_some(),
             guard_released: false,
             unacked_rounds: Vec::new(),
+            quota_waits: Vec::new(),
+            quota_hold: None,
             workspace: if let WorkspacePass::Commit { record, .. } = pass {
                 Some(record.clone())
             } else {
@@ -2067,7 +2091,7 @@ fn handle_locked_with_project(
                         "development_refusal":development.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),"can_run":can_run,"constraints":constraints,"quota":quota})
                 }).collect();
             Ok(
-                json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
+                json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3,"resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -2824,6 +2848,19 @@ pub(super) fn capture_reply(
     if message.body.len() > 262144 || message.body.trim().is_empty() {
         return Err("native_result_invalid".into());
     }
+    if quota_enabled(&task) && task.state == "working" {
+        if task.quota_hold.is_some() {
+            return Ok(true);
+        }
+        if task
+            .quota_waits
+            .last()
+            .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+            && !settle_quota_acked(st, &mut task, unix_timestamp())?
+        {
+            return Ok(true);
+        }
+    }
     if !task.terminal() && task.state != "cancelling" && task.result.is_none() {
         task.result = Some(message.body.clone());
         task.state = "waiting_for_children".into();
@@ -2837,33 +2874,642 @@ pub(super) fn capture_reply(
 /// Complexité : O(b + log T + L(c) + log P), L(c) coût de latest_in_chain sur c maillons.
 /// b octets du payload de tâche, T tâches et P pauses ; hors latences système.
 pub(super) fn rejected(
-    st: &DaemonState,
+    st: &mut DaemonState,
     conn: &str,
     mission: &str,
     reason: &str,
-) -> Result<bool, String> {
+    execution_id: Option<&str>,
+    generation: Option<u64>,
+) -> Result<NativeRejection, String> {
     let Some(mut task) = st.delegation_store.for_mission(mission)? else {
-        return Ok(false);
+        return Ok(NativeRejection::Pass);
     };
-    if task.terminal()
-        || task.state == "cancelling"
-        || task.child_instance.as_deref() != st.conn_instances.get(conn).map(String::as_str)
+    let opt_in = quota_enabled(&task);
+    if task.child_instance.as_deref() != st.conn_instances.get(conn).map(String::as_str) {
+        return Ok(if opt_in {
+            NativeRejection::StaleIgnored
+        } else {
+            NativeRejection::Pass
+        });
+    }
+    if !opt_in {
+        if task.terminal() || task.state == "cancelling" {
+            return Ok(NativeRejection::Pass);
+        }
+        if reason == "tour annulé par le pilote"
+            && let Some(snapshot) = st
+                .execution_store
+                .latest_in_chain(&format!("execution-{}", task.mission))
+                .map_err(|error| error.to_string())?
+            && pause_covers(st, &snapshot.execution_id, true)?
+        {
+            return Ok(NativeRejection::PauseInterruption);
+        }
+        task.state = "failed".into();
+        task.error = Some(reason.chars().take(1024).collect());
+        st.delegation_store.save(&task)?;
+        return Ok(NativeRejection::Pass);
+    }
+    let snapshot = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|error| error.to_string())?;
+    if let Some(current) = snapshot.as_ref()
+        && (execution_id.is_some_and(|id| id != current.execution_id)
+            || generation.is_some_and(|generation| generation != current.generation))
     {
-        return Ok(false);
+        return Ok(NativeRejection::StaleIgnored);
+    }
+    if (execution_id.is_none() || generation.is_none() || snapshot.is_none())
+        && (snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.generation > 1)
+            || task
+                .quota_waits
+                .iter()
+                .any(|wait| wait.resume_execution_id.is_some()))
+    {
+        if !task.terminal() && task.state != "cancelling" {
+            fail_quota_task(
+                st,
+                &mut task,
+                "native_refusal_uncorrelated",
+                unix_timestamp(),
+            )?;
+        }
+        return Ok(NativeRejection::NativeFailed);
+    }
+    if task.terminal() || task.state == "cancelling" || task.state != "working" {
+        return Ok(NativeRejection::NativeFailed);
     }
     if reason == "tour annulé par le pilote"
-        && let Some(snapshot) = st
-            .execution_store
-            .latest_in_chain(&format!("execution-{}", task.mission))
-            .map_err(|error| error.to_string())?
+        && let Some(snapshot) = snapshot.as_ref()
         && pause_covers(st, &snapshot.execution_id, true)?
     {
-        return Ok(true);
+        return Ok(NativeRejection::PauseInterruption);
     }
+    if task
+        .quota_waits
+        .last()
+        .is_some_and(|wait| wait.phase == QuotaWaitPhase::Relaunching)
+    {
+        settle_quota_acked(st, &mut task, unix_timestamp())?;
+    }
+    if let Some(wait) = task
+        .quota_waits
+        .last()
+        .filter(|wait| wait.phase != QuotaWaitPhase::Done)
+    {
+        if wait.phase == QuotaWaitPhase::Relaunching
+            && snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.execution_id != wait.execution_id)
+        {
+            fail_quota_task(st, &mut task, "native_relaunch_failed", unix_timestamp())?;
+            return Ok(NativeRejection::NativeFailed);
+        }
+        return Ok(NativeRejection::QuotaHold);
+    }
+    let Some(snapshot) = snapshot else {
+        fail_quota_task(st, &mut task, reason, unix_timestamp())?;
+        return Ok(NativeRejection::NativeFailed);
+    };
+    handle_quota_failure(st, &mut task, &snapshot, reason, unix_timestamp())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NativeRejection {
+    Pass,
+    PauseInterruption,
+    QuotaHold,
+    NativeFailed,
+    StaleIgnored,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Qualification {
+    Wait { reset_at: i64 },
+    TooFar { reset_at: i64 },
+    Past { reset_at: i64 },
+    RoundsDone { reset_at: i64 },
+    NoFact,
+}
+
+/// O(1+B) : motif Delegate fermé, sans nouveau fait durable ; B octets de labels.
+fn quota_enabled(task: &Task) -> bool {
+    matches!(
+        &task.request,
+        NativeDelegationRequest::Delegate {
+            resume_on_limit: Some(true),
+            ..
+        }
+    )
+}
+
+/// O(log p+Q), p fournisseurs, Q<=8 fenêtres attestées ; lecture pure157.
+/// Le filtre de cinq secondes porte sur chaque observation, jamais sur now.
+fn qualify_quota(
+    task: &Task,
+    now: i64,
+    limits: &crate::provider_limits::ProviderLimits,
+) -> Qualification {
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+        return Qualification::NoFact;
+    };
+    let emission = task
+        .mission_deadline_at
+        .map(|deadline| {
+            deadline.saturating_sub(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS))
+        })
+        .or(task.mission_issued_at)
+        .unwrap_or_else(|| task.quota_hold.as_ref().map_or(now, |hold| hold.since));
+    let since = task
+        .quota_waits
+        .last()
+        .and_then(|wait| wait.until)
+        .map_or(emission, |until| emission.max(until));
+    let Some((reset_at, _)) = limits.attested_exhausted_since(
+        agent_type,
+        since,
+        now,
+        task.quota_hold.as_ref().map(|hold| hold.since),
+    ) else {
+        return Qualification::NoFact;
+    };
+    if reset_at <= now {
+        Qualification::Past { reset_at }
+    } else if task.quota_waits.len() >= 2 {
+        Qualification::RoundsDone { reset_at }
+    } else if reset_at > now.saturating_add(21600) {
+        Qualification::TooFar { reset_at }
+    } else {
+        Qualification::Wait { reset_at }
+    }
+}
+
+/// O(L(c)+log q+log d+B) : c chaîne, q qualifications, d remises, B payload.
+/// Règlement commun échec/annulation/restart : aucun solde sans fermeture CAS.
+fn reconcile_quota_relaunch(
+    st: &mut DaemonState,
+    task: &mut Task,
+    reason: &str,
+    now: i64,
+) -> Result<(), String> {
+    let Some(wait) = task
+        .quota_waits
+        .last()
+        .filter(|wait| wait.phase != QuotaWaitPhase::Done)
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let qualification = st
+        .execution_store
+        .quota_failure_for(&wait.execution_id)
+        .map_err(|error| error.to_string())?;
+    let resumed = match qualification {
+        Some((identity, reset, _, resumed)) => {
+            if identity != wait.identity || reset != wait.reset_at {
+                return Err("native_execution_changed".into());
+            }
+            if wait.resume_execution_id.is_some() && wait.resume_execution_id != resumed {
+                return Err("native_execution_changed".into());
+            }
+            resumed.or(wait.resume_execution_id.clone())
+        }
+        None => wait.resume_execution_id.clone(),
+    };
+    close_lost_execution(st, task, reason)?;
+    if let Some(execution) = &resumed {
+        let scope = st
+            .idempotency
+            .supervisor_scope()
+            .map_err(|error| error.to_string())?;
+        let key = IdempotencyKey::new(scope, OperationKind::Send, format!("recovery-{execution}"))
+            .map_err(|error| error.to_string())?;
+        if let Some(delivery) = st
+            .idempotency
+            .stored_send_delivery(&key)
+            .map_err(|error| error.to_string())?
+            && delivery.phase == "dispatching"
+        {
+            st.idempotency
+                .mark_delivery_indeterminate(
+                    &delivery.delivery_id,
+                    &delivery.recipient_instance_id,
+                    delivery.delivery_generation,
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    let wait = task
+        .quota_waits
+        .last_mut()
+        .ok_or("native_execution_changed")?;
+    if reason.starts_with("native_cancelled") {
+        wait.phase = QuotaWaitPhase::Done;
+        wait.until.get_or_insert(now);
+    }
+    wait.resume_execution_id = resumed;
+    task.quota_hold = None;
+    Ok(())
+}
+
+/// O(L(c)+log q+log d+B), mêmes magasins et checkpoints que152 ; jamais un faux solde.
+fn fail_quota_task(
+    st: &mut DaemonState,
+    task: &mut Task,
+    error: &str,
+    now: i64,
+) -> Result<(), String> {
+    if task.terminal() || task.state == "cancelling" {
+        return Ok(());
+    }
+    if task
+        .quota_waits
+        .last()
+        .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+        && task.error.as_deref() != Some(error)
+    {
+        task.error = Some(error.chars().take(1024).collect());
+        st.delegation_store.save(task)?;
+    }
+    reconcile_quota_relaunch(st, task, error, now)?;
+    close_lost_execution(st, task, error)?;
+    task.quota_hold = None;
     task.state = "failed".into();
-    task.error = Some(reason.chars().take(1024).collect());
-    st.delegation_store.save(&task)?;
-    Ok(false)
+    task.error = Some(error.chars().take(1024).collect());
+    st.delegation_store.save(task)?;
+    st.pending_replies
+        .retain(|pending| pending.msg_id != task.mission);
+    Ok(())
+}
+
+/// O(log q+L(c)+log p+B). Un seul domaine décisionnel : refus A, lecture B et hold.
+/// L'intent Hold précède la qualification ; SQL précède toujours TaskWait.
+fn handle_quota_failure(
+    st: &mut DaemonState,
+    task: &mut Task,
+    execution: &crate::execution_store::ExecutionSnapshot,
+    error: &str,
+    now: i64,
+) -> Result<NativeRejection, String> {
+    if task
+        .quota_waits
+        .last()
+        .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+    {
+        return Ok(NativeRejection::QuotaHold);
+    }
+    if execution.state != "failed" {
+        fail_quota_task(st, task, error, now)?;
+        return Ok(NativeRejection::NativeFailed);
+    }
+    if task.quota_hold.is_none() {
+        match qualify_quota(task, now, &st.provider_limits) {
+            Qualification::TooFar { reset_at }
+            | Qualification::Past { reset_at }
+            | Qualification::RoundsDone { reset_at } => {
+                let error = json!({"code":"usage_limit","limit_reset_at":reset_at}).to_string();
+                fail_quota_task(st, task, &error, now)?;
+                return Ok(NativeRejection::NativeFailed);
+            }
+            _ => {}
+        }
+        task.quota_hold = Some(QuotaHold {
+            since: now,
+            error: error.chars().take(1024).collect(),
+            execution_id: execution.execution_id.clone(),
+        });
+        st.delegation_store.save(task)?;
+    }
+    let hold = task
+        .quota_hold
+        .as_ref()
+        .ok_or("native_execution_changed")?
+        .clone();
+    if hold.execution_id != execution.execution_id {
+        fail_quota_task(st, task, "native_relaunch_failed", now)?;
+        return Ok(NativeRejection::NativeFailed);
+    }
+    let round = u8::try_from(task.quota_waits.len() + 1).map_err(|_| "native_relaunch_failed")?;
+    let existing = st
+        .execution_store
+        .quota_failure_for(&hold.execution_id)
+        .map_err(|error| error.to_string())?;
+    let qualified = if let Some((identity, reset_at, at, resumed)) = existing {
+        // M4 : une ancienne qualification sans cet intent n'est jamais adoptée.
+        if at < hold.since
+            || identity != format!("limit-resume:{}:{round}:{reset_at}", task.task_id)
+            || resumed.is_some()
+            || round > 2
+        {
+            fail_quota_task(st, task, "native_relaunch_failed", now)?;
+            return Ok(NativeRejection::NativeFailed);
+        }
+        Some((identity, reset_at, at, resumed))
+    } else {
+        match qualify_quota(task, now, &st.provider_limits) {
+            Qualification::Wait { reset_at } => {
+                let identity = format!("limit-resume:{}:{round}:{reset_at}", task.task_id);
+                match st
+                    .execution_store
+                    .qualify_quota_failure(&hold.execution_id, &identity, reset_at, now)
+                    .map_err(|error| error.to_string())?
+                {
+                    Some(row) => Some(row),
+                    None => {
+                        fail_quota_task(st, task, "native_relaunch_failed", now)?;
+                        return Ok(NativeRejection::NativeFailed);
+                    }
+                }
+            }
+            Qualification::TooFar { reset_at }
+            | Qualification::Past { reset_at }
+            | Qualification::RoundsDone { reset_at } => {
+                let error = json!({"code":"usage_limit","limit_reset_at":reset_at}).to_string();
+                fail_quota_task(st, task, &error, now)?;
+                return Ok(NativeRejection::NativeFailed);
+            }
+            Qualification::NoFact if now >= hold.since.saturating_add(5) => {
+                fail_quota_task(st, task, &hold.error, now)?;
+                return Ok(NativeRejection::NativeFailed);
+            }
+            Qualification::NoFact => None,
+        }
+    };
+    if let Some((identity, reset_at, _, resumed)) = qualified {
+        task.quota_waits.push(QuotaWait {
+            since: hold.since,
+            reset_at,
+            round,
+            identity,
+            execution_id: hold.execution_id,
+            phase: QuotaWaitPhase::Waiting,
+            until: None,
+            resume_execution_id: resumed,
+        });
+        task.quota_hold = None;
+        st.delegation_store.save(task)?;
+    }
+    Ok(NativeRejection::QuotaHold)
+}
+
+/// O(log q+log d+B), settlement ACK partagé par tick, remise et résultat reçu.
+/// Une réponse ne reconstruit jamais : seul l'ACK durable ouvre la capture.
+fn settle_quota_acked(st: &mut DaemonState, task: &mut Task, now: i64) -> Result<bool, String> {
+    if task.error.as_deref().is_some_and(|error| {
+        matches!(
+            error,
+            "native_relaunch_failed" | "native_refusal_uncorrelated" | "mission_reply_timeout"
+        )
+    }) {
+        return Ok(false);
+    }
+    let Some(wait) = task
+        .quota_waits
+        .last()
+        .filter(|wait| wait.phase != QuotaWaitPhase::Done)
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    let Some((identity, reset, _, Some(resumed))) = st
+        .execution_store
+        .quota_failure_for(&wait.execution_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    if identity != wait.identity
+        || reset != wait.reset_at
+        || wait
+            .resume_execution_id
+            .as_ref()
+            .is_some_and(|id| id != &resumed)
+    {
+        return Err("native_execution_changed".into());
+    }
+    let scope = st
+        .idempotency
+        .supervisor_scope()
+        .map_err(|error| error.to_string())?;
+    let key = IdempotencyKey::new(scope, OperationKind::Send, format!("recovery-{resumed}"))
+        .map_err(|error| error.to_string())?;
+    if st
+        .idempotency
+        .send_delivery_phase(&key)
+        .map_err(|error| error.to_string())?
+        .as_deref()
+        != Some("acked")
+    {
+        return Ok(false);
+    }
+    let wait = task
+        .quota_waits
+        .last_mut()
+        .ok_or("native_execution_changed")?;
+    wait.phase = QuotaWaitPhase::Done;
+    wait.until.get_or_insert(now);
+    wait.resume_execution_id = Some(resumed);
+    st.delegation_store.save(task)?;
+    Ok(true)
+}
+
+/// O(L(c)+log q+log d+B) hors E/S ; seules les remises ACKées soldent l'entrée.
+fn relaunch_quota_task(st: &mut DaemonState, task: &mut Task, now: i64) -> Result<(), String> {
+    let Some(mut wait) = task
+        .quota_waits
+        .last()
+        .filter(|wait| wait.phase != QuotaWaitPhase::Done)
+        .cloned()
+    else {
+        return Ok(());
+    };
+    if let Some(error) = task.error.clone().filter(|error| {
+        matches!(
+            error.as_str(),
+            "native_relaunch_failed" | "native_refusal_uncorrelated" | "mission_reply_timeout"
+        )
+    }) {
+        return fail_quota_task(st, task, &error, now);
+    }
+    if task.state != "working"
+        || wait.identity
+            != format!(
+                "limit-resume:{}:{}:{}",
+                task.task_id, wait.round, wait.reset_at
+            )
+        || usize::from(wait.round) != task.quota_waits.len()
+        || wait.round > 2
+    {
+        return Err("native_execution_changed".into());
+    }
+    let control =
+        crate::referent_control::read(st.store.connection()).map_err(|error| error.to_string())?;
+    if !matches!(
+        crate::referent_control::admit_autonomous_effect(
+            crate::referent_control::AutonomousEffect::NativeMissionDispatch,
+            &control
+        ),
+        crate::referent_control::Admission::Admitted
+    ) {
+        return Ok(());
+    }
+    let route = st
+        .router
+        .get_agent(&task.child)
+        .map(|route| route.connection_id.clone());
+    if wait.phase == QuotaWaitPhase::Waiting {
+        if now < wait.reset_at.saturating_add(30) {
+            return Ok(());
+        }
+        let Some(conn) = route.as_deref() else {
+            return Ok(());
+        };
+        let Some(instance) = st.conn_instances.get(conn) else {
+            return Ok(());
+        };
+        if task.child_instance.as_ref() != Some(instance)
+            || live_connection_identity(st, conn) != Some((task.child.clone(), instance.clone()))
+            || !st.presences.get(instance).is_some_and(|presence| {
+                presence.state == "connected" && presence.busy_since.is_none()
+            })
+        {
+            return Ok(());
+        }
+        wait.phase = QuotaWaitPhase::Relaunching;
+        *task
+            .quota_waits
+            .last_mut()
+            .ok_or("native_execution_changed")? = wait.clone();
+        st.delegation_store.save(task)?;
+    }
+    let qualification = st
+        .execution_store
+        .quota_failure_for(&wait.execution_id)
+        .map_err(|error| error.to_string())?;
+    let Some((identity, reset, _, recorded_resume)) = qualification else {
+        return fail_quota_task(st, task, "native_relaunch_failed", now);
+    };
+    if identity != wait.identity || reset != wait.reset_at {
+        return fail_quota_task(st, task, "native_relaunch_failed", now);
+    }
+    // Même absent, relire ACK/issue de la remise existante avant toute reconstruction.
+    let resumed = recorded_resume.or(wait.resume_execution_id.clone());
+    if let Some(execution) = &resumed {
+        let scope = st
+            .idempotency
+            .supervisor_scope()
+            .map_err(|error| error.to_string())?;
+        let key = IdempotencyKey::new(scope, OperationKind::Send, format!("recovery-{execution}"))
+            .map_err(|error| error.to_string())?;
+        match st
+            .idempotency
+            .send_delivery_phase(&key)
+            .map_err(|error| error.to_string())?
+            .as_deref()
+        {
+            Some("acked") => {
+                settle_quota_acked(st, task, now)?;
+                return Ok(());
+            }
+            Some("indeterminate" | "orphaned") => {
+                return fail_quota_task(st, task, "native_relaunch_failed", now);
+            }
+            Some("dispatching") => return Ok(()),
+            Some(_) => return fail_quota_task(st, task, "native_relaunch_failed", now),
+            None => {}
+        }
+    }
+    let Some(conn) = route.as_deref() else {
+        return Ok(());
+    };
+    let Some(instance) = st.conn_instances.get(conn).cloned() else {
+        return Ok(());
+    };
+    if task.child_instance.as_deref() != Some(instance.as_str())
+        || live_connection_identity(st, conn) != Some((task.child.clone(), instance.clone()))
+    {
+        return Ok(());
+    }
+    let child_id = format!("execution-quota-{}", Uuid::new_v4());
+    let recovered = match st.execution_store.reconstruct_quota_failed(
+        &wait.execution_id,
+        &wait.identity,
+        &instance,
+        &child_id,
+        now,
+    ) {
+        Ok(outcome) => outcome,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return fail_quota_task(st, task, "native_relaunch_failed", now);
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let reconstructed = match recovered {
+        crate::execution_store::QuotaRecoveryOutcome::Reconstructed(reconstructed) => {
+            *reconstructed
+        }
+        crate::execution_store::QuotaRecoveryOutcome::AlreadyResumed(execution_id) => {
+            let Some(snapshot) = st
+                .execution_store
+                .execution_snapshot(&execution_id)
+                .map_err(|error| error.to_string())?
+            else {
+                return fail_quota_task(st, task, "native_relaunch_failed", now);
+            };
+            let Some(message) = st
+                .execution_store
+                .execution_message(&execution_id)
+                .map_err(|error| error.to_string())?
+            else {
+                return fail_quota_task(st, task, "native_relaunch_failed", now);
+            };
+            crate::execution_store::ReconstructedExecution {
+                parent_execution_id: wait.execution_id.clone(),
+                snapshot,
+                message,
+            }
+        }
+        _ => return fail_quota_task(st, task, "native_relaunch_failed", now),
+    };
+    let Some(continuation) = st
+        .execution_store
+        .continuation_for(&reconstructed.snapshot.execution_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return fail_quota_task(st, task, "native_relaunch_failed", now);
+    };
+    if continuation.parent_execution_id != wait.execution_id
+        || continuation.reason.as_deref() != Some("usage_limit_reset")
+        || reconstructed.message.id != task.mission
+    {
+        return fail_quota_task(st, task, "native_relaunch_failed", now);
+    }
+    task.quota_waits
+        .last_mut()
+        .ok_or("native_execution_changed")?
+        .resume_execution_id = Some(reconstructed.snapshot.execution_id.clone());
+    st.delegation_store.save(task)?;
+    match deliver_reconstructed(
+        st,
+        conn,
+        &instance,
+        &reconstructed,
+        continuation.observed_at,
+        true,
+    ) {
+        Ok("acked") => {
+            settle_quota_acked(st, task, now)?;
+            Ok(())
+        }
+        Ok("dispatching") => Ok(()),
+        Ok(_) | Err(ReconstructedDeliveryError::NonReprenable(_)) => {
+            fail_quota_task(st, task, "native_relaunch_failed", unix_timestamp())
+        }
+        Err(ReconstructedDeliveryError::Storage(error)) => Err(error),
+    }
 }
 
 /// Identité issue de la flotte et de son lien attesté. Une tâche ancienne peut
@@ -3127,7 +3773,7 @@ pub(super) fn fail_restart(st: &DaemonState, task: &mut Task, reason: &str) -> R
 
 /// Une seule décision durable, avant toute reprise. Le crash ne peut que
 /// sur-compter. La fermeture des groupes précède cette décision au démarrage.
-pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, String> {
+pub(super) fn prepare_restart(st: &mut DaemonState) -> Result<HashSet<String>, String> {
     super::native_child_requests::prepare_restart(st)?;
     let mut children = HashSet::new();
     let now = unix_timestamp();
@@ -3138,6 +3784,22 @@ pub(super) fn prepare_restart(st: &DaemonState) -> Result<HashSet<String>, Strin
             task.guard_released = true;
             task.idle_deadline_at = None;
             st.delegation_store.save(&task)?;
+        }
+        if let Some(hold) = task.quota_hold.clone() {
+            fail_quota_task(st, &mut task, &hold.error, now)?;
+        }
+        if task.state == "working"
+            && task
+                .quota_waits
+                .last()
+                .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+        {
+            if effective_deadline(st, &task, now)?.is_some_and(|deadline| now >= deadline) {
+                fail_quota_task(st, &mut task, "mission_reply_timeout", now)?;
+            } else {
+                children.insert(task.child.clone());
+                continue;
+            }
         }
         if task.state == "failed" {
             // Une feuille encore active d'une mission déjà échouée ne doit
@@ -3434,6 +4096,65 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
         }
         for mut task in tasks.iter().cloned() {
+            if task.state == "cancelling" {
+                match cancellation_root(&st, &task) {
+                    Ok(true) => cancellations.push(task),
+                    Ok(false) => {}
+                    Err(error) => warn!("racine d'annulation illisible: {error}"),
+                }
+                continue;
+            }
+            if quota_enabled(&task) && task.state == "working" && task.quota_hold.is_some() {
+                let hold = task.quota_hold.clone().unwrap();
+                let execution = match st.execution_store.execution_snapshot(&hold.execution_id) {
+                    Ok(Some(snapshot)) => snapshot,
+                    Ok(None) => {
+                        if let Err(error) =
+                            fail_quota_task(&mut st, &mut task, &hold.error, unix_timestamp())
+                        {
+                            warn!("échec hold natif non persisté: {error}");
+                        }
+                        continue;
+                    }
+                    Err(error) => {
+                        warn!("feuille hold native illisible: {error}");
+                        continue;
+                    }
+                };
+                if let Err(error) = handle_quota_failure(
+                    &mut st,
+                    &mut task,
+                    &execution,
+                    &hold.error,
+                    unix_timestamp(),
+                ) {
+                    warn!("décision quota native non persistée: {error}");
+                    continue;
+                }
+                if task.quota_hold.is_some() {
+                    continue;
+                }
+            }
+            // Un échec déjà décidé règle ses écritures sans dispatch, même en pause.
+            if quota_enabled(&task)
+                && task.state == "working"
+                && task
+                    .quota_waits
+                    .last()
+                    .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+                && let Some(error) = task.error.clone().filter(|error| {
+                    matches!(
+                        error.as_str(),
+                        "native_relaunch_failed"
+                            | "native_refusal_uncorrelated"
+                            | "mission_reply_timeout"
+                    )
+                })
+                && let Err(error) = fail_quota_task(&mut st, &mut task, &error, unix_timestamp())
+            {
+                warn!("règlement quota avant pause au checkpoint durable: {error}");
+                continue;
+            }
             if control.paused
                 && matches!(
                     task.state.as_str(),
@@ -3455,14 +4176,6 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     continue;
                 }
                 info!("keep_alive_expired: {}", task.task_id);
-            }
-            if task.state == "cancelling" {
-                match cancellation_root(&st, &task) {
-                    Ok(true) => cancellations.push(task),
-                    Ok(false) => {}
-                    Err(error) => warn!("racine d'annulation illisible: {error}"),
-                }
-                continue;
             }
             let owner = task.owner.clone();
             let owner_proved = if let Some(instance) = st
@@ -3526,14 +4239,55 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 false
             };
             if expired {
-                task.state = "failed".into();
-                task.error = Some("mission_reply_timeout".into());
-                if let Err(error) = st.delegation_store.save(&task) {
-                    error!("échéance native non persistée: {error}");
+                if quota_enabled(&task) {
+                    if let Err(error) = fail_quota_task(
+                        &mut st,
+                        &mut task,
+                        "mission_reply_timeout",
+                        unix_timestamp(),
+                    ) {
+                        error!("échéance quota native non persistée: {error}");
+                        continue;
+                    }
+                } else {
+                    task.state = "failed".into();
+                    task.error = Some("mission_reply_timeout".into());
+                    if let Err(error) = st.delegation_store.save(&task) {
+                        error!("échéance native non persistée: {error}");
+                        continue;
+                    }
+                }
+            }
+            if quota_enabled(&task)
+                && task.state == "working"
+                && task
+                    .quota_waits
+                    .last()
+                    .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+            {
+                let outcome = relaunch_quota_task(&mut st, &mut task, unix_timestamp());
+                if let Some(conn) = st
+                    .router
+                    .get_agent(&task.child)
+                    .map(|route| route.connection_id.clone())
+                    && let Some(mut ready) = st.pending_post_response_controls.remove(&conn)
+                {
+                    controls.append(&mut ready);
+                }
+                if let Err(error) = outcome {
+                    warn!("relance quota native au checkpoint durable: {error}");
+                    continue;
+                }
+                if task.state == "working" {
+                    align_request_deadline(&st, &task);
                     continue;
                 }
             }
             if task.state == "failed" {
+                if quota_enabled(&task) {
+                    st.pending_replies
+                        .retain(|pending| pending.msg_id != task.mission);
+                }
                 let parent_live = owner_proved
                     && st
                         .router
@@ -3548,13 +4302,18 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         .get(&task.owner_instance)
                         .is_some_and(|presence| presence.state == "connected")
                 {
+                    let projected = task_view(&task, None, false);
+                    let error = projected["error"].as_str().unwrap_or("failure");
+                    let description = projected["detail"]["limit_reset_at"].as_i64().map_or_else(
+                        || error.to_string(),
+                        |reset| format!("{error} (retour quota : {reset})"),
+                    );
                     let mut notice = bridget_core::BridgetMessage::new(
                         &task.owner,
                         &task.owner,
                         format!(
                             "Délégation native {} échouée : {}",
-                            task.task_id,
-                            task.error.as_deref().unwrap_or("failure")
+                            task.task_id, description
                         ),
                     );
                     notice.id = format!("native-failure-{}", task.task_id);
@@ -3822,6 +4581,17 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         if let Some(mut ready) = st.pending_post_response_controls.remove(&conn) {
                             controls.append(&mut ready);
                         }
+                    }
+                } else if quota_enabled(&task) {
+                    let reason = snapshot.state.clone();
+                    if let Err(error) = handle_quota_failure(
+                        &mut st,
+                        &mut task,
+                        &snapshot,
+                        &reason,
+                        unix_timestamp(),
+                    ) {
+                        warn!("échec quota chemin B au checkpoint durable: {error}");
                     }
                 } else {
                     task.state = "failed".into();
@@ -4263,7 +5033,7 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         let mut reports = Vec::new();
         let mut closed = Vec::new();
         {
-            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
             // Les demandes ne retardent jamais les arrêts ci-dessus. Elles
             // protègent seulement la finalisation et le nettoyage après arrêt.
             for id in &task_ids {
@@ -4285,6 +5055,18 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
             for id in &task_ids {
                 if let Ok(Some(mut entry)) = st.delegation_store.get(id) {
                     if matches!(entry.state.as_str(), "cancelling" | "cancelled") {
+                        if let Err(error) = reconcile_quota_relaunch(
+                            &mut st,
+                            &mut entry,
+                            "native_cancelled",
+                            unix_timestamp(),
+                        ) {
+                            entry.error = Some("native_cancel_unverifiable:quota_relaunch".into());
+                            let _ = st.delegation_store.save(&entry);
+                            warn!("annulation quota non réglée: {error}");
+                            return;
+                        }
+                        entry.quota_hold = None;
                         // Tous les arrêts ci-dessus sont confirmés. Ne publier la
                         // fin de l'annulation qu'après la clôture CAS de sa mission.
                         if let Err(error) = close_lost_execution(&st, &entry, "native_cancelled") {
@@ -4556,6 +5338,1021 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
+
+    // T003–T037 : admission et remise réelles du harnais150 ; le JSON reste
+    // compilable avant les DTO160. Aucun fournisseur ni processus n'est lancé.
+    fn native160_mission(
+        opt_in: bool,
+    ) -> (
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        Task,
+        BufReader<UnixStream>,
+        BufReader<UnixStream>,
+    ) {
+        let mut request = serde_json::to_value(request_delai_150("quota160", Some(120))).unwrap();
+        request["resume_on_limit"] = json!(opt_in);
+        let parsed = match serde_json::from_value(request.clone()) {
+            Ok(parsed) => parsed,
+            Err(error)
+                if error
+                    .to_string()
+                    .starts_with("unknown field `resume_on_limit`") =>
+            {
+                eprintln!(
+                    "fixture160 : ancien protocole sans opt-in ; aucun scénario opt-in ancien revendiqué"
+                );
+                request.as_object_mut().unwrap().remove("resume_on_limit");
+                serde_json::from_value(request).unwrap()
+            }
+            Err(error) => panic!("fixture Delegate160 invalide : {error}"),
+        };
+        let (state, config, id, _, _) = parent_en_cours_150(parsed, 0);
+        let (parent_writer, parent_reader) = super::super::presence_tests::control_socket("q160p");
+        let (child_writer, child_reader) = super::super::presence_tests::control_socket("q160c");
+        for reader in [&parent_reader, &child_reader] {
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+        }
+        let (task, delivery) = {
+            let mut st = state.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let task = st.delegation_store.get(&id).unwrap().unwrap();
+            let delivery = st
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    &format!("execution-{}", task.mission),
+                    task.child_instance.as_ref().unwrap(),
+                    unix_timestamp(),
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(task.state, "working");
+            assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+            (task, delivery)
+        };
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id: delivery.delivery_id,
+                    delivery_generation: delivery.delivery_generation,
+                },
+                &state
+            )
+            .is_none()
+        );
+        transition_wrapper_152(&state, &task, "running");
+        (state, config, task, parent_reader, child_reader)
+    }
+
+    // Trois usages au moins : les ordres du fait et les bornes d'avis.
+    fn native160_quota(state: &Arc<Mutex<DaemonState>>, task: &Task, reset_at: i64) {
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("fixture160 Delegate")
+        };
+        let start = Instant::now();
+        while unix_timestamp() <= task.started_at.unwrap_or(task.created_at) {
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "horloge fixture sans progression"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut st = state.lock().unwrap();
+        assert!(matches!(
+            super::super::handle_rate_limit(
+                &task.child,
+                "five_hour".into(),
+                "rate_limit_reached".into(),
+                Some(reset_at),
+                Some(100),
+                bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                &mut st,
+            ),
+            DaemonToWrapper::Ack { .. }
+        ));
+        let presence = st
+            .presences
+            .get(task.child_instance.as_ref().unwrap())
+            .unwrap();
+        assert_eq!(presence.agent_type, *agent_type, "fait du vrai type enfant");
+        assert_eq!(
+            task.definition.protocol, "codex_app_server",
+            "sourceCodex cohérente avec le porteur épinglé"
+        );
+        let quota = st
+            .provider_limits
+            .quota(agent_type, unix_timestamp())
+            .expect("fait157 enregistré par le vrai handler pour le type de la Task");
+        assert!(
+            quota.exhausted,
+            "sourceCodexAppServer à100% doit attester une fenêtre"
+        );
+        assert_eq!(quota.resets_at, Some(reset_at));
+        assert_eq!(quota.windows.len(), 1);
+        assert_eq!(quota.windows[0]["window"], "five_hour");
+        assert_eq!(quota.windows[0]["used_percent"], 100);
+        assert_eq!(quota.windows[0]["exhausted"], true);
+        assert!(quota.observed_at > task.started_at.unwrap_or(task.created_at));
+    }
+
+    // Composition de données seulement, consommée par gel/restart/compteur/frontières.
+    fn native160_wait(
+        task: &Task,
+        since: i64,
+        reset_at: i64,
+        round: u8,
+        phase: &str,
+        until: Option<i64>,
+        resume: Option<&str>,
+    ) -> Value {
+        json!({"since":since,"reset_at":reset_at,"round":round,
+            "identity":format!("limit-resume:{}:{round}:{reset_at}",task.task_id),
+            "execution_id":format!("execution-{}",task.mission),"phase":phase,
+            "until":until,"resume_execution_id":resume})
+    }
+
+    #[test]
+    fn native160_rouge_gestionnaire_fait_avant_echec() {
+        for path in ["handler", "tick"] {
+            let (state, config, task, mut parent, _child) = native160_mission(true);
+            let reset = unix_timestamp() + 1800;
+            native160_quota(&state, &task, reset);
+            transition_wrapper_152(&state, &task, "failed");
+            if path == "handler" {
+                let rejection: WrapperToDaemon = serde_json::from_value(json!({
+                    "type":"DeliveryRejected","id":task.mission,"reason":"quota fixture160",
+                    "execution_id":format!("execution-{}",task.mission),"generation":1,
+                }))
+                .unwrap();
+                assert!(handle_wrapper_message("child-conn", rejection, &state).is_none());
+            } else {
+                tick(&state);
+            }
+            let (saved, pending) = {
+                let st = state.lock().unwrap();
+                (
+                    st.delegation_store.get(&task.task_id).unwrap().unwrap(),
+                    st.pending_replies.iter().any(|p| p.msg_id == task.mission),
+                )
+            };
+            let mut raw = String::new();
+            let read = parent.read_line(&mut raw);
+            eprintln!(
+                "T003 {path} : task={}, pending={pending}, parent_read={read:?}, parent_bytes={}",
+                saved.state,
+                raw.len()
+            );
+            cleanup(&config);
+            assert_eq!(
+                saved.state, "working",
+                "{path}: opt-in ne doit pas échouer sur le fait connu"
+            );
+            assert!(pending, "{path}: le suivi de mission est conservé");
+            assert!(raw.is_empty(), "{path}: aucun avis pendant l'attente");
+            let value = serde_json::to_value(saved).unwrap();
+            assert_eq!(value["quota_waits"][0]["phase"], "waiting");
+            assert_eq!(value["quota_waits"][0]["reset_at"], reset);
+        }
+    }
+
+    #[test]
+    fn native160_rouge_gestionnaire_fait_apres_echec() {
+        for path in ["handler", "tick"] {
+            let (state, config, task, mut parent, _child) = native160_mission(true);
+            transition_wrapper_152(&state, &task, "failed");
+            if path == "handler" {
+                let rejection: WrapperToDaemon = serde_json::from_value(json!({
+                    "type":"DeliveryRejected","id":task.mission,"reason":"quota fixture160",
+                    "execution_id":format!("execution-{}",task.mission),"generation":1,
+                }))
+                .unwrap();
+                handle_wrapper_message("child-conn", rejection, &state);
+            } else {
+                tick(&state);
+            }
+            let hold = state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                hold.state, "working",
+                "{path}: décision en attente avant le fait"
+            );
+            assert!(serde_json::to_value(&hold).unwrap()["quota_hold"].is_object());
+            let reset = unix_timestamp() + 1800;
+            native160_quota(&state, &task, reset);
+            tick(&state);
+            let st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, "working");
+            assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+            let value = serde_json::to_value(saved).unwrap();
+            assert_eq!(value["quota_waits"][0]["phase"], "waiting");
+            assert!(value["quota_hold"].is_null());
+            let mut raw = String::new();
+            let _ = parent.read_line(&mut raw);
+            assert!(raw.is_empty(), "aucun avis après le fait tardif admissible");
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native160_rouge_gel_cumule() {
+        let (state, config, mut task, _parent, _child) = native160_mission(true);
+        let now = unix_timestamp();
+        let mut st = state.lock().unwrap();
+        task.reply_timeout = Some(3600);
+        task.mission_deadline_at = Some(now + 1800);
+        let mut value = serde_json::to_value(&task).unwrap();
+        value["quota_waits"] = json!([native160_wait(
+            &task,
+            now - 1800,
+            now + 1800,
+            1,
+            "waiting",
+            None,
+            None
+        )]);
+        task = serde_json::from_value(value).unwrap();
+        st.delegation_store.save(&task).unwrap();
+        st.store
+            .connection()
+            .execute(
+                "UPDATE tracked_requests SET created_at=?1 WHERE id=?2",
+                rusqlite::params![now - 1800, task.mission],
+            )
+            .unwrap();
+        control_pause_a_152(&st, true, now - 1200);
+        control_pause_a_152(&st, false, now - 600);
+        let pause =
+            crate::referent_control::pause_overlap(st.store.connection(), now - 1800, now).unwrap();
+        let effective = effective_deadline(&st, &task, now).unwrap().unwrap();
+        let frozen = request_frozen_secs(&st, &task.mission, now)
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "T005 mesuré : pause={pause}, deadline_frozen={}, request_frozen={frozen}",
+            effective - task.mission_deadline_at.unwrap()
+        );
+        cleanup(&config);
+        assert_eq!(pause, 600);
+        assert_eq!(
+            effective - task.mission_deadline_at.unwrap(),
+            1800,
+            "union, pas sous-compte de la pause seule ni somme2400"
+        );
+        assert_eq!(frozen, 1800);
+    }
+
+    #[test]
+    fn native160_rouge_redemarrage_pendant_attente() {
+        let (state, config, task, _parent, _child) = native160_mission(true);
+        transition_wrapper_152(&state, &task, "failed");
+        let now = unix_timestamp();
+        let mut st = state.lock().unwrap();
+        let mut value = serde_json::to_value(&task).unwrap();
+        value["quota_waits"] = json!([native160_wait(
+            &task,
+            now,
+            now + 1800,
+            1,
+            "waiting",
+            None,
+            None
+        )]);
+        let waiting: Task = serde_json::from_value(value).unwrap();
+        st.delegation_store.save(&waiting).unwrap();
+        reouvrir_flotte_152(&mut st, &config);
+        prepare_restart(&mut st).unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let leaf = st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "T006 réel : state={}, restarts={}, generation={}",
+            saved.state, saved.restart_resumes, leaf.generation
+        );
+        cleanup(&config);
+        assert_eq!(saved.state, "working");
+        assert_eq!(
+            saved.restart_resumes, task.restart_resumes,
+            "attente quota n'est pas une panne152"
+        );
+        assert_eq!(leaf.generation, 1);
+        assert_eq!(
+            serde_json::to_value(saved).unwrap()["quota_waits"][0]["phase"],
+            "waiting"
+        );
+    }
+
+    #[test]
+    fn native160_rouge_double_avis() {
+        // Même refus livré et tick que152 ; opt-in doit supprimer seulement le direct.
+        for case in [
+            "no_fact",
+            "too_far",
+            "past_during_hold",
+            "rounds_done",
+            "late_after_hold",
+        ] {
+            for opt_in in [false, true] {
+                let (state, config, task, mut parent, _child) = native160_mission(opt_in);
+                if case == "too_far" {
+                    native160_quota(&state, &task, unix_timestamp() + 21610);
+                }
+                if case == "rounds_done" {
+                    let st = state.lock().unwrap();
+                    let now = unix_timestamp();
+                    let mut value = serde_json::to_value(&task).unwrap();
+                    value["quota_waits"] = json!([
+                        native160_wait(
+                            &task,
+                            now - 1200,
+                            now - 1100,
+                            1,
+                            "done",
+                            Some(now - 1070),
+                            Some("prior-one160")
+                        ),
+                        native160_wait(
+                            &task,
+                            now - 600,
+                            now - 500,
+                            2,
+                            "done",
+                            Some(now - 470),
+                            Some("prior-two160")
+                        ),
+                    ]);
+                    st.delegation_store
+                        .save(&serde_json::from_value(value).unwrap())
+                        .unwrap();
+                    drop(st);
+                    native160_quota(&state, &task, unix_timestamp() + 1800);
+                }
+                transition_wrapper_152(&state, &task, "failed");
+                let rejection: WrapperToDaemon = serde_json::from_value(json!({
+                    "type":"DeliveryRejected","id":task.mission,"reason":"quota sans fait160",
+                    "execution_id":format!("execution-{}",task.mission),"generation":1,
+                }))
+                .unwrap();
+                handle_wrapper_message("child-conn", rejection, &state);
+                // Faire expirer la décision par sa date durable, sans attendre5s.
+                if opt_in {
+                    let st = state.lock().unwrap();
+                    let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                    let mut value = serde_json::to_value(saved).unwrap();
+                    if value["quota_hold"].is_object() {
+                        value["quota_hold"]["since"] = json!(unix_timestamp() - 6);
+                    }
+                    st.delegation_store
+                        .save(&serde_json::from_value(value).unwrap())
+                        .unwrap();
+                }
+                if opt_in && case == "past_during_hold" {
+                    // Enregistrement valide à son instant ; reset a expiré à la décision.
+                    let mut st = state.lock().unwrap();
+                    let now = unix_timestamp();
+                    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+                        panic!("fixture160 Delegate")
+                    };
+                    st.provider_limits.record(
+                        agent_type,
+                        bridget_transport::protocol::RateLimitFact {
+                            window: "five_hour".into(),
+                            status: "rate_limit_reached".into(),
+                            resets_at: Some(now - 1),
+                            used_percent: Some(100),
+                        },
+                        bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                        now - 2,
+                    );
+                }
+                if opt_in && case == "late_after_hold" {
+                    native160_quota(&state, &task, unix_timestamp() + 1800);
+                }
+                tick(&state);
+                let mut count = 0;
+                let mut durable = 0;
+                let mut direct = 0;
+                loop {
+                    let mut raw = String::new();
+                    match parent.read_line(&mut raw) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            let frame: Value = serde_json::from_str(raw.trim()).unwrap();
+                            count += 1;
+                            if frame["message"]["id"] == format!("native-failure-{}", task.task_id)
+                            {
+                                durable += 1;
+                            }
+                            if frame
+                                .get("body")
+                                .or_else(|| {
+                                    frame.get("message").and_then(|message| message.get("body"))
+                                })
+                                .and_then(Value::as_str)
+                                .is_some_and(|s| s.contains("Échec de livraison de la demande"))
+                            {
+                                direct += 1;
+                            }
+                        }
+                    }
+                }
+                let st = state.lock().unwrap();
+                let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                eprintln!(
+                    "T037 case={case} opt_in={opt_in}: state={}, frames={count}, direct={direct}, durable={durable}, failure_sent={}",
+                    saved.state, saved.failure_sent
+                );
+                cleanup(&config);
+                assert_eq!(saved.state, "failed");
+                assert!(saved.failure_sent);
+                assert_eq!(durable, 1, "un seul avis durable existant");
+                assert_eq!(
+                    direct,
+                    usize::from(!opt_in),
+                    "seul l'opt-in retire le message direct"
+                );
+                assert_eq!(count, if opt_in { 1 } else { 2 });
+            }
+        }
+    }
+
+    // T004/T008/T032 : snapshots SQL de crash dans les magasins réels.
+    // Le schéma quota doit avoir été créé par les fondations, jamais par le test.
+    fn native160_stage(
+        state: &Arc<Mutex<DaemonState>>,
+        config: &DaemonConfig,
+        task: &Task,
+        boundary: &str,
+    ) -> String {
+        let now = unix_timestamp();
+        let reset = now - 31;
+        let root = format!("execution-{}", task.mission);
+        let resumed = format!("execution-quota-{}", task.task_id);
+        let identity = format!("limit-resume:{}:1:{reset}", task.task_id);
+        let conn = rusqlite::Connection::open(&config.db_path).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_quota_resumes')", [], |r| r.get(0)).unwrap();
+        assert!(
+            exists,
+            "frontière{boundary} NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+        );
+        conn.execute("INSERT INTO execution_quota_resumes(execution_id,identity,reset_at,qualified_at,resume_execution_id) VALUES(?1,?2,?3,?4,NULL)", rusqlite::params![root,identity,reset,now-120]).unwrap();
+        let phase = if matches!(boundary, "a" | "b") {
+            "waiting"
+        } else {
+            "relaunching"
+        };
+        let mut value = serde_json::to_value(task).unwrap();
+        if boundary != "a" {
+            value["quota_waits"] =
+                json!([native160_wait(task, now - 120, reset, 1, phase, None, None)]);
+        }
+        {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .save(&serde_json::from_value(value.clone()).unwrap())
+                .unwrap();
+        }
+        if matches!(boundary, "d" | "e" | "f" | "g" | "h") {
+            conn.execute("INSERT INTO executions(execution_id,submission_id,agent_instance_id,project_id,binding_generation,generation,state,revision,reason,created_at,updated_at) SELECT ?1,submission_id,agent_instance_id,project_id,binding_generation,generation+1,'starting',0,'usage_limit_reset',?3,?3 FROM executions WHERE execution_id=?2",rusqlite::params![resumed,root,now-30]).unwrap();
+            let st = state.lock().unwrap();
+            st.execution_store
+                .record_continuation(
+                    &resumed,
+                    2,
+                    &root,
+                    crate::execution_store::ContinuationMode::Reconstructed,
+                    Some("usage_limit_reset"),
+                    now - 30,
+                )
+                .unwrap();
+            conn.execute(
+                "UPDATE execution_quota_resumes SET resume_execution_id=?1 WHERE execution_id=?2",
+                rusqlite::params![resumed, root],
+            )
+            .unwrap();
+            value["quota_waits"][0]["resume_execution_id"] = json!(resumed);
+            st.delegation_store
+                .save(&serde_json::from_value(value).unwrap())
+                .unwrap();
+        }
+        if matches!(boundary, "e" | "f" | "g" | "h") {
+            let mut st = state.lock().unwrap();
+            let message = st
+                .execution_store
+                .execution_message(&resumed)
+                .unwrap()
+                .unwrap();
+            let scope = st.idempotency.supervisor_scope().unwrap();
+            let key =
+                IdempotencyKey::new(scope, OperationKind::Send, format!("recovery-{resumed}"))
+                    .unwrap();
+            let canonical =
+                canonical_send(&key.issuer_scope, &key.idempotency_key, &message, now - 30);
+            let Reservation::Prepared { expires_at } = st
+                .idempotency
+                .reserve(
+                    &key,
+                    &canonical,
+                    now - 30,
+                    CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                    now,
+                    CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                )
+                .unwrap()
+            else {
+                panic!("réservation fixture neuve")
+            };
+            if boundary != "e" {
+                let delivery = crate::idempotency::SendDelivery {
+                    delivery_id: format!("delivery-recovery-{resumed}"),
+                    recipient_instance_id: task.child_instance.clone().unwrap(),
+                    delivery_generation: 901,
+                    expires_at,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                };
+                let link = crate::idempotency::DeliveryExecutionLink {
+                    delivery_id: delivery.delivery_id.clone(),
+                    submission_id: message.id,
+                    execution_id: resumed.clone(),
+                };
+                st.idempotency
+                    .begin_send_delivery_with_execution(&key, &delivery, None, &link)
+                    .unwrap();
+                if boundary == "g" {
+                    st.idempotency
+                        .acknowledge_send_delivery(
+                            &delivery.delivery_id,
+                            &delivery.recipient_instance_id,
+                            delivery.delivery_generation,
+                        )
+                        .unwrap();
+                }
+                if boundary == "h" {
+                    st.idempotency
+                        .orphan_dispatching_for_instance(
+                            &delivery.recipient_instance_id,
+                            "crash quota fixture160",
+                        )
+                        .unwrap();
+                }
+                if boundary == "f" {
+                    super::super::schedule_idempotent_delivery_recovery(
+                        &mut st,
+                        "child-conn",
+                        &delivery.recipient_instance_id,
+                    );
+                    assert_eq!(
+                        st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                        Some("indeterminate"),
+                        "reconnexion native met la remise sans preuve en quarantaine"
+                    );
+                }
+            }
+        }
+        resumed
+    }
+
+    #[test]
+    fn native160_rouge_reconstruction_failed() {
+        let (state, config, task, _parent, _child) = native160_mission(true);
+        transition_wrapper_152(&state, &task, "failed");
+        {
+            let st = state.lock().unwrap();
+            assert!(
+                st.execution_store
+                    .recoverable_execution_ids_for_agent(&task.child)
+                    .unwrap()
+                    .is_empty(),
+                "témoin ordinaire livré, doit rester vrai"
+            );
+            assert!(matches!(
+                st.execution_store
+                    .reconstruct_active_for_agent(
+                        &task.child,
+                        task.child_instance.as_ref().unwrap(),
+                        "ordinary160",
+                        unix_timestamp()
+                    )
+                    .unwrap(),
+                ExecutionRecoveryOutcome::None
+            ));
+        }
+        native160_stage(&state, &config, &task, "b");
+        tick(&state);
+        let st = state.lock().unwrap();
+        let leaf = st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .unwrap()
+            .unwrap();
+        cleanup(&config);
+        assert_eq!(
+            leaf.generation, 2,
+            "reprisequota, pas modification de la repriseordinairefailed"
+        );
+        assert_eq!(
+            st.execution_store
+                .continuation_for(&leaf.execution_id)
+                .unwrap()
+                .unwrap()
+                .reason
+                .as_deref(),
+            Some("usage_limit_reset")
+        );
+    }
+
+    #[test]
+    fn native160_rouge_compteur_durable() {
+        let (state, config, task, _parent, _child) = native160_mission(true);
+        let now = unix_timestamp();
+        for count in [1, 2] {
+            let mut st = state.lock().unwrap();
+            let mut value = serde_json::to_value(&task).unwrap();
+            value["quota_waits"] = Value::Array(
+                (1..=count)
+                    .map(|round| {
+                        native160_wait(
+                            &task,
+                            now - 600 * (3 - round) as i64,
+                            now - 600 * (3 - round) as i64 + 100,
+                            round,
+                            "done",
+                            Some(now - 600 * (3 - round) as i64 + 130),
+                            Some("previous-quota160"),
+                        )
+                    })
+                    .collect(),
+            );
+            st.delegation_store
+                .save(&serde_json::from_value(value).unwrap())
+                .unwrap();
+            st.delegation_store =
+                crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(&saved).unwrap()["quota_waits"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(count as usize),
+                "rondesdone persistent après solde et réouverture"
+            );
+            prepare_restart(&mut st).unwrap();
+            assert_eq!(
+                serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap())
+                    .unwrap()["quota_waits"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(count as usize),
+                "restart ne supprime pas les rondesdone"
+            );
+        }
+        // Deux rondes déjà faites : les dix refus supplémentaires ne créent pas la troisième.
+        native160_quota(&state, &task, unix_timestamp() + 1800);
+        for _ in 0..10 {
+            let rejection: WrapperToDaemon = serde_json::from_value(
+                json!({"type":"DeliveryRejected","id":task.mission,"reason":"dix refus160"}),
+            )
+            .unwrap();
+            handle_wrapper_message("child-conn", rejection, &state);
+            tick(&state);
+        }
+        let st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(saved).unwrap()["quota_waits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let leaf = st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .unwrap()
+            .unwrap();
+        assert!(leaf.generation <= 3, "au plus deux relances");
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native160_rouge_relance_frontieres() {
+        for boundary in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            let (state, config, task, _parent, mut child) = native160_mission(true);
+            transition_wrapper_152(&state, &task, "failed");
+            let resumed = native160_stage(&state, &config, &task, boundary);
+            tick(&state);
+            tick(&state);
+            let mut st = state.lock().unwrap();
+            let root = format!("execution-{}", task.mission);
+            let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            let val = serde_json::to_value(&saved).unwrap();
+            if boundary == "a" {
+                assert_eq!(
+                    leaf.generation, 1,
+                    "qualificationorpheline sansTaskwait ne relance pas"
+                );
+            } else if matches!(boundary, "f" | "h") {
+                assert_eq!(saved.state, "failed");
+                assert_eq!(saved.error.as_deref(), Some("native_relaunch_failed"));
+                assert!(saved.failure_sent, "avis durable après remiseperdue");
+            } else {
+                assert_eq!(
+                    leaf.generation, 2,
+                    "{boundary}: une seule continuation malgré doubletick"
+                );
+                let scope = st.idempotency.supervisor_scope().unwrap();
+                let key = IdempotencyKey::new(
+                    scope,
+                    OperationKind::Send,
+                    format!("recovery-{}", leaf.execution_id),
+                )
+                .unwrap();
+                let _stored = st.idempotency.stored_send_delivery(&key).unwrap().unwrap();
+                let message = st
+                    .execution_store
+                    .execution_message(&leaf.execution_id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_value::<bridget_core::BridgetMessage>(
+                        st.idempotency.stored_send_message(&key).unwrap().unwrap()
+                    )
+                    .unwrap(),
+                    message,
+                    "origine conservée"
+                );
+                let continuation = st
+                    .execution_store
+                    .continuation_for(&leaf.execution_id)
+                    .unwrap()
+                    .unwrap();
+                let canonical = canonical_send(
+                    &key.issuer_scope,
+                    &key.idempotency_key,
+                    &message,
+                    continuation.observed_at,
+                );
+                assert!(
+                    matches!(
+                        st.idempotency
+                            .reserve(
+                                &key,
+                                &canonical,
+                                continuation.observed_at,
+                                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                                unix_timestamp(),
+                                CLIENT_ISSUED_AT_TOLERANCE_SECS
+                            )
+                            .unwrap(),
+                        Reservation::Replayed { .. }
+                    ),
+                    "canon identique malgré deux ticks"
+                );
+                assert_eq!(
+                    val["quota_waits"][0]["phase"],
+                    if boundary == "g" {
+                        "done"
+                    } else {
+                        "relaunching"
+                    },
+                    "solde seulementacked"
+                );
+                if matches!(boundary, "d" | "e" | "g") {
+                    assert_eq!(leaf.execution_id, resumed);
+                }
+            }
+            drop(st);
+            let mut pushes = 0;
+            loop {
+                let mut raw = String::new();
+                match child.read_line(&mut raw) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let frame: Value = serde_json::from_str(raw.trim()).unwrap();
+                        if frame["type"] == "DeliverIdempotent" {
+                            assert_eq!(frame["message"]["id"], task.mission);
+                            pushes += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                pushes <= 1,
+                "{boundary}: pas deuxième émission après doubletick"
+            );
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native160_rouge_concurrence_reprise_ordinaire() {
+        for boundary in ["c", "d", "e", "f"] {
+            let (state, config, task, _parent, _child) = native160_mission(true);
+            transition_wrapper_152(&state, &task, "failed");
+            native160_stage(&state, &config, &task, boundary);
+            let mut st = state.lock().unwrap();
+            let before = st
+                .execution_store
+                .latest_in_chain(&format!("execution-{}", task.mission))
+                .unwrap()
+                .unwrap();
+            let waiting = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert!(
+                !may_resume(
+                    &st,
+                    &waiting,
+                    &before.execution_id,
+                    task.child_instance.as_ref().unwrap()
+                )
+                .unwrap(),
+                "entréequota ouverte réserve toute la chaîne"
+            );
+            super::super::schedule_execution_recovery(
+                &mut st,
+                "child-conn",
+                task.child_instance.as_ref().unwrap(),
+                &task.child,
+                false,
+            );
+            assert_eq!(
+                st.execution_store
+                    .latest_in_chain(&format!("execution-{}", task.mission))
+                    .unwrap()
+                    .unwrap(),
+                before,
+                "{boundary}: pas secondecontinuation152 à reconnexion"
+            );
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native160_rouge_hold_horloges() {
+        for mode in ["deadline", "pause", "parent_offline"] {
+            let (state, config, mut task, _parent, _child) = native160_mission(true);
+            transition_wrapper_152(&state, &task, "failed");
+            let now = unix_timestamp();
+            let expired = mode != "deadline";
+            task.mission_deadline_at = Some(if mode == "deadline" {
+                now - 1
+            } else {
+                now + 120
+            });
+            {
+                let mut st = state.lock().unwrap();
+                let mut val = serde_json::to_value(&task).unwrap();
+                val["quota_hold"] = json!({"since":now-if expired {6}else{1},"error":"hold origine160","execution_id":format!("execution-{}",task.mission)});
+                st.delegation_store
+                    .save(&serde_json::from_value(val).unwrap())
+                    .unwrap();
+                if mode == "pause" {
+                    control_pause_a_152(&st, true, now - 2);
+                }
+                if mode == "parent_offline" {
+                    st.router.unregister_by_conn("conn-1");
+                    st.connections.remove("conn-1");
+                }
+            }
+            tick(&state);
+            let mut st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            if mode == "deadline" {
+                assert_eq!(saved.state, "working", "hold inhibe deadline imminente");
+                let actions = collect_reminder_actions(&mut st, Instant::now());
+                assert!(!actions.iter().any(
+                    |a| matches!(a,ReminderAction::Timeout{msg_id,..}if msg_id==&task.mission)
+                ));
+            } else {
+                assert_eq!(
+                    saved.state, "failed",
+                    "hold doit se résoudre malgré pause/parentabsent"
+                );
+                assert_eq!(saved.error.as_deref(), Some("hold origine160"));
+                assert!(serde_json::to_value(saved).unwrap()["quota_hold"].is_null());
+            }
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native160_rouge_refus_ancien_et_autres_causes() {
+        for mode in [
+            "old_running",
+            "old_failed",
+            "sync",
+            "empty",
+            "uncorrelated",
+            "partial_execution_old",
+            "partial_generation_old",
+        ] {
+            let (state, config, task, mut parent, _child) = native160_mission(true);
+            let root = format!("execution-{}", task.mission);
+            let child = format!("execution-second-{}", task.task_id);
+            if matches!(mode, "old_running" | "old_failed" | "uncorrelated") {
+                transition_wrapper_152(&state, &task, "failed");
+                let now = unix_timestamp();
+                let conn = rusqlite::Connection::open(&config.db_path).unwrap();
+                conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+                conn.execute("INSERT INTO executions(execution_id,submission_id,agent_instance_id,project_id,binding_generation,generation,state,revision,reason,created_at,updated_at) SELECT ?1,submission_id,agent_instance_id,project_id,binding_generation,2,?3,0,'usage_limit_reset',?4,?4 FROM executions WHERE execution_id=?2",rusqlite::params![child,root,if mode=="old_failed" {"failed"}else{"running"},now]).unwrap();
+                let st = state.lock().unwrap();
+                st.execution_store
+                    .record_continuation(
+                        &child,
+                        2,
+                        &root,
+                        crate::execution_store::ContinuationMode::Reconstructed,
+                        Some("usage_limit_reset"),
+                        now,
+                    )
+                    .unwrap();
+                let mut val = serde_json::to_value(&task).unwrap();
+                val["quota_waits"] = json!([native160_wait(
+                    &task,
+                    now - 60,
+                    now - 31,
+                    1,
+                    "done",
+                    Some(now),
+                    Some(&child)
+                )]);
+                st.delegation_store
+                    .save(&serde_json::from_value(val).unwrap())
+                    .unwrap();
+            } else if mode == "empty" {
+                transition_wrapper_152(&state, &task, "completed");
+            }
+            native160_quota(&state, &task, unix_timestamp() + 1800);
+            let mut rejection =
+                json!({"type":"DeliveryRejected","id":task.mission,"reason":"erreur origine160"});
+            if mode == "partial_execution_old" {
+                rejection["execution_id"] = json!("execution-foreign160");
+            } else if mode == "partial_generation_old" {
+                rejection["generation"] = json!(2);
+            } else if mode != "uncorrelated" {
+                rejection["execution_id"] = json!(root);
+                rejection["generation"] = json!(1);
+            }
+            let before = serde_json::to_vec(
+                &state
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .get(&task.task_id)
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            handle_wrapper_message(
+                "child-conn",
+                serde_json::from_value(rejection).unwrap(),
+                &state,
+            );
+            let st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            if mode.starts_with("old_") || mode.starts_with("partial_") {
+                assert_eq!(
+                    serde_json::to_vec(&saved).unwrap(),
+                    before,
+                    "{mode}: refus divergent sans mutation de Task"
+                );
+                assert_eq!(
+                    saved.state, "working",
+                    "refus ancien sans effet même si nouvellefeuillefailed"
+                );
+                assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+                let mut raw = String::new();
+                let _ = parent.read_line(&mut raw);
+                assert!(raw.is_empty());
+            } else {
+                assert_eq!(saved.state, "failed");
+                assert_eq!(
+                    saved.error.as_deref(),
+                    Some(if mode == "uncorrelated" {
+                        "native_refusal_uncorrelated"
+                    } else {
+                        "erreur origine160"
+                    })
+                );
+                assert!(serde_json::to_value(saved).unwrap()["quota_hold"].is_null());
+            }
+            cleanup(&config);
+        }
+    }
 
     #[test]
     fn native153_brief_invalide_sans_tache_ni_cle() {
@@ -5060,7 +6857,7 @@ mod tests {
                 st.delegation_store.save(&task).unwrap();
             }
             reouvrir_flotte_152(&mut st, &config);
-            prepare_restart(&st).unwrap();
+            prepare_restart(&mut st).unwrap();
             let saved = st.delegation_store.get(&id).unwrap().unwrap();
             assert!(
                 saved.guard_released,
@@ -6589,6 +8386,8 @@ mod tests {
                 WrapperToDaemon::DeliveryRejected {
                     id: task.mission.clone(),
                     reason: "tour annulé par le pilote".into(),
+                    execution_id: None,
+                    generation: None,
                 },
                 &shared,
             )
@@ -8287,6 +10086,8 @@ mod tests {
                 WrapperToDaemon::DeliveryRejected {
                     id: task.mission.clone(),
                     reason: "tour annulé par le pilote".into(),
+                    execution_id: None,
+                    generation: None,
                 },
                 &shared
             )
@@ -10357,6 +12158,7 @@ mod tests {
     fn request(key: &str) -> NativeDelegationRequest {
         NativeDelegationRequest::Delegate {
             fallback: Vec::new(),
+            resume_on_limit: None,
             request_id: key.into(),
             agent_type: "native-test".into(),
             model: "custom/model".into(),
@@ -11284,6 +13086,7 @@ mod tests {
         );
         let job = NativeDelegationRequest::Delegate {
             fallback: Vec::new(),
+            resume_on_limit: None,
             request_id: "glm".into(),
             agent_type: "glm-fake".into(),
             model: "glm/custom-exact".into(),
@@ -13550,6 +15353,1805 @@ mod tests {
         assert_eq!(message.reply_timeout, Some(3600));
         drop(shared);
         cleanup(&config);
+    }
+
+    // T014 : fonction de production, origine d'émission152 explicite.
+    #[test]
+    fn native160_attente_qualification_table() {
+        let (state, config, original, _parent, _child) = native160_mission(true);
+        let now = unix_timestamp();
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &original.request else {
+            panic!("Delegate")
+        };
+        for case in [
+            "six_hours",
+            "too_far",
+            "past_hold",
+            "two_done",
+            "before_mission",
+            "before_last_wait",
+            "codex_global",
+        ] {
+            let mut task = original.clone();
+            task.reply_timeout = Some(120);
+            task.mission_issued_at = Some(now - 100);
+            task.mission_deadline_at = Some(now + 20); // origine = deadline - reply_timeout
+            let reset = if case == "too_far" {
+                now + 21601
+            } else if case == "past_hold" {
+                now - 1
+            } else {
+                now + 21600
+            };
+            let observed = if case == "before_mission" {
+                now - 101
+            } else if case == "before_last_wait" {
+                now - 30
+            } else {
+                now - 2
+            };
+            if case == "past_hold" {
+                task.quota_hold = Some(crate::delegation::QuotaHold {
+                    since: now - 4,
+                    error: "hold160".into(),
+                    execution_id: format!("execution-{}", task.mission),
+                });
+            }
+            if matches!(case, "two_done" | "before_last_wait") {
+                let count = if case == "two_done" { 2 } else { 1 };
+                for round in 1..=count {
+                    task.quota_waits.push(
+                        serde_json::from_value(native160_wait(
+                            &task,
+                            now - 80,
+                            now - 60,
+                            round,
+                            "done",
+                            Some(now - 20),
+                            Some("done-pure160"),
+                        ))
+                        .unwrap(),
+                    );
+                }
+            }
+            let mut limits = crate::provider_limits::ProviderLimits::default();
+            limits.record(
+                agent_type,
+                bridget_transport::protocol::RateLimitFact {
+                    window: "five_hour".into(),
+                    status: "rate_limit_reached".into(),
+                    resets_at: Some(reset),
+                    used_percent: if case == "codex_global" {
+                        None
+                    } else {
+                        Some(100)
+                    },
+                },
+                bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                observed,
+            );
+            let expected = match case {
+                "six_hours" => Qualification::Wait { reset_at: reset },
+                "too_far" => Qualification::TooFar { reset_at: reset },
+                "past_hold" => Qualification::Past { reset_at: reset },
+                "two_done" => Qualification::RoundsDone { reset_at: reset },
+                _ => Qualification::NoFact,
+            };
+            assert_eq!(qualify_quota(&task, now, &limits), expected, "{case}");
+        }
+        drop(state);
+        cleanup(&config);
+    }
+
+    // T017 : vue publique additive ; Lineage inchangé pour les seuls faitsquota.
+    #[test]
+    fn native160_vue_quota_wait_additive_et_lineage_identique() {
+        let (state, config, original, _parent, _child) = native160_mission(true);
+        let now = unix_timestamp();
+        let st = state.lock().unwrap();
+        let baseline = serde_json::to_vec(
+            &st.delegation_store
+                .lineage_page(OWNER, 100, None, |_| false)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(current_task_view(&st, &original, true).unwrap()["quota_wait"].is_null());
+        for phase in ["hold", "waiting", "relaunching", "done"] {
+            let mut task = original.clone();
+            if phase == "hold" {
+                task.quota_hold = Some(crate::delegation::QuotaHold {
+                    since: now,
+                    error: "hold160".into(),
+                    execution_id: format!("execution-{}", task.mission),
+                });
+            } else {
+                task.quota_waits.push(
+                    serde_json::from_value(native160_wait(
+                        &task,
+                        now,
+                        now + 1800,
+                        1,
+                        phase,
+                        if phase == "done" { Some(now) } else { None },
+                        None,
+                    ))
+                    .unwrap(),
+                );
+            }
+            st.delegation_store.save(&task).unwrap();
+            let value = current_task_view(&st, &task, true).unwrap();
+            assert_eq!(value["status"], "working");
+            if matches!(phase, "waiting" | "relaunching") {
+                assert_eq!(
+                    value["quota_wait"],
+                    json!({"round":1,"phase":phase,"resumes_at":now+1830})
+                );
+            } else {
+                assert!(value["quota_wait"].is_null());
+            }
+            assert_eq!(
+                serde_json::to_vec(
+                    &st.delegation_store
+                        .lineage_page(OWNER, 100, None, |_| false)
+                        .unwrap()
+                )
+                .unwrap(),
+                baseline,
+                "{phase}: aucun signalLineage des faitsquota"
+            );
+            assert!(
+                st.delegation_store
+                    .failed_for_owner(OWNER)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+        }
+        cleanup(&config);
+    }
+
+    // T016/T021 : le fait volatile connu ne sauve pas un hold après restart.
+    #[test]
+    fn native160_attente_redemarrage_pendant_hold() {
+        let (state, config, mut task, mut parent, _child) = native160_mission(true);
+        let now = unix_timestamp();
+        task.quota_hold = Some(crate::delegation::QuotaHold {
+            since: now,
+            error: "erreur originale duhold160".into(),
+            execution_id: format!("execution-{}", task.mission),
+        });
+        native160_quota(&state, &task, now + 1800);
+        {
+            let mut st = state.lock().unwrap();
+            st.delegation_store.save(&task).unwrap();
+            reouvrir_flotte_152(&mut st, &config);
+            st.provider_limits = crate::provider_limits::ProviderLimits::default();
+            prepare_restart(&mut st).unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, "failed");
+            assert_eq!(saved.error.as_deref(), Some("erreur originale duhold160"));
+            assert!(saved.quota_hold.is_none());
+            assert!(saved.quota_waits.is_empty());
+            assert_eq!(saved.restart_resumes, task.restart_resumes);
+        }
+        tick(&state);
+        let mut raw = String::new();
+        parent.read_line(&mut raw).unwrap();
+        let frame: Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(
+            frame["message"]["id"],
+            format!("native-failure-{}", task.task_id)
+        );
+        raw.clear();
+        assert!(
+            parent.read_line(&mut raw).is_err(),
+            "un seul avis durable, aucun direct"
+        );
+        cleanup(&config);
+    }
+
+    // T015 : les refus sur terminal ferment le cheminA sans créer un autre avis.
+    #[test]
+    fn native160_attente_un_seul_avis_terminal_preserve() {
+        for terminal in ["failed", "cancelled", "result_available"] {
+            let (state, config, mut task, mut parent, _child) = native160_mission(true);
+            task.state = terminal.into();
+            task.error = if terminal == "failed" {
+                Some("premier échec160".into())
+            } else {
+                None
+            };
+            task.failure_sent = terminal == "failed";
+            {
+                let st = state.lock().unwrap();
+                st.delegation_store.save(&task).unwrap();
+            }
+            let rejection:WrapperToDaemon=serde_json::from_value(json!({"type":"DeliveryRejected","id":task.mission,"reason":"refus tardif160","execution_id":format!("execution-{}",task.mission),"generation":1})).unwrap();
+            assert!(handle_wrapper_message("child-conn", rejection, &state).is_none());
+            let st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, task.state);
+            assert_eq!(saved.error, task.error);
+            assert_eq!(saved.failure_sent, task.failure_sent);
+            let mut raw = String::new();
+            let _ = parent.read_line(&mut raw);
+            assert!(
+                raw.is_empty(),
+                "{terminal}: zéro nouvel avis direct/durable"
+            );
+            cleanup(&config);
+        }
+    }
+
+    // T015/T016 : B a déjà créé l'attente ; A ne doit ni la remplacer ni notifier.
+    #[test]
+    fn native160_attente_chemin_a_apres_b_sans_effet() {
+        let (state, config, task, mut parent, _child) = native160_mission(true);
+        native160_quota(&state, &task, unix_timestamp() + 1800);
+        transition_wrapper_152(&state, &task, "failed");
+        tick(&state);
+        let before = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.quota_waits.len(), 1);
+        let rejection:WrapperToDaemon=serde_json::from_value(json!({"type":"DeliveryRejected","id":task.mission,"reason":"AaprèsB160","execution_id":format!("execution-{}",task.mission),"generation":1})).unwrap();
+        handle_wrapper_message("child-conn", rejection, &state);
+        let st = state.lock().unwrap();
+        let after = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(after.quota_waits, before.quota_waits);
+        assert_eq!(after.quota_hold, before.quota_hold);
+        assert_eq!(after.state, "working");
+        assert!(st.pending_replies.iter().any(|p| p.msg_id == task.mission));
+        assert!(
+            st.delegation_store
+                .failed_for_owner(OWNER)
+                .unwrap()
+                .is_empty()
+        );
+        let mut raw = String::new();
+        let _ = parent.read_line(&mut raw);
+        assert!(raw.is_empty());
+        cleanup(&config);
+    }
+
+    // T023 : union partielle, même gel suivi/délai, puis borne sans parent/enfant.
+    #[test]
+    fn native160_gel_chevauchement_suivi_rappels_et_borne() {
+        let (state, config, mut task, _parent, _child) = native160_mission(true);
+        let now = unix_timestamp();
+        task.reply_timeout = Some(3600);
+        task.mission_deadline_at = Some(now + 1800);
+        task.quota_waits.push(
+            serde_json::from_value(native160_wait(
+                &task,
+                now - 1800,
+                now + 1800,
+                1,
+                "waiting",
+                None,
+                None,
+            ))
+            .unwrap(),
+        );
+        let mut st = state.lock().unwrap();
+        st.delegation_store.save(&task).unwrap();
+        st.store
+            .connection()
+            .execute(
+                "UPDATE tracked_requests SET created_at=?1 WHERE id=?2",
+                rusqlite::params![now - 1800, task.mission],
+            )
+            .unwrap();
+        control_pause_a_152(&st, true, now - 2100);
+        control_pause_a_152(&st, false, now - 1500);
+        // Origine152=now-1800 : pause chevauchante est rognée ; quota couvre déjà1800.
+        assert_eq!(
+            effective_deadline(&st, &task, now).unwrap(),
+            Some(now + 3600)
+        );
+        assert_eq!(
+            request_frozen_secs(&st, &task.mission, now).unwrap(),
+            Some(1800)
+        );
+        for pending in &mut st.pending_replies {
+            if pending.msg_id == task.mission {
+                pending.created_at = Instant::now() - Duration::from_secs(1800);
+            }
+        }
+        let actions = collect_reminder_actions(&mut st, Instant::now());
+        assert!(actions.is_empty(), "aucun palier pendant quotaouvert");
+        let before = effective_deadline(&st, &task, now + 1830).unwrap();
+        st.router.unregister_by_conn("child-conn");
+        st.connections.remove("child-conn");
+        assert_eq!(
+            effective_deadline(&st, &task, now + 1831).unwrap(),
+            before,
+            "gelquota cesse à reset+30 quellequeconnexion"
+        );
+        assert_eq!(
+            request_frozen_secs(&st, &task.mission, now + 1831).unwrap(),
+            request_frozen_secs(&st, &task.mission, now + 1830).unwrap()
+        );
+        cleanup(&config);
+    }
+
+    // T024 : pause retarde l'admissionwaiting ; levée laisse la même identité.
+    #[test]
+    fn native160_gel_pause_differe_puis_relance() {
+        let (state, config, task, _parent, mut child) = native160_mission(true);
+        transition_wrapper_152(&state, &task, "failed");
+        native160_stage(&state, &config, &task, "b");
+        {
+            let st = state.lock().unwrap();
+            control_pause_a_152(&st, true, unix_timestamp());
+        }
+        tick(&state);
+        let paused = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            paused.quota_waits[0].phase,
+            crate::delegation::QuotaWaitPhase::Waiting
+        );
+        let mut raw = String::new();
+        assert!(child.read_line(&mut raw).is_err());
+        {
+            let st = state.lock().unwrap();
+            control_pause_a_152(&st, false, unix_timestamp());
+        }
+        tick(&state);
+        let saved = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.mission, task.mission);
+        assert_eq!(
+            saved.quota_waits[0].identity,
+            paused.quota_waits[0].identity
+        );
+        assert_eq!(
+            saved.quota_waits[0].phase,
+            crate::delegation::QuotaWaitPhase::Relaunching
+        );
+        raw.clear();
+        child.read_line(&mut raw).unwrap();
+        let frame: Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(frame["message"]["id"], task.mission);
+        cleanup(&config);
+    }
+
+    // T020 : relance du message initial, ACK puis résultat unique vers le parent.
+    #[test]
+    fn native160_relance_meme_identifiant_et_resultat_rendu_une_fois() {
+        // Absorption de l'ancienrésultat : aucune mutationpendant Hold/WaitsansACKquota.
+        for phase in ["hold", "waiting"] {
+            let (state, config, mut task, _parent, _child) = native160_mission(true);
+            transition_wrapper_152(&state, &task, "failed");
+            if phase == "hold" {
+                task.quota_hold = Some(crate::delegation::QuotaHold {
+                    since: unix_timestamp(),
+                    error: "holdorigine160".into(),
+                    execution_id: format!("execution-{}", task.mission),
+                });
+                state.lock().unwrap().delegation_store.save(&task).unwrap();
+            } else {
+                native160_stage(&state, &config, &task, "b");
+            }
+            let mut st = state.lock().unwrap();
+            let before =
+                serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap())
+                    .unwrap();
+            let mut old_reply =
+                bridget_core::BridgetMessage::new(&task.child, &task.owner, "ancienrésultat160");
+            old_reply.in_reply_to = Some(task.mission.clone());
+            assert!(
+                capture_reply(&mut st, "child-conn", &old_reply).unwrap(),
+                "absorbé pour ACKtransportseulement"
+            );
+            assert_eq!(
+                serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap())
+                    .unwrap(),
+                before,
+                "{phase}: aucunrésultat ni soldequota ajouté"
+            );
+            cleanup(&config);
+        }
+        let (state, config, task, mut parent, mut child) = native160_mission(true);
+        let request_before = serde_json::to_vec(&task.request).unwrap();
+        transition_wrapper_152(&state, &task, "failed");
+        native160_stage(&state, &config, &task, "b");
+        tick(&state);
+        let mut raw = String::new();
+        child.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent {
+            message,
+            delivery_id,
+            delivery_generation,
+            ..
+        } = decode(raw.trim()).unwrap()
+        else {
+            panic!("remise réellequota")
+        };
+        assert_eq!(message.id, task.mission);
+        assert!(
+            handle_wrapper_message(
+                "child-conn",
+                WrapperToDaemon::DeliverAcked {
+                    delivery_id,
+                    delivery_generation
+                },
+                &state
+            )
+            .is_none()
+        );
+        // Frontière g : remiseACKed ; TaskWait n'a pas encore été soldée par tick.
+        let saved = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            saved.quota_waits[0].phase,
+            crate::delegation::QuotaWaitPhase::Relaunching
+        );
+        assert_eq!(saved.mission, task.mission);
+        assert_eq!(serde_json::to_vec(&saved.request).unwrap(), request_before);
+        transition_wrapper_152(&state, &task, "running");
+        transition_wrapper_152(&state, &task, "completed");
+        let stop = {
+            let mut st = state.lock().unwrap();
+            let mut result =
+                bridget_core::BridgetMessage::new(&task.child, &task.owner, "résultatquota160");
+            result.in_reply_to = Some(task.mission.clone());
+            assert!(capture_reply(&mut st, "child-conn", &result).unwrap());
+            let captured = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(
+                captured.quota_waits[0].phase,
+                crate::delegation::QuotaWaitPhase::Done,
+                "ACK→reply avanttick solde mêmeACK durable"
+            );
+            assert_eq!(
+                captured.state, "waiting_for_children",
+                "capture durable avant publication du tick"
+            );
+            assert_eq!(captured.result.as_deref(), Some("résultatquota160"));
+            st.managed_spawns.values().next().unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&state);
+        tick(&state);
+        done.send(()).unwrap();
+        observer.join().unwrap();
+        raw.clear();
+        parent.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(raw.trim()).unwrap() else {
+            panic!("résultat réelquota")
+        };
+        assert_eq!(message.id, format!("native-result-{}", task.task_id));
+        assert_eq!(message.body, "résultatquota160");
+        raw.clear();
+        assert!(
+            parent.read_line(&mut raw).is_err(),
+            "aucun doublon résultat après deux ticks"
+        );
+        let st = state.lock().unwrap();
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .quota_waits
+                .len(),
+            1
+        );
+        let leaf = st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .unwrap()
+            .unwrap();
+        assert_eq!(leaf.generation, 2);
+        cleanup(&config);
+    }
+
+    // T024 : annulation réelle et backend de stop152 ; aucune émission après annulation.
+    #[test]
+    fn native160_gel_annulation_attente_relaunch_et_hold() {
+        for phase in ["hold", "b", "c", "d", "dispatching"] {
+            let (state, config, task, _parent, mut child) = native160_mission(true);
+            transition_wrapper_152(&state, &task, "failed");
+            if phase == "hold" {
+                let rejection:WrapperToDaemon=serde_json::from_value(json!({"type":"DeliveryRejected","id":task.mission,"reason":"holdàannuler160","execution_id":format!("execution-{}",task.mission),"generation":1})).unwrap();
+                handle_wrapper_message("child-conn", rejection, &state);
+                assert!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .delegation_store
+                        .get(&task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .quota_hold
+                        .is_some()
+                );
+            } else {
+                let resumed = native160_stage(
+                    &state,
+                    &config,
+                    &task,
+                    if phase == "dispatching" { "e" } else { phase },
+                );
+                if phase == "dispatching" {
+                    let mut st = state.lock().unwrap();
+                    let message = st
+                        .execution_store
+                        .execution_message(&resumed)
+                        .unwrap()
+                        .unwrap();
+                    let continuation = st
+                        .execution_store
+                        .continuation_for(&resumed)
+                        .unwrap()
+                        .unwrap();
+                    let scope = st.idempotency.supervisor_scope().unwrap();
+                    let key = IdempotencyKey::new(
+                        scope,
+                        OperationKind::Send,
+                        format!("recovery-{resumed}"),
+                    )
+                    .unwrap();
+                    let canonical = canonical_send(
+                        &key.issuer_scope,
+                        &key.idempotency_key,
+                        &message,
+                        continuation.observed_at,
+                    );
+                    let Reservation::Replayed { .. } = st
+                        .idempotency
+                        .reserve(
+                            &key,
+                            &canonical,
+                            continuation.observed_at,
+                            CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                            unix_timestamp(),
+                            CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                        )
+                        .unwrap()
+                    else {
+                        panic!("réservation e réelle")
+                    };
+                    let delivery = crate::idempotency::SendDelivery {
+                        delivery_id: format!("cancel-quota-{resumed}"),
+                        recipient_instance_id: task.child_instance.clone().unwrap(),
+                        delivery_generation: 902,
+                        expires_at: unix_timestamp() + 3600,
+                        message_bytes: serde_json::to_vec(&message).unwrap(),
+                    };
+                    let link = crate::idempotency::DeliveryExecutionLink {
+                        delivery_id: delivery.delivery_id.clone(),
+                        submission_id: message.id,
+                        execution_id: resumed,
+                    };
+                    st.idempotency
+                        .begin_send_delivery_with_execution(&key, &delivery, None, &link)
+                        .unwrap();
+                    assert_eq!(
+                        st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                        Some("dispatching")
+                    );
+                }
+            }
+            let stop = {
+                let mut st = state.lock().unwrap();
+                handle_locked(
+                    "conn-1",
+                    NativeDelegationRequest::Cancel {
+                        task_id: task.task_id.clone(),
+                    },
+                    &mut st,
+                )
+                .unwrap();
+                st.managed_spawns.values().next().unwrap().stop.clone()
+            };
+            let (done, observer) = observer_arrets_152(vec![stop]);
+            tick(&state);
+            tick(&state);
+            done.send(()).unwrap();
+            assert_eq!(observer.join().unwrap(), vec![true]);
+            let mut st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, "cancelled", "{phase}");
+            assert!(saved.quota_hold.is_none());
+            if phase != "hold" {
+                assert_eq!(
+                    saved.quota_waits[0].phase,
+                    crate::delegation::QuotaWaitPhase::Done
+                );
+                assert!(saved.quota_waits[0].until.is_some());
+            }
+            let leaf = st
+                .execution_store
+                .latest_in_chain(&format!("execution-{}", task.mission))
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(leaf.state.as_str(), "failed" | "unreachable"),
+                "{phase}: feuilleclôturée avant le solde"
+            );
+            if phase == "dispatching" {
+                let key = IdempotencyKey::new(
+                    st.idempotency.supervisor_scope().unwrap(),
+                    OperationKind::Send,
+                    format!("recovery-{}", leaf.execution_id),
+                )
+                .unwrap();
+                assert_eq!(
+                    st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                    Some("indeterminate")
+                );
+            }
+            assert!(
+                !may_resume(
+                    &st,
+                    &saved,
+                    &leaf.execution_id,
+                    task.child_instance.as_ref().unwrap()
+                )
+                .unwrap()
+            );
+            drop(st);
+            let mut frames = Vec::new();
+            loop {
+                let mut raw = String::new();
+                match child.read_line(&mut raw) {
+                    Ok(0) => break,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("lecture contrôle {phase}: {error}"),
+                    Ok(_) => {
+                        let frame: Value = serde_json::from_str(raw.trim()).unwrap();
+                        let mission_id = frame
+                            .get("message")
+                            .and_then(|m| m.get("id"))
+                            .or_else(|| frame.get("id"));
+                        let kind = frame["type"].as_str().unwrap_or("?");
+                        let metadata = json!({"type":kind,"id":mission_id,
+                            "execution_id":frame.get("execution_id"),
+                            "command_id":frame.get("command_id")});
+                        assert!(
+                            !(matches!(kind, "DeliverExecution" | "DeliverIdempotent" | "Deliver")
+                                && mission_id == Some(&json!(task.mission))),
+                            "{phase}: mission annulée remise, metadata={metadata}"
+                        );
+                        frames.push(metadata);
+                    }
+                }
+            }
+            eprintln!("T024 contrôle légitime après annulation {phase}: {frames:?}");
+            cleanup(&config);
+        }
+    }
+
+    // T020/SC010 : l'enfant absent ne rend pas le gel illimité.
+    #[test]
+    fn native160_relance_enfant_absent_au_dela_de_la_borne() {
+        let (state, config, task, _parent, _child) = native160_mission(true);
+        transition_wrapper_152(&state, &task, "failed");
+        native160_stage(&state, &config, &task, "b");
+        {
+            let mut st = state.lock().unwrap();
+            let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            let now = unix_timestamp();
+            saved.reply_timeout = Some(60);
+            saved.mission_deadline_at = Some(now - 61);
+            saved.quota_waits[0].since = now - 121;
+            saved.quota_waits[0].reset_at = now - 91;
+            saved.quota_waits[0].identity =
+                format!("limit-resume:{}:1:{}", saved.task_id, now - 91);
+            // Même qualificationfixture mise au même instant ; pas de nouvelle autorisation.
+            let conn = rusqlite::Connection::open(&config.db_path).unwrap();
+            conn.execute("UPDATE execution_quota_resumes SET identity=?1,reset_at=?2,qualified_at=?3 WHERE execution_id=?4",rusqlite::params![saved.quota_waits[0].identity,now-91,now-121,format!("execution-{}",task.mission)]).unwrap();
+            st.delegation_store.save(&saved).unwrap();
+            st.router.unregister_by_conn("child-conn");
+            st.connections.remove("child-conn");
+            if let Some(instance) = st.conn_instances.remove("child-conn") {
+                st.presences.remove(&instance);
+            }
+        }
+        tick(&state);
+        let st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "failed");
+        assert_eq!(saved.error.as_deref(), Some("mission_reply_timeout"));
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native160_gel_purge_150_arbre_en_attente_conserve() {
+        let (state, config, task, _parent, _child) = native160_mission(true);
+        transition_wrapper_152(&state, &task, "failed");
+        native160_stage(&state, &config, &task, "b");
+        let mut st = state.lock().unwrap();
+        let model = modele_150(&mut st);
+        semer_brut_150(
+            &config,
+            &model,
+            0,
+            crate::delegation::MAX_RETAINED_TASKS - 1,
+            "result_available",
+            false,
+            "instance-autre",
+            1000,
+        );
+        control_pause_a_152(&st, true, unix_timestamp());
+        assert_eq!(
+            purge_retained(
+                &st,
+                unix_timestamp() + 8 * JOUR_150,
+                Some(crate::delegation::MAX_RETAINED_TASKS - 1),
+                usize::MAX
+            ),
+            0,
+            "arbreenattente etrésultatsnonaccusés conservés souspression"
+        );
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            crate::delegation::MAX_RETAINED_TASKS
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .quota_waits[0]
+                .phase,
+            crate::delegation::QuotaWaitPhase::Waiting
+        );
+        // La pause gagne àl'admission ; la lever prouve ensuite le refus de borne.
+        control_pause_a_152(&st, false, unix_timestamp());
+        assert_eq!(
+            handle_locked("conn-1", request("quota-retention160"), &mut st).unwrap_err(),
+            "retention_saturated"
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native160_gel_purge_150_apres_annulation() {
+        let (state, config, task, _parent, _child) = native160_mission(true);
+        transition_wrapper_152(&state, &task, "failed");
+        native160_stage(&state, &config, &task, "b");
+        let stop = {
+            let mut st = state.lock().unwrap();
+            handle_locked(
+                "conn-1",
+                NativeDelegationRequest::Cancel {
+                    task_id: task.task_id.clone(),
+                },
+                &mut st,
+            )
+            .unwrap();
+            st.managed_spawns.values().next().unwrap().stop.clone()
+        };
+        let (done, observer) = observer_arrets_152(vec![stop]);
+        tick(&state);
+        tick(&state);
+        done.send(()).unwrap();
+        assert_eq!(observer.join().unwrap(), vec![true]);
+        let (lease, completion) = {
+            let st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, "cancelled");
+            assert!(saved.cleanup_done);
+            assert!(saved.unacked_rounds.is_empty());
+            assert!(saved.idle_deadline_at.is_none());
+            let record = st
+                .managed_spawns
+                .get(&task.task_id)
+                .expect("StopControl fixture complet mais événement superviseur non encore drainé");
+            assert_eq!(record.lease.name, task.child);
+            eprintln!(
+                "T024 purge avant événementStopped : cleanup={}, failure_sent={}, delivery_acked={}, unacked={}, idle={}, managed={}",
+                saved.cleanup_done,
+                saved.failure_sent,
+                saved.delivery_acked,
+                saved.unacked_rounds.len(),
+                saved.idle_deadline_at.is_some(),
+                st.managed_spawns.len()
+            );
+            (record.lease.clone(), record.stop.clone())
+        };
+        // Le backend152 a confirméStopped ; compléter le même événement réel
+        // du superviseur, qui retire managed_spawns/managed_by_instance.
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(ManagedSupervisorEvent::Stopped {
+                lease,
+                conn_id: Some("child-conn".into()),
+                outcome: StopOutcome::Stopped,
+                completion,
+            })
+            .unwrap();
+        super::super::drain_managed_events(&state, &event_rx);
+        let mut st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "cancelled");
+        assert!(saved.cleanup_done);
+        assert!(
+            !st.managed_spawns
+                .values()
+                .any(|r| r.lease.name == task.child)
+        );
+        assert!(
+            !st.managed_by_instance
+                .contains_key(task.child_instance.as_ref().unwrap())
+        );
+        st.router.unregister_by_conn("child-conn");
+        st.connections.remove("child-conn");
+        if let Some(instance) = st.conn_instances.remove("child-conn") {
+            st.presences.remove(&instance);
+        }
+        let desired_running = st
+            .fleet
+            .desired_entry(&task.child)
+            .unwrap()
+            .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Running);
+        let saga_launching = st
+            .idempotency
+            .spawn_commands(&st.fleet.supervisor_scope())
+            .unwrap()
+            .iter()
+            .any(|s| {
+                s.name == task.child
+                    && matches!(
+                        s.state,
+                        crate::idempotency::SpawnCommandState::Requested
+                            | crate::idempotency::SpawnCommandState::Reserved
+                            | crate::idempotency::SpawnCommandState::Starting
+                    )
+            });
+        let metadata = json!({"state":saved.state,"cleanup":saved.cleanup_done,
+            "unacked":saved.unacked_rounds.len(),"idle":saved.idle_deadline_at.is_some(),
+            "delivery_acked":saved.delivery_acked,"failure_sent":saved.failure_sent,
+            "route":st.router.get_agent(&task.child).is_some(),"managed":st.managed_spawns.len(),
+            "desired_running":desired_running,"saga_launching":saga_launching});
+        assert!(
+            !desired_running && !saga_launching,
+            "purge still blocked: {metadata}"
+        );
+        assert_eq!(
+            purge_retained(&st, unix_timestamp() + 8 * JOUR_150, None, usize::MAX),
+            1,
+            "annulationclôturée, superviseurStopped etEOF permettent purge : {metadata}"
+        );
+        assert!(st.delegation_store.get(&task.task_id).unwrap().is_none());
+        cleanup(&config);
+    }
+
+    // T026 : substitution obtenue par admission157, jamais fabriquée dans Task.
+    #[test]
+    fn native160_optin_aucune_substitution() {
+        let (mut st, config, rx, parent) = fixture("pinned160");
+        let registry = r#"{"agents":{
+            "native-test":{"command":"/missing/requested160","args":["app-server"],"protocol":"codex_app_server","forbidden_env":[],"capabilities":{"execution_paths":["codex_app_server"],"models":{"custom/model":{"efforts":["high"]}}}},
+            "fallback160":{"command":"/bin/sh","args":["app-server"],"protocol":"codex_app_server","forbidden_env":[],"capabilities":{"execution_paths":["codex_app_server"],"models":{"custom/model":{"efforts":["high"]}}}}
+        }}"#;
+        st.registry =
+            AgentRegistry::from_json(registry, Path::new("/tmp/pinned160-registry.json")).unwrap();
+        let mut request = request_delai_150("pinned160", Some(120));
+        let NativeDelegationRequest::Delegate {
+            fallback,
+            resume_on_limit,
+            ..
+        } = &mut request
+        else {
+            panic!("Delegate")
+        };
+        *resume_on_limit = Some(true);
+        fallback.push(bridget_transport::protocol::FallbackTarget {
+            agent_type: "fallback160".into(),
+            model: "custom/model".into(),
+            effort: Some("high".into()),
+        });
+        let receipt = handle_locked("conn-1", request, &mut st).unwrap();
+        let id = receipt["task_id"].as_str().unwrap().to_owned();
+        let state = Arc::new(Mutex::new(st));
+        tick(&state);
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("porteur préparé après véritable substitution")
+        };
+        assert_eq!(prepared.agent_type, "fallback160");
+        let (writer, mut child) = super::super::presence_tests::control_socket("pinned160-child");
+        child
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        {
+            let mut st = state.lock().unwrap();
+            let host = st.host.clone();
+            assert!(matches!(
+                handle_register_with_channel(
+                    "child-conn",
+                    2,
+                    prepared.agent_type.clone(),
+                    prepared.lease.name.clone(),
+                    Some(host),
+                    Some(prepared.resolved_definition.protocol.clone()),
+                    ChannelReport::Known("unix".into()),
+                    Some(PresenceMode::Acp),
+                    None,
+                    Some("macOS".into()),
+                    Some(prepared.lease.instance_id.clone()),
+                    None,
+                    false,
+                    Some(true),
+                    &mut st,
+                    false
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+            st.connections.insert("child-conn".into(), writer);
+            st.conn_instances
+                .insert("child-conn".into(), prepared.lease.instance_id.clone());
+            st.fleet
+                .register_connected(
+                    &prepared.lease,
+                    &prepared.lease.instance_id,
+                    unix_timestamp(),
+                )
+                .unwrap();
+            st.managed_spawns.get_mut(&id).unwrap().wrapper_conn = Some("child-conn".into());
+        }
+        tick(&state);
+        let mut raw = String::new();
+        child.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } = decode(raw.trim()).unwrap()
+        else {
+            panic!("mission admise")
+        };
+        handle_wrapper_message(
+            "child-conn",
+            WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation,
+            },
+            &state,
+        );
+        let task = state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&id)
+            .unwrap()
+            .unwrap();
+        let substitution = task
+            .substitution
+            .clone()
+            .expect("substitution réelle àadmission157");
+        assert_eq!(substitution.requested.agent_type, "native-test");
+        assert_eq!(substitution.selected.agent_type, "fallback160");
+        assert_eq!(substitution.reason, "command_missing");
+        let pinned = serde_json::to_vec(&task.definition).unwrap();
+        let request_pinned = serde_json::to_vec(&task.request).unwrap();
+        transition_wrapper_152(&state, &task, "running");
+        transition_wrapper_152(&state, &task, "failed");
+        native160_stage(&state, &config, &task, "b");
+        {
+            let mut st = state.lock().unwrap();
+            // Rendre le primaire disponible et la définitionlivefallback indisponible.
+            // Une résolution157 réexécutée ne peut pas réussir avec cette définition.
+            let registry = registry
+                .replace("/missing/requested160", "/bin/sh")
+                .replace(
+                    "\"fallback160\":{\"command\":\"/bin/sh\"",
+                    "\"fallback160\":{\"command\":\"/missing/live-fallback160\"",
+                );
+            st.registry =
+                AgentRegistry::from_json(&registry, Path::new("/tmp/pinned160-changed.json"))
+                    .unwrap();
+        }
+        tick(&state);
+        raw.clear();
+        child.read_line(&mut raw).unwrap();
+        let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(raw.trim()).unwrap() else {
+            panic!("relance avec définitionépinglée")
+        };
+        let st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&id).unwrap().unwrap();
+        assert_eq!(message.id, task.mission);
+        assert_eq!(serde_json::to_vec(&saved.definition).unwrap(), pinned);
+        assert_eq!(serde_json::to_vec(&saved.request).unwrap(), request_pinned);
+        assert_eq!(
+            serde_json::to_value(&saved.substitution).unwrap(),
+            serde_json::to_value(Some(substitution)).unwrap()
+        );
+        assert_eq!(saved.child, task.child);
+        drop(parent);
+        cleanup(&config);
+    }
+
+    // T022 : aucune ronde seedée ; qualification SQL et remise ACKée réelles.
+    #[test]
+    fn native160_bornes_dix_echecs_meme_retour() {
+        let (state, config, task, _parent, mut child) = native160_mission(true);
+        native160_quota(&state, &task, unix_timestamp() + 1800);
+        let root = format!("execution-{}", task.mission);
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("Delegate160");
+        };
+        let mut clock = unix_timestamp() + 1;
+        let reset = clock + 1;
+        state.lock().unwrap().provider_limits.record(
+            agent_type,
+            bridget_transport::protocol::RateLimitFact {
+                window: "five_hour".into(),
+                status: "rate_limit_reached".into(),
+                resets_at: Some(reset),
+                used_percent: Some(100),
+            },
+            bridget_transport::protocol::RateLimitSource::CodexAppServer,
+            clock,
+        );
+        let mut actual_relaunches = 0;
+        for failure in 0..10 {
+            let saved = state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap();
+            if saved.terminal() {
+                let mut st = state.lock().unwrap();
+                let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+                assert_eq!(
+                    rejected(
+                        &mut st,
+                        "child-conn",
+                        &task.mission,
+                        "quota160",
+                        Some(&leaf.execution_id),
+                        Some(leaf.generation)
+                    )
+                    .unwrap(),
+                    NativeRejection::NativeFailed
+                );
+                assert_eq!(
+                    st.delegation_store
+                        .get(&task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .quota_waits
+                        .len(),
+                    actual_relaunches
+                );
+                continue;
+            }
+            transition_wrapper_152(&state, &task, "failed");
+            {
+                let mut st = state.lock().unwrap();
+                let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                assert_eq!(
+                    handle_quota_failure(&mut st, &mut saved, &leaf, "quota160", clock).unwrap(),
+                    NativeRejection::QuotaHold
+                );
+                if failure == 0 {
+                    assert_eq!(
+                        saved.quota_waits.last().unwrap().phase,
+                        QuotaWaitPhase::Waiting
+                    );
+                }
+                if failure == 0 {
+                    assert!(
+                        st.execution_store
+                            .quota_failure_for(&leaf.execution_id)
+                            .unwrap()
+                            .is_some()
+                    );
+                }
+            }
+            if failure == 0 {
+                assert!(
+                    handle_wrapper_message(
+                        "child-conn",
+                        WrapperToDaemon::TurnState { in_progress: false },
+                        &state
+                    )
+                    .is_none()
+                );
+                clock = reset + 30;
+                // La livraison99 relit Unix réel ; garder une marge sous sa tolérance,
+                // sans modifier le seuil ni fabriquer les compteurs de la Task.
+                let bound = Instant::now();
+                while unix_timestamp() < clock - 55 {
+                    assert!(bound.elapsed() < Duration::from_secs(20));
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let (controls, resumed) = {
+                    let mut st = state.lock().unwrap();
+                    let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                    relaunch_quota_task(&mut st, &mut saved, clock).unwrap();
+                    assert_eq!(
+                        saved.quota_waits.last().unwrap().phase,
+                        QuotaWaitPhase::Relaunching
+                    );
+                    let resumed = saved
+                        .quota_waits
+                        .last()
+                        .unwrap()
+                        .resume_execution_id
+                        .clone()
+                        .unwrap();
+                    (
+                        st.pending_post_response_controls
+                            .remove("child-conn")
+                            .expect("remise différée réelle"),
+                        resumed,
+                    )
+                };
+                assert!(execute_controls(controls).is_empty());
+                let mut raw = String::new();
+                child.read_line(&mut raw).unwrap();
+                let DaemonToWrapper::DeliverIdempotent {
+                    message,
+                    delivery_id,
+                    delivery_generation,
+                    ..
+                } = serde_json::from_str(raw.trim()).unwrap()
+                else {
+                    panic!("DeliverIdempotent attendu : {raw}");
+                };
+                assert_eq!(message.id, task.mission);
+                assert!(
+                    handle_wrapper_message(
+                        "child-conn",
+                        WrapperToDaemon::DeliverAcked {
+                            delivery_id,
+                            delivery_generation
+                        },
+                        &state
+                    )
+                    .is_none()
+                );
+                {
+                    let mut st = state.lock().unwrap();
+                    let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                    relaunch_quota_task(&mut st, &mut saved, clock).unwrap();
+                    let wait = saved.quota_waits.last().unwrap();
+                    assert_eq!(wait.phase, QuotaWaitPhase::Done);
+                    assert!(wait.until.is_some());
+                    assert_eq!(wait.resume_execution_id.as_deref(), Some(resumed.as_str()));
+                    let scope = st.idempotency.supervisor_scope().unwrap();
+                    let key = IdempotencyKey::new(
+                        scope,
+                        OperationKind::Send,
+                        format!("recovery-{resumed}"),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                        Some("acked")
+                    );
+                    st.delegation_store =
+                        crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+                    assert_eq!(
+                        st.delegation_store
+                            .get(&task.task_id)
+                            .unwrap()
+                            .unwrap()
+                            .quota_waits,
+                        saved.quota_waits
+                    );
+                }
+                clock += 1;
+                actual_relaunches += 1;
+            } else {
+                // Le même retour est maintenant ancien. Aucun fait périmé n'est
+                // renouvelé ; le hold NoFact expire via l'horloge métier existante.
+                let mut st = state.lock().unwrap();
+                let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+                let mut current = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                assert_eq!(
+                    handle_quota_failure(&mut st, &mut current, &leaf, "quota160", clock + 6)
+                        .unwrap(),
+                    NativeRejection::NativeFailed
+                );
+                assert_eq!(current.state, "failed");
+            }
+        }
+        let st = state.lock().unwrap();
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+        assert_eq!(
+            actual_relaunches, 1,
+            "une relance réelle, puis arrêt NoFact sans renouveler le même retour"
+        );
+        assert_eq!(saved.quota_waits.len(), actual_relaunches);
+        assert!(actual_relaunches <= 2);
+        assert_eq!(leaf.generation, actual_relaunches as u64 + 1);
+        assert_eq!(saved.error.as_deref(), Some("quota160"));
+        eprintln!(
+            "T022 dixinjections : relances={actual_relaunches}, génération={}, cause={:?}",
+            leaf.generation, saved.error
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native160_bornes_compteur_survit_au_solde_et_au_redemarrage() {
+        let (state, config, task, _parent, mut child) = native160_mission(true);
+        native160_quota(&state, &task, unix_timestamp() + 1800);
+        let root = format!("execution-{}", task.mission);
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("Delegate160");
+        };
+        let mut clock = unix_timestamp() + 1;
+        for round in 1..=2 {
+            let reset = clock + 1;
+            state.lock().unwrap().provider_limits.record(
+                agent_type,
+                bridget_transport::protocol::RateLimitFact {
+                    window: "five_hour".into(),
+                    status: "rate_limit_reached".into(),
+                    resets_at: Some(reset),
+                    used_percent: Some(100),
+                },
+                bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                clock,
+            );
+            transition_wrapper_152(&state, &task, "failed");
+            {
+                let mut st = state.lock().unwrap();
+                let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                assert_eq!(
+                    handle_quota_failure(&mut st, &mut saved, &leaf, "quota160", clock).unwrap(),
+                    NativeRejection::QuotaHold
+                );
+                assert_eq!(
+                    saved.quota_waits.last().unwrap().phase,
+                    QuotaWaitPhase::Waiting
+                );
+                assert!(
+                    st.execution_store
+                        .quota_failure_for(&leaf.execution_id)
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            assert!(
+                handle_wrapper_message(
+                    "child-conn",
+                    WrapperToDaemon::TurnState { in_progress: false },
+                    &state
+                )
+                .is_none()
+            );
+            clock = reset + 30;
+            // La livraison99 relit Unix réel ; garder une marge sous sa tolérance,
+            // sans modifier le seuil ni fabriquer les compteurs de la Task.
+            let bound = Instant::now();
+            while unix_timestamp() < clock - 55 {
+                assert!(bound.elapsed() < Duration::from_secs(20));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let (controls, resumed) = {
+                let mut st = state.lock().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                relaunch_quota_task(&mut st, &mut saved, clock).unwrap();
+                assert_eq!(
+                    saved.quota_waits.last().unwrap().phase,
+                    QuotaWaitPhase::Relaunching
+                );
+                let resumed = saved
+                    .quota_waits
+                    .last()
+                    .unwrap()
+                    .resume_execution_id
+                    .clone()
+                    .unwrap();
+                (
+                    st.pending_post_response_controls
+                        .remove("child-conn")
+                        .expect("remise différée réelle"),
+                    resumed,
+                )
+            };
+            assert!(execute_controls(controls).is_empty());
+            let mut raw = String::new();
+            child.read_line(&mut raw).unwrap();
+            let DaemonToWrapper::DeliverIdempotent {
+                message,
+                delivery_id,
+                delivery_generation,
+                ..
+            } = serde_json::from_str(raw.trim()).unwrap()
+            else {
+                panic!("DeliverIdempotent attendu : {raw}");
+            };
+            assert_eq!(message.id, task.mission);
+            assert!(
+                handle_wrapper_message(
+                    "child-conn",
+                    WrapperToDaemon::DeliverAcked {
+                        delivery_id,
+                        delivery_generation
+                    },
+                    &state
+                )
+                .is_none()
+            );
+            {
+                let mut st = state.lock().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                relaunch_quota_task(&mut st, &mut saved, clock).unwrap();
+                let wait = saved.quota_waits.last().unwrap();
+                assert_eq!(wait.phase, QuotaWaitPhase::Done);
+                assert!(wait.until.is_some());
+                assert_eq!(wait.resume_execution_id.as_deref(), Some(resumed.as_str()));
+                let scope = st.idempotency.supervisor_scope().unwrap();
+                let key =
+                    IdempotencyKey::new(scope, OperationKind::Send, format!("recovery-{resumed}"))
+                        .unwrap();
+                assert_eq!(
+                    st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                    Some("acked")
+                );
+                st.delegation_store =
+                    crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+                assert_eq!(
+                    st.delegation_store
+                        .get(&task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .quota_waits,
+                    saved.quota_waits
+                );
+            }
+            clock += 1;
+            let st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.quota_waits.len(), round);
+            assert_eq!(saved.restart_resumes, 0);
+            assert_eq!(
+                st.execution_store
+                    .latest_in_chain(&root)
+                    .unwrap()
+                    .unwrap()
+                    .generation,
+                round as u64 + 1
+            );
+        }
+        // Troisième fait frais après le dernier until : RoundsDone, pas Past.
+        let reset = clock + 10;
+        state.lock().unwrap().provider_limits.record(
+            agent_type,
+            bridget_transport::protocol::RateLimitFact {
+                window: "five_hour".into(),
+                status: "rate_limit_reached".into(),
+                resets_at: Some(reset),
+                used_percent: Some(100),
+            },
+            bridget_transport::protocol::RateLimitSource::CodexAppServer,
+            clock,
+        );
+        transition_wrapper_152(&state, &task, "failed");
+        let mut st = state.lock().unwrap();
+        let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+        let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(
+            handle_quota_failure(&mut st, &mut saved, &leaf, "quota160", clock).unwrap(),
+            NativeRejection::NativeFailed
+        );
+        let error: Value = serde_json::from_str(saved.error.as_deref().unwrap()).unwrap();
+        assert_eq!(error["code"], "usage_limit");
+        assert_eq!(error["limit_reset_at"], reset);
+        assert_eq!(saved.quota_waits.len(), 2);
+        assert_eq!(leaf.generation, 3);
+        reouvrir_flotte_152(&mut st, &config);
+        prepare_restart(&mut st).unwrap();
+        st.delegation_store = crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+        let durable = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(durable.quota_waits, saved.quota_waits);
+        assert_eq!(durable.state, "failed");
+        assert_eq!(durable.restart_resumes, 0);
+        assert_eq!(durable.error, saved.error);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native160_bornes_apres_deux_rondes_deux_redemarrages_survivent() {
+        let (state, config, task, _parent, mut child) = native160_mission(true);
+        native160_quota(&state, &task, unix_timestamp() + 1800);
+        let root = format!("execution-{}", task.mission);
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            panic!("Delegate160");
+        };
+        let mut clock = unix_timestamp() + 1;
+        for round in 1..=2 {
+            let reset = clock + 1;
+            state.lock().unwrap().provider_limits.record(
+                agent_type,
+                bridget_transport::protocol::RateLimitFact {
+                    window: "five_hour".into(),
+                    status: "rate_limit_reached".into(),
+                    resets_at: Some(reset),
+                    used_percent: Some(100),
+                },
+                bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                clock,
+            );
+            transition_wrapper_152(&state, &task, "failed");
+            {
+                let mut st = state.lock().unwrap();
+                let leaf = st.execution_store.latest_in_chain(&root).unwrap().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                assert_eq!(
+                    handle_quota_failure(&mut st, &mut saved, &leaf, "quota160", clock).unwrap(),
+                    NativeRejection::QuotaHold
+                );
+                assert_eq!(
+                    saved.quota_waits.last().unwrap().phase,
+                    QuotaWaitPhase::Waiting
+                );
+                assert!(
+                    st.execution_store
+                        .quota_failure_for(&leaf.execution_id)
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            assert!(
+                handle_wrapper_message(
+                    "child-conn",
+                    WrapperToDaemon::TurnState { in_progress: false },
+                    &state
+                )
+                .is_none()
+            );
+            clock = reset + 30;
+            // La livraison99 relit Unix réel ; garder une marge sous sa tolérance,
+            // sans modifier le seuil ni fabriquer les compteurs de la Task.
+            let bound = Instant::now();
+            while unix_timestamp() < clock - 55 {
+                assert!(bound.elapsed() < Duration::from_secs(20));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let (controls, resumed) = {
+                let mut st = state.lock().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                relaunch_quota_task(&mut st, &mut saved, clock).unwrap();
+                assert_eq!(
+                    saved.quota_waits.last().unwrap().phase,
+                    QuotaWaitPhase::Relaunching
+                );
+                let resumed = saved
+                    .quota_waits
+                    .last()
+                    .unwrap()
+                    .resume_execution_id
+                    .clone()
+                    .unwrap();
+                (
+                    st.pending_post_response_controls
+                        .remove("child-conn")
+                        .expect("remise différée réelle"),
+                    resumed,
+                )
+            };
+            assert!(execute_controls(controls).is_empty());
+            let mut raw = String::new();
+            child.read_line(&mut raw).unwrap();
+            let DaemonToWrapper::DeliverIdempotent {
+                message,
+                delivery_id,
+                delivery_generation,
+                ..
+            } = serde_json::from_str(raw.trim()).unwrap()
+            else {
+                panic!("DeliverIdempotent attendu : {raw}");
+            };
+            assert_eq!(message.id, task.mission);
+            assert!(
+                handle_wrapper_message(
+                    "child-conn",
+                    WrapperToDaemon::DeliverAcked {
+                        delivery_id,
+                        delivery_generation
+                    },
+                    &state
+                )
+                .is_none()
+            );
+            {
+                let mut st = state.lock().unwrap();
+                let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                relaunch_quota_task(&mut st, &mut saved, clock).unwrap();
+                let wait = saved.quota_waits.last().unwrap();
+                assert_eq!(wait.phase, QuotaWaitPhase::Done);
+                assert!(wait.until.is_some());
+                assert_eq!(wait.resume_execution_id.as_deref(), Some(resumed.as_str()));
+                let scope = st.idempotency.supervisor_scope().unwrap();
+                let key =
+                    IdempotencyKey::new(scope, OperationKind::Send, format!("recovery-{resumed}"))
+                        .unwrap();
+                assert_eq!(
+                    st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                    Some("acked")
+                );
+                st.delegation_store =
+                    crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+                assert_eq!(
+                    st.delegation_store
+                        .get(&task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .quota_waits,
+                    saved.quota_waits
+                );
+            }
+            clock += 1;
+            let st = state.lock().unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.quota_waits.len(), round);
+            assert_eq!(saved.restart_resumes, 0);
+            assert_eq!(
+                st.execution_store
+                    .latest_in_chain(&root)
+                    .unwrap()
+                    .unwrap()
+                    .generation,
+                round as u64 + 1
+            );
+        }
+        let mut st = state.lock().unwrap();
+        for expected in [1, 2] {
+            reouvrir_flotte_152(&mut st, &config);
+            assert!(!prepare_restart(&mut st).unwrap().contains(&task.child));
+            st.delegation_store =
+                crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+            let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert_eq!(saved.state, "working");
+            assert_eq!(saved.restart_resumes, expected);
+            assert_eq!(saved.quota_waits.len(), 2);
+            assert!(
+                saved
+                    .quota_waits
+                    .iter()
+                    .all(|wait| wait.phase == QuotaWaitPhase::Done)
+            );
+        }
+        reouvrir_flotte_152(&mut st, &config);
+        assert!(prepare_restart(&mut st).unwrap().contains(&task.child));
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state, "failed");
+        assert_eq!(saved.error.as_deref(), Some("native_resume_exhausted"));
+        assert_eq!(saved.restart_resumes, 2);
+        assert_eq!(saved.quota_waits.len(), 2);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native160_attente_avis_crash_frontieres_durables() {
+        for boundary in [
+            "before_failed_save",
+            "after_failed_save",
+            "after_notice_reserve",
+            "after_notice_commit",
+            "after_failure_sent",
+        ] {
+            let (state, config, mut task, mut parent, _child) = native160_mission(true);
+            if boundary == "before_failed_save" {
+                // Décision métier réelle au replay, pas une Task failed déjà semée.
+                native160_quota(&state, &task, unix_timestamp() + 21_610);
+                transition_wrapper_152(&state, &task, "failed");
+                assert_eq!(
+                    state
+                        .lock()
+                        .unwrap()
+                        .delegation_store
+                        .get(&task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .state,
+                    "working"
+                );
+            } else {
+                transition_wrapper_152(&state, &task, "failed");
+                task.state = "failed".into();
+                task.error = Some("fixture_notice160".into());
+                task.failure_sent = false;
+                state.lock().unwrap().delegation_store.save(&task).unwrap();
+            }
+            let notice_id = format!("native-failure-{}", task.task_id);
+            let scope = crate::communication::issuer_scope(&task.task_id);
+            let key = IdempotencyKey::new(&scope, OperationKind::Send, &notice_id).unwrap();
+            if matches!(
+                boundary,
+                "after_notice_reserve" | "after_notice_commit" | "after_failure_sent"
+            ) {
+                // Composition de l'entrée réelle de send_as ; aucune issue/ACK forgée.
+                let projected = task_view(&task, None, false);
+                let error = projected["error"].as_str().unwrap_or("failure");
+                let description = projected["detail"]["limit_reset_at"].as_i64().map_or_else(
+                    || error.to_string(),
+                    |reset| format!("{error} (retour quota : {reset})"),
+                );
+                let mut notice = bridget_core::BridgetMessage::new(
+                    &task.owner,
+                    &task.owner,
+                    format!(
+                        "Délégation native {} échouée : {}",
+                        task.task_id, description
+                    ),
+                );
+                notice.id = notice_id.clone();
+                notice.origin = Some(bridget_core::MessageOrigin::System);
+                let mut st = state.lock().unwrap();
+                if boundary == "after_notice_reserve" {
+                    let canon = canonical_send(&scope, &notice_id, &notice, task.created_at);
+                    assert!(matches!(
+                        st.idempotency
+                            .reserve(
+                                &key,
+                                &canon,
+                                task.created_at,
+                                CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                                unix_timestamp(),
+                                i64::MAX
+                            )
+                            .unwrap(),
+                        Reservation::Prepared { .. }
+                    ));
+                    assert!(st.idempotency.send_delivery_phase(&key).unwrap().is_none());
+                } else {
+                    let mut controls = Vec::new();
+                    let outcome = send_as(
+                        &mut st,
+                        &task.owner,
+                        &task.owner_instance,
+                        &task.task_id,
+                        notice,
+                        task.created_at,
+                        &mut controls,
+                    );
+                    // Le COMMIT précède l'ACK : cette voie rend OutcomeUnknown.
+                    assert!(
+                        matches!(
+                            outcome,
+                            DaemonToWrapper::IdempotencyResult {
+                                issue: IdempotencyIssue::OutcomeUnknown {
+                                    delivery_id: Some(_),
+                                    ..
+                                },
+                                ..
+                            }
+                        ),
+                        "{boundary}: gravure avant ACK, réponse réelle={outcome:?}"
+                    );
+                    assert_eq!(controls.len(), 1, "{boundary}: poussée préparée réelle");
+                    assert_eq!(
+                        st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                        Some("dispatching")
+                    );
+                    // Crash logique APRÈS le COMMIT, AVANT le writer : pas de poussée.
+                    drop(controls);
+                    if boundary == "after_failure_sent" {
+                        task.failure_sent = true;
+                        st.delegation_store.save(&task).unwrap();
+                    }
+                }
+            }
+            let mut raw = String::new();
+            assert!(
+                parent.read_line(&mut raw).is_err() && raw.is_empty(),
+                "{boundary}: aucun avis déjà poussé dans le snapshot"
+            );
+            // Reprise de remise ordinaire existante à la reconnexion du parent.
+            // Le périmètre notice n'est pas une mission native à réinjecter.
+            let recovered_controls = {
+                let mut st = state.lock().unwrap();
+                super::super::schedule_idempotent_delivery_recovery(
+                    &mut st,
+                    "conn-1",
+                    &task.owner_instance,
+                );
+                st.pending_post_response_controls
+                    .remove("conn-1")
+                    .unwrap_or_default()
+            };
+            assert!(execute_controls(recovered_controls).is_empty());
+            for _ in 0..3 {
+                tick(&state);
+            }
+            let mut notices = 0;
+            loop {
+                raw.clear();
+                match parent.read_line(&mut raw) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        let frame: DaemonToWrapper = decode(raw.trim_end()).unwrap();
+                        let DaemonToWrapper::DeliverIdempotent {
+                            delivery_id,
+                            delivery_generation,
+                            message,
+                            ..
+                        } = frame
+                        else {
+                            panic!("{boundary}: trame directe ou inattendue {frame:?}");
+                        };
+                        assert_eq!(message.id, notice_id, "{boundary}: seul avis durable");
+                        assert_eq!(message.origin, Some(bridget_core::MessageOrigin::System));
+                        assert!(!message.body.contains("Échec de livraison de la demande"));
+                        notices += 1;
+                        assert!(
+                            handle_wrapper_message(
+                                "conn-1",
+                                WrapperToDaemon::DeliverAcked {
+                                    delivery_id,
+                                    delivery_generation,
+                                },
+                                &state
+                            )
+                            .is_none(),
+                            "{boundary}: ACK par la vraie identité du parent"
+                        );
+                    }
+                }
+            }
+            assert_eq!(notices, 1, "{boundary}: jamais perdu ni doublé");
+            {
+                let st = state.lock().unwrap();
+                assert_eq!(
+                    st.idempotency.send_delivery_phase(&key).unwrap().as_deref(),
+                    Some("acked")
+                );
+                let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+                assert_eq!(saved.state, "failed");
+                assert!(saved.failure_sent, "{boundary}: solde durable présent");
+                copy_delivery_acks(&st).unwrap();
+                assert!(
+                    st.delegation_store
+                        .get(&task.task_id)
+                        .unwrap()
+                        .unwrap()
+                        .delivery_acked,
+                    "{boundary}: ACK recopié depuis la vraie phase SQL"
+                );
+            }
+            // Deux replays après l'ACK ne remettent ni avis ni message direct.
+            tick(&state);
+            tick(&state);
+            raw.clear();
+            assert!(
+                parent.read_line(&mut raw).is_err() && raw.is_empty(),
+                "{boundary}: zéro seconde poussée après ACK et failure_sent"
+            );
+            cleanup(&config);
+        }
     }
 }
 

@@ -2193,6 +2193,8 @@ pub enum NativeDelegationRequest {
         child_requests: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fallback: Vec<FallbackTarget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume_on_limit: Option<bool>,
     },
     Respond {
         task_id: String,
@@ -3595,6 +3597,10 @@ pub enum WrapperToDaemon {
     DeliveryRejected {
         id: String,
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
     },
     /// Transition dédiée du tour ACP, distincte de l'observation `Runtime`.
     /// Fait runtime corrélé émis par un wrapper managed.
@@ -5919,6 +5925,41 @@ mod tests {
     }
 
     #[test]
+    fn native160_protocole_refus_sans_correlation_octets_inchanges() {
+        let wire = br#"{"type":"DeliveryRejected","id":"message160","reason":"limite"}"#;
+        let decoded: WrapperToDaemon = serde_json::from_slice(wire).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), wire);
+        assert!(matches!(
+            decoded,
+            WrapperToDaemon::DeliveryRejected {
+                execution_id: None,
+                generation: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn native160_protocole_refus_correlation_et_ancien_decodeur() {
+        let wire = br#"{"type":"DeliveryRejected","id":"message160","reason":"limite","execution_id":"execution160","generation":2}"#;
+        let decoded: WrapperToDaemon = serde_json::from_slice(wire).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), wire);
+        assert!(matches!(decoded, WrapperToDaemon::DeliveryRejected {
+            execution_id: Some(ref id), generation: Some(2), ..
+        } if id == "execution160"));
+        // Projection de cette variante historique : même tag, sans deny_unknown_fields.
+        // Aucun ancien binaire daemon n'est exécuté par ce test.
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type")]
+        enum LegacyWrapper {
+            DeliveryRejected { id: String, reason: String },
+        }
+        let old: LegacyWrapper = serde_json::from_slice(wire).unwrap();
+        assert!(matches!(old, LegacyWrapper::DeliveryRejected { id, reason }
+            if id == "message160" && reason == "limite"));
+    }
+
+    #[test]
     fn test_encode_decode_acp_delivery_lifecycle() {
         let cancel = DaemonToWrapper::CancelDelivery {
             id: "message-1".to_string(),
@@ -5932,10 +5973,12 @@ mod tests {
         let rejected = WrapperToDaemon::DeliveryRejected {
             id: "message-1".to_string(),
             reason: "file ACP pleine".to_string(),
+            execution_id: None,
+            generation: None,
         };
         assert!(matches!(
             decode(&encode(&rejected).unwrap()).unwrap(),
-            WrapperToDaemon::DeliveryRejected { id, reason } if id == "message-1" && reason == "file ACP pleine"
+            WrapperToDaemon::DeliveryRejected { id, reason, .. } if id == "message-1" && reason == "file ACP pleine"
         ));
         assert!(matches!(
             decode(&encode(&WrapperToDaemon::TurnState { in_progress: true }).unwrap()).unwrap(),
@@ -8457,6 +8500,7 @@ mod spec104_search_contract_tests {
             keep_alive_secs: None,
             brief: None,
             child_requests: None,
+            resume_on_limit: None,
             fallback: Vec::new(),
         };
         let expected = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null}"#;
@@ -8635,6 +8679,35 @@ mod spec104_search_contract_tests {
         ).unwrap();
         let value: serde_json::Value = serde_json::from_str(&encode(&report).unwrap()).unwrap();
         assert_eq!(value["features"], serde_json::json!([]));
+    }
+
+    // T009 : réemploi JSON public et serde_json::to_vec ; aucun canon alternatif.
+    #[test]
+    fn native160_protocole_delegate_sans_resume_on_limit_octets_identiques() {
+        let wire = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120}"#;
+        let request: NativeDelegationRequest = serde_json::from_slice(wire).unwrap();
+        assert_eq!(serde_json::to_vec(&request).unwrap(), wire);
+        assert!(
+            serde_json::to_value(request)
+                .unwrap()
+                .get("resume_on_limit")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native160_protocole_delegate_resume_on_limit_faux_octets_distincts() {
+        let legacy = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120}"#;
+        let explicit = br#"{"operation":"delegate","request_id":"k","agent_type":"a","model":"m","effort":null,"task":"t","cwd":"/c","posture":null,"reply_timeout":120,"resume_on_limit":false}"#;
+        let request: NativeDelegationRequest =
+            serde_json::from_slice(explicit).expect("resume_on_limit explicite doit être accepté");
+        let bytes = serde_json::to_vec(&request).unwrap();
+        assert_eq!(bytes, explicit);
+        assert_ne!(bytes, legacy);
+        assert_eq!(
+            serde_json::to_value(request).unwrap()["resume_on_limit"],
+            false
+        );
     }
 
     #[test]

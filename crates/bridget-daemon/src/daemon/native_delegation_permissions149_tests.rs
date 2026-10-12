@@ -212,6 +212,7 @@ pub(super) fn delegate_request(
     posture: Option<SpawnPosture>,
 ) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        resume_on_limit: None,
         fallback: Vec::new(),
         request_id: request_id.into(),
         agent_type: agent_type.into(),
@@ -1114,6 +1115,8 @@ fn tache_enregistree(
         guarded: false,
         guard_released: false,
         unacked_rounds: Vec::new(),
+        quota_waits: Vec::new(),
+        quota_hold: None,
         launch_issued_at: None,
         mission_issued_at: None,
         restart_resumes: 0,
@@ -2538,7 +2541,7 @@ fn native149_f2_execution_terminale_n_est_jamais_rouverte_au_redemarrage() {
         .map(|e| etat_execution(&st, e))
         .collect();
 
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
 
     let apres: Vec<_> = [&completee, &echouee, &injoignable]
         .iter()
@@ -2556,7 +2559,7 @@ fn native149_f2_execution_terminale_n_est_jamais_rouverte_au_redemarrage() {
     );
     // Idempotent : un second redémarrage ne réécrit rien.
     let apres_active = etat_execution(&st, &active);
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
     assert_eq!(etat_execution(&st, &active), apres_active);
     let _ = fs::remove_file(&config.db_path);
 }
@@ -2574,7 +2577,7 @@ fn native149_f2_execution_d_un_autre_agent_est_refusee_sans_etre_modifiee() {
     );
     let avant = etat_execution(&st, &execution);
 
-    let erreur = prepare_restart(&st).unwrap_err();
+    let erreur = prepare_restart(&mut st).unwrap_err();
 
     assert_eq!(erreur, "native_execution_mismatch");
     assert_eq!(
@@ -3199,7 +3202,7 @@ fn native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_res
     let ordinaire_avant = etat_execution(&st, execution_ordinaire);
     let native_avant = etat_execution(&st, &execution);
 
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
 
     // FR013/015/027 : une mission attestée reprend sans changer son exécution.
     let relue = st.delegation_store.get(&engagee.task_id).unwrap().unwrap();
@@ -3255,7 +3258,7 @@ fn native149_f2_mission_engagee_est_fermee_avec_son_execution_et_l_ordinaire_res
         descendants_busy(&st, &racine).unwrap(),
         "témoin : un descendant réellement actif bloque"
     );
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
     assert_eq!(
         etat_execution(&st, "execution-vivant-149").0,
         "running",
@@ -3578,7 +3581,7 @@ fn native149_e2_filiation_contradictoire_ou_incomplete_est_refusee_sans_fermer_l
         let contradictoire = fabriquer(&mut st, &racine);
         assert_eq!(etat_tache(&st, &contradictoire), ("queued".into(), None));
 
-        let erreur = prepare_restart(&st).expect_err(nom);
+        let erreur = prepare_restart(&mut st).expect_err(nom);
 
         assert_eq!(erreur, attendu, "{nom}");
         assert_eq!(
@@ -3620,7 +3623,7 @@ fn native149_f3_annulation_et_execution_active_sont_fermees_une_fois_au_redemarr
         }
     }
 
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
 
     for (etat, exec, tache, execution, avant) in &cas {
         let (apres, revision, generation) = etat_execution(&st, execution);
@@ -3635,7 +3638,7 @@ fn native149_f3_annulation_et_execution_active_sont_fermees_une_fois_au_redemarr
     }
     // Idempotent : un second redémarrage n'écrit plus rien.
     let figees: Vec<_> = cas.iter().map(|c| etat_execution(&st, &c.3)).collect();
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
     let relues: Vec<_> = cas.iter().map(|c| etat_execution(&st, &c.3)).collect();
     assert_eq!(figees, relues);
     let _ = fs::remove_file(&config.db_path);
@@ -3654,7 +3657,7 @@ fn native149_f3_execution_terminale_d_une_tache_annulee_n_est_jamais_rouverte() 
         etat_execution(&st, &echouee),
     ];
 
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
 
     assert_eq!(
         [
@@ -3690,7 +3693,7 @@ fn native149_f3_execution_d_un_autre_agent_refuse_la_fermeture_d_une_tache_annul
     let avant = etat_execution(&st, &execution);
 
     assert_eq!(
-        prepare_restart(&st).unwrap_err(),
+        prepare_restart(&mut st).unwrap_err(),
         "native_execution_mismatch"
     );
     assert_eq!(
@@ -3808,7 +3811,7 @@ fn native149_f3_une_tache_annulee_a_execution_interrompue_ne_bloque_pas_la_racin
         descendants_busy(&st, &racine).unwrap(),
         "annulée mais exécution active : bloquante tant qu'elle n'est pas fermée"
     );
-    prepare_restart(&st).unwrap();
+    prepare_restart(&mut st).unwrap();
     assert_eq!(etat_execution(&st, &active).0, "unreachable");
     assert!(
         !descendants_busy(&st, &racine).unwrap(),

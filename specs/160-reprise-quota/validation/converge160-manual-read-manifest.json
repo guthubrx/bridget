@@ -1,0 +1,282 @@
+{
+  "at_utc": "2026-10-12T21:47:23.608048+00:00",
+  "code_inherited": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "c7b0a8aa48eeddf4b4e0b48cb9621b4e09e7f3f13e8d2383b7d5b9e584715575",
+      "inherited_semantic_ranges": [
+        [
+          185,
+          219
+        ],
+        [
+          227,
+          260
+        ],
+        [
+          390,
+          401
+        ],
+        [
+          2876,
+          3440
+        ],
+        [
+          3450,
+          3514
+        ],
+        [
+          3775,
+          3812
+        ],
+        [
+          4067,
+          4285
+        ],
+        [
+          6051,
+          6161
+        ],
+        [
+          15332,
+          15419
+        ],
+        [
+          16758,
+          16808
+        ],
+        [
+          16875,
+          16928
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.605576+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2a2dd53d43c2af2221f2438e2f675395557cdfc089e2213268e16f75efea85d3",
+      "inherited_semantic_ranges": [
+        [
+          6475,
+          6620
+        ],
+        [
+          9128,
+          9163
+        ],
+        [
+          22483,
+          22515
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.606892+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "0f8f94cef329d3eb92146b1dbf3336175c244d91f1de497dff3a2a0c790fa8d3",
+      "inherited_semantic_ranges": [
+        [
+          1030,
+          1103
+        ],
+        [
+          1410,
+          1493
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.607035+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "edfc4f25b57ae18c3116133c35f0b2fea5433e6c30e8dbbd14cfa8fd8df65164",
+      "inherited_semantic_ranges": [
+        [
+          180,
+          230
+        ],
+        [
+          265,
+          300
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.607168+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+      "sha256": "19798bca9c1aae954ee7229b18a99b7973001555b82800c64fc9960d24b1e104",
+      "inherited_semantic_ranges": [
+        [
+          354,
+          455
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.607275+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+      "sha256": "0265eb5d6f686442aedc3073d270192213279c28788296604a17b0fcf063e8bb",
+      "inherited_semantic_ranges": [
+        [
+          1,
+          106
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.607372+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "0f0553ebe24e7eb73273c20e7d5783f48ca1992a1cb23b05c00abb429d7c459b",
+      "inherited_semantic_ranges": [
+        [
+          130,
+          148
+        ],
+        [
+          310,
+          329
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.607482+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "bfc61ff19e4aeb4a7019ec595eab47c1a98c018e39722f05f77ff75c076843f6",
+      "inherited_semantic_ranges": [
+        [
+          5950,
+          5970
+        ],
+        [
+          4620,
+          4670
+        ],
+        [
+          6680,
+          6723
+        ],
+        [
+          6735,
+          6768
+        ],
+        [
+          11558,
+          11624
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.607800+00:00"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+      "sha256": "e8bed4850d635430459d3d254c4fcd72ce4bc922eb62a06999648557081c37ae",
+      "inherited_semantic_ranges": [
+        [
+          2195,
+          2200
+        ],
+        [
+          8690,
+          8720
+        ]
+      ],
+      "read_mode": "inherited_preconverge_unchanged_sha",
+      "provenance": "/Users/moi/.cache/bridget-converge160-preparation-20261012/preconverge160.json",
+      "provenance_sha256": "fd0903413b688c7b0da8bf2817a63fd47d2797fd71832d618bf0409163cdc146",
+      "verified_at_utc": "2026-10-12T21:47:23.608039+00:00"
+    }
+  ],
+  "T028fresh": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/docs/delegation-native.md",
+      "sha256_before": "9f70aa9b09c1d998461115a7708c3f49ddc29cee5ca89644b18269f6bc5e206d",
+      "sha256_after": "9f70aa9b09c1d998461115a7708c3f49ddc29cee5ca89644b18269f6bc5e206d",
+      "ranges": [
+        [
+          142,
+          208
+        ]
+      ],
+      "read_mode": "fresh_T028_applied_sections",
+      "receipt_expected_sha256": "9f70aa9b09c1d998461115a7708c3f49ddc29cee5ca89644b18269f6bc5e206d"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/skills/bridget/SKILL.md",
+      "sha256_before": "cd851c784d6bbd8d3ab156f3af90a36446436c36313107428a6b420f9b985505",
+      "sha256_after": "cd851c784d6bbd8d3ab156f3af90a36446436c36313107428a6b420f9b985505",
+      "ranges": [
+        [
+          48,
+          69
+        ]
+      ],
+      "read_mode": "fresh_T028_applied_sections",
+      "receipt_expected_sha256": "cd851c784d6bbd8d3ab156f3af90a36446436c36313107428a6b420f9b985505"
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/skills/bridget/references/commandes.md",
+      "sha256_before": "8b9fd33b6b66f27d5176df2df86a14286eeba69bea5a17bbc7f17c6bd374b8c2",
+      "sha256_after": "8b9fd33b6b66f27d5176df2df86a14286eeba69bea5a17bbc7f17c6bd374b8c2",
+      "ranges": [
+        [
+          571,
+          604
+        ]
+      ],
+      "read_mode": "fresh_T028_applied_sections",
+      "receipt_expected_sha256": "8b9fd33b6b66f27d5176df2df86a14286eeba69bea5a17bbc7f17c6bd374b8c2"
+    }
+  ],
+  "checklist": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/checklists/requirements.md",
+    "sha256": "5cc7d2dea24d0524af3f16451b9ffa99ad96eb7717231214513f11f0fdd05538",
+    "ranges": [
+      [
+        1,
+        48
+      ]
+    ],
+    "read_mode": "fresh"
+  },
+  "contract": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/contracts/reprise160.md",
+    "sha256": "bf9507f6e69c35bc5e7eb53bffb0ec34c24f8cfbf8a2b9178b7de6194522ec5b",
+    "sections": "API,guarantees,R1/R2 targeted plus unchangedpriorSHA; not whole-source audit"
+  },
+  "tasks": {
+    "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/tasks.md",
+    "before_sha256": "b9d13df759713ab594db8922d20700024f853a8531bd886c16c391a2915191ab",
+    "after_sha256": "b9d13df759713ab594db8922d20700024f853a8531bd886c16c391a2915191ab",
+    "byte_identical": true
+  },
+  "other_docs": {
+    "spec.md": "FR/SC/US correspondences and R1/R2 passages targeted; not complete fresh narrative reading",
+    "plan.md": "Architecture/files/decisions/complexity1-125 and current remaining gates125-end targeted; not approval of every research assertion",
+    "tasks.md": "IDs/checkboxes exact, gateT001/T002 and finishingT027-T031 inspected; not semantic reread of all37long task descriptions",
+    "contracts/reprise160.md": "SHAguard only this turn; final contract semantics inherited targetedR2candidate, NOT a claimed complete fresh reread",
+    "checklists/requirements.md": "Full48lines read;16checked design assertions historical, not execution proof"
+  },
+  "semantic_limits": "No fake100%repository/testbody coverage; scope requirements-level mapping."
+}

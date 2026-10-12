@@ -1,0 +1,1070 @@
+{
+  "kind": "ROOT_RED160_DISPOSITION",
+  "status": "PREFOUNDATIONS_NO_BUSINESS_RED_CHECKOFF",
+  "prepared_at": "2026-10-12T21:02:27.953228+00:00",
+  "owners": "ROOT seul runner et correctifs WT ; ce préparateur produit seulement rapportCACHE.",
+  "runs": [
+    {
+      "label": "T003-T008-T032-T033-T037-eleven-RED-first",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T003-T008-T032-T033-T037-eleven-RED-first.json",
+        "sha256": "4cfc80dc7b5b4b6dd6f0df2c448e5bea713e194e456a77326ae255cb5301833f"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T003-T008-T032-T033-T037-eleven-RED-first.log",
+        "sha256": "864ae2a88b3bba4dd05148c6668a48c37b860d07639b085f0c9c764b7e4c3ae3",
+        "lines": 45
+      },
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "native160_rouge",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T20:47:16.567245+00:00",
+      "seconds": 5.25,
+      "rc": 101,
+      "raw_test_results": [],
+      "failed_tests_exact": [],
+      "parent_targets": [],
+      "summaries": [],
+      "embedded_summary_count": 0,
+      "sources_count": 223,
+      "sources_stable": true,
+      "critical_source_SHA_during_run": {
+        "crates/bridget-daemon/src/daemon/native_delegation.rs": "af8e3b725a8ba60757d6fe49ad3f7ce26518624f698a4585ac0d8d6fafcfcb79",
+        "crates/bridget-daemon/src/delegation.rs": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "crates/bridget-daemon/src/execution_store.rs": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+        "crates/bridget-transport/src/protocol.rs": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990"
+      },
+      "diagnostics": [
+        {
+          "line": 2,
+          "text": "error[E0609]: no field `agent_type` on type `&delegation::Task`"
+        },
+        {
+          "line": 10,
+          "text": "error[E0609]: no field `agent_type` on type `&delegation::Task`"
+        },
+        {
+          "line": 18,
+          "text": "error[E0609]: no field `agent_type` on type `delegation::Task`"
+        },
+        {
+          "line": 26,
+          "text": "error[E0616]: field `message_bytes` of struct `StoredSendDelivery` is private"
+        }
+      ],
+      "panics": [],
+      "disposition": "COMPILATION_ONLY_NOT_RED_BUSINESS :4erreurs Task.agent_type absent / StoredSendDelivery.message_bytes privé ;0tests exécutés."
+    },
+    {
+      "label": "T003-T008-T032-T033-T037-eleven-RED-compiled",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T003-T008-T032-T033-T037-eleven-RED-compiled.json",
+        "sha256": "005c4df3b8a6396e5435327ca756deb118f579a46ebe74c9c0eb3e7b2ad55b57"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T003-T008-T032-T033-T037-eleven-RED-compiled.log",
+        "sha256": "74ec980584b148608547d5441c0af828b6a027cfc27bf33802d1786e95f6bb71",
+        "lines": 132
+      },
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "native160_rouge",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T20:49:13.401347+00:00",
+      "seconds": 14.43,
+      "rc": 101,
+      "raw_test_results": [
+        [
+          "FAILED",
+          "0",
+          "11",
+          "0"
+        ]
+      ],
+      "failed_tests_exact": [
+        "daemon::native_delegation::tests::native160_rouge_compteur_durable",
+        "daemon::native_delegation::tests::native160_rouge_concurrence_reprise_ordinaire",
+        "daemon::native_delegation::tests::native160_rouge_gel_cumule",
+        "daemon::native_delegation::tests::native160_rouge_double_avis",
+        "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_apres_echec",
+        "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_avant_echec",
+        "daemon::native_delegation::tests::native160_rouge_hold_horloges",
+        "daemon::native_delegation::tests::native160_rouge_reconstruction_failed",
+        "daemon::native_delegation::tests::native160_rouge_redemarrage_pendant_attente",
+        "daemon::native_delegation::tests::native160_rouge_refus_ancien_et_autres_causes",
+        "daemon::native_delegation::tests::native160_rouge_relance_frontieres"
+      ],
+      "parent_targets": [
+        {
+          "line": 66,
+          "raw": "     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)"
+        }
+      ],
+      "summaries": [
+        {
+          "line": 130,
+          "raw": "test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 1882 filtered out; finished in 0.00s"
+        }
+      ],
+      "embedded_summary_count": 0,
+      "sources_count": 223,
+      "sources_stable": true,
+      "critical_source_SHA_during_run": {
+        "crates/bridget-daemon/src/daemon/native_delegation.rs": "25a96e95342434535a87086350ea583108fa8de1fc52a96616fd966d7f3dc734",
+        "crates/bridget-daemon/src/delegation.rs": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "crates/bridget-daemon/src/execution_store.rs": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+        "crates/bridget-transport/src/protocol.rs": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990"
+      },
+      "diagnostics": [],
+      "panics": [
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_compteur_durable",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 70,
+          "evidence_lines": [
+            {
+              "line": 71,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            },
+            {
+              "line": 74,
+              "text": "thread 'daemon::native_delegation::tests::native160_rouge_concurrence_reprise_ordinaire' (79819202) panicked at crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65:"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_concurrence_reprise_ordinaire",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 74,
+          "evidence_lines": [
+            {
+              "line": 75,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_gel_cumule",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 79,
+          "evidence_lines": [
+            {
+              "line": 80,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            },
+            {
+              "line": 82,
+              "text": "thread 'daemon::native_delegation::tests::native160_rouge_double_avis' (79819203) panicked at crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65:"
+            },
+            {
+              "line": 83,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_double_avis",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 82,
+          "evidence_lines": [
+            {
+              "line": 83,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_apres_echec",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 87,
+          "evidence_lines": [
+            {
+              "line": 88,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            },
+            {
+              "line": 90,
+              "text": "thread 'daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_avant_echec' (79819206) panicked at crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65:"
+            },
+            {
+              "line": 91,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_avant_echec",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 90,
+          "evidence_lines": [
+            {
+              "line": 91,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_hold_horloges",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 95,
+          "evidence_lines": [
+            {
+              "line": 96,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            },
+            {
+              "line": 98,
+              "text": "thread 'daemon::native_delegation::tests::native160_rouge_reconstruction_failed' (79819208) panicked at crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65:"
+            },
+            {
+              "line": 99,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_reconstruction_failed",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 98,
+          "evidence_lines": [
+            {
+              "line": 99,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_redemarrage_pendant_attente",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 103,
+          "evidence_lines": [
+            {
+              "line": 104,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            },
+            {
+              "line": 106,
+              "text": "thread 'daemon::native_delegation::tests::native160_rouge_refus_ancien_et_autres_causes' (79819210) panicked at crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65:"
+            },
+            {
+              "line": 107,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_refus_ancien_et_autres_causes",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 106,
+          "evidence_lines": [
+            {
+              "line": 107,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_relance_frontieres",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4574:65",
+          "log_line": 111,
+          "evidence_lines": [
+            {
+              "line": 112,
+              "text": "called `Result::unwrap()` on an `Err` value: Error(\"unknown field `resume_on_limit`, expected one of `request_id`, `agent_type`, `model`, `effort`, `task`, `cwd`, `posture`, `reply_timeout`, `workspace`, `keep_alive_secs`, `brief`, `child_requests`, `fallback`\", line: 0, column: 0)"
+            },
+            {
+              "line": 115,
+              "text": "failures:"
+            }
+          ]
+        }
+      ],
+      "disposition": "FIXTURE_SERDE_ONLY_NOT_RED_BUSINESS :0P11F avant admission dans NativeDelegationRequest, unknownresume_on_limit ; aucun handler160atteint."
+    },
+    {
+      "label": "T003-T008-T032-T033-T037-eleven-RED-base-legacy-protocol",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T003-T008-T032-T033-T037-eleven-RED-base-legacy-protocol.json",
+        "sha256": "f6180455293ff7367751ccbaf43b0e0b8838ef7739c9995fde149cb4db864b6e"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T003-T008-T032-T033-T037-eleven-RED-base-legacy-protocol.log",
+        "sha256": "eac91bc530eeca323c00435ff84ebc626de38babf199b91f324b514443c51da1",
+        "lines": 163
+      },
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "native160_rouge",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T20:53:09.438253+00:00",
+      "seconds": 9.7,
+      "rc": 101,
+      "raw_test_results": [
+        [
+          "FAILED",
+          "0",
+          "11",
+          "0"
+        ]
+      ],
+      "failed_tests_exact": [
+        "daemon::native_delegation::tests::native160_rouge_concurrence_reprise_ordinaire",
+        "daemon::native_delegation::tests::native160_rouge_compteur_durable",
+        "daemon::native_delegation::tests::native160_rouge_gel_cumule",
+        "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_apres_echec",
+        "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_avant_echec",
+        "daemon::native_delegation::tests::native160_rouge_double_avis",
+        "daemon::native_delegation::tests::native160_rouge_reconstruction_failed",
+        "daemon::native_delegation::tests::native160_rouge_redemarrage_pendant_attente",
+        "daemon::native_delegation::tests::native160_rouge_refus_ancien_et_autres_causes",
+        "daemon::native_delegation::tests::native160_rouge_relance_frontieres",
+        "daemon::native_delegation::tests::native160_rouge_hold_horloges"
+      ],
+      "parent_targets": [
+        {
+          "line": 66,
+          "raw": "     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)"
+        }
+      ],
+      "summaries": [
+        {
+          "line": 161,
+          "raw": "test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 1882 filtered out; finished in 3.95s"
+        }
+      ],
+      "embedded_summary_count": 0,
+      "sources_count": 223,
+      "sources_stable": true,
+      "critical_source_SHA_during_run": {
+        "crates/bridget-daemon/src/daemon/native_delegation.rs": "af6e29a62e54db2759060bc43be980a0b1816263886e4c07e6b27439b9f7a308",
+        "crates/bridget-daemon/src/delegation.rs": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "crates/bridget-daemon/src/execution_store.rs": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+        "crates/bridget-transport/src/protocol.rs": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990"
+      },
+      "diagnostics": [
+        {
+          "line": 73,
+          "text": "frontièrec NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+        },
+        {
+          "line": 84,
+          "text": "T005 mesuré : pause=600, deadline_frozen=600, request_frozen=600"
+        },
+        {
+          "line": 99,
+          "text": "T003 handler : task=failed, pending=false, parent_read=Ok(265), parent_bytes=265"
+        },
+        {
+          "line": 107,
+          "text": "T037 case=no_fact opt_in=false: state=failed, frames=2, direct=0, durable=1, failure_sent=true"
+        },
+        {
+          "line": 117,
+          "text": "frontièreb NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+        },
+        {
+          "line": 120,
+          "text": "T006 réel : state=working, restarts=1, generation=1"
+        },
+        {
+          "line": 137,
+          "text": "frontièrea NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+        }
+      ],
+      "panics": [
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_concurrence_reprise_ordinaire",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5022:9",
+          "log_line": 72,
+          "evidence_lines": [
+            {
+              "line": 73,
+              "text": "frontièrec NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+            },
+            {
+              "line": 76,
+              "text": "fixture160 : ancien protocole sans opt-in ; aucun scénario opt-in ancien revendiqué"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_compteur_durable",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5220:13",
+          "log_line": 78,
+          "evidence_lines": [
+            {
+              "line": 79,
+              "text": "assertion `left == right` failed: rondesdone persistent après solde et réouverture"
+            },
+            {
+              "line": 80,
+              "text": "  left: None"
+            },
+            {
+              "line": 81,
+              "text": " right: Some(1)"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_gel_cumule",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4825:9",
+          "log_line": 86,
+          "evidence_lines": [
+            {
+              "line": 87,
+              "text": "assertion `left == right` failed: union, pas sous-compte de la pause seule ni somme2400"
+            },
+            {
+              "line": 88,
+              "text": "  left: 600"
+            },
+            {
+              "line": 89,
+              "text": " right: 1800"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_apres_echec",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4763:13",
+          "log_line": 93,
+          "evidence_lines": [
+            {
+              "line": 94,
+              "text": "assertion `left == right` failed: handler: décision en attente avant le fait"
+            },
+            {
+              "line": 95,
+              "text": "  left: \"failed\""
+            },
+            {
+              "line": 96,
+              "text": " right: \"working\""
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_gestionnaire_fait_avant_echec",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4729:13",
+          "log_line": 101,
+          "evidence_lines": [
+            {
+              "line": 102,
+              "text": "assertion `left == right` failed: handler: opt-in ne doit pas échouer sur le fait connu"
+            },
+            {
+              "line": 103,
+              "text": "  left: \"failed\""
+            },
+            {
+              "line": 104,
+              "text": " right: \"working\""
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_double_avis",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4996:17",
+          "log_line": 109,
+          "evidence_lines": [
+            {
+              "line": 110,
+              "text": "assertion `left == right` failed: seul l'opt-in retire le message direct"
+            },
+            {
+              "line": 111,
+              "text": "  left: 0"
+            },
+            {
+              "line": 112,
+              "text": " right: 1"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_reconstruction_failed",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5022:9",
+          "log_line": 116,
+          "evidence_lines": [
+            {
+              "line": 117,
+              "text": "frontièreb NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+            },
+            {
+              "line": 119,
+              "text": "fixture160 : ancien protocole sans opt-in ; aucun scénario opt-in ancien revendiqué"
+            },
+            {
+              "line": 120,
+              "text": "T006 réel : state=working, restarts=1, generation=1"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_redemarrage_pendant_attente",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:4865:9",
+          "log_line": 122,
+          "evidence_lines": [
+            {
+              "line": 123,
+              "text": "assertion `left == right` failed: attente quota n'est pas une panne152"
+            },
+            {
+              "line": 124,
+              "text": "  left: 1"
+            },
+            {
+              "line": 125,
+              "text": " right: 0"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_refus_ancien_et_autres_causes",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5520:17",
+          "log_line": 129,
+          "evidence_lines": [
+            {
+              "line": 130,
+              "text": "assertion `left == right` failed: refus ancien sans effet même si nouvellefeuillefailed"
+            },
+            {
+              "line": 131,
+              "text": "  left: \"failed\""
+            },
+            {
+              "line": 132,
+              "text": " right: \"working\""
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_relance_frontieres",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5022:9",
+          "log_line": 136,
+          "evidence_lines": [
+            {
+              "line": 137,
+              "text": "frontièrea NON ATTEINTE : schémaquota absent, aucun faux crash rejoué"
+            },
+            {
+              "line": 140,
+              "text": "thread 'daemon::native_delegation::tests::native160_rouge_hold_horloges' (79845756) panicked at crates/bridget-daemon/src/daemon/native_delegation.rs:5449:17:"
+            }
+          ]
+        },
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_hold_horloges",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5449:17",
+          "log_line": 140,
+          "evidence_lines": [
+            {
+              "line": 141,
+              "text": "assertion `left == right` failed: hold inhibe deadline imminente"
+            },
+            {
+              "line": 142,
+              "text": "  left: \"failed\""
+            },
+            {
+              "line": 143,
+              "text": " right: \"working\""
+            }
+          ]
+        }
+      ],
+      "disposition": "PREFOUNDATION_LEGACY_PROTOCOL :0P11F ; fallbacksupprime seulementresume_on_limit, doncNone/inactif. Certains handlers/horloges152atteints, pasoptin160réel. T004/T008/T032schemasNONATTEINTS. T037erreurlecturefil directflatten."
+    },
+    {
+      "label": "T037-RED-existing-double-notice-flat-wire-oracle",
+      "receipt": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T037-RED-existing-double-notice-flat-wire-oracle.json",
+        "sha256": "4c5b2de9c737164aa3011f269edfb262dabce4c8f5a74c03bf1d74415563cce5"
+      },
+      "log": {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T037-RED-existing-double-notice-flat-wire-oracle.log",
+        "sha256": "13ed51f3f824fd64cf58ae4f7ad1b060d74b13998746853f4f0bf060b17bb4b6",
+        "lines": 80
+      },
+      "command": [
+        "/usr/bin/nice",
+        "-n",
+        "10",
+        "python3",
+        "scripts/build.py",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "bridget-daemon",
+        "--lib",
+        "--features",
+        "test-support",
+        "--",
+        "native160_rouge_double_avis",
+        "--nocapture",
+        "--test-threads=2"
+      ],
+      "started_at": "2026-10-12T20:55:26.088714+00:00",
+      "seconds": 14.75,
+      "rc": 101,
+      "raw_test_results": [
+        [
+          "FAILED",
+          "0",
+          "1",
+          "0"
+        ]
+      ],
+      "failed_tests_exact": [
+        "daemon::native_delegation::tests::native160_rouge_double_avis"
+      ],
+      "parent_targets": [
+        {
+          "line": 58,
+          "raw": "     Running unittests src/lib.rs (/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/deps/bridget_daemon-0321bef9fccb32ef)"
+        }
+      ],
+      "summaries": [
+        {
+          "line": 78,
+          "raw": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1892 filtered out; finished in 6.35s"
+        }
+      ],
+      "embedded_summary_count": 0,
+      "sources_count": 223,
+      "sources_stable": true,
+      "critical_source_SHA_during_run": {
+        "crates/bridget-daemon/src/daemon/native_delegation.rs": "a05fd387bb303d4f4312a0a6a5ece85125cc19a5b48444a7887c639435f19e09",
+        "crates/bridget-daemon/src/delegation.rs": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+        "crates/bridget-daemon/src/execution_store.rs": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+        "crates/bridget-transport/src/protocol.rs": "8c4c5846b5e3279163930e82d564eabae9f3497dcb222f96b14b617c5d146990"
+      },
+      "diagnostics": [
+        {
+          "line": 62,
+          "text": "T037 case=no_fact opt_in=false: state=failed, frames=2, direct=1, durable=1, failure_sent=true"
+        },
+        {
+          "line": 64,
+          "text": "T037 case=no_fact opt_in=true: state=failed, frames=2, direct=1, durable=1, failure_sent=true"
+        }
+      ],
+      "panics": [
+        {
+          "test": "daemon::native_delegation::tests::native160_rouge_double_avis",
+          "location": "crates/bridget-daemon/src/daemon/native_delegation.rs:5000:17",
+          "log_line": 66,
+          "evidence_lines": [
+            {
+              "line": 67,
+              "text": "assertion `left == right` failed: seul l'opt-in retire le message direct"
+            },
+            {
+              "line": 68,
+              "text": "  left: 1"
+            },
+            {
+              "line": 69,
+              "text": " right: 0"
+            }
+          ]
+        }
+      ],
+      "disposition": "LEGACY_NOFACT_DOUBLE_NOTICE_OBSERVED :0P1F ; fauxchampoptintrue devientNone commefalse. Deuxavis réellementobservés danslesdeuxcas. Écartàexigence160 mais pasRED d’un vraiSome(true) avantT009."
+    }
+  ],
+  "source_checks_targeted": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+      "sha256": "5f1a7d8f12fc3094f5337008e616d524f600d371225193fb48aa8cbef53ea496",
+      "ranges": [
+        [
+          2152,
+          2166
+        ]
+      ],
+      "evidence": [
+        {
+          "line": 2152,
+          "text": "/// Aucun champ d'identité parent n'est accepté dans une demande de mission."
+        },
+        {
+          "line": 2153,
+          "text": "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]"
+        },
+        {
+          "line": 2154,
+          "text": "#[serde(tag = \"operation\", rename_all = \"snake_case\", deny_unknown_fields)]"
+        },
+        {
+          "line": 2155,
+          "text": "pub enum NativeDelegationRequest {"
+        },
+        {
+          "line": 2156,
+          "text": "    Catalogue,"
+        },
+        {
+          "line": 2157,
+          "text": "    /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil."
+        },
+        {
+          "line": 2158,
+          "text": "    CallerScope {},"
+        },
+        {
+          "line": 2159,
+          "text": "    Delegate {"
+        },
+        {
+          "line": 2160,
+          "text": "        request_id: String,"
+        },
+        {
+          "line": 2161,
+          "text": "        agent_type: String,"
+        },
+        {
+          "line": 2162,
+          "text": "        model: String,"
+        },
+        {
+          "line": 2163,
+          "text": "        #[serde(default)]"
+        },
+        {
+          "line": 2164,
+          "text": "        effort: Option<String>,"
+        },
+        {
+          "line": 2165,
+          "text": "        task: String,"
+        },
+        {
+          "line": 2166,
+          "text": "        cwd: String,"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "456f4066e4d95696d505d86b474a34f54da5a673124ac1c5e9ad79aafac240ea",
+      "ranges": [
+        [
+          180,
+          192
+        ]
+      ],
+      "evidence": [
+        {
+          "line": 180,
+          "text": "}"
+        },
+        {
+          "line": 181,
+          "text": ""
+        },
+        {
+          "line": 182,
+          "text": "#[derive(Debug, Clone, Serialize, Deserialize)]"
+        },
+        {
+          "line": 183,
+          "text": "pub(crate) struct Task {"
+        },
+        {
+          "line": 184,
+          "text": "    pub task_id: String,"
+        },
+        {
+          "line": 185,
+          "text": "    #[serde(default)]"
+        },
+        {
+          "line": 186,
+          "text": "    pub root_owner_agent_id: String,"
+        },
+        {
+          "line": 187,
+          "text": "    #[serde(default)]"
+        },
+        {
+          "line": 188,
+          "text": "    pub parent_task_id: Option<String>,"
+        },
+        {
+          "line": 189,
+          "text": "    #[serde(default)]"
+        },
+        {
+          "line": 190,
+          "text": "    pub updated_at: i64,"
+        },
+        {
+          "line": 191,
+          "text": "    #[serde(default)]"
+        },
+        {
+          "line": 192,
+          "text": "    pub started_at: Option<i64>,"
+        }
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "8d38c471b7efbeda70fb1900b5c8c37b1fbbf631e4cc7b614133636f15e81c59",
+      "ranges": [
+        [
+          4566,
+          4587
+        ]
+      ],
+      "evidence": [
+        {
+          "line": 4566,
+          "text": "        opt_in: bool,"
+        },
+        {
+          "line": 4567,
+          "text": "    ) -> ("
+        },
+        {
+          "line": 4568,
+          "text": "        Arc<Mutex<DaemonState>>,"
+        },
+        {
+          "line": 4569,
+          "text": "        DaemonConfig,"
+        },
+        {
+          "line": 4570,
+          "text": "        Task,"
+        },
+        {
+          "line": 4571,
+          "text": "        BufReader<UnixStream>,"
+        },
+        {
+          "line": 4572,
+          "text": "        BufReader<UnixStream>,"
+        },
+        {
+          "line": 4573,
+          "text": "    ) {"
+        },
+        {
+          "line": 4574,
+          "text": "        let mut request = serde_json::to_value(request_delai_150(\"quota160\", Some(120))).unwrap();"
+        },
+        {
+          "line": 4575,
+          "text": "        request[\"resume_on_limit\"] = json!(opt_in);"
+        },
+        {
+          "line": 4576,
+          "text": "        let parsed = match serde_json::from_value(request.clone()) {"
+        },
+        {
+          "line": 4577,
+          "text": "            Ok(parsed) => parsed,"
+        },
+        {
+          "line": 4578,
+          "text": "            Err(error)"
+        },
+        {
+          "line": 4579,
+          "text": "                if error"
+        },
+        {
+          "line": 4580,
+          "text": "                    .to_string()"
+        },
+        {
+          "line": 4581,
+          "text": "                    .starts_with(\"unknown field `resume_on_limit`\") =>"
+        },
+        {
+          "line": 4582,
+          "text": "            {"
+        },
+        {
+          "line": 4583,
+          "text": "                eprintln!("
+        },
+        {
+          "line": 4584,
+          "text": "                    \"fixture160 : ancien protocole sans opt-in ; aucun scénario opt-in ancien revendiqué\""
+        },
+        {
+          "line": 4585,
+          "text": "                );"
+        },
+        {
+          "line": 4586,
+          "text": "                request.as_object_mut().unwrap().remove(\"resume_on_limit\");"
+        },
+        {
+          "line": 4587,
+          "text": "                serde_json::from_value(request).unwrap()"
+        }
+      ]
+    }
+  ],
+  "ROOT_fixture_corrections": [
+    "Tasktype trouvé par pattern Task.request::Delegate.agent_type, pas champTask.agent_type.",
+    "Lecturemessage099 via APIexistante stored_send_message, pas champprivéStoredSendDelivery.message_bytes.",
+    "Delegate refuse unknownfields : fallbackseulementerreur qui commence unknown field resume_on_limit ; retireclé puisreparse ; erreursautrespropagées. AprèsT009 le mêmeJSON doit produireSome(true).",
+    "Parseravis parent : bodypourDeliverplat oumessage.bodypourDeliverIdempotent ; cette différence de trame est réelle.",
+    "Task sansdeny_unknown_fields : quota_waits/quota_hold sont ignorés avantT010 ; ne pas prendrejsonfixture pour étatdurablequota réellement créé."
+  ],
+  "legacy_observations": {
+    "T003_first_path_only": {
+      "task_state": "failed",
+      "pending": false,
+      "parent_bytes": 265,
+      "known_fact_fixture_guard": "Ack+lecturequota157exhausted/type/reset passent avantassertion Taskfailed ; aucunoptinwirevalidé."
+    },
+    "T005_measured": {
+      "pause": 600,
+      "deadline_frozen": 600,
+      "request_frozen": 600,
+      "expected_union_after160": 1800,
+      "hypothetical2400_not_observed": true
+    },
+    "T006": {
+      "task_state": "working",
+      "restart_resumes": 1,
+      "leaf_generation": 1,
+      "expected_restart_resumes_after160": 0
+    },
+    "T007": {
+      "observed_quota_waits_length": null,
+      "expected_first_snapshot_length": 1,
+      "restart_and_ten_failures_not_reached": true
+    },
+    "T008": "Premièrepositiona schemaNONATTEINT ; b–h nonexercées.",
+    "T004": "TémoinordinaryfailedNone exécutéavant schemaNONATTEINT b ; reconstructionquota nonexercée.",
+    "T032": "Premièrepositionc schemaNONATTEINT ; repriseordinaireouvertequota et positionsd–f nonexercées.",
+    "T033": "Premierscasdeadline/old_running échouent ; pause/parentoffline/old_failed/sync/empty/uncorrelated nonexercés dans ce run.",
+    "T037_after_flat_wire_fix": {
+      "only_case": "no_fact",
+      "false": {
+        "frames": 2,
+        "direct": 1,
+        "durable": 1,
+        "failure_sent": true
+      },
+      "true_requested_but_legacy_None": {
+        "frames": 2,
+        "direct": 1,
+        "durable": 1,
+        "failure_sent": true
+      },
+      "remaining_cases_not_reached": [
+        "too_far",
+        "past_during_hold",
+        "rounds_done",
+        "late_after_hold"
+      ]
+    }
+  },
+  "next_ROOT_gate": {
+    "foundations": [
+      "T009 vraiDelegateOptionBool",
+      "T010 vraisQuotaHold/QuotaWaitTask",
+      "T011 tablequalification réelle"
+    ],
+    "before_N_core": [
+      "Rejouer mêmes11tests dans1batch native160_rouge aprèsfondations, avantcodeNcore160.",
+      "Vérifier vraieSome(true) conservée dansrequestadmise et vraispréétatsquotastockés.",
+      "QualifierREDparpremierassert réellementatteint ; schemaNONATTEINT paspreuvefrontières.",
+      "T005 mesureinitiale600documentée, aucun2400inventé.",
+      "T037nonoptin2avis reste témoin ; vraisSome(true) doivent donnerREDuniqueavis avantcore."
+    ],
+    "command_from_existing_run": [
+      "/usr/bin/nice",
+      "-n",
+      "10",
+      "python3",
+      "scripts/build.py",
+      "cargo",
+      "test",
+      "--locked",
+      "--offline",
+      "-p",
+      "bridget-daemon",
+      "--lib",
+      "--features",
+      "test-support",
+      "--",
+      "native160_rouge",
+      "--nocapture",
+      "--test-threads=2"
+    ],
+    "runner_limits": {
+      "nice": 10,
+      "cargo_jobs": 2,
+      "test_threads": 2
+    }
+  },
+  "limits": [
+    "AucunREDbusinessoptin160totalrevendiqué et aucune tâche rouge cochée par cet agent.",
+    "AucunGREEN ni modèle/réseau/service/DBprod/test/nouveloutil créé ou exécuté.",
+    "Baseconserveinterfacesfermées ; erreursinitialesétaientdeshypothèsesdepréparationincorrectes, pasdéfautsproduction.",
+    "La correctiondeparserwire ne corrigequeobservationfixture ; observationdurable/directréelle àconserver.",
+    "Patches CACHE01–05 etmanifestes historiques demeurent immuables."
+  ]
+}

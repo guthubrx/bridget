@@ -1,0 +1,5 @@
+{
+  "patch_sha256": "ba8eb3e4e4f545a59376592fdec04d96a6158c39899084aa49ef3f6cbd44ce73",
+  "gzip_sha256": "db3641301e23e813b278984888e8aacc77c5a42eaea2aa3488ab1df04d14eb1c",
+  "reason": "Byte-exact patch compressed because context empty lines are valid patch text and otherwise appear as whitespace findings"
+}

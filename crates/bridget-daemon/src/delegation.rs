@@ -1,5 +1,7 @@
 //! Saga native durable. Les identités et effets appartiennent au daemon.
-use bridget_transport::protocol::{FallbackTarget, NativeDelegationRequest, ResolvedAgentDefinition, SpawnPosture};
+use bridget_transport::protocol::{
+    FallbackTarget, NativeDelegationRequest, ResolvedAgentDefinition, SpawnPosture,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -179,6 +181,34 @@ pub(crate) struct Substitution {
     pub tried: Vec<serde_json::Value>,
 }
 
+/// Phase durable de la relance160 ; seule la tâche porte le checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum QuotaWaitPhase {
+    Waiting,
+    Relaunching,
+    Done,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct QuotaWait {
+    pub since: i64,
+    pub reset_at: i64,
+    pub round: u8,
+    pub identity: String,
+    pub execution_id: String,
+    pub phase: QuotaWaitPhase,
+    pub until: Option<i64>,
+    pub resume_execution_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct QuotaHold {
+    pub since: i64,
+    pub error: String,
+    pub execution_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
@@ -245,6 +275,12 @@ pub(crate) struct Task {
     /// Reprises après redémarrage, distinctes des reprises de pause.
     #[serde(default)]
     pub restart_resumes: u8,
+    /// Historique append-only160 ; la longueur est le compteur de rondes.
+    #[serde(default)]
+    pub quota_waits: Vec<QuotaWait>,
+    /// Décision d'échec bornée160 ; l'opt-in reste dans request.
+    #[serde(default)]
+    pub quota_hold: Option<QuotaHold>,
     /// Arrêts déjà confirmés pour l'annulation de cet arbre.
     #[serde(default)]
     pub cancel_stopped: Vec<String>,
@@ -265,6 +301,32 @@ pub(crate) struct Task {
 }
 
 impl Task {
+    /// O(W+B), W attentes quota (au plus2), B octets du motif ; mémoire O(B).
+    /// Le checkpoint d'échec reste interne tant que la clôture de relance est ouverte.
+    pub(crate) fn projected_error(&self) -> Option<&str> {
+        if self.state == "working"
+            && self
+                .quota_waits
+                .iter()
+                .any(|wait| wait.phase != QuotaWaitPhase::Done)
+        {
+            return None;
+        }
+        let error = self.error.as_deref()?;
+        if let Ok(serde_json::Value::Object(object)) =
+            serde_json::from_str::<serde_json::Value>(error)
+            && object.len() == 2
+            && object.get("code").and_then(serde_json::Value::as_str) == Some("usage_limit")
+            && object
+                .get("limit_reset_at")
+                .and_then(serde_json::Value::as_i64)
+                .is_some_and(|at| at >= 0)
+        {
+            return Some("usage_limit");
+        }
+        Some(error)
+    }
+
     pub fn terminal(&self) -> bool {
         matches!(
             self.state.as_str(),
@@ -316,10 +378,8 @@ impl DelegationStore {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS native_delegations (
             task_id TEXT PRIMARY KEY, owner_instance TEXT NOT NULL,
             request_id TEXT NOT NULL, canonical BLOB NOT NULL, payload TEXT NOT NULL,
@@ -415,7 +475,9 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
     }
 
     /// O(1), lecture de l'unique ligne ; aucun effet sur pause, tâches ou réveils.
-    pub fn delegation_halt(&self) -> Result<HaltState, bridget_transport::protocol::DelegationControlRefusal> {
+    pub fn delegation_halt(
+        &self,
+    ) -> Result<HaltState, bridget_transport::protocol::DelegationControlRefusal> {
         use bridget_transport::protocol::DelegationControlRefusal as E;
         self.conn.query_row(
             "SELECT halted,since,by_actor,reason,generation FROM native_delegation_halt WHERE id=1",
@@ -476,8 +538,14 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
             state.since = halted.then_some(now);
             state.by = halted.then(|| actor.to_owned());
             state.reason = if halted {
-                reason.map(|text| text.chars().take(crate::referent_control::MAX_REASON_CHARS).collect())
-            } else { None };
+                reason.map(|text| {
+                    text.chars()
+                        .take(crate::referent_control::MAX_REASON_CHARS)
+                        .collect()
+                })
+            } else {
+                None
+            };
             tx.execute("UPDATE native_delegation_halt SET halted=?1,since=?2,by_actor=?3,reason=?4,generation=?5 WHERE id=1",
                 params![state.halted,state.since,state.by,state.reason,state.generation])
                 .map_err(|_| E::StoreUnavailable)?;
@@ -516,16 +584,37 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
         }
         let mut tasks = self.tasks().map_err(|_| E::StoreUnavailable)?;
         let total_active = tasks.iter().filter(|task| task.holds_slot()).count() as u32;
-        if state_filter == "active" { tasks.retain(Task::holds_slot); }
-        tasks.sort_by(|a,b| b.created_at.cmp(&a.created_at).then_with(|| b.task_id.cmp(&a.task_id)));
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| E::StoreUnavailable)?.as_secs().min(i64::MAX as u64) as i64;
-        let items = tasks.into_iter().take(limit as usize).map(|task| task.overview_row(now)).collect();
+        if state_filter == "active" {
+            tasks.retain(Task::holds_slot);
+        }
+        tasks.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.task_id.cmp(&a.task_id))
+        });
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| E::StoreUnavailable)?
+            .as_secs()
+            .min(i64::MAX as u64) as i64;
+        let items = tasks
+            .into_iter()
+            .take(limit as usize)
+            .map(|task| task.overview_row(now))
+            .collect();
         // Tous les champs d'arrêt viennent de cette seule lecture, jamais de fragments distincts.
         let halt = self.delegation_halt()?;
-        serde_json::to_value(bridget_transport::protocol::DaemonToWrapper::DelegationOverview {
-            halted:halt.halted, since:halt.since, by:halt.by, reason:halt.reason, items, total_active,
-        }).map_err(|_| E::StoreUnavailable)
+        serde_json::to_value(
+            bridget_transport::protocol::DaemonToWrapper::DelegationOverview {
+                halted: halt.halted,
+                since: halt.since,
+                by: halt.by,
+                reason: halt.reason,
+                items,
+                total_active,
+            },
+        )
+        .map_err(|_| E::StoreUnavailable)
     }
 
     /// O(log n+B). Les deux clés uniques et l'empreinte sont contrôlées dans
@@ -926,12 +1015,24 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
     pub fn admission_counts(&self, instance: &str) -> Result<(usize, usize, usize), String> {
         const HOLDS_SLOT: &str = "json_extract(payload,'$.state') IN ('queued','starting','mission_pending','working','waiting_for_children','cancelling') OR (json_extract(payload,'$.state') IN ('result_available','failed','cancelled') AND coalesce(json_extract(payload,'$.guarded'),0)=1 AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0)";
         let count = |sql: String, args: &[&dyn rusqlite::ToSql]| -> Result<usize, String> {
-            self.conn.query_row(&sql, args, |row| row.get(0)).map_err(|error| error.to_string())
+            self.conn
+                .query_row(&sql, args, |row| row.get(0))
+                .map_err(|error| error.to_string())
         };
         Ok((
             // Évite le parcours des terminaux par l'index owner_instance seul.
-            count(format!("SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE ({HOLDS_SLOT})"), &[])?,
-            count(format!("SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE owner_instance=?1 AND ({HOLDS_SLOT})"), &[&instance])?,
+            count(
+                format!(
+                    "SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE ({HOLDS_SLOT})"
+                ),
+                &[],
+            )?,
+            count(
+                format!(
+                    "SELECT count(*) FROM native_delegations INDEXED BY native_delegations_state WHERE owner_instance=?1 AND ({HOLDS_SLOT})"
+                ),
+                &[&instance],
+            )?,
             count("SELECT count(*) FROM native_delegations".into(), &[])?,
         ))
     }
@@ -994,7 +1095,9 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
             [mission],
             |row| row.get(0),
         ).optional().map_err(|error| error.to_string())?;
-        payload.map(|payload| serde_json::from_str(&payload).map_err(|error| error.to_string())).transpose()
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(|error| error.to_string()))
+            .transpose()
     }
 
     pub fn grant(
@@ -1124,6 +1227,102 @@ mod tests {
         // La fixture relit le JSON150 original, sans champ substitution.
         let task = legacy_task151();
         assert!(task.substitution.is_none());
+    }
+
+    #[test]
+    fn native160_task_payload157_defauts() {
+        // Le payload157 ne porte ni attente quota ni décision en attente.
+        let mut payload = serde_json::to_value(legacy_task151()).unwrap();
+        payload.as_object_mut().unwrap().remove("quota_waits");
+        payload.as_object_mut().unwrap().remove("quota_hold");
+        let task: Task = serde_json::from_value(payload).unwrap();
+        let decoded = serde_json::to_value(task).unwrap();
+        assert_eq!(decoded.get("quota_waits"), Some(&serde_json::json!([])));
+        assert_eq!(decoded.get("quota_hold"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn native160_task_quota_sans_signal_lineage() {
+        // Même sauvegarde/projection réelle que l'oracle152 existant.
+        let mut task = legacy_task151();
+        task.state = "working".into();
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        store.insert(&task, "request-152", b"canonical").unwrap();
+        let before = store.lineage_page("parent", 100, None, |_| false).unwrap();
+        store.take_changes();
+        let receiver = store.change_receiver().unwrap();
+        receiver.try_recv().unwrap();
+        let hold = serde_json::json!({
+            "since":120, "error":"refus", "execution_id":"execution-mission-152"
+        });
+        let mut wait = serde_json::json!({
+            "since":120, "reset_at":200, "round":1,
+            "identity":format!("limit-resume:{}:1:200", task.task_id),
+            "execution_id":"execution-mission-152", "phase":"waiting",
+            "until":null, "resume_execution_id":null
+        });
+        for phase in [None, Some("waiting"), Some("relaunching"), Some("done")] {
+            let mut updated =
+                serde_json::to_value(store.get(&task.task_id).unwrap().unwrap()).unwrap();
+            let (expected_hold, expected_waits) = if let Some(phase) = phase {
+                wait["phase"] = serde_json::json!(phase);
+                wait["until"] = if phase == "done" {
+                    serde_json::json!(230)
+                } else {
+                    serde_json::Value::Null
+                };
+                wait["resume_execution_id"] = if phase == "waiting" {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!("execution-resumed-152")
+                };
+                (serde_json::Value::Null, serde_json::json!([wait.clone()]))
+            } else {
+                (hold.clone(), serde_json::json!([]))
+            };
+            // Le checkpoint durable peut précéder la fermeture SQL de la feuille.
+            // Il ne doit pas devenir une erreur publique pendant Relaunching.
+            updated["error"] = if phase == Some("relaunching") {
+                serde_json::json!("native_relaunch_failed")
+            } else {
+                serde_json::Value::Null
+            };
+            updated["quota_hold"] = expected_hold.clone();
+            updated["quota_waits"] = expected_waits.clone();
+            store
+                .save(&serde_json::from_value(updated).unwrap())
+                .unwrap();
+            let saved = serde_json::to_value(store.get(&task.task_id).unwrap().unwrap()).unwrap();
+            assert_eq!(saved.get("quota_hold"), Some(&expected_hold));
+            assert_eq!(saved.get("quota_waits"), Some(&expected_waits));
+            if phase == Some("relaunching") {
+                assert_eq!(
+                    saved["error"], "native_relaunch_failed",
+                    "checkpoint interne conservé"
+                );
+                assert_eq!(
+                    store.get(&task.task_id).unwrap().unwrap().projected_error(),
+                    None
+                );
+            }
+            assert_eq!(
+                store.lineage_page("parent", 100, None, |_| false).unwrap(),
+                before
+            );
+            assert!(store.take_changes().is_empty());
+            assert!(receiver.try_recv().is_err());
+        }
+        // Après la clôture confirmée, failed et son erreur deviennent visibles.
+        let mut failed = store.get(&task.task_id).unwrap().unwrap();
+        failed.state = "failed".into();
+        failed.error = Some("native_relaunch_failed".into());
+        store.save(&failed).unwrap();
+        let after = store.lineage_page("parent", 100, None, |_| false).unwrap();
+        assert_ne!(after, before);
+        assert_eq!(after["tasks"][0]["status"], "failed");
+        assert_eq!(after["tasks"][0]["error"], "native_relaunch_failed");
+        assert!(!store.take_changes().is_empty());
+        assert!(receiver.try_recv().is_ok());
     }
 
     #[test]
@@ -1449,7 +1648,10 @@ mod tests {
         for version in [150, 152, 153] {
             let mut payload = base.clone();
             payload.as_object_mut().unwrap().remove("workspace");
-            payload.as_object_mut().unwrap().remove("workspace_report_mission");
+            payload
+                .as_object_mut()
+                .unwrap()
+                .remove("workspace_report_mission");
             if version >= 152 {
                 payload["launch_issued_at"] = serde_json::json!(110);
                 payload["restart_resumes"] = serde_json::json!(1);
@@ -1458,7 +1660,8 @@ mod tests {
                 payload["round"] = serde_json::json!(2);
                 payload["guarded"] = serde_json::json!(true);
                 payload["request"]["keep_alive_secs"] = serde_json::json!(600);
-                payload["request"]["brief"] = serde_json::json!({"objective":"objectif","summary":"résultat"});
+                payload["request"]["brief"] =
+                    serde_json::json!({"objective":"objectif","summary":"résultat"});
             }
             let task: Task = serde_json::from_value(payload).unwrap();
             assert!(task.workspace.is_none(), "payload {version}");
@@ -1497,9 +1700,18 @@ mod tests {
             }
             store.save(&task).unwrap();
             let saved = store.get(&task.task_id).unwrap().unwrap();
-            assert_eq!(serde_json::to_value(saved.workspace).unwrap(), serde_json::to_value(&task.workspace).unwrap());
-            assert_eq!(saved.workspace_report_mission, task.workspace_report_mission);
-            assert_eq!(store.lineage_page("parent", 100, None, |_| false).unwrap(), before);
+            assert_eq!(
+                serde_json::to_value(saved.workspace).unwrap(),
+                serde_json::to_value(&task.workspace).unwrap()
+            );
+            assert_eq!(
+                saved.workspace_report_mission,
+                task.workspace_report_mission
+            );
+            assert_eq!(
+                store.lineage_page("parent", 100, None, |_| false).unwrap(),
+                before
+            );
             assert!(store.take_changes().is_empty());
             assert!(receiver.try_recv().is_err());
         }
@@ -1836,9 +2048,24 @@ mod tests {
             .set_delegation_halt("B", false, "cli", None, || Ok(0), 200)
             .unwrap();
         let before = store.delegation_halt().unwrap();
-        let original_receipt: String = store.conn.query_row(
-            "SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'", [], |row| row.get(0)).unwrap();
-        let replay = store.set_delegation_halt("A", true, "humain", Some("autre"), || panic!("aucun comptage au rejeu"), 999).unwrap();
+        let original_receipt: String = store
+            .conn
+            .query_row(
+                "SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let replay = store
+            .set_delegation_halt(
+                "A",
+                true,
+                "humain",
+                Some("autre"),
+                || panic!("aucun comptage au rejeu"),
+                999,
+            )
+            .unwrap();
         let mut expected = first;
         expected["replayed"] = serde_json::json!(true);
         assert_eq!(replay, expected);
@@ -1890,10 +2117,21 @@ mod tests {
     fn control158_halt_store_recu_porte_la_reponse() {
         let store = DelegationStore::open(Path::new(":memory:")).unwrap();
         // Trois arbres ciblés : valeur fournie par l'appelant, pas une terminaison simulée.
-        let first = store.set_delegation_halt("A", true, "cli", Some("compte fourni"), || Ok(3), 100).unwrap();
-        let saved: String = store.conn.query_row("SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'",
-            [], |row| row.get(0)).unwrap();
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&saved).unwrap(), first);
+        let first = store
+            .set_delegation_halt("A", true, "cli", Some("compte fourni"), || Ok(3), 100)
+            .unwrap();
+        let saved: String = store
+            .conn
+            .query_row(
+                "SELECT response_json FROM native_delegation_halt_commands WHERE command_id='A'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved).unwrap(),
+            first
+        );
         assert_eq!(first["cancelled"], 3);
         store
             .set_delegation_halt("B", false, "cli", None, || Ok(0), 200)
@@ -1910,9 +2148,25 @@ mod tests {
     fn control158_halt_store_recus_bornes() {
         let store = DelegationStore::open(Path::new(":memory:")).unwrap();
         for index in 0..257 {
-            store.set_delegation_halt(&format!("command-{index}"), true, "cli", None, || Ok(0), index).unwrap();
+            store
+                .set_delegation_halt(
+                    &format!("command-{index}"),
+                    true,
+                    "cli",
+                    None,
+                    || Ok(0),
+                    index,
+                )
+                .unwrap();
         }
-        let count: u32 = store.conn.query_row("SELECT count(*) FROM native_delegation_halt_commands", [], |row| row.get(0)).unwrap();
+        let count: u32 = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM native_delegation_halt_commands",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 256);
         assert!(!store.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_halt_commands WHERE command_id='command-0')",
             [], |row| row.get::<_,bool>(0)).unwrap());
@@ -2020,7 +2274,16 @@ mod tests {
     fn control158_overview_filtre_actif() {
         let store = DelegationStore::open(Path::new(":memory:")).unwrap();
         let mut live = Vec::new();
-        for (index, state) in ["working","cancelling","result_available","failed","cancelled"].into_iter().enumerate() {
+        for (index, state) in [
+            "working",
+            "cancelling",
+            "result_available",
+            "failed",
+            "cancelled",
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut task = legacy_task151();
             task.state = state.into();
             task.created_at = 100 + index as i64;
@@ -2118,8 +2381,15 @@ mod tests {
         );
         assert!(item["deadline_in_secs"].is_null());
         let wire = response.to_string();
-        for private in ["MISSION_PRIVEE_158", "RESULTAT_PRIVE_158", "/chemin-prive-158"] {
-            assert!(!wire.contains(private), "la projection ne contient aucune donnée privée");
+        for private in [
+            "MISSION_PRIVEE_158",
+            "RESULTAT_PRIVE_158",
+            "/chemin-prive-158",
+        ] {
+            assert!(
+                !wire.contains(private),
+                "la projection ne contient aucune donnée privée"
+            );
         }
     }
 }

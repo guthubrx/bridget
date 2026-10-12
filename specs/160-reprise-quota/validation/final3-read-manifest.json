@@ -1,0 +1,106 @@
+{
+  "at_utc": "2026-10-12T22:23:07.828690+00:00",
+  "scope_file": "/Users/moi/.cache/bridget-review160-preparation-20261012/scope-files-final21.json",
+  "scope_sha256": "57c15398ba4292cbebc9e27b5b22ad06c6eb6b45c155c850d21b085a5c2e6a6c",
+  "sources_before": {
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs": "2a2dd53d43c2af2221f2438e2f675395557cdfc089e2213268e16f75efea85d3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs": "d9a834dc1349f96b0a9587a436e6f012e28b9c60e7e78d33b7d5824b320c7be8",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs": "c7b7583eb6e40ef99e392b15eacc9bc3b6942e7b890fe75a4cdb7344cec6b174",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "d6273dc2e71864a5df6159ca2009c4609613dbef0f4193d740fb427a9b45fe4a",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "7203a7abb6301682c2063c6c47b5785a59cbdfb0c18f1848cf6ee410dfa7d330",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs": "edfc4f25b57ae18c3116133c35f0b2fea5433e6c30e8dbbd14cfa8fd8df65164",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_lineage.rs": "72ca28a0c6730876373f1e8dfc299932b088f5f193fa98d7daa93b5da6abde04",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_lineage_tests.rs": "1664316548afbf33d46dce35e527e09cc207d1e3db680fa67f0d77f6edf7c69b",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs": "0f0553ebe24e7eb73273c20e7d5783f48ca1992a1cb23b05c00abb429d7c459b",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs": "0f8f94cef329d3eb92146b1dbf3336175c244d91f1de497dff3a2a0c790fa8d3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs": "0265eb5d6f686442aedc3073d270192213279c28788296604a17b0fcf063e8bb",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs": "19798bca9c1aae954ee7229b18a99b7973001555b82800c64fc9960d24b1e104",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/t3code.rs": "eb2e50f2f9ba99cb5616da6c65218d18910617ddeafa04a3860c547f268bb379",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs": "bfc61ff19e4aeb4a7019ec595eab47c1a98c018e39722f05f77ff75c076843f6",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/edit159_e2e.rs": "5cc3c50d221f1be4dfb717ea2b593098e636294e7bd40cf3d81011041a91c7e2",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/guidance156_e2e.rs": "c1845816607559c4c67405c71fd20a08f21586259647a808af5585a720a00a54",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/held159_e2e.rs": "bbc2bed10c4bebcf2125a97f712783dd282536f1d885f315c9eb24e61170365f",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/native_delegation_e2e.rs": "71c4956d88d6706499b7188d092deec8c5ebeb2fe2af43cb694a20074c476757",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs": "e8bed4850d635430459d3d254c4fcd72ce4bc922eb62a06999648557081c37ae",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "0c19bffa246f79962b88a3ace1100c1ba1a0f3578f26806cf0042eb3c69974d9",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/execution_store_test.rs": "95191e23c047a35a4e84800d6c3034b271981abe8a475c6a0d1c1c5d43695617"
+  },
+  "sources_after": {
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs": "2a2dd53d43c2af2221f2438e2f675395557cdfc089e2213268e16f75efea85d3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs": "d9a834dc1349f96b0a9587a436e6f012e28b9c60e7e78d33b7d5824b320c7be8",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs": "c7b7583eb6e40ef99e392b15eacc9bc3b6942e7b890fe75a4cdb7344cec6b174",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation_permissions149_tests.rs": "d6273dc2e71864a5df6159ca2009c4609613dbef0f4193d740fb427a9b45fe4a",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_lineage_tests.rs": "7203a7abb6301682c2063c6c47b5785a59cbdfb0c18f1848cf6ee410dfa7d330",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs": "edfc4f25b57ae18c3116133c35f0b2fea5433e6c30e8dbbd14cfa8fd8df65164",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_lineage.rs": "72ca28a0c6730876373f1e8dfc299932b088f5f193fa98d7daa93b5da6abde04",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_lineage_tests.rs": "1664316548afbf33d46dce35e527e09cc207d1e3db680fa67f0d77f6edf7c69b",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs": "0f0553ebe24e7eb73273c20e7d5783f48ca1992a1cb23b05c00abb429d7c459b",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs": "0f8f94cef329d3eb92146b1dbf3336175c244d91f1de497dff3a2a0c790fa8d3",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs": "0265eb5d6f686442aedc3073d270192213279c28788296604a17b0fcf063e8bb",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs": "19798bca9c1aae954ee7229b18a99b7973001555b82800c64fc9960d24b1e104",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/t3code.rs": "eb2e50f2f9ba99cb5616da6c65218d18910617ddeafa04a3860c547f268bb379",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs": "bfc61ff19e4aeb4a7019ec595eab47c1a98c018e39722f05f77ff75c076843f6",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/edit159_e2e.rs": "5cc3c50d221f1be4dfb717ea2b593098e636294e7bd40cf3d81011041a91c7e2",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/guidance156_e2e.rs": "c1845816607559c4c67405c71fd20a08f21586259647a808af5585a720a00a54",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/held159_e2e.rs": "bbc2bed10c4bebcf2125a97f712783dd282536f1d885f315c9eb24e61170365f",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/native_delegation_e2e.rs": "71c4956d88d6706499b7188d092deec8c5ebeb2fe2af43cb694a20074c476757",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs": "e8bed4850d635430459d3d254c4fcd72ce4bc922eb62a06999648557081c37ae",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs": "0c19bffa246f79962b88a3ace1100c1ba1a0f3578f26806cf0042eb3c69974d9",
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/execution_store_test.rs": "95191e23c047a35a4e84800d6c3034b271981abe8a475c6a0d1c1c5d43695617"
+  },
+  "fresh_read": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+      "ranges": [
+        [
+          869,
+          882
+        ]
+      ],
+      "sha256": "0c19bffa246f79962b88a3ace1100c1ba1a0f3578f26806cf0042eb3c69974d9",
+      "evidence": "Vue complète comparée sans projection ; quota_wait:null ajouté conformément FR019."
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/execution_store_test.rs",
+      "ranges": [
+        [
+          12,
+          20
+        ],
+        [
+          64,
+          79
+        ],
+        [
+          276,
+          280
+        ],
+        [
+          290,
+          301
+        ],
+        [
+          314,
+          322
+        ]
+      ],
+      "sha256": "95191e23c047a35a4e84800d6c3034b271981abe8a475c6a0d1c1c5d43695617",
+      "evidence": "Assertions de version12 du magasin neuf, migration héritée et réouverture ; les autres assertions sont conservées."
+    }
+  ],
+  "inherited": {
+    "report": "/Users/moi/.cache/bridget-converge160-preparation-20261012/final2/converge160-pass2-final.json",
+    "sha256": "1a34041f581937f735987fb9fe93714cb1b65c7f0e5f83cda065847aeee300d1",
+    "manifest": "/Users/moi/.cache/bridget-converge160-preparation-20261012/final2/read-manifest.json",
+    "manifest_sha256": "18f9f93f2d157ae76eaa7fb69c10934d19781ae5a0c4549f85bc1699aca7ebba",
+    "condition": "Les19 sources du passage2 sont strictement identiques ; seules lectures héritées déclarées dans son manifeste sont créditées."
+  },
+  "tasks_file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/tasks.md",
+  "tasks_before_sha256": "b875e103921978112c7f04128b19e70b85709381df5a757a86cdd5fb78b0b91d",
+  "tasks_after_sha256": "b875e103921978112c7f04128b19e70b85709381df5a757a86cdd5fb78b0b91d",
+  "task_bytes_identical": true,
+  "limitations": [
+    "Les deux deltas seulement ont été relus dans ce passage ; aucune lecture intégrale du dépôt ni nouvel audit.",
+    "Les notes du scope21 sont historiques ; FULLnotyetstarted ne décrit pas le résultat actuel."
+  ]
+}

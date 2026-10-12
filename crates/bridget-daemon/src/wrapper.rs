@@ -4542,10 +4542,11 @@ fn launch_session_with_status(
                         idempotent_deliveries.historic_injection_failed(&message.id);
                         send_wrapper_message(
                             &writer,
-                            WrapperToDaemon::DeliveryRejected {
-                                id: message.id,
-                                reason: error.to_string(),
-                            },
+                            bound_delivery_rejection(
+                                &execution_bindings,
+                                message.id,
+                                error.to_string(),
+                            ),
                         );
                     }
                 }
@@ -4577,6 +4578,11 @@ fn launch_session_with_status(
                         &message,
                         &mut deferred_native_context,
                     ) {
+                        let rejection = bound_delivery_rejection(
+                            &execution_bindings,
+                            message_id.clone(),
+                            error.to_string(),
+                        );
                         idempotent_deliveries.historic_injection_failed(&message_id);
                         publish_execution_transition(
                             &writer,
@@ -4585,13 +4591,7 @@ fn launch_session_with_status(
                             "failed",
                             "provider_unavailable",
                         );
-                        send_wrapper_message(
-                            &writer,
-                            WrapperToDaemon::DeliveryRejected {
-                                id: message_id,
-                                reason: error.to_string(),
-                            },
-                        );
+                        send_wrapper_message(&writer, rejection);
                     }
                 }
                 Ok(DaemonToWrapper::DeliverIdempotent {
@@ -4640,10 +4640,11 @@ fn launch_session_with_status(
                             ) {
                                 send_wrapper_message(
                                     &writer,
-                                    WrapperToDaemon::DeliveryRejected {
-                                        id: message_id.clone(),
-                                        reason: error.to_string(),
-                                    },
+                                    bound_delivery_rejection(
+                                        &execution_bindings,
+                                        message_id.clone(),
+                                        error.to_string(),
+                                    ),
                                 );
                                 if let Some(report) =
                                     idempotent_deliveries.injection_failed(&delivery_id)
@@ -5949,6 +5950,22 @@ fn publish_provider_context(
     }
 }
 
+/// T036 : lookup HashMap moyen O(M), copie O(E), M/E octets des identifiants.
+/// Capturer avant une transition terminale ; une absence reste une absence.
+fn bound_delivery_rejection(
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    id: String,
+    reason: String,
+) -> WrapperToDaemon {
+    let binding = bindings.get(&id);
+    WrapperToDaemon::DeliveryRejected {
+        execution_id: binding.map(|binding| binding.execution_id.clone()),
+        generation: binding.map(|binding| binding.generation),
+        id,
+        reason,
+    }
+}
+
 fn publish_execution_transition(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     bindings: &mut HashMap<String, ManagedExecutionBinding>,
@@ -6672,6 +6689,28 @@ fn forward_managed_events_with_redaction(
                         ),
                     );
                 }
+                let rejection = match &terminal {
+                    ManagedTerminal::Completed
+                        if automatic_reply && message.reply && response.is_empty() =>
+                    {
+                        Some(bound_delivery_rejection(
+                            bindings,
+                            message_id.clone(),
+                            "réponse vide".to_string(),
+                        ))
+                    }
+                    ManagedTerminal::Cancelled => Some(bound_delivery_rejection(
+                        bindings,
+                        message_id.clone(),
+                        "tour annulé par le pilote".to_string(),
+                    )),
+                    ManagedTerminal::Failed { detail } => Some(bound_delivery_rejection(
+                        bindings,
+                        message_id.clone(),
+                        detail.clone(),
+                    )),
+                    _ => None,
+                };
                 let (next_state, reason) = match &terminal {
                     ManagedTerminal::Completed => ("completed", "completed"),
                     ManagedTerminal::Cancelled => ("interrupted", "interrupted"),
@@ -6687,30 +6726,10 @@ fn forward_managed_events_with_redaction(
                         reply.in_reply_to = Some(message.id);
                         send_wrapper_message(writer, WrapperToDaemon::Send(reply));
                     }
-                    ManagedTerminal::Completed if automatic_reply && message.reply => {
-                        send_wrapper_message(
-                            writer,
-                            WrapperToDaemon::DeliveryRejected {
-                                id: message.id,
-                                reason: "réponse vide".to_string(),
-                            },
-                        );
-                    }
-                    ManagedTerminal::Completed => {}
-                    ManagedTerminal::Cancelled => send_wrapper_message(
-                        writer,
-                        WrapperToDaemon::DeliveryRejected {
-                            id: message.id,
-                            reason: "tour annulé par le pilote".to_string(),
-                        },
-                    ),
-                    ManagedTerminal::Failed { detail } => send_wrapper_message(
-                        writer,
-                        WrapperToDaemon::DeliveryRejected {
-                            id: message.id,
-                            reason: detail,
-                        },
-                    ),
+                    _ => {}
+                }
+                if let Some(rejection) = rejection {
+                    send_wrapper_message(writer, rejection);
                 }
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
@@ -6725,6 +6744,8 @@ fn forward_managed_events_with_redaction(
                         in_progress: current_turn_in_progress.unwrap_or(false),
                     },
                 );
+                let rejection =
+                    bound_delivery_rejection(bindings, message_id.clone(), reason.clone());
                 let execution_reason = if reason.ends_with("pleine") {
                     publish_delegated_runtime_for_message(
                         writer,
@@ -6754,13 +6775,7 @@ fn forward_managed_events_with_redaction(
                 if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
                     send_wrapper_message(writer, report);
                 }
-                send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::DeliveryRejected {
-                        id: message_id,
-                        reason,
-                    },
-                );
+                send_wrapper_message(writer, rejection);
             }
             ManagedEventKind::JournalFailed { detail } => {
                 journal_failed = true;
@@ -11356,7 +11371,7 @@ mod reconnect_tests {
             frames.push(decode::<WrapperToDaemon>(line.trim()).unwrap());
         }
         assert!(frames.iter().any(|frame| matches!(frame, WrapperToDaemon::DeliveryIndeterminate { delivery_id, delivery_generation: 7 } if delivery_id == "delivery-full159")));
-        assert!(frames.iter().any(|frame| matches!(frame, WrapperToDaemon::DeliveryRejected { id, reason } if id == "full159" && reason == "file Codex pleine")));
+        assert!(frames.iter().any(|frame| matches!(frame, WrapperToDaemon::DeliveryRejected { id, reason, .. } if id == "full159" && reason == "file Codex pleine")));
         assert!(
             !frames
                 .iter()
@@ -11537,6 +11552,144 @@ mod native_child_requests155_tests {
             }
         }
         frames
+    }
+
+    #[test]
+    fn native160_wrapper_refus_injection_idempotente_liaison_optionnelle() {
+        for context in [
+            None,
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution160".into(),
+                generation: 2,
+                revision: 0,
+            }),
+        ] {
+            let (writer, mut reader, _requests, _session, mut bindings) = fixture155();
+            bindings.clear();
+            let bound = bind_idempotent_delivery_execution(
+                &mut bindings,
+                "message160",
+                context,
+                "codex",
+                "codex_app_server",
+            );
+            send_wrapper_message(
+                &writer,
+                bound_delivery_rejection(
+                    &bindings,
+                    "message160".into(),
+                    "injection refusée".into(),
+                ),
+            );
+            let frames = frames155(&mut reader);
+            assert_eq!(
+                frames.len(),
+                1,
+                "aucune transition failed synchrone idempotente"
+            );
+            assert!(matches!(&frames[0], WrapperToDaemon::DeliveryRejected {
+                execution_id, generation, ..
+            } if execution_id.as_deref() == bound.then_some("execution160")
+                && *generation == bound.then_some(2)));
+            assert_eq!(
+                bindings.get("message160").map(|b| b.state.as_str()),
+                bound.then_some("starting")
+            );
+        }
+    }
+
+    #[test]
+    fn native160_wrapper_refus_deliver_execution_capture_avant_failed() {
+        let (writer, mut reader, _requests, _session, mut bindings) = fixture155();
+        bindings.get_mut("message155").unwrap().state = "starting".into();
+        let rejection =
+            bound_delivery_rejection(&bindings, "message155".into(), "injection refusée".into());
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message155",
+            "failed",
+            "provider_unavailable",
+        );
+        send_wrapper_message(&writer, rejection);
+        assert!(!bindings.contains_key("message155"));
+        let frames = frames155(&mut reader);
+        assert!(
+            matches!(&frames[0], WrapperToDaemon::ExecutionStateChanged { transition }
+            if transition.next_state == "failed")
+        );
+        assert!(matches!(&frames[1], WrapperToDaemon::DeliveryRejected {
+            execution_id: Some(id), generation: Some(1), ..
+        } if id == "execution155"));
+    }
+
+    #[test]
+    fn native160_wrapper_refus_forward_capture_avant_terminal() {
+        for (surface, expected_state, expected_reason) in [
+            ("async", "failed", "limite"),
+            ("empty", "completed", "réponse vide"),
+            ("pause", "interrupted", "tour annulé par le pilote"),
+        ] {
+            let (writer, mut reader, _requests, _session, mut bindings) = fixture155();
+            let root =
+                std::env::temp_dir().join(format!("native160-{surface}-{}", uuid::Uuid::new_v4()));
+            crate::environment::ensure_private_directory(&root).unwrap();
+            let mut tracker = IdempotentDeliveryTracker::open_at(&root, "native160").unwrap();
+            let mut message = bridget_core::BridgetMessage::new("parent", "agent", "mission");
+            message.id = "message155".into();
+            message.reply = true;
+            let kind = match surface {
+                "async" => ManagedEventKind::DeliveryRejected {
+                    message_id: message.id,
+                    reason: "limite".into(),
+                },
+                "empty" => ManagedEventKind::TurnFinished {
+                    message,
+                    response: String::new(),
+                    terminal: ManagedTerminal::Completed,
+                },
+                "pause" => {
+                    publish_execution_transition(
+                        &writer,
+                        &mut bindings,
+                        "message155",
+                        "interrupting",
+                        "interrupt_requested",
+                    );
+                    ManagedEventKind::TurnFinished {
+                        message,
+                        response: String::new(),
+                        terminal: ManagedTerminal::Cancelled,
+                    }
+                }
+                _ => unreachable!("trois chemins prescrits"),
+            };
+            forward_managed_events(
+                &writer,
+                "agent",
+                vec![ManagedEvent::internal(
+                    bridget_transport::ManagedEventSource::Acp,
+                    Vec::new(),
+                    kind,
+                )],
+                &mut tracker,
+                &mut bindings,
+            );
+            assert!(!bindings.contains_key("message155"));
+            let frames = frames155(&mut reader);
+            assert!(frames.iter().any(
+                |f| matches!(f, WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.next_state == expected_state)
+            ));
+            assert!(
+                frames
+                    .iter()
+                    .any(|f| matches!(f, WrapperToDaemon::DeliveryRejected {
+                reason, execution_id: Some(execution_id), generation: Some(1), ..
+            } if reason == expected_reason && execution_id == "execution155"))
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

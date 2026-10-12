@@ -729,6 +729,7 @@ fn bootstrap159(
     let created = f.request(
         &mut parent,
         NativeDelegationRequest::Delegate {
+            resume_on_limit: None,
             fallback: Vec::new(),
             request_id: "latence159-bootstrap".into(),
             agent_type: "fake-codex".into(),

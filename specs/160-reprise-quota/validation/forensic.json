@@ -1,0 +1,404 @@
+{
+  "captured_at_utc": "2026-10-12T20:22:03.508001+00:00",
+  "base_announced_by_root": "159B928631df delivered/active/clean; no Git invocation by this agent",
+  "purpose": "T002160 readonly preparation and T036 binding correspondence, not a gate success/checkoff",
+  "real_quota_verdict": "non vu en réel",
+  "real_path_A_or_B": null,
+  "real_delivery_rejected_reason": null,
+  "real_quota_failure_order": null,
+  "runtime_scope": {
+    "namespace": "/Users/moi/.cache/bridget-core",
+    "namespace_source": "environment.rs36-39 HOME/.cache/bridget-core default; no private fixture namespace counted",
+    "daemon_log": "/Users/moi/.cache/bridget-core/daemon-stderr.log",
+    "daemon_log_sha256": "be5f074e9c5784ef0adfa99fce0fb206f34bbcb923e45b1f5e4415a2bbd2eb26",
+    "daemon_log_lines": 19922,
+    "literal_counts": {
+      "rate_limit_event": 0,
+      "quota": 0,
+      "rate_limit": 0,
+      "usage_limit": 0,
+      "rejected": 0,
+      "reached": 0
+    },
+    "db": "/Users/moi/.cache/bridget-core/bridget.db",
+    "read_mode": "SQLite URI mode=ro; readonly transaction, no schema/data writes",
+    "ledger_rows": 3765,
+    "ledger_literal_counts": {
+      "rate_limit_event": 0,
+      "usage_limit": 0,
+      "quota": 6,
+      "rate_limit": 0,
+      "Échec de livraison": 0
+    },
+    "quota_mentions_metadata": [
+      {
+        "id": "mcp-50766-6ac406c5-116",
+        "ts": 1791231685,
+        "body_exported": false,
+        "exhaustion_literal": false
+      },
+      {
+        "id": "mcp-53697-6ac40e15-8b",
+        "ts": 1791233557,
+        "body_exported": false,
+        "exhaustion_literal": false
+      },
+      {
+        "id": "mcp-50766-6ac40e28-120",
+        "ts": 1791233576,
+        "body_exported": false,
+        "exhaustion_literal": false
+      },
+      {
+        "id": "mcp-50766-6ac426fd-134",
+        "ts": 1791239933,
+        "body_exported": false,
+        "exhaustion_literal": false
+      },
+      {
+        "id": "mcp-50766-6ac42a25-136",
+        "ts": 1791240741,
+        "body_exported": false,
+        "exhaustion_literal": false
+      },
+      {
+        "id": "t3-e4897cfa-e7fa-47b9-9e61-d01f548279bb",
+        "ts": 1791269031,
+        "body_exported": false,
+        "exhaustion_literal": false
+      }
+    ],
+    "quota_or_limit_execution_reason_count": 0,
+    "session_files": 1079,
+    "session_lines": 657151,
+    "structured_quota_objects": [],
+    "lexical_candidate_count": 16,
+    "lexical_candidate_event_counts": {
+      "update": 13,
+      "turn_start": 3
+    },
+    "candidate_file_hashes": [
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/3132020d-edd5-4c34-899f-53eea8aee063/2026-10-11.jsonl",
+        "sha256": "6fc920f616fd46472246e6a76f6a2a537cfee04aed402451b9d860c4bea2afe3"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "sha256": "5a1beae0ec1bc7d23defb6699c90768c183b554c81f90a57cb0a2a5e30f0ed2c"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-07.jsonl",
+        "sha256": "833a6ae9dce5c996c5f6ec96e3e2a137add1736fe8d85159f2d89c391957b586"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/5c8cbf6b-b276-4f55-85b0-09357153aa15/2026-09-24.jsonl",
+        "sha256": "bd1bb56f7c73d4b1e0f4a53d52fab4ea66b2261bc5e81d91f1f1b5907371d9f3"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/96118059-fc28-4e50-b241-b5022660941a/2026-10-11.jsonl",
+        "sha256": "946d8a3c97429059ddeb03e0f94e5dd1e7feb2d5fb70ae2fe2a7a9befcaa4991"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/a4d12c75-5994-4c02-9acc-2db07ba817af/2026-09-06.jsonl",
+        "sha256": "185e1232fb8afe21e9958c1911db15bffbcd7074b2aec887959f7aae12ce82e8"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/a4d12c75-5994-4c02-9acc-2db07ba817af/2026-09-07.jsonl",
+        "sha256": "63b9531d007e0b98d058755c70a00df25732d39d6413f97027cc75b2cd5b6485"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/ab9e43fe-2b22-45f6-ba24-30079b6e0e2d/2026-10-12.jsonl",
+        "sha256": "40eab7eb05949487462d7312587464e41018e956f006e2afeb201d5eb436711b"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/ad1e35ed-9fd7-4a72-b153-ee7e8d05e1bf/2026-10-11.jsonl",
+        "sha256": "37438f4d4478d1d0b293891ec5f0ce80d8213d3336b92c7ba527f847d7dbde24"
+      }
+    ],
+    "candidate_metadata": [
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/a4d12c75-5994-4c02-9acc-2db07ba817af/2026-09-06.jsonl",
+        "line": 8811,
+        "event": "update",
+        "ts": "2026-09-06T13:21:52Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/a4d12c75-5994-4c02-9acc-2db07ba817af/2026-09-07.jsonl",
+        "line": 1093,
+        "event": "update",
+        "ts": "2026-09-07T03:33:34Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/a4d12c75-5994-4c02-9acc-2db07ba817af/2026-09-07.jsonl",
+        "line": 1097,
+        "event": "update",
+        "ts": "2026-09-07T03:33:54Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "line": 928,
+        "event": "update",
+        "ts": "2026-09-06T07:45:41Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "line": 3984,
+        "event": "update",
+        "ts": "2026-09-06T09:54:55Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "line": 14510,
+        "event": "update",
+        "ts": "2026-09-06T13:40:48Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "line": 14589,
+        "event": "update",
+        "ts": "2026-09-06T13:41:39Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "line": 14590,
+        "event": "update",
+        "ts": "2026-09-06T13:41:41Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-06.jsonl",
+        "line": 14699,
+        "event": "update",
+        "ts": "2026-09-06T13:44:27Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-07.jsonl",
+        "line": 9400,
+        "event": "update",
+        "ts": "2026-09-07T08:54:21Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/4e425374-d10e-418a-9118-18e1335aac1a/2026-09-07.jsonl",
+        "line": 9726,
+        "event": "update",
+        "ts": "2026-09-07T09:11:27Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/96118059-fc28-4e50-b241-b5022660941a/2026-10-11.jsonl",
+        "line": 2,
+        "event": "turn_start",
+        "ts": "2026-10-11T02:35:43Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/3132020d-edd5-4c34-899f-53eea8aee063/2026-10-11.jsonl",
+        "line": 17,
+        "event": "turn_start",
+        "ts": "2026-10-11T00:40:49Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/5c8cbf6b-b276-4f55-85b0-09357153aa15/2026-09-24.jsonl",
+        "line": 1,
+        "event": "turn_start",
+        "ts": "2026-09-24T02:29:43Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/ab9e43fe-2b22-45f6-ba24-30079b6e0e2d/2026-10-12.jsonl",
+        "line": 2,
+        "event": "update",
+        "ts": "2026-10-12T03:02:19Z"
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-core/sessions/ad1e35ed-9fd7-4a72-b153-ee7e8d05e1bf/2026-10-11.jsonl",
+        "line": 4,
+        "event": "update",
+        "ts": "2026-10-11T02:34:50Z"
+      }
+    ]
+  },
+  "continuation_parent_failed": "ACCEPTED in principle: InactiveParent or RecoveryAfterIdleWrapper reaches parent_is_inactive containing failed (execution_store953-957). Subject to autonomy budget, existence, gen/rev, proof fresh/not future and no active competing execution. It reserves only; it does not reconstruct failed by itself.",
+  "T036": {
+    "DeliverIdempotent_sync": "binding inserted before provider call4607-4615 if executionSome; sync Err4641-4655 sends DeliveryRejected without publishfailed, leaving binding. ContextNone means absent binding. No claim that sync binding always absent.",
+    "DeliverExecution_sync": "binding explicitly inserted4558-4572; Err4581 publishesfailed/provider_unavailable; publishtransition5988 removes terminalbinding before DeliveryRejected4590. Metadata must be captured before removal if this surface is included.",
+    "async_rejection": "wrapper6747 publishesfailed then DeliveryRejected6760; terminaltransition removes binding; capture beforetransition needed.",
+    "empty_response": "wrapper6680 publishescompleted then DeliveryRejected6692; terminaltransition removesbinding. Same ordering constraint.",
+    "contract_limit": "FR006c targets failed leaf; synchronous idempotent refusal does not publishfailed. DeliverExecution is a distinct surface that DOESpublishfailed. Preserve this distinction in T036, do not broaden quotaqualification from reason text."
+  },
+  "source_manifest": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/tasks.md",
+      "sha256": "e9c2f88bbb8299b5f41fac9c95c7deaae6fa8f72386b09d5e5a0ed7b0970d222",
+      "ranges": [
+        [
+          1,
+          28
+        ],
+        [
+          54,
+          54
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/spec.md",
+      "sha256": "3db1fb439f9deaa9e97f8027d962dd62e943558ab9bf377225199b416b16340c",
+      "ranges": [
+        [
+          46,
+          64
+        ],
+        [
+          195,
+          207
+        ],
+        [
+          350,
+          361
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/contracts/reprise160.md",
+      "sha256": "add41d194c880e8940a7d4fa2eaccf0b48ea3e61a92b17ebcb92516edd303655",
+      "ranges": [
+        [
+          1,
+          125
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/managed_supervisor.rs",
+      "sha256": "262efff43efbd067dd675b1162f40b32b1834a7a7859037cf7d6a3dbb2e71659",
+      "ranges": [
+        [
+          22,
+          111
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/execution_store.rs",
+      "sha256": "43cacff23bb954c8ed207bc9a1d3bc398c58705623560933cfccb7e9d3c91302",
+      "ranges": [
+        [
+          802,
+          855
+        ],
+        [
+          868,
+          995
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/fleet.rs",
+      "sha256": "186f9032c506e04f6004d6e9bf4e5a5147fb4dc25d7b0b7605ec2a080753be6f",
+      "ranges": [
+        [
+          95,
+          134
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/environment.rs",
+      "sha256": "3e15747a52a154d26f6bf665dbe66b3e2079c0dfe44202b26b3af855506a5a78",
+      "ranges": [
+        [
+          13,
+          40
+        ],
+        [
+          42,
+          82
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs",
+      "sha256": "bbf931ee21149e5b69500c07b9e3043e6725f7c48955af39751c9fb23b62ddd0",
+      "ranges": [
+        [
+          4550,
+          4658
+        ],
+        [
+          5880,
+          5910
+        ],
+        [
+          5952,
+          5995
+        ],
+        [
+          6635,
+          6695
+        ],
+        [
+          6730,
+          6848
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "650ca7849e55a9fdfa483924c5d9df64d515316ef44d0e5628c911e73ab09e47",
+      "ranges": [
+        [
+          6350,
+          6387
+        ],
+        [
+          8725,
+          8788
+        ],
+        [
+          22370,
+          22428
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "69d6dc4bd0bae2ad81f4e71bc481e73956eb162fa7a0e6014e092462c00f3482",
+      "ranges": [
+        [
+          2839,
+          2868
+        ],
+        [
+          3788,
+          3832
+        ]
+      ]
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/codex_app_server.rs",
+      "sha256": "763cf459419f7257eec7b036a28a94af1cd992313e5b8881629d46cdeae1625a",
+      "ranges": [
+        [
+          3227,
+          3270
+        ]
+      ]
+    }
+  ],
+  "limits": [
+    "No authenticated real quota exhaustion correlated to native task found in these retained sources. Absence here is not proof no provider ever reached quota.",
+    "Live log and sessions read without global runtime freeze; database query snapshot was consistent, other files are bounded captures.",
+    "Lexical update/turn_start mentions are command/output/body content, not structured provider facts; no content exported.",
+    "No provider/API/model/service/test/build/Git launched; no task checked; only CACHE reports written."
+  ],
+  "source_guard_after": {
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/tasks.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/spec.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/contracts/reprise160.md": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/managed_supervisor.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/execution_store.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/fleet.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/environment.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/wrapper.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs": true,
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-transport/src/codex_app_server.rs": true
+  }
+}

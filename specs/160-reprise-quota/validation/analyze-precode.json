@@ -1,0 +1,389 @@
+{
+  "at_utc": "2026-10-12T20:28:57.450104+00:00",
+  "kind": "manual Analyze, documentary candidate only",
+  "base": "6907df9ba15b58df05c2041631005beb57a1bed6",
+  "official_prerequisite_absent_proof": {
+    "file": "/Users/moi/.cache/bridget-plan160-preparation-20261012/ROOT-preflight160.json",
+    "sha256": "522eca54296d592e5b6ab96dfc0192ec9c1f3a34bd6413f92154618601c9a84e"
+  },
+  "baseline": {
+    "file": "/Users/moi/.cache/bridget-tests160-preparation-20261012/baseline160.json",
+    "sha256": "85b9e9490bc7617bc4be2f141f1f71b8b834c55482d5f532b464075b0891f6ea",
+    "counts": {
+      "parent_targets": 84,
+      "targets_with_selected_names": 5,
+      "passed_distinct": 276,
+      "failed_distinct": 0,
+      "ignored_distinct": 2,
+      "selected_distinct": 278,
+      "embedded_summaries": 0,
+      "raw_receipt_sum": {
+        "passed": 276,
+        "failed": 0,
+        "ignored": 2
+      },
+      "sum_filter_pass_memberships": 276,
+      "overlapping_qualified_names": 0
+    },
+    "rc": 0,
+    "limits": "276distinctPASS/2ignored; not FULL, not160 implementation proof"
+  },
+  "FR_to_tasks": {
+    "001": [
+      9,
+      25,
+      27
+    ],
+    "002": [
+      14,
+      15,
+      35
+    ],
+    "003": [
+      13,
+      14,
+      22
+    ],
+    "004": [
+      3,
+      15,
+      16,
+      33
+    ],
+    "004b": [
+      16,
+      23,
+      33
+    ],
+    "005": [
+      14,
+      22,
+      37
+    ],
+    "006": [
+      3,
+      15,
+      37
+    ],
+    "006b": [
+      33,
+      35,
+      36
+    ],
+    "006c": [
+      35,
+      36
+    ],
+    "007": [
+      15,
+      16,
+      17
+    ],
+    "008": [
+      7,
+      10,
+      22
+    ],
+    "009": [
+      11,
+      16
+    ],
+    "010": [
+      18,
+      21,
+      29
+    ],
+    "011": [
+      18,
+      19,
+      20
+    ],
+    "011b": [
+      8,
+      18,
+      19,
+      20
+    ],
+    "011c": [
+      32,
+      34
+    ],
+    "012": [
+      8,
+      18,
+      19,
+      20
+    ],
+    "013": [
+      4,
+      11,
+      18
+    ],
+    "014": [
+      20,
+      23
+    ],
+    "015": [
+      26
+    ],
+    "016": [
+      5,
+      12,
+      23
+    ],
+    "017": [
+      24
+    ],
+    "018": [
+      6,
+      16,
+      21,
+      22
+    ],
+    "019": [
+      10,
+      17,
+      27
+    ],
+    "020": [
+      25,
+      28
+    ]
+  },
+  "SC_to_tasks": {
+    "001": [
+      3,
+      15,
+      16,
+      20
+    ],
+    "002": [
+      16,
+      33
+    ],
+    "003": [
+      7,
+      22
+    ],
+    "004": [
+      8,
+      18,
+      19,
+      20
+    ],
+    "005": [
+      21,
+      22
+    ],
+    "006": [
+      5,
+      12,
+      23
+    ],
+    "007": [
+      4,
+      11,
+      18
+    ],
+    "008": [
+      26
+    ],
+    "009": [
+      9,
+      25,
+      27
+    ],
+    "010": [
+      20,
+      23
+    ],
+    "011": [
+      33,
+      35,
+      36
+    ],
+    "012": [
+      32,
+      34
+    ],
+    "013": [
+      15,
+      37
+    ]
+  },
+  "US_to_tasks": {
+    "1": [
+      3,
+      13,
+      14,
+      15,
+      16,
+      17,
+      33,
+      35,
+      36,
+      37
+    ],
+    "2": [
+      4,
+      8,
+      11,
+      18,
+      19,
+      20,
+      21,
+      32,
+      34
+    ],
+    "3": [
+      7,
+      10,
+      22
+    ],
+    "4": [
+      5,
+      6,
+      12,
+      23,
+      24
+    ],
+    "5": [
+      9,
+      25,
+      26,
+      27
+    ]
+  },
+  "tasks": [
+    "T001",
+    "T002",
+    "T003",
+    "T004",
+    "T005",
+    "T006",
+    "T007",
+    "T008",
+    "T032",
+    "T033",
+    "T009",
+    "T010",
+    "T011",
+    "T012",
+    "T013",
+    "T014",
+    "T015",
+    "T035",
+    "T036",
+    "T037",
+    "T016",
+    "T017",
+    "T018",
+    "T019",
+    "T020",
+    "T034",
+    "T021",
+    "T022",
+    "T023",
+    "T024",
+    "T025",
+    "T026",
+    "T027",
+    "T028",
+    "T029",
+    "T030",
+    "T031"
+  ],
+  "task_count": 37,
+  "requirements_count": 25,
+  "success_count": 13,
+  "story_count": 5,
+  "findings": [
+    {
+      "id": "DOC01",
+      "status": "candidate_corrected",
+      "topic": "FR011 ACK-only solde"
+    },
+    {
+      "id": "DOC02",
+      "status": "candidate_corrected",
+      "topic": "fact observation<=since+5 distinct tick resolution lateness"
+    },
+    {
+      "id": "DOC03",
+      "status": "candidate_corrected",
+      "topic": "8crash boundaries and5rejected outcomes"
+    },
+    {
+      "id": "DOC04",
+      "status": "candidate_corrected",
+      "topic": "lookup/chain and union sorting costs, noO1SQL promise"
+    },
+    {
+      "id": "DOC05",
+      "status": "candidate_corrected",
+      "topic": "base/WT and actual authorized delivery, T036 capture-before-terminal and stable continuation observation references"
+    },
+    {
+      "id": "OPEN-Past-T013",
+      "severity": "MEDIUM",
+      "status": "pending_plan_review",
+      "topic": "T013 attested_exhausted_since may filter reset_at<=now before qualification; then T014 Past/FR005 cannot be reached. No resolution invented or code inspected now."
+    }
+  ],
+  "critical_count": 0,
+  "high_count": 0,
+  "coverage_design": "All25FR/13SC/5US have mapped existing tasks; not semantic code coverage or execution evidence. GatesT001/T002 andfinishingT028-T031 arecrosscutting, not orphan feature tasks.",
+  "patch": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/known-doc-corrections160.patch",
+  "patch_sha256": "36a2dec95c645a20a500b4d511843e502c2bf5c721aa908e7459fc26420ab57f",
+  "files": [
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/spec.md",
+      "before_sha256": "3db1fb439f9deaa9e97f8027d962dd62e943558ab9bf377225199b416b16340c",
+      "candidate": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/candidate-docs/spec.md",
+      "after_sha256": "cc5986635ed8cdc6e27cdda31a11585186695072616cfd3375a70a99b14b58b3",
+      "unchanged_on_disk": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/plan.md",
+      "before_sha256": "c539186655269258ce9ec000dbc10f56545c13586b47a2b861010f6efb3c1fc0",
+      "candidate": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/candidate-docs/plan.md",
+      "after_sha256": "76cf88b9ea805c2d08902d8067627fd74d1477006955b882b5eb4f96f87369eb",
+      "unchanged_on_disk": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/tasks.md",
+      "before_sha256": "e9c2f88bbb8299b5f41fac9c95c7deaae6fa8f72386b09d5e5a0ed7b0970d222",
+      "candidate": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/candidate-docs/tasks.md",
+      "after_sha256": "dbaa10d2b1f150697eca9bdd11beb1afc3a73d7de63293ad7cc3d132a779405f",
+      "unchanged_on_disk": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/data-model.md",
+      "before_sha256": "3042349f5af0abdb27f5d2f912f65eeb4e0dc79ba9b2468c389bad7478679e03",
+      "candidate": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/candidate-docs/data-model.md",
+      "after_sha256": "0f36af3c5cb001fb073df70f9d3d4c738b07c20502277a8f3835d56d37c51035",
+      "unchanged_on_disk": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/quickstart.md",
+      "before_sha256": "ebbcb278034a0bb5f3f45802ecbcc13b30ea0d4ea74e61e8295d296f16b4a636",
+      "candidate": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/candidate-docs/quickstart.md",
+      "after_sha256": "1622d04a098f602e9e72aa98b96d3477354b8399eaf969631551b6f303f1438d",
+      "unchanged_on_disk": true
+    },
+    {
+      "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/contracts/reprise160.md",
+      "before_sha256": "add41d194c880e8940a7d4fa2eaccf0b48ea3e61a92b17ebcb92516edd303655",
+      "candidate": "/Users/moi/.cache/bridget-analyze160-preparation-20261012/candidate-docs/contracts/reprise160.md",
+      "after_sha256": "0768f62e3b2909885ad6bb68e3307e9b35fb107be15bf1e0c754d2a14b3970ac",
+      "unchanged_on_disk": true
+    }
+  ],
+  "limits": [
+    "Five known documentary correction groups only; no source read or patched, no new task/test/tool.",
+    "Past/T013 remains open for reviewplan; no GO implementation inferred.",
+    "research/reuse unchanged: old cost references still historical and ROOT should align their wording if it copies the candidate core corrections.",
+    "Checklist16checks historical readiness, not executed proof160.",
+    "Source/doc guards checked only for files read at this bounded pass."
+  ]
+}

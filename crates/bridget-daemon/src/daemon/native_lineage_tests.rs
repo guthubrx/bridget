@@ -51,6 +51,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         origin_owner_instance: format!("inst-{owner}"),
         parent_execution_id: None,
         request: bridget_transport::protocol::NativeDelegationRequest::Delegate {
+            resume_on_limit: None,
             fallback: Vec::new(),
             request_id: format!("req-{task_id}"),
             agent_type: "fixture".into(),
@@ -95,6 +96,8 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         guarded: false,
         guard_released: false,
         unacked_rounds: Vec::new(),
+        quota_waits: Vec::new(),
+        quota_hold: None,
         launch_issued_at: None,
         mission_issued_at: None,
         restart_resumes: 0,

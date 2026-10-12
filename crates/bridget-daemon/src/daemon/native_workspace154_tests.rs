@@ -869,16 +869,16 @@ fn native154_partage_discovery_termine_et_statut_compatibles150() {
     let task = task154(&fixture, &first);
     assert!(first.get("workspace").is_none());
     assert!(first.get("shared_writers").is_none());
-    // Oracle complet 150, étendu par 157 : toutes ses clés, sans projection qui masquerait une
-    // différence de contrat. Les valeurs variables viennent de la tâche réelle.
+    // Oracle complet 150, étendu par 157/160 : toutes ses clés, sans projection qui masque
+    // une différence. FR019 : quota_wait est additif et vaut null sans attente quota.
     let expected = json!({"version":1,"task_id":task.task_id,"status":"queued", "child_agent_id":task.child,
         "message_id":task.mission,"agent_type":"native-test","model":"custom/model","effort":"high", "cwd":task.cwd,
         "posture":"development","mission_deadline_at":null,"round":1,"idle_deadline_at":null,"continuable":false,
         "result":null,"error":null,"work_state":"working","summary":null,"summary_truncated":false,"result_bytes":null,
-        "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0,"pending_requests":[],"recent_requests":[],"substitution":null});
+        "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0,"pending_requests":[],"recent_requests":[],"substitution":null,"quota_wait":null});
     assert_eq!(
         first, expected,
-        "contrat courant 150 complété par 152/153/157"
+        "contrat courant 150 complété par 152/153/157/160"
     );
     assert_eq!(
         serde_json::to_vec(&first).unwrap(),

@@ -1,0 +1,78 @@
+{
+  "grade": "A",
+  "date": "2026-10-12",
+  "spec": "160",
+  "scope": "21sources Rust du diff6907df9 ; scoring statique ciblé après correctionFR006b et deux oracles",
+  "coverage_percent": 6.22,
+  "coverage_basis": "Fully read current-side diff hunks lower bound, not tests or entirefiles",
+  "numeric": 99.65,
+  "justification": "0C/0H, PERF001MEDIUM etDUP001LOW maintenus ; REL001résolu. Lecture partielle explicitée ; FULLhistoriqueen échec et sixrejeux distincts sansGLOBALGREEN.",
+  "metrics": {
+    "security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "llm_security": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "supply_chain": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "observability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "reliability": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "tests": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "performance": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "complexity": {
+      "grade": "A",
+      "numeric": 97,
+      "findings_count": 1
+    },
+    "quality": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "architecture": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "ai_hygiene": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    },
+    "duplication": {
+      "grade": "A",
+      "numeric": 99,
+      "findings_count": 1
+    },
+    "minimalism": {
+      "grade": "A",
+      "numeric": 100,
+      "findings_count": 0
+    }
+  },
+  "release_blocked": false
+}

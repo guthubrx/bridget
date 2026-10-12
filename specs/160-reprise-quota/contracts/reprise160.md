@@ -53,17 +53,20 @@ reste absent jusqu'à l'échéance effective), `native_resume_exhausted`,
 | Pendant la décision en attente | échéance et rappels inhibés ; résolution avant le saut de pause ; indépendante du parent |
 | Refus ancien après une relance | sans effet si son identifiant d'exécution ou sa génération diffère de la feuille de chaîne (`StaleIgnored`), même quand la nouvelle feuille est déjà `failed` |
 | Refus sans corrélation après une relance | échec explicite `native_refusal_uncorrelated` |
-| Injection synchrone refusée, réponse vide | échec avec l'erreur d'origine, sans reprise (la feuille n'est pas `failed`) |
+| Injection synchrone refusée, réponse vide | corrélation d’abord ; absents après relance = native_refusal_uncorrelated ; sinon erreur d’origine si la feuille n’est pas failed |
 | Tout échec d'une tâche opt-in | un seul avis, l'avis d'échec durable ; aucun message direct |
+| Réponse vide sans DeliveryRejected | attente du timeout de mission existant, aucun refus inventé |
 | Reprise ordinaire de 152 | refusée pour toute chaîne dont l'entrée de quota est ouverte |
 | Fait qualifiant arrivé dans les 5 s | attente |
 | Pause du référent | cause de pause (152) prioritaire ; relance différée pendant une pause |
 | Annulation pendant l'attente | exécutée ; l'entrée est fermée ; aucune relance |
 | Annulation pendant `relaunching` | réconciliation de la continuation et de la remise, puis fermeture ; sinon `cancelling` avec `native_cancel_unverifiable:quota_relaunch` |
 | Redémarrage du daemon pendant l'attente | tâche gardée, enfant non reconstruit avant l'heure, `restart_resumes` inchangé |
-| Redémarrage pendant la décision en attente | échec normal avec avis |
+| Redémarrage pendant la décision en attente | échec normal avec avis même si un fait était vu en mémoire volatile avant arrêt |
 | Enfant absent à l'heure de retour | réessai à chaque tick ; le gel quota s'arrête à `retour + 30 s`, puis `mission_reply_timeout` à l'échéance |
-| Troisième échec de quota | `usage_limit` avec `limit_reset_at` |
+| Troisième échec de quota | `usage_limit` avec `limit_reset_at` ; cause Past ou RoundsDone vérifiée séparément par les oracles existants |
+
+La borne porte sur l’observation du fait : `observed_at <= quota_hold.since + 5`. Un tick retardé peut résoudre le hold plus tard, mais ne rend jamais admissible un fait observé après cette borne. La classification emploie `now` réel au tick de décision, pas `hold.since+5` comme horloge fictive. La borne observée s’applique à chaque fenêtre avant sélection : observed_at<=since+5. Un résultat différent quand now change est prévu ; un fait observé à10:42 pour un hold commencé à10:40 dépasse5s et est exclu.
 
 ## Trame wrapper `DeliveryRejected` (compatibilité)
 
@@ -76,9 +79,7 @@ sont optionnels et omis s'ils sont absents.
 | nouveau | ancien | champs absents : refus courant tant que la tâche n'a jamais été relancée, sinon `native_refusal_uncorrelated` |
 | ancien | nouveau | champs ignorés (`WrapperToDaemon` sans `deny_unknown_fields`) ; comportement actuel |
 
-Le wrapper remplit les champs depuis sa liaison d'exécution quand elle existe
-(refus asynchrone, réponse vide, refus de pause). Le refus d'une injection
-synchrone peut ne pas avoir de liaison : champs absents.
+Le wrapper capture les champs depuis sa liaison AVANT la transition terminale qui la retire (refus asynchrone, réponse vide, refus de pause). Injection idempotente synchrone : liaison présente si le contexte d’exécution est fourni, et absence de transition failed. DeliverExecution synchrone : liaison avant injection puis transition failed sur erreur ; capturer avant son retrait. Sans contexte/lien, champs absents.
 
 ## Identité et rejeu de la relance
 
@@ -86,7 +87,7 @@ Identité : `limit-resume:<task_id>:<ronde>:<retour>`. Elle est unique dans le
 magasin d'exécutions et reliée à la continuation (`usage_limit_reset`). Rejouer la
 relance rend la continuation existante, puis reprend la remise à l'état trouvé
 (réservation absente, réservée, gravée, accusée). La date d'émission du message
-est figée (observation de la continuation). Le solde n'a lieu qu'à partir de
+est figée (`observed_at` initial de la continuation), conservée et relue sans réécriture au rejeu. Le solde n'a lieu qu'à partir de
 « remise accusée » (`acked`). Une remise `indeterminate` ou `orphaned` donne
 `native_relaunch_failed`.
 
@@ -106,3 +107,15 @@ est figée (observation de la continuation). Le solde n'a lieu qu'à partir de
 ## Lineage T3
 
 Aucun changement de forme. La tâche en attente apparaît `working`.
+
+## Précisions retenues R1
+
+La corrélation FR006b précède toute classification FR006c/quota. Après une relance, des champs absents donnent donc `native_refusal_uncorrelated`, même pour un refus synchrone. Une réponse vide termine l’Execution en `completed`, tandis que la Task demeure `working` jusqu’au refus : elle échoue avec l’erreur d’origine si le refus est corrélé. Les Task déjà `result_available` ou `cancelled` sont préservées ; une Task déjà `failed` ne reçoit pas de nouvel avis.
+
+Lecture160 conservatrice : `attested_exhausted_since(type,since,now,past_since:Option<i64>)` garde la preuve enregistrée par157 et son admission inchangée. Observation strictement après `since`, puis reset futur OU (`past_since=hold.since` et observation>=past_since). Pendant le hold, filtrer chaque fenêtre par `observed_at <= past_since + 5` avant toute agrégation de reset/observation. Hors résolution du hold, past_since=None ; ancienne observation expirée=NoFact. Le cas fait observé pendant le hold puis expiré à la décision donne `Past{reset_at}`/usage_limit. Une fenêtre rejetée à son enregistrement n’est jamais inventée.
+
+Toute sortie d’échec depuis `relaunching` réconcilie la feuille et la remise avant Task.failed/cleanup, en réemployant `close_lost_execution` et T024 : cible child vérifiée, CAS de la feuille vers `unreachable`, remise dispatching mise en quarantaine. Une erreur de clôture se propage ; l’entrée reste `relaunching` pour réessayer le settlement. Aucun nouvel arrêt physique. Les résultats reçus pour Task.failed sont déjà ignorés par capture_reply (ACK transport seulement). Cela ne garantit pas l’unicité des effets externes.
+
+FR003 est une politique de corrélation temporelle, pas une preuve que le quota cause cet échec. Un fait admissible antérieur à l’échec peut qualifier une panne sans rapport et faire répéter des effets de la mission. L’opt-in, les bornes6h/2rondes et l’idempotence de la relance ne garantissent ni causalité ni exactly-once des effets externes. Aucune fenêtre W60 ou test supplémentaire n’est ajouté.
+
+R2 : waiting suit la garde retour+30 ; relaunching se reprend à chaque tick sans nouveau gate horaire, avec pause/échéance conservées. Si Task.save échoue après qualification, réutiliser sa même identity/reset pour finir le même intent Task ; ne jamais reconstruire sans TaskQuotaWait. Si DB indisponible, conserver checkpoint et propager l’erreur pour retry, sans promettre de fermer le hold. Past ne concerne que la preuve admissible observée pendant le hold ; ancienne observation périmée=NoFact.

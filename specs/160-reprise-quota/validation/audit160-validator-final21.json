@@ -1,0 +1,88 @@
+{
+  "status": "GEL_FINAL21_AUDIT_VALIDATOR_RC0",
+  "at_utc": "2026-10-12T22:19:15.291927+00:00",
+  "validator": "/Users/moi/Nextcloud/10.Scripts/00.Generic/audit-code-v14/scripts/validate_session.py",
+  "command": [
+    "python3",
+    "validate_session.py",
+    "/Users/moi/.cache/bridget-audit160-preparation-20261012",
+    "--block-on",
+    "CRITICAL,HIGH"
+  ],
+  "rc": 0,
+  "errors": 0,
+  "warnings": 0,
+  "stdout": "0 erreur(s), 0 warning(s) — session conforme",
+  "files": [
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/manifest.json",
+      "sha256": "814bbe0c80dd72c7db4100011fcff7aa205708f8bcaab7b1341c9f457252de3a"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/scope-files-final21.json",
+      "sha256": "57c15398ba4292cbebc9e27b5b22ad06c6eb6b45c155c850d21b085a5c2e6a6c"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/scoring.md",
+      "sha256": "bbf7b1a8b4d7f28e41aa26772e5dd2630aed618c03192e8f8b3ab31168f77654"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/grade.json",
+      "sha256": "349887c96e81037de279905e8a916669f594f33037e8f371e1f7d3d6ce803246"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-1/aggregated-findings.json",
+      "sha256": "aadb75852b2300df97593fed9d0e6cdd8d267020ced47a2e04b07d27efccf666"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/aggregated-findings.json",
+      "sha256": "3170044660601a6fd5e904cd950d9772f6c780b8b85fdee2a0cdcc4408853608"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_complexite.json",
+      "sha256": "49b97413161d7ebed48ae6a9bcae64a663baa4c669f66e9fdb409a5db4c2d254"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_duplication.json",
+      "sha256": "66a212720d6bf329e82ea7454699f343c73f5d155e8d8c82f0efc55f200b9ce9"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_minimalisme.json",
+      "sha256": "e4509b172819c0b211c0651bd2a49fdd084bb089abb5cf9f7891402e7691bf49"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_performance.json",
+      "sha256": "0dec476c93904d4fb79399a8fb9f88315528e26b9a7001b8917efcd895242c8f"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_qualite.json",
+      "sha256": "2ef9468dfd3374521b112f953071e6f99b60103561ab045f0166715d11b77e3d"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_securite.json",
+      "sha256": "bc323687c4b68536ad72372b210a9b729bc7876369be3213b7ced66d53671d4a"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-audit160-preparation-20261012/cycle-scoring/findings_tests.json",
+      "sha256": "73c827c5cac42d6eb4b1659339e12d9802e02502ece4762200b22729e2fe624e"
+    }
+  ],
+  "grade": "A",
+  "numeric": 99.65,
+  "residual_summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 1
+  },
+  "fresh_coverage": {
+    "hunks_full": 12,
+    "hunks_partial": 11,
+    "hunks_total": 193,
+    "percent_lower_bound": 6.22,
+    "unique_lines": 1564,
+    "whole_files": 0
+  },
+  "FULL": "historicalRC1012683PASS6FAIL76ignored/97parents,7childrenexcluded; exactreplays1+5PASS, noGLOBALGREEN",
+  "no_WT_Cargo_test_Git_services_DB_model_execution": true
+}

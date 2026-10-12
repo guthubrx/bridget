@@ -1,0 +1,137 @@
+{
+  "status": "GEL CACHE T028 seulement ; aucun \u00e9tat de livraison160 d\u00e9clar\u00e9",
+  "patch": {
+    "path": "/Users/moi/.cache/bridget-docs160-T028-final-preparation-20261012/T028-final-docs160.patch",
+    "sha256": "9cf3c1da224b8ae49ee1aeec268f334eee9296b6e9eaf65069fe340225f77a53"
+  },
+  "files": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/docs/delegation-native.md",
+      "base_sha256": "28e8192e00628333c201e799c7fab246ec3c57d84d6756f9f4884c9a27e12495",
+      "candidate_sha256": "9f70aa9b09c1d998461115a7708c3f49ddc29cee5ca89644b18269f6bc5e206d",
+      "added_lines": 68
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/skills/bridget/SKILL.md",
+      "base_sha256": "ab968346983bcf310696f0a212c8cd09fae478933203150d575cb47f75956649",
+      "candidate_sha256": "cd851c784d6bbd8d3ab156f3af90a36446436c36313107428a6b420f9b985505",
+      "added_lines": 23
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/skills/bridget/references/commandes.md",
+      "base_sha256": "33d51a9c6f1336188c180e2832899c43ebfc6e4c735b64388e5496ddc17749b7",
+      "candidate_sha256": "8b9fd33b6b66f27d5176df2df86a14286eeba69bea5a17bbc7f17c6bd374b8c2",
+      "added_lines": 35
+    }
+  ],
+  "source_reads": [
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+      "sha256": "0f0553ebe24e7eb73273c20e7d5783f48ca1992a1cb23b05c00abb429d7c459b",
+      "ranges": [
+        [
+          129,
+          144
+        ],
+        [
+          318,
+          320
+        ]
+      ]
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+      "sha256": "edfc4f25b57ae18c3116133c35f0b2fea5433e6c30e8dbbd14cfa8fd8df65164",
+      "ranges": [
+        [
+          295,
+          325
+        ]
+      ]
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+      "sha256": "c7b0a8aa48eeddf4b4e0b48cb9621b4e09e7f3f13e8d2383b7d5b9e584715575",
+      "ranges": [
+        [
+          386,
+          415
+        ],
+        [
+          2925,
+          2948
+        ],
+        [
+          2996,
+          3050
+        ],
+        [
+          3191,
+          3258
+        ],
+        [
+          3335,
+          3458
+        ],
+        [
+          3488,
+          3522
+        ],
+        [
+          3768,
+          3808
+        ],
+        [
+          4098,
+          4142
+        ]
+      ]
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/specs/160-reprise-quota/contracts/reprise160.md",
+      "sha256": "bf9507f6e69c35bc5e7eb53bffb0ec34c24f8cfbf8a2b9178b7de6194522ec5b",
+      "ranges": [
+        [
+          1,
+          119
+        ]
+      ]
+    },
+    {
+      "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+      "sha256": "2a2dd53d43c2af2221f2438e2f675395557cdfc089e2213268e16f75efea85d3",
+      "ranges": [
+        [
+          9140,
+          9154
+        ]
+      ],
+      "scope": "Rappels inhib\u00e9s : hold ou attente ouverte avant retour+30 seulement."
+    }
+  ],
+  "forensic": {
+    "path": "/Users/moi/.cache/bridget-forensic160-20261012/forensic160-readonly.md",
+    "sha256": "a3b0f0697a6867f83c9931904be5228be2f7554b6ab4ab190e0c38a08863f2a4",
+    "verdict": "quota r\u00e9el non vu"
+  },
+  "limits": [
+    "Aucun test ex\u00e9cut\u00e9 ici ; replays ROOT non cr\u00e9dit\u00e9s avant r\u00e9ception",
+    "Pas de preuve installation/runtime160",
+    "Effets externes potentiellement r\u00e9p\u00e9t\u00e9s, corr\u00e9lation non causale",
+    "Observation5s, r\u00e9solution tick retardable, pas borne rigide de latence"
+  ],
+  "self_review": {
+    "three_owned_docs_only": true,
+    "ADR_unmodified": true,
+    "tasks_unmodified": true,
+    "strict_bool_None_false": true,
+    "ACK_only_same_provider_no_fallback": true,
+    "union_child_only": true,
+    "no_new_option_tool_test": true,
+    "current_source_matches_contract": true
+  },
+  "report": {
+    "path": "/Users/moi/.cache/bridget-docs160-T028-final-preparation-20261012/rapport.md",
+    "sha256": "433a97cd16a8b454057e84db05b89b89544e80aab8931c7d94ee102fc136ce21"
+  }
+}

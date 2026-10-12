@@ -45,6 +45,8 @@ Valeurs dérivées, jamais stockées :
   rappels de la tâche. Le hold est borné à 5 s par sa résolution, qui passe avant
   la pause dans `tick`.
 
+La borne porte sur l’observation du fait : `observed_at <= quota_hold.since + 5`. Un tick retardé peut résoudre le hold plus tard, mais ne rend jamais admissible un fait observé après cette borne. La classification emploie `now` réel au tick de décision, pas `hold.since+5` comme horloge fictive. La borne observée s’applique à chaque fenêtre avant sélection : observed_at<=since+5. Un résultat différent quand now change est prévu ; un fait observé à10:42 pour un hold commencé à10:40 dépasse5s et est exclu.
+
 ### Invariants
 
 - I1 : `quota_waits` est append-only. Aucune écriture ne retire une entrée ni
@@ -52,7 +54,7 @@ Valeurs dérivées, jamais stockées :
 - I2 : au plus une entrée n'est pas `done`. Une entrée n'est ajoutée que si la
   longueur est inférieure à 2.
 - I3 : la qualification de l'exécution (table ci-dessous) est écrite AVANT
-  l'entrée de tâche. Une entrée sans qualification ne relance jamais.
+  l'entrée de tâche. Si cette sauvegarde échoue, relire la qualification persistée et finir le même intent Task avec la même identity/reset ; aucune reconstruction sans TaskQuotaWait. Stockage indisponible : checkpoint conservé, erreur propagée, retry ; aucun hold déclaré fermé sans écriture.
 - I4 : `until` est posé une seule fois, au passage à `done`.
 - I5 : `quota_hold` et une entrée non `done` n'existent jamais ensemble. Le
   passage du hold à l'attente est une seule sauvegarde, et `since` de l'entrée
@@ -60,7 +62,7 @@ Valeurs dérivées, jamais stockées :
 - I10 : une chaîne dont l'entrée de quota est ouverte n'est jamais reprise par la
   reprise ordinaire de 152 (`may_resume` refuse).
 - I11 : le message de la relance a une date d'émission figée, égale à
-  `observed_at` de la continuation. Le canonique est identique à chaque rejeu.
+  `observed_at` initial de la continuation, conservé puis relu sans réécriture au rejeu. Le canonique est identique à chaque rejeu.
 - I6 : `restart_resumes` de 152 n'est jamais modifié par ce mécanisme.
 - I7 : `mission_deadline_at` n'est jamais réécrite (152 I2). Le gel passe par
   l'échéance effective.
@@ -95,7 +97,7 @@ Une transaction :
 
 1. lire la ligne de qualification du parent ; absente ou d'une autre identité :
    `NotQualified` ;
-2. si `resume_execution_id` est posé : `AlreadyResumed(id)` (rejeu) ;
+2. si `resume_execution_id` est posé : garder `AlreadyResumed(id)` (rejeu), puis relire snapshot/message/continuation existants et son `observed_at` initial, sans DTO supplémentaire ni upsert ;
 3. vérifier que le parent est `failed` et feuille de sa chaîne : sinon
    `NotLeaf` ou `NotFailed` ;
 4. insérer l'exécution enfant (`starting`, génération `parent + 1`, même
@@ -141,7 +143,7 @@ intervalles = pause_intervals(from, to) + [e.since .. min(e.until ou to, e.reset
 rogner à [from, to], trier par début, fusionner les chevauchements, sommer
 ```
 
-Complexité : O(P + Q log Q), Q au plus 3.
+Complexité : lecture SQL du journal H, tri puis union O((P + Q) log(P + Q)), espace O(P + Q), Q au plus2.
 
 Utilisé par : échéance effective (`mission_deadline_at + frozen_overlap(...,
 mission_deadline_at - reply_timeout, now)`), `frozen_secs` du suivi de demande,
@@ -154,9 +156,10 @@ working --échec, opt-in, fait qualifiant connu--> working + QuotaWait(waiting) 
 working --échec, opt-in, aucun fait--> working + QuotaHold (5 s)
 QuotaHold --fait qualifiant avant 5 s--> working + QuotaWait(waiting)
 QuotaHold --5 s écoulées--> failed (erreur d'origine, avis d'échec durable)
-QuotaHold --redémarrage--> failed (erreur d'origine, avis d'échec durable)
+QuotaHold --redémarrage--> failed (erreur d'origine, avis durable, même si fait vu avant en mémoire volatile)
 working + waiting --retour + 30 s, garde de pause, enfant connecté--> relaunching
 relaunching --reconstruction (idempotente)--> relaunching (resume_execution_id posé)
+relaunching --chaque tick, sans nouveau gate horaire, pause/échéance conservées--> relire continuation/remise existantes
 relaunching --remise réservée puis gravée (états de la remise)--> relaunching
 relaunching --remise accusée--> working + done (until posé), exécution enfant en cours
 relaunching --remise indeterminate ou orphaned--> failed (native_relaunch_failed, avis durable)
@@ -193,8 +196,7 @@ de chaîne :
 
 Un refus courant ne peut qualifier une limite que si la feuille est `failed`
 (sinon : `NativeFailed` avec l'erreur d'origine). Les refus d'une tâche opt-in
-déjà terminale rendent `NativeFailed` (jamais `Pass`) pour éviter un second
-avis.
+déjà terminale rendent `NativeFailed` (jamais `Pass`) uniquement pour arrêter le gestionnaire : préserver `result_available`/`cancelled`, ne pas réécrire `failed` ni réserver un nouvel avis.
 
 ## Vue de tâche (`task_view`)
 
@@ -205,3 +207,13 @@ reste `working`. `suspended` de 152 reste réservé à la pause.
 
 Aucune variante nouvelle : la relance utilise `AutonomousEffect::NativeMissionDispatch`
 de 152.
+
+## Précisions R1
+
+La corrélation FR006b précède toute classification FR006c/quota. Après une relance, des champs absents donnent donc `native_refusal_uncorrelated`, même pour un refus synchrone. Une réponse vide termine l’Execution en `completed`, tandis que la Task demeure `working` jusqu’au refus : elle échoue avec l’erreur d’origine si le refus est corrélé. Les Task déjà `result_available` ou `cancelled` sont préservées ; une Task déjà `failed` ne reçoit pas de nouvel avis.
+
+Lecture160 conservatrice : `attested_exhausted_since(type,since,now,past_since:Option<i64>)` garde la preuve enregistrée par157 et son admission inchangée. Observation strictement après `since`, puis reset futur OU (`past_since=hold.since` et observation>=past_since). Pendant le hold, filtrer chaque fenêtre par `observed_at <= past_since + 5` avant toute agrégation de reset/observation. Hors résolution du hold, past_since=None ; ancienne observation expirée=NoFact. Le cas fait observé pendant le hold puis expiré à la décision donne `Past{reset_at}`/usage_limit. Une fenêtre rejetée à son enregistrement n’est jamais inventée.
+
+Toute sortie d’échec depuis `relaunching` réconcilie la feuille et la remise avant Task.failed/cleanup, en réemployant `close_lost_execution` et T024 : cible child vérifiée, CAS de la feuille vers `unreachable`, remise dispatching mise en quarantaine. Une erreur de clôture se propage ; l’entrée reste `relaunching` pour réessayer le settlement. Aucun nouvel arrêt physique. Les résultats reçus pour Task.failed sont déjà ignorés par capture_reply (ACK transport seulement). Cela ne garantit pas l’unicité des effets externes.
+
+Refus/non-reprenable de la remise : native_relaunch_failed existant, pas nouvelle phase. AlreadyResumed(id) et relectures existantes conservent le premier observed_at.

@@ -55,6 +55,16 @@ pub enum ExecutionRecoveryOutcome {
     Ambiguous { execution_ids: Vec<String> },
 }
 
+/// Issues160 fermées ; le rejeu porte seulement l'ID à relire par les lecteurs existants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum QuotaRecoveryOutcome {
+    NotQualified,
+    NotFailed,
+    NotLeaf,
+    AlreadyResumed(String),
+    Reconstructed(Box<ReconstructedExecution>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedSubmission {
     pub submission_id: String,
@@ -1017,6 +1027,77 @@ impl ExecutionStore {
             .optional()
     }
 
+    /// Qualification160 persistée, sans recalcul du quota au rejeu.
+    /// O(log N + log Q + B), N exécutions, Q qualifications, B octets des identifiants.
+    /// La transaction Immediate protège failed et les deux unicités jusqu'au commit.
+    /// Some = ligne durable ; None = refus métier ; Err = stockage/arguments invalides.
+    pub(crate) fn qualify_quota_failure(
+        &self,
+        execution_id: &str,
+        identity: &str,
+        reset_at: i64,
+        now: i64,
+    ) -> rusqlite::Result<Option<(String, i64, i64, Option<String>)>> {
+        if execution_id.trim().is_empty() || identity.trim().is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "qualification quota invalide".into(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let failed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM executions WHERE execution_id=?1 AND state='failed')",
+            [execution_id],
+            |row| row.get(0),
+        )?;
+        if !failed {
+            return Ok(None);
+        }
+        // Même connexion dans la transaction ouverte ; jamais un autre magasin.
+        if let Some(stored) = self.quota_failure_for(execution_id)? {
+            if stored.0 != identity {
+                return Ok(None);
+            }
+            tx.commit()?;
+            return Ok(Some(stored));
+        }
+        let identity_used: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM execution_quota_resumes WHERE identity=?1)",
+            [identity],
+            |row| row.get(0),
+        )?;
+        if identity_used {
+            return Ok(None);
+        }
+        if reset_at < 0 || now < 0 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "qualification quota invalide".into(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO execution_quota_resumes(execution_id,identity,reset_at,qualified_at,resume_execution_id)
+             VALUES(?1,?2,?3,?4,NULL)", params![execution_id, identity, reset_at, now],
+        )?;
+        tx.commit()?;
+        Ok(Some((identity.to_string(), reset_at, now, None)))
+    }
+
+    /// Lecture M4 : relire la qualification avant une nouvelle décision après Task.save échoué.
+    /// O(log Q + B), Q qualifications, B octets du résultat ; aucune mutation ni permission.
+    /// Tuple fermé : (identity, reset_at, qualified_at, resume_execution_id).
+    pub(crate) fn quota_failure_for(
+        &self,
+        execution_id: &str,
+    ) -> rusqlite::Result<Option<(String, i64, i64, Option<String>)>> {
+        self.conn
+            .query_row(
+                "SELECT identity,reset_at,qualified_at,resume_execution_id
+             FROM execution_quota_resumes WHERE execution_id=?1",
+                [execution_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+    }
+
     /// Dernière feuille de la chaîne, choisie par génération et jamais par date.
     /// O(c (log n + log c)) pour c lignes visitées sur n exécutions et liens :
     /// recherches indexées par parent et identifiant, déduplication UNION.
@@ -1320,6 +1401,109 @@ impl ExecutionStore {
         };
         tx.commit()?;
         Ok(ConditionalTransition::Applied(applied))
+    }
+
+    /// Reconstruction160 ciblée, séparée de la reprise ordinaire des parents actifs.
+    /// O(log Q + log N + log C + log S + B), Q qualifications, N exécutions,
+    /// C continuations, S soumissions, B message et IDs ; mémoire O(B).
+    /// Qualification, enfant et continuation partagent la même TX Immediate.
+    pub(crate) fn reconstruct_quota_failed(
+        &self,
+        parent_execution_id: &str,
+        identity: &str,
+        agent_instance_id: &str,
+        child_execution_id: &str,
+        observed_at: i64,
+    ) -> rusqlite::Result<QuotaRecoveryOutcome> {
+        if parent_execution_id.trim().is_empty()
+            || identity.trim().is_empty()
+            || agent_instance_id.trim().is_empty()
+            || child_execution_id.trim().is_empty()
+            || observed_at < 0
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "reconstruction quota invalide".into(),
+            ));
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let Some((qualified_identity, _, _, resumed)) =
+            self.quota_failure_for(parent_execution_id)?
+        else {
+            return Ok(QuotaRecoveryOutcome::NotQualified);
+        };
+        if qualified_identity != identity {
+            return Ok(QuotaRecoveryOutcome::NotQualified);
+        }
+        // Le reçu historique précède la nouvelle garde de feuille ; aucun upsert/date réécrite.
+        if let Some(execution_id) = resumed {
+            tx.commit()?;
+            return Ok(QuotaRecoveryOutcome::AlreadyResumed(execution_id));
+        }
+        let Some(parent) = self.execution_snapshot(parent_execution_id)? else {
+            return Ok(QuotaRecoveryOutcome::NotFailed);
+        };
+        if parent.state != "failed" {
+            return Ok(QuotaRecoveryOutcome::NotFailed);
+        }
+        let has_child: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM execution_continuations WHERE parent_execution_id=?1)",
+            [parent_execution_id],
+            |row| row.get(0),
+        )?;
+        if has_child {
+            return Ok(QuotaRecoveryOutcome::NotLeaf);
+        }
+        // Lecteurs déjà livrés, même connexion : refus avant mutation si enveloppe indisponible.
+        let message = self
+            .execution_message(parent_execution_id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        let submission_id: String = tx.query_row(
+            "SELECT submission_id FROM executions WHERE execution_id=?1",
+            [parent_execution_id],
+            |row| row.get(0),
+        )?;
+        let generation = parent
+            .generation
+            .checked_add(1)
+            .ok_or(rusqlite::Error::IntegralValueOutOfRange(4, i64::MAX))?;
+        let sql_generation = sql_counter(generation)?;
+        tx.execute(
+            "INSERT INTO executions(execution_id,submission_id,agent_instance_id,
+                project_id,binding_generation,generation,state,revision,reason,created_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,'starting',0,'accepted',?7,?7)",
+            params![child_execution_id, submission_id, agent_instance_id,
+                parent.project.as_ref().map(|p| &p.project_id),
+                parent.project.as_ref().map(|p| p.binding_generation), sql_generation, observed_at],
+        )?;
+        tx.execute(
+            "INSERT INTO execution_continuations(execution_id,generation,parent_execution_id,mode,reason,observed_at)
+             VALUES(?1,?2,?3,'reconstructed','usage_limit_reset',?4)",
+            params![child_execution_id, sql_generation, parent_execution_id, observed_at],
+        )?;
+        if tx.execute(
+            "UPDATE execution_quota_resumes SET resume_execution_id=?1
+             WHERE execution_id=?2 AND identity=?3 AND resume_execution_id IS NULL",
+            params![child_execution_id, parent_execution_id, identity],
+        )? != 1
+        {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        let snapshot = ExecutionSnapshot {
+            execution_id: child_execution_id.into(),
+            project: parent.project,
+            state: "starting".into(),
+            generation,
+            revision: 0,
+            created_at: observed_at,
+        };
+        tx.commit()?;
+        Ok(QuotaRecoveryOutcome::Reconstructed(Box::new(
+            ReconstructedExecution {
+                parent_execution_id: parent_execution_id.into(),
+                snapshot,
+                message,
+            },
+        )))
     }
 
     /// Reconstruit au plus une exécution active d'un agent après perte du
@@ -1669,6 +1853,19 @@ impl ExecutionStore {
             "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (11)",
             [],
         )?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS execution_quota_resumes(
+                execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id),
+                identity TEXT NOT NULL UNIQUE,
+                reset_at INTEGER NOT NULL,
+                qualified_at INTEGER NOT NULL,
+                resume_execution_id TEXT REFERENCES executions(execution_id)
+            );",
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (12)",
+            [],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1730,6 +1927,478 @@ fn work_submission_column(tx: &Transaction<'_>, column: &str) -> rusqlite::Resul
 #[cfg(test)]
 mod focus_priority_tests {
     use super::*;
+
+    #[test]
+    fn native160_execution_reconstruction_non_qualifiee_refusee() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        let message = bridget_core::BridgetMessage::new("parent", "child", "mission160");
+        store
+            .admit_starting_message(&message, "quota-parent", 100)
+            .unwrap();
+        store
+            .transition_if_current(
+                "quota-parent",
+                "starting",
+                0,
+                1,
+                "failed",
+                "provider_failed",
+                105,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .reconstruct_quota_failed(
+                    "quota-parent",
+                    "limit-resume:task:1:200",
+                    "instance",
+                    "quota-child",
+                    240
+                )
+                .unwrap(),
+            QuotaRecoveryOutcome::NotQualified
+        );
+        assert!(store.execution_snapshot("quota-child").unwrap().is_none());
+        assert_eq!(
+            store
+                .execution_snapshot("quota-parent")
+                .unwrap()
+                .unwrap()
+                .state,
+            "failed"
+        );
+    }
+
+    #[test]
+    fn native160_execution_reconstruction_parent_non_feuille_refuse() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        let message = bridget_core::BridgetMessage::new("parent", "child", "mission160");
+        store
+            .admit_starting_message(&message, "quota-parent", 100)
+            .unwrap();
+        assert!(matches!(
+            store
+                .reconstruct_active_for_agent("child", "instance", "ordinary-child", 105)
+                .unwrap(),
+            ExecutionRecoveryOutcome::Reconstructed(_)
+        ));
+        let parent = store.execution_snapshot("quota-parent").unwrap().unwrap();
+        store
+            .transition_if_current(
+                &parent.execution_id,
+                &parent.state,
+                parent.revision,
+                parent.generation,
+                "failed",
+                "late_failure",
+                108,
+            )
+            .unwrap();
+        store
+            .qualify_quota_failure("quota-parent", "limit-resume:task:1:200", 200, 110)
+            .unwrap();
+        assert_eq!(
+            store
+                .reconstruct_quota_failed(
+                    "quota-parent",
+                    "limit-resume:task:1:200",
+                    "instance",
+                    "quota-child",
+                    240
+                )
+                .unwrap(),
+            QuotaRecoveryOutcome::NotLeaf
+        );
+        assert!(store.execution_snapshot("quota-child").unwrap().is_none());
+        assert_eq!(
+            store
+                .latest_in_chain("quota-parent")
+                .unwrap()
+                .unwrap()
+                .execution_id,
+            "ordinary-child"
+        );
+    }
+
+    #[test]
+    fn native160_execution_reconstruction_deux_identites_refusees() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        let message = bridget_core::BridgetMessage::new("parent", "child", "mission160");
+        store
+            .admit_starting_message(&message, "quota-parent", 100)
+            .unwrap();
+        store
+            .transition_if_current(
+                "quota-parent",
+                "starting",
+                0,
+                1,
+                "failed",
+                "provider_failed",
+                105,
+            )
+            .unwrap();
+        store
+            .qualify_quota_failure("quota-parent", "limit-resume:task:1:200", 200, 110)
+            .unwrap();
+        assert_eq!(
+            store
+                .reconstruct_quota_failed(
+                    "quota-parent",
+                    "limit-resume:task:2:300",
+                    "instance",
+                    "wrong-child",
+                    240
+                )
+                .unwrap(),
+            QuotaRecoveryOutcome::NotQualified
+        );
+        assert!(matches!(
+            store
+                .reconstruct_quota_failed(
+                    "quota-parent",
+                    "limit-resume:task:1:200",
+                    "instance",
+                    "quota-child",
+                    240
+                )
+                .unwrap(),
+            QuotaRecoveryOutcome::Reconstructed(_)
+        ));
+        assert_eq!(
+            store
+                .reconstruct_quota_failed(
+                    "quota-parent",
+                    "limit-resume:task:2:300",
+                    "instance",
+                    "second-child",
+                    241
+                )
+                .unwrap(),
+            QuotaRecoveryOutcome::NotQualified
+        );
+        assert!(store.execution_snapshot("wrong-child").unwrap().is_none());
+        assert!(store.execution_snapshot("second-child").unwrap().is_none());
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM execution_continuations WHERE parent_execution_id='quota-parent'", [],
+            |row| row.get::<_, u32>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn native160_execution_reconstruction_transaction_atomique() {
+        for trigger in [
+            "BEFORE INSERT ON executions",
+            "BEFORE INSERT ON execution_continuations",
+            "BEFORE UPDATE OF resume_execution_id ON execution_quota_resumes",
+        ] {
+            let store = ExecutionStore::open_in_memory().unwrap();
+            let message = bridget_core::BridgetMessage::new("parent", "child", "mission160");
+            store
+                .admit_starting_message(&message, "quota-parent", 100)
+                .unwrap();
+            store
+                .transition_if_current(
+                    "quota-parent",
+                    "starting",
+                    0,
+                    1,
+                    "failed",
+                    "provider_failed",
+                    105,
+                )
+                .unwrap();
+            store
+                .qualify_quota_failure("quota-parent", "limit-resume:task:1:200", 200, 110)
+                .unwrap();
+            let parent = store.execution_snapshot("quota-parent").unwrap();
+            store.conn.execute_batch(&format!("CREATE TEMP TRIGGER quota160_abort {trigger} BEGIN SELECT RAISE(ABORT,'quota reconstruction rollback'); END;")).unwrap();
+            assert!(
+                matches!(
+                    store.reconstruct_quota_failed(
+                        "quota-parent",
+                        "limit-resume:task:1:200",
+                        "instance",
+                        "quota-child",
+                        240
+                    ),
+                    Err(rusqlite::Error::SqliteFailure(_, _))
+                ),
+                "{trigger}"
+            );
+            assert!(
+                store.execution_snapshot("quota-child").unwrap().is_none(),
+                "{trigger}"
+            );
+            assert!(
+                store.continuation_for("quota-child").unwrap().is_none(),
+                "{trigger}"
+            );
+            assert_eq!(
+                store.quota_failure_for("quota-parent").unwrap().unwrap().3,
+                None,
+                "{trigger}"
+            );
+            assert_eq!(
+                store.execution_snapshot("quota-parent").unwrap(),
+                parent,
+                "{trigger}"
+            );
+        }
+    }
+
+    #[test]
+    fn native160_execution_reconstruction_rejeu() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        let message = bridget_core::BridgetMessage::new("parent", "child", "mission160");
+        let project = ProjectReference {
+            project_id: "project160".into(),
+            binding_generation: 3,
+        };
+        store
+            .admit_starting_message_for_project(&message, "quota-parent", Some(&project), 100)
+            .unwrap();
+        store
+            .transition_if_current(
+                "quota-parent",
+                "starting",
+                0,
+                1,
+                "failed",
+                "provider_failed",
+                105,
+            )
+            .unwrap();
+        let parent = store.execution_snapshot("quota-parent").unwrap();
+        // T004 : le chemin ordinaire continue d'exclure failed ; aucun changement de contrat.
+        assert_eq!(
+            store
+                .reconstruct_active_for_agent("child", "instance", "ordinary-child", 120)
+                .unwrap(),
+            ExecutionRecoveryOutcome::None
+        );
+        store
+            .qualify_quota_failure("quota-parent", "limit-resume:task:1:200", 200, 110)
+            .unwrap();
+        let QuotaRecoveryOutcome::Reconstructed(recovery) = store
+            .reconstruct_quota_failed(
+                "quota-parent",
+                "limit-resume:task:1:200",
+                "instance",
+                "quota-child",
+                240,
+            )
+            .unwrap()
+        else {
+            panic!("qualification et parent failed feuille doivent permettre la reprise");
+        };
+        assert_eq!(recovery.parent_execution_id, "quota-parent");
+        assert_eq!(recovery.message, message);
+        assert_eq!(recovery.snapshot.generation, 2);
+        assert_eq!(recovery.snapshot.project, Some(project));
+        assert_eq!(recovery.snapshot.created_at, 240);
+        let first = store.continuation_for("quota-child").unwrap().unwrap();
+        assert_eq!(first.mode, ContinuationMode::Reconstructed);
+        assert_eq!(first.reason.as_deref(), Some("usage_limit_reset"));
+        assert_eq!(first.observed_at, 240);
+        assert_eq!(
+            store
+                .reconstruct_quota_failed(
+                    "quota-parent",
+                    "limit-resume:task:1:200",
+                    "new-instance",
+                    "discarded-child",
+                    999
+                )
+                .unwrap(),
+            QuotaRecoveryOutcome::AlreadyResumed("quota-child".into())
+        );
+        assert!(
+            store
+                .execution_snapshot("discarded-child")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .continuation_for("quota-child")
+                .unwrap()
+                .unwrap()
+                .observed_at,
+            240
+        );
+        assert_eq!(store.execution_snapshot("quota-parent").unwrap(), parent);
+        assert_eq!(
+            store.execution_snapshot("quota-child").unwrap(),
+            Some(recovery.snapshot)
+        );
+        assert_eq!(
+            store.execution_message("quota-child").unwrap(),
+            Some(message)
+        );
+        assert_eq!(
+            store
+                .quota_failure_for("quota-parent")
+                .unwrap()
+                .unwrap()
+                .3
+                .as_deref(),
+            Some("quota-child")
+        );
+    }
+
+    #[test]
+    fn native160_execution_quota_creation() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        assert_eq!(store.schema_version().unwrap(), 12);
+        store
+            .record_starting("quota-submission", "quota-execution", "child", 100)
+            .unwrap();
+        assert!(matches!(
+            store
+                .transition_if_current(
+                    "quota-execution",
+                    "starting",
+                    0,
+                    1,
+                    "failed",
+                    "provider_failed",
+                    105
+                )
+                .unwrap(),
+            ConditionalTransition::Applied(_)
+        ));
+        let row = ("limit-resume:task:1:200".to_string(), 200, 110, None);
+        assert_eq!(
+            store
+                .qualify_quota_failure("quota-execution", &row.0, 200, 110)
+                .unwrap(),
+            Some(row.clone())
+        );
+        assert_eq!(
+            store.quota_failure_for("quota-execution").unwrap(),
+            Some(row)
+        );
+        assert_eq!(
+            store
+                .execution_snapshot("quota-execution")
+                .unwrap()
+                .unwrap()
+                .state,
+            "failed"
+        );
+    }
+
+    #[test]
+    fn native160_execution_quota_rejeu() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        store
+            .record_starting("quota-submission", "quota-execution", "child", 100)
+            .unwrap();
+        store
+            .transition_if_current(
+                "quota-execution",
+                "starting",
+                0,
+                1,
+                "failed",
+                "provider_failed",
+                105,
+            )
+            .unwrap();
+        let initial = store
+            .qualify_quota_failure("quota-execution", "limit-resume:task:1:200", 200, 110)
+            .unwrap();
+        assert_eq!(
+            initial,
+            Some(("limit-resume:task:1:200".to_string(), 200, 110, None))
+        );
+        assert_eq!(
+            store
+                .qualify_quota_failure("quota-execution", "limit-resume:task:1:200", 999, 120)
+                .unwrap(),
+            initial
+        );
+        assert_eq!(store.quota_failure_for("quota-execution").unwrap(), initial);
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM execution_quota_resumes", [], |row| {
+                    row.get::<_, u32>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn native160_execution_quota_non_failed_refusee() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        store
+            .record_starting("quota-submission", "quota-execution", "child", 100)
+            .unwrap();
+        assert_eq!(
+            store
+                .qualify_quota_failure("quota-execution", "limit-resume:task:1:200", 200, 110)
+                .unwrap(),
+            None
+        );
+        assert_eq!(store.quota_failure_for("quota-execution").unwrap(), None);
+        assert_eq!(
+            store
+                .execution_snapshot("quota-execution")
+                .unwrap()
+                .unwrap()
+                .state,
+            "starting"
+        );
+    }
+
+    #[test]
+    fn native160_execution_quota_identite_double_refusee() {
+        let store = ExecutionStore::open_in_memory().unwrap();
+        for execution in ["quota-first", "quota-second"] {
+            store
+                .record_starting(execution, execution, "child", 100)
+                .unwrap();
+            store
+                .transition_if_current(
+                    execution,
+                    "starting",
+                    0,
+                    1,
+                    "failed",
+                    "provider_failed",
+                    105,
+                )
+                .unwrap();
+        }
+        let original = store
+            .qualify_quota_failure("quota-first", "limit-resume:task:1:200", 200, 110)
+            .unwrap();
+        assert!(original.is_some());
+        assert_eq!(
+            store
+                .qualify_quota_failure("quota-first", "limit-resume:task:2:300", 300, 120)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .qualify_quota_failure("quota-second", "limit-resume:task:1:200", 200, 120)
+                .unwrap(),
+            None
+        );
+        assert_eq!(store.quota_failure_for("quota-first").unwrap(), original);
+        assert_eq!(store.quota_failure_for("quota-second").unwrap(), None);
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM execution_quota_resumes", [], |row| {
+                    row.get::<_, u32>(0)
+                })
+                .unwrap(),
+            1
+        );
+    }
 
     #[test]
     fn native152_chaine_generation_et_reprises_de_pause() {

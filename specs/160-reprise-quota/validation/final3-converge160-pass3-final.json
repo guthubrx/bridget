@@ -1,0 +1,1854 @@
+{
+  "at_utc": "2026-10-12T22:23:07.828690+00:00",
+  "passage": 3,
+  "status": "CONVERGED",
+  "scope": "Réalisation25FR160,13SC/5US mapping; dernièrecorrectionFR006b included. No productgap.",
+  "requirements": [
+    {
+      "id": "FR-001",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 2197,
+          "evidence": "Option<bool> default/skipNone"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 135,
+          "evidence": "None absent, Bool Some, autres InvalidParams"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_optin_sans_champ_octets_identiques",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 844,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_optin_absent_et_faux_deux_enveloppes",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 920,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_protocole_delegate_sans_resume_on_limit_octets_identiques",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 8686,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_protocole_delegate_resume_on_limit_faux_octets_distincts",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 8699,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-002",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2900,
+          "evidence": "non opt-in ancien chemin et terminal préservé"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2951,
+          "evidence": "pause qualifiée avant quota, étatworking exigé"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_refus_ancien_et_autres_causes",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6253,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_qualification_table",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15360,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-003",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 78,
+          "evidence": "chaque fenêtre observation>since et<=hold+5 filtrée avant maxima"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3031,
+          "evidence": "now réel et bornes21600/2rondes"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_attente_qualification_table",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15360,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_limits_fait_ancien_ignore",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 577,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_limits_codex_global_sans_fenetre_100_ignore",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 603,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_limits_ancienne_observation_perimee_ignore",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 641,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_limits_hold_fait_expire_admis",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 671,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_limits_hold_filtre_chaque_fenetre_avant_agregation",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/provider_limits.rs",
+          "line": 704,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-004",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3179,
+          "evidence": "Hold.since durable avantqualification"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3229,
+          "evidence": "NoFact: échec àsince+5 ; filtreobservation indépendantnow"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_gestionnaire_fait_avant_echec",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5480,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_rouge_gestionnaire_fait_apres_echec",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5524,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_rouge_hold_horloges",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6205,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-004b",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4107,
+          "evidence": "hold résolu avant sautpause etexpiration"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 9145,
+          "evidence": "rappelsinhibés hold/ouattenteavantreset+30"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_hold_horloges",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6205,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_gel_chevauchement_suivi_rappels_et_borne",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15623,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-005",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3040,
+          "evidence": "Past/TooFar/RoundsDone"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3225,
+          "evidence": "usage_limit+limit_reset_at"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_attente_qualification_table",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15360,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_bornes_dix_echecs_meme_retour",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16397,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_bornes_compteur_survit_au_solde_et_au_redemarrage",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16604,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_bornes_apres_deux_rondes_deux_redemarrages_survivent",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16786,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-006",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 22498,
+          "evidence": "cinqsorties, seulementPassversgestionnairehistorique"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4285,
+          "evidence": "avisstable native-failure-task seulementfailed"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_double_avis",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5659,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_un_seul_avis_terminal_preserve",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15555,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_avis_crash_frontieres_durables",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16958,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-006b",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2918,
+          "evidence": "corrélationfeuillegenavantclassification"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 5954,
+          "evidence": "métadonnéescapturebindings avanttransition"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2918,
+          "evidence": "Each providedexecution_id/generation mismatch is StaleIgnored even when otherfieldabsent; missingcorrelationafterresumeNativeFailedpriority."
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_refus_ancien_et_autres_causes",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6253,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_injection_idempotente_liaison_optionnelle",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11558,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_deliver_execution_capture_avant_failed",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11602,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_forward_capture_avant_terminal",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11627,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_protocole_refus_sans_correlation_octets_inchanges",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 5928,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_protocole_refus_correlation_et_ancien_decodeur",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 5943,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-006c",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3164,
+          "evidence": "failed seulqualifie ; autreséchecorigine"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 4629,
+          "evidence": "syncidempotentconservebinding sansfailedtransition"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_refus_ancien_et_autres_causes",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6253,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_injection_idempotente_liaison_optionnelle",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11558,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_deliver_execution_capture_avant_failed",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11602,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_forward_capture_avant_terminal",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11627,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-007",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4142,
+          "evidence": "attentesworkingcheckpoint"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4285,
+          "evidence": "avisgardefailed ; pasavisworking"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_gestionnaire_fait_avant_echec",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5480,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_rouge_gestionnaire_fait_apres_echec",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5524,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_chemin_a_apres_b_sans_effet",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15588,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-008",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+          "line": 280,
+          "evidence": "quota_waits VecserdeDefault"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3242,
+          "evidence": "pushWait sansretrait"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3041,
+          "evidence": "borne len>=2"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_compteur_durable",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5979,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_bornes_compteur_survit_au_solde_et_au_redemarrage",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16604,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-009",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1034,
+          "evidence": "qualificationIMMEDIATEfailed/unicités"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3196,
+          "evidence": "M4 réemploiidentityresetqualificationexistante pourmêmeHold"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3242,
+          "evidence": "TaskWaitaprèsqualification"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_relance_frontieres",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6052,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_non_qualifiee_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1932,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_parent_non_feuille_refuse",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1973,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_deux_identites_refusees",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2024,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_transaction_atomique",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2087,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_rejeu",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2149,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_creation",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2249,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_rejeu",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2291,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_non_failed_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2333,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_identite_double_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2356,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_deliver_execution_capture_avant_failed",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11602,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-010",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1479,
+          "evidence": "continuation usage_limit_reset"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3776,
+          "evidence": "waitingrestart sansincrément"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_redemarrage_pendant_attente",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5616,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_bornes_apres_deux_rondes_deux_redemarrages_survivent",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16786,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-011",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3355,
+          "evidence": "NativeMissionDispatchpauseguard"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3367,
+          "evidence": "Waitingreset+30 puisRelaunching checkpoint"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3298,
+          "evidence": "soldeACKuniquement"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_relance_frontieres",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6052,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_meme_identifiant_et_resultat_rendu_une_fois",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15736,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-011b",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 6475,
+          "evidence": "canonissued_atpersisté,rejeuphysique1004phase"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3476,
+          "evidence": "observed_atcontinuationrelu"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3401,
+          "evidence": "phaseacked/indeterminate/orphaned/dispatching"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_relance_frontieres",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6052,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_reservation_absente",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47566,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_reservation_sans_gravure",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47680,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_dispatching_rejeu_sans_emission",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47825,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_acked_seule_phase_de_solde",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47969,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_ordinaire_prepared_only",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 48124,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-011c",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 190,
+          "evidence": "may_resume refuseWaitnonDone"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_concurrence_reprise_ordinaire",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6163,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-012",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3341,
+          "evidence": "identité limit-resume task/round/reset vérifiée"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1479,
+          "evidence": "identitéqualificationliéecontinuation mêmeTX"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_relance_frontieres",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6052,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_non_qualifiee_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1932,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_parent_non_feuille_refuse",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1973,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_deux_identites_refusees",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2024,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_transaction_atomique",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2087,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_rejeu",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2149,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_creation",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2249,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_rejeu",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2291,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_non_failed_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2333,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_quota_identite_double_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2356,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_deliver_execution_capture_avant_failed",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11602,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-013",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1431,
+          "evidence": "qualificationexigée,reçuAlreadyResumed,failed/feuille avantINSERT"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_reconstruction_failed",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5930,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_non_qualifiee_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1932,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_parent_non_feuille_refuse",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1973,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-014",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3371,
+          "evidence": "enfantabsentdifféré Waiting"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+          "line": 436,
+          "evidence": "quotauntil bornéreset+30 horsconnexion"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4234,
+          "evidence": "deadlineeffectiveexpiry"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_gel_chevauchement_suivi_rappels_et_borne",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15623,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_enfant_absent_au_dela_de_la_borne",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16055,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-015",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3441,
+          "evidence": "reconstruitmessage mêmeTask/definitionconninstance, aucuneadmissionfallback"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1463,
+          "evidence": "soumissionparentconservée"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_optin_aucune_substitution",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16251,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-016",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+          "line": 420,
+          "evidence": "unionpausesquotatri/fusion, Q<=2"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 227,
+          "evidence": "effectivedeadline parunion"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 241,
+          "evidence": "suivirequestunion"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 9134,
+          "evidence": "frozen_secs actualisés"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_gel_cumule",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5568,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_gel_chevauchement_suivi_rappels_et_borne",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15623,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_gel_union_intervalles",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+          "line": 1079,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-017",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5055,
+          "evidence": "annulationréconciliationpuisquota_holdNone/cancelled"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3052,
+          "evidence": "clôtureCASfeuilleetquarantaine avantTaskstate"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_gel_annulation_attente_relaunch_et_hold",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15871,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_gel_purge_150_arbre_en_attente_conserve",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16088,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_gel_purge_150_apres_annulation",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16138,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-018",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3788,
+          "evidence": "Holdrestartfailmêmefactvolatile"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3791,
+          "evidence": "Waitrestartsansreconstruction/compteur,deadlineeffective"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_redemarrage_pendant_attente",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5616,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_redemarrage_pendant_hold",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15515,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-019",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+          "line": 280,
+          "evidence": "payloadadditifserdeDefault"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 396,
+          "evidence": "vuequota_wait seulementworkingnonDone"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_vue_quota_wait_additive_et_lineage_identique",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15448,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_task_payload157_defauts",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+          "line": 1233,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_task_quota_sans_signal_lineage",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+          "line": 1245,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    },
+    {
+      "id": "FR-020",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2094,
+          "evidence": "cataloguefeaturesresume3"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 319,
+          "evidence": "MCPfeatures3"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/docs/delegation-native.md",
+          "line": 142,
+          "evidence": "T028 public documentation applied and reread, strictbool/limits/errors/ACK/risks"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/skills/bridget/SKILL.md",
+          "line": 48,
+          "evidence": "T028 public documentation applied and reread, strictbool/limits/errors/ACK/risks"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/skills/bridget/references/commandes.md",
+          "line": 571,
+          "evidence": "T028 public documentation applied and reread, strictbool/limits/errors/ACK/risks"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_optin_aucune_substitution",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16251,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_optin_sans_champ_octets_identiques",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 844,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_optin_absent_et_faux_deux_enveloppes",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 920,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "code_status": "mapped_observed",
+      "execution_status": "not a PASS statement",
+      "remaining": null,
+      "status": "REALISATION_CONFORME_PAR_LECTURE_CODE_ET_MAPPING_ORACLES"
+    }
+  ],
+  "success_criteria": [
+    {
+      "id": "SC-001",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 22498,
+          "evidence": "cinqsorties, seulementPassversgestionnairehistorique"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4285,
+          "evidence": "avisstable native-failure-task seulementfailed"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3355,
+          "evidence": "NativeMissionDispatchpauseguard"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3367,
+          "evidence": "Waitingreset+30 puisRelaunching checkpoint"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3298,
+          "evidence": "soldeACKuniquement"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 6475,
+          "evidence": "canonissued_atpersisté,rejeuphysique1004phase"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3476,
+          "evidence": "observed_atcontinuationrelu"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3401,
+          "evidence": "phaseacked/indeterminate/orphaned/dispatching"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_gestionnaire_fait_avant_echec",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5480,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_rouge_gestionnaire_fait_apres_echec",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5524,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_meme_identifiant_et_resultat_rendu_une_fois",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15736,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-002",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3179,
+          "evidence": "Hold.since durable avantqualification"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3229,
+          "evidence": "NoFact: échec àsince+5 ; filtreobservation indépendantnow"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4107,
+          "evidence": "hold résolu avant sautpause etexpiration"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 9145,
+          "evidence": "rappelsinhibés hold/ouattenteavantreset+30"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_hold_horloges",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6205,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-003",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3040,
+          "evidence": "Past/TooFar/RoundsDone"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3225,
+          "evidence": "usage_limit+limit_reset_at"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation.rs",
+          "line": 280,
+          "evidence": "quota_waits VecserdeDefault"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3242,
+          "evidence": "pushWait sansretrait"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3041,
+          "evidence": "borne len>=2"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_bornes_dix_echecs_meme_retour",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16397,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-004",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1034,
+          "evidence": "qualificationIMMEDIATEfailed/unicités"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3196,
+          "evidence": "M4 réemploiidentityresetqualificationexistante pourmêmeHold"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3242,
+          "evidence": "TaskWaitaprèsqualification"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 6475,
+          "evidence": "canonissued_atpersisté,rejeuphysique1004phase"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3476,
+          "evidence": "observed_atcontinuationrelu"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3401,
+          "evidence": "phaseacked/indeterminate/orphaned/dispatching"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3341,
+          "evidence": "identité limit-resume task/round/reset vérifiée"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1479,
+          "evidence": "identitéqualificationliéecontinuation mêmeTX"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_relance_frontieres",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6052,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_reservation_absente",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47566,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_reservation_sans_gravure",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47680,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_dispatching_rejeu_sans_emission",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47825,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_acked_seule_phase_de_solde",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 47969,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_relance_remise_ordinaire_prepared_only",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 48124,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-005",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1479,
+          "evidence": "continuation usage_limit_reset"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3776,
+          "evidence": "waitingrestart sansincrément"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3788,
+          "evidence": "Holdrestartfailmêmefactvolatile"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3791,
+          "evidence": "Waitrestartsansreconstruction/compteur,deadlineeffective"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_bornes_apres_deux_rondes_deux_redemarrages_survivent",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16786,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-006",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+          "line": 420,
+          "evidence": "unionpausesquotatri/fusion, Q<=2"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 227,
+          "evidence": "effectivedeadline parunion"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 241,
+          "evidence": "suivirequestunion"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 9134,
+          "evidence": "frozen_secs actualisés"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_gel_cumule",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5568,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_gel_union_intervalles",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+          "line": 1079,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-007",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1431,
+          "evidence": "qualificationexigée,reçuAlreadyResumed,failed/feuille avantINSERT"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_execution_reconstruction_non_qualifiee_refusee",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1932,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_parent_non_feuille_refuse",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1973,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_deux_identites_refusees",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2024,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_transaction_atomique",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2087,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_execution_reconstruction_rejeu",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 2149,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-008",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3441,
+          "evidence": "reconstruitmessage mêmeTask/definitionconninstance, aucuneadmissionfallback"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/execution_store.rs",
+          "line": 1463,
+          "evidence": "soumissionparentconservée"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_optin_aucune_substitution",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16251,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-009",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 2197,
+          "evidence": "Option<bool> default/skipNone"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 135,
+          "evidence": "None absent, Bool Some, autres InvalidParams"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2900,
+          "evidence": "non opt-in ancien chemin et terminal préservé"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2951,
+          "evidence": "pause qualifiée avant quota, étatworking exigé"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_optin_sans_champ_octets_identiques",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/delegation_mcp.rs",
+          "line": 844,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_protocole_delegate_sans_resume_on_limit_octets_identiques",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 8686,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_protocole_delegate_resume_on_limit_faux_octets_distincts",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-transport/src/protocol.rs",
+          "line": 8699,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-010",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3371,
+          "evidence": "enfantabsentdifféré Waiting"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/referent_control.rs",
+          "line": 436,
+          "evidence": "quotauntil bornéreset+30 horsconnexion"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4234,
+          "evidence": "deadlineeffectiveexpiry"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_relance_enfant_absent_au_dela_de_la_borne",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16055,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-011",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2918,
+          "evidence": "corrélationfeuillegenavantclassification"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 5954,
+          "evidence": "métadonnéescapturebindings avanttransition"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 3164,
+          "evidence": "failed seulqualifie ; autreséchecorigine"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 4629,
+          "evidence": "syncidempotentconservebinding sansfailedtransition"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 2918,
+          "evidence": "Each providedexecution_id/generation mismatch is StaleIgnored even when otherfieldabsent; missingcorrelationafterresumeNativeFailedpriority."
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_refus_ancien_et_autres_causes",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6253,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_injection_idempotente_liaison_optionnelle",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11558,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_deliver_execution_capture_avant_failed",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11602,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_wrapper_refus_forward_capture_avant_terminal",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/wrapper.rs",
+          "line": 11627,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-012",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 190,
+          "evidence": "may_resume refuseWaitnonDone"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_concurrence_reprise_ordinaire",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 6163,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    },
+    {
+      "id": "SC-013",
+      "code": [
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon.rs",
+          "line": 22498,
+          "evidence": "cinqsorties, seulementPassversgestionnairehistorique"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4285,
+          "evidence": "avisstable native-failure-task seulementfailed"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4142,
+          "evidence": "attentesworkingcheckpoint"
+        },
+        {
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 4285,
+          "evidence": "avisgardefailed ; pasavisworking"
+        }
+      ],
+      "tests": [
+        {
+          "name": "native160_rouge_double_avis",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 5659,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_un_seul_avis_terminal_preserve",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 15555,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        },
+        {
+          "name": "native160_attente_avis_crash_frontieres_durables",
+          "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_delegation.rs",
+          "line": 16958,
+          "proof_kind": "definition_index_only unless covered by semantic read ranges"
+        }
+      ],
+      "execution_status": "receipt coverage distinct; no FULL/SC aggregate assertion",
+      "status": "IMPLEMENTATION_ET_ORACLES_MAPPES; GLOBAL_EXECUTION_GATE_NOT_CLOSED"
+    }
+  ],
+  "stories": {
+    "US1": [
+      "002",
+      "003",
+      "004",
+      "004b",
+      "005",
+      "006",
+      "006b",
+      "006c",
+      "007",
+      "009"
+    ],
+    "US2": [
+      "010",
+      "011",
+      "011b",
+      "011c",
+      "012",
+      "013",
+      "014"
+    ],
+    "US3": [
+      "005",
+      "008"
+    ],
+    "US4": [
+      "016",
+      "017",
+      "018"
+    ],
+    "US5": [
+      "001",
+      "015",
+      "019",
+      "020"
+    ]
+  },
+  "counts": {
+    "FR": 25,
+    "SC": 13,
+    "US": 5,
+    "tasks": 37,
+    "checked_at_entry": 37
+  },
+  "product_gaps": [],
+  "new_tasks_required": false,
+  "last_delta": {
+    "kind": "tests_only",
+    "fresh_read": [
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/src/daemon/native_workspace154_tests.rs",
+        "ranges": [
+          [
+            869,
+            882
+          ]
+        ],
+        "sha256": "0c19bffa246f79962b88a3ace1100c1ba1a0f3578f26806cf0042eb3c69974d9",
+        "evidence": "Vue complète comparée sans projection ; quota_wait:null ajouté conformément FR019."
+      },
+      {
+        "file": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota/crates/bridget-daemon/tests/execution_store_test.rs",
+        "ranges": [
+          [
+            12,
+            20
+          ],
+          [
+            64,
+            79
+          ],
+          [
+            276,
+            280
+          ],
+          [
+            290,
+            301
+          ],
+          [
+            314,
+            322
+          ]
+        ],
+        "sha256": "95191e23c047a35a4e84800d6c3034b271981abe8a475c6a0d1c1c5d43695617",
+        "evidence": "Assertions de version12 du magasin neuf, migration héritée et réouverture ; les autres assertions sont conservées."
+      }
+    ],
+    "product_changed": false
+  },
+  "execution_evidence": {
+    "inherited_pass2": "/Users/moi/.cache/bridget-converge160-preparation-20261012/final2/converge160-pass2-final.json",
+    "exact_replays": [
+      {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T030-six-oracles-native154-exact-replay.json",
+        "sha256": "8a9617a9fb437d0d627dbeb0958bd823fde53bb627612e65652cb2a08db4f5bf",
+        "rc": 0,
+        "test_results": [
+          [
+            "ok",
+            "1",
+            "0",
+            "0"
+          ]
+        ],
+        "seconds": 7.88,
+        "log": "/Users/moi/.cache/bridget-tests160-20261012/T030-six-oracles-native154-exact-replay.log",
+        "log_sha256": "2914173fd0732e4c2dc0fb1dc0c4daeb37b24cff7e3e4f4100bcf4bb1f6cb889",
+        "stable_source_hashes": true
+      },
+      {
+        "file": "/Users/moi/.cache/bridget-tests160-20261012/T030-five-existing-migration12-oracles-exact-replay.json",
+        "sha256": "bd636763c75cfddd92cd6d36760e6d7beb38ca7b1288c64577d07dff984c5f9c",
+        "rc": 0,
+        "test_results": [
+          [
+            "ok",
+            "5",
+            "0",
+            "0"
+          ]
+        ],
+        "seconds": 4.99,
+        "log": "/Users/moi/.cache/bridget-tests160-20261012/T030-five-existing-migration12-oracles-exact-replay.log",
+        "log_sha256": "e4b17b1cc8eb08bbdc70a0333bccac318f2bfb26e5efada1bdcdcdb73874da31",
+        "stable_source_hashes": true
+      }
+    ],
+    "full_historical": {
+      "passed": 2683,
+      "failed": 6,
+      "ignored": 76,
+      "rc": 101,
+      "provenance": "MessageROOT ; résultatFULL conservé, pas reconstruit aprèsreplays."
+    },
+    "global_green_claim": false
+  },
+  "remaining_gate": null,
+  "task_bytes_identical": true,
+  "tasks_sha256": "b875e103921978112c7f04128b19e70b85709381df5a757a86cdd5fb78b0b91d",
+  "read_manifest": "/Users/moi/.cache/bridget-converge160-preparation-20261012/final3/read-manifest.json",
+  "limitations": [
+    "25FR/13SC/5US conservés par gardeSHA des19 sources, avec provenance du passage2.",
+    "FULL historique2683P6F76I RC101 ; les six oracles sont fermés par deux replays distincts1PASS+5PASS RC0, aucunFULLvert annoncé.",
+    "Quota fournisseur réel non vu ; preuves comportementales fondées sur fixtures.",
+    "Converge ne prouve pas commit, build, activation, push ni runtime160."
+  ]
+}

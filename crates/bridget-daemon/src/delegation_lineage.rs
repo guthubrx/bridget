@@ -1,6 +1,8 @@
 //! Projection des faits de la saga dans le même magasin transactionnel.
 use super::{DelegationStore, RoundRecord, Task};
-use bridget_transport::protocol::{HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, NativeDelegationRequest};
+use bridget_transport::protocol::{
+    HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, NativeDelegationRequest,
+};
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -44,54 +46,118 @@ fn tree_settled(tree: &[Task]) -> bool {
 
 /// Dernière fin de l'arbre ; `updated_at` pour les tâches 148 sans `completed_at`.
 fn tree_age(tree: &[Task]) -> i64 {
-    tree.iter().map(|t| t.completed_at.unwrap_or(t.updated_at)).max().unwrap_or(0)
+    tree.iter()
+        .map(|t| t.completed_at.unwrap_or(t.updated_at))
+        .max()
+        .unwrap_or(0)
 }
 
 impl Task {
     pub fn root_owner(&self) -> &str {
-        if self.root_owner_agent_id.is_empty() { &self.owner } else { &self.root_owner_agent_id }
+        if self.root_owner_agent_id.is_empty() {
+            &self.owner
+        } else {
+            &self.root_owner_agent_id
+        }
     }
 }
 
 pub(crate) fn task_entry(task: &Task, journal_available: bool) -> Result<Value, E> {
-    let NativeDelegationRequest::Delegate { agent_type, model, effort, posture, task: instruction, .. } = &task.request else {
+    let NativeDelegationRequest::Delegate {
+        agent_type,
+        model,
+        effort,
+        posture,
+        task: instruction,
+        ..
+    } = &task.request
+    else {
         return Err(E::StoreUnavailable);
     };
-    if !matches!(task.state.as_str(), "queued"|"starting"|"mission_pending"|"working"|"waiting_for_children"|"cancelling"|"result_available"|"failed"|"cancelled") {
+    if !matches!(
+        task.state.as_str(),
+        "queued"
+            | "starting"
+            | "mission_pending"
+            | "working"
+            | "waiting_for_children"
+            | "cancelling"
+            | "result_available"
+            | "failed"
+            | "cancelled"
+    ) {
         return Err(E::StoreUnavailable);
     }
-    let title: String = instruction.lines().find(|line| !line.trim().is_empty()).unwrap_or("")
-        .chars().filter(|c| !bridget_core::is_disallowed_control(*c)).take(256).collect();
-    let error = task.error.as_ref().map(|error| error.chars().filter(|c| !bridget_core::is_disallowed_control(*c)).take(1024).collect::<String>());
-    Ok(json!({"task_id":task.task_id,"parent_task_id":task.parent_task_id,
+    let title: String = instruction
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !bridget_core::is_disallowed_control(*c))
+        .take(256)
+        .collect();
+    let error = task.projected_error().map(|error| {
+        error
+            .chars()
+            .filter(|c| !bridget_core::is_disallowed_control(*c))
+            .take(1024)
+            .collect::<String>()
+    });
+    Ok(
+        json!({"task_id":task.task_id,"parent_task_id":task.parent_task_id,
         "parent_agent_id":task.owner,"child_agent_id":task.child,"child_instance_id":task.child_instance,
         "created_at":task.created_at,"updated_at":task.updated_at.max(task.created_at),
         "started_at":task.started_at,"completed_at":task.completed_at,
         "agent_type":agent_type,"execution_protocol":task.definition.protocol,
         "model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture).unwrap_or(bridget_transport::protocol::SpawnPosture::Discovery),
         "title":title,"status":task.state,"error":error,
-        "result_available":task.state=="result_available","journal_available":journal_available}))
+        "result_available":task.state=="result_available","journal_available":journal_available}),
+    )
 }
 
 fn visible_changed(old: &Task, new: &Task) -> bool {
-    old.state != new.state || old.child_instance != new.child_instance || old.error != new.error
+    old.state != new.state
+        || old.child_instance != new.child_instance
+        || old.projected_error() != new.projected_error()
         || (new.state == "result_available" && old.result != new.result)
 }
 
 fn stamp(mut task: Task, old: Option<&Task>) -> Task {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64);
-    task.updated_at = if old.is_none_or(|old| visible_changed(old, &task)) { now.max(task.created_at) } else { old.unwrap().updated_at };
-    task.started_at = old.and_then(|old| old.started_at).or(task.started_at)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64);
+    task.updated_at = if old.is_none_or(|old| visible_changed(old, &task)) {
+        now.max(task.created_at)
+    } else {
+        old.unwrap().updated_at
+    };
+    task.started_at = old
+        .and_then(|old| old.started_at)
+        .or(task.started_at)
         .or_else(|| task.mission_deadline_at.map(|_| now));
-    task.completed_at = old.and_then(|old| old.completed_at).or(task.completed_at)
+    task.completed_at = old
+        .and_then(|old| old.completed_at)
+        .or(task.completed_at)
         .or_else(|| task.terminal().then_some(now));
     task
 }
 
 fn increment(tx: &Transaction<'_>) -> rusqlite::Result<ProjectionMutation> {
-    let (mut generation, seq): (String, u64) = tx.query_row("SELECT generation,seq FROM native_delegation_projection_meta WHERE singleton=1", [], |r| Ok((r.get(0)?,r.get(1)?)))?;
-    let seq = if seq >= HUMAN_LINEAGE_MAX_SEQ { generation=uuid::Uuid::new_v4().to_string(); 1 } else { seq+1 };
-    tx.execute("UPDATE native_delegation_projection_meta SET generation=?1,seq=?2 WHERE singleton=1", params![generation,seq])?;
+    let (mut generation, seq): (String, u64) = tx.query_row(
+        "SELECT generation,seq FROM native_delegation_projection_meta WHERE singleton=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let seq = if seq >= HUMAN_LINEAGE_MAX_SEQ {
+        generation = uuid::Uuid::new_v4().to_string();
+        1
+    } else {
+        seq + 1
+    };
+    tx.execute(
+        "UPDATE native_delegation_projection_meta SET generation=?1,seq=?2 WHERE singleton=1",
+        params![generation, seq],
+    )?;
     Ok(ProjectionMutation { generation, seq })
 }
 
@@ -103,25 +169,41 @@ impl DelegationStore {
         self.conn.execute("INSERT OR IGNORE INTO native_delegation_projection_meta(singleton,generation,seq) VALUES(1,?1,0)", [uuid::Uuid::new_v4().to_string()])?;
         // Les anciens liens sont dérivés seulement des identités native148 durables.
         let records = self.tasks().map_err(|_| rusqlite::Error::InvalidQuery)?;
-        let children: BTreeMap<_,_> = records.iter().map(|task| (task.child.as_str(), task)).collect();
+        let children: BTreeMap<_, _> = records
+            .iter()
+            .map(|task| (task.child.as_str(), task))
+            .collect();
         let tx = self.conn.unchecked_transaction()?;
         for record in &records {
-            if !record.root_owner_agent_id.is_empty() { continue; }
-            let mut task=record.clone();
-            let mut current=record;
+            if !record.root_owner_agent_id.is_empty() {
+                continue;
+            }
+            let mut task = record.clone();
+            let mut current = record;
             // La première mission compte pour un ; sept ancêtres donnent
             // une chaîne de huit missions, huit ancêtres sont refusés.
-            let mut visited=HashSet::from([record.task_id.clone()]);
-            while let Some(parent)=children.get(current.owner.as_str()).copied() {
-                if parent.child_instance.as_deref()!=Some(current.origin_owner_instance.as_str()) { break; }
-                if !visited.insert(parent.task_id.clone()) || visited.len()>8 { return Err(rusqlite::Error::InvalidQuery); }
-                if task.parent_task_id.is_none() { task.parent_task_id=Some(parent.task_id.clone()); }
-                current=parent;
+            let mut visited = HashSet::from([record.task_id.clone()]);
+            while let Some(parent) = children.get(current.owner.as_str()).copied() {
+                if parent.child_instance.as_deref() != Some(current.origin_owner_instance.as_str())
+                {
+                    break;
+                }
+                if !visited.insert(parent.task_id.clone()) || visited.len() > 8 {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                if task.parent_task_id.is_none() {
+                    task.parent_task_id = Some(parent.task_id.clone());
+                }
+                current = parent;
             }
-            task.root_owner_agent_id=current.owner.clone();
-            task.updated_at=task.created_at;
-            let payload=serde_json::to_string(&task).map_err(|_| rusqlite::Error::InvalidQuery)?;
-            tx.execute("UPDATE native_delegations SET payload=?2 WHERE task_id=?1",params![task.task_id,payload])?;
+            task.root_owner_agent_id = current.owner.clone();
+            task.updated_at = task.created_at;
+            let payload =
+                serde_json::to_string(&task).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            tx.execute(
+                "UPDATE native_delegations SET payload=?2 WHERE task_id=?1",
+                params![task.task_id, payload],
+            )?;
         }
         tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS native_delegations_child ON native_delegations(json_extract(payload,'$.child'));
             CREATE INDEX IF NOT EXISTS native_delegations_root_page ON native_delegations(json_extract(payload,'$.root_owner_agent_id'),json_extract(payload,'$.created_at'),task_id);
@@ -130,44 +212,90 @@ impl DelegationStore {
     }
 
     fn committed(&self, root: &str, mutation: ProjectionMutation) {
-        self.changes.borrow_mut().insert(root.into(),mutation);
-        let _=self.notify.try_send(());
+        self.changes.borrow_mut().insert(root.into(), mutation);
+        let _ = self.notify.try_send(());
     }
 
-    pub fn change_receiver(&self) -> Option<std::sync::mpsc::Receiver<()>> { self.receiver.borrow_mut().take() }
-    pub fn take_changes(&self) -> BTreeMap<String, ProjectionMutation> { std::mem::take(&mut *self.changes.borrow_mut()) }
+    pub fn change_receiver(&self) -> Option<std::sync::mpsc::Receiver<()>> {
+        self.receiver.borrow_mut().take()
+    }
+    pub fn take_changes(&self) -> BTreeMap<String, ProjectionMutation> {
+        std::mem::take(&mut *self.changes.borrow_mut())
+    }
 
     pub fn projection_meta(&self) -> Result<ProjectionMutation, E> {
-        let meta=self.conn.query_row("SELECT generation,seq FROM native_delegation_projection_meta WHERE singleton=1",[],|r|Ok(ProjectionMutation {generation:r.get(0)?,seq:r.get(1)?})).map_err(|_|E::StoreUnavailable)?;
-        if meta.seq>HUMAN_LINEAGE_MAX_SEQ || crate::threads::canonical_uuid(&meta.generation).as_deref()!=Some(meta.generation.as_str()) {return Err(E::StoreUnavailable)}
+        let meta = self
+            .conn
+            .query_row(
+                "SELECT generation,seq FROM native_delegation_projection_meta WHERE singleton=1",
+                [],
+                |r| {
+                    Ok(ProjectionMutation {
+                        generation: r.get(0)?,
+                        seq: r.get(1)?,
+                    })
+                },
+            )
+            .map_err(|_| E::StoreUnavailable)?;
+        if meta.seq > HUMAN_LINEAGE_MAX_SEQ
+            || crate::threads::canonical_uuid(&meta.generation).as_deref()
+                != Some(meta.generation.as_str())
+        {
+            return Err(E::StoreUnavailable);
+        }
         Ok(meta)
     }
 
     pub fn for_child(&self, child: &str) -> Result<Option<Task>, String> {
-        let payload: Option<String>=self.conn.query_row("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.child')=?1",[child],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
-        payload.map(|p|serde_json::from_str(&p).map_err(|e|e.to_string())).transpose()
+        let payload: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT payload FROM native_delegations WHERE json_extract(payload,'$.child')=?1",
+                [child],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        payload
+            .map(|p| serde_json::from_str(&p).map_err(|e| e.to_string()))
+            .transpose()
     }
 
-    pub fn parent_lineage(&self, parent: &Task) -> Result<(String,Option<String>),String> {
-        let mut current=parent.clone();
-        let mut visited=HashSet::new();
+    pub fn parent_lineage(&self, parent: &Task) -> Result<(String, Option<String>), String> {
+        let mut current = parent.clone();
+        let mut visited = HashSet::new();
         loop {
-            if !visited.insert(current.task_id.clone()) || visited.len()>=8 { return Err("task_depth_limit".into()); }
-            let Some(id)=&current.parent_task_id else {break};
-            current=self.get(id)?.ok_or("parent_task_unavailable")?;
-            if current.root_owner()!=parent.root_owner() { return Err("parent_task_unavailable".into()); }
+            if !visited.insert(current.task_id.clone()) || visited.len() >= 8 {
+                return Err("task_depth_limit".into());
+            }
+            let Some(id) = &current.parent_task_id else {
+                break;
+            };
+            current = self.get(id)?.ok_or("parent_task_unavailable")?;
+            if current.root_owner() != parent.root_owner() {
+                return Err("parent_task_unavailable".into());
+            }
         }
-        Ok((parent.root_owner().into(),Some(parent.task_id.clone())))
+        Ok((parent.root_owner().into(), Some(parent.task_id.clone())))
     }
 
-    pub fn descendants(&self, task_id: &str) -> Result<Vec<Task>,String> {
+    pub fn descendants(&self, task_id: &str) -> Result<Vec<Task>, String> {
         let mut statement=self.conn.prepare("WITH RECURSIVE descendants(id,payload,depth) AS (
             SELECT task_id,payload,1 FROM native_delegations WHERE json_extract(payload,'$.parent_task_id')=?1
             UNION ALL SELECT d.task_id,d.payload,p.depth+1 FROM native_delegations d JOIN descendants p ON json_extract(d.payload,'$.parent_task_id')=p.id WHERE p.depth<8)
             SELECT payload FROM descendants ORDER BY depth, id LIMIT 4097").map_err(|e|e.to_string())?;
-        let rows=statement.query_map([task_id],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?;
-        let result:Vec<Task>=rows.map(|r|r.map_err(|e|e.to_string()).and_then(|p|serde_json::from_str(&p).map_err(|e|e.to_string()))).collect::<Result<_,_>>()?;
-        if result.len()>4096 {return Err("descendant_limit".into())}
+        let rows = statement
+            .query_map([task_id], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let result: Vec<Task> = rows
+            .map(|r| {
+                r.map_err(|e| e.to_string())
+                    .and_then(|p| serde_json::from_str(&p).map_err(|e| e.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+        if result.len() > 4096 {
+            return Err("descendant_limit".into());
+        }
         Ok(result)
     }
 
@@ -175,16 +303,28 @@ impl DelegationStore {
     /// Complexité : O(r · d) — r racines terminales, d taille d'arbre ; r·d ≤ lignes conservées (≤ 4096).
     fn settled_trees(&self) -> Result<Vec<Vec<Task>>, String> {
         let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.parent_task_id') IS NULL AND json_extract(payload,'$.state') IN ('result_available','failed','cancelled')").map_err(|e|e.to_string())?;
-        let roots:Vec<Task>=statement.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?
-            .map(|r|r.map_err(|e|e.to_string()).and_then(|p|serde_json::from_str(&p).map_err(|e|e.to_string()))).collect::<Result<_,_>>()?;
+        let roots: Vec<Task> = statement
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .map(|r| {
+                r.map_err(|e| e.to_string())
+                    .and_then(|p| serde_json::from_str(&p).map_err(|e| e.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
         // Une racine qui n'est le parent de personne est un arbre d'une tâche : pas de requête récursive.
         let parents:HashSet<String>=self.conn.prepare("SELECT DISTINCT json_extract(payload,'$.parent_task_id') FROM native_delegations WHERE json_extract(payload,'$.parent_task_id') IS NOT NULL").map_err(|e|e.to_string())?
             .query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<_,_>>().map_err(|e|e.to_string())?;
-        let mut trees=Vec::new();
+        let mut trees = Vec::new();
         for root in roots {
-            let mut tree=if parents.contains(&root.task_id) {self.descendants(&root.task_id)?} else {Vec::new()};
-            tree.insert(0,root);
-            if tree_settled(&tree) {trees.push(tree)}
+            let mut tree = if parents.contains(&root.task_id) {
+                self.descendants(&root.task_id)?
+            } else {
+                Vec::new()
+            };
+            tree.insert(0, root);
+            if tree_settled(&tree) {
+                trees.push(tree)
+            }
         }
         Ok(trees)
     }
@@ -197,18 +337,37 @@ impl DelegationStore {
     /// l'appelant sous le verrou du daemon : il retire aussi les enfants de la flotte
     /// et rend `false` pour conserver l'arbre. Rend le nombre d'arbres supprimés.
     /// Complexité : O(n log n) — n ≤ 4096 lignes conservées ; une transaction par arbre.
-    pub fn purge_trees(&self, now: i64, bound: Option<usize>, max_trees: usize, mut releasable: impl FnMut(&[Task])->bool) -> Result<usize,String> {
-        let mut trees:Vec<(i64,Vec<Task>)>=self.settled_trees()?.into_iter().map(|t|(tree_age(&t),t)).collect();
-        trees.sort_by(|a,b|(a.0,&a.1[0].task_id).cmp(&(b.0,&b.1[0].task_id)));
-        let mut total:usize=self.conn.query_row("SELECT count(*) FROM native_delegations",[],|r|r.get(0)).map_err(|e|e.to_string())?;
-        let mut purged=0;
-        for (age,tree) in trees {
-            if purged>=max_trees || bound.is_some_and(|b|total<b) {break}
-            if bound.is_none() && now.saturating_sub(age)<=RETENTION_SECS {break}
-            if !releasable(&tree) {continue}
-            self.delete_tree(&tree,now)?;
-            total=total.saturating_sub(tree.len());
-            purged+=1;
+    pub fn purge_trees(
+        &self,
+        now: i64,
+        bound: Option<usize>,
+        max_trees: usize,
+        mut releasable: impl FnMut(&[Task]) -> bool,
+    ) -> Result<usize, String> {
+        let mut trees: Vec<(i64, Vec<Task>)> = self
+            .settled_trees()?
+            .into_iter()
+            .map(|t| (tree_age(&t), t))
+            .collect();
+        trees.sort_by(|a, b| (a.0, &a.1[0].task_id).cmp(&(b.0, &b.1[0].task_id)));
+        let mut total: usize = self
+            .conn
+            .query_row("SELECT count(*) FROM native_delegations", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let mut purged = 0;
+        for (age, tree) in trees {
+            if purged >= max_trees || bound.is_some_and(|b| total < b) {
+                break;
+            }
+            if bound.is_none() && now.saturating_sub(age) <= RETENTION_SECS {
+                break;
+            }
+            if !releasable(&tree) {
+                continue;
+            }
+            self.delete_tree(&tree, now)?;
+            total = total.saturating_sub(tree.len());
+            purged += 1;
         }
         Ok(purged)
     }
@@ -216,12 +375,17 @@ impl DelegationStore {
     /// Libère les clés de rejeu purgées depuis 30 jours ou plus.
     /// Complexité : O(T) — balayage des T pierres (pas d'index sur `purged_at`) ; appelée
     /// une fois par passage d'entretien horaire, T borné par les purges des 30 derniers jours.
-    pub fn purge_expired_tombstones(&self, now: i64) -> Result<usize,String> {
-        self.conn.execute("DELETE FROM native_delegation_tombstones WHERE purged_at<=?1",[now.saturating_sub(TOMBSTONE_SECS)]).map_err(|e|e.to_string())
+    pub fn purge_expired_tombstones(&self, now: i64) -> Result<usize, String> {
+        self.conn
+            .execute(
+                "DELETE FROM native_delegation_tombstones WHERE purged_at<=?1",
+                [now.saturating_sub(TOMBSTONE_SECS)],
+            )
+            .map_err(|e| e.to_string())
     }
 
     /// Une clé dont la tâche a été purgée se rejoue en refus, jamais en nouvelle tâche.
-    pub(super) fn tombstoned(&self, owner: &str, request_id: &str) -> Result<bool,String> {
+    pub(super) fn tombstoned(&self, owner: &str, request_id: &str) -> Result<bool, String> {
         self.conn.query_row("SELECT EXISTS(SELECT 1 FROM native_delegation_tombstones WHERE owner=?1 AND request_id=?2)",params![owner,request_id],|r|r.get(0)).map_err(|e|e.to_string())
     }
 
@@ -270,16 +434,26 @@ impl DelegationStore {
         Ok(())
     }
 
-    pub(super) fn insert_projected(&self, task: &Task, request_id: &str, canonical: &[u8]) -> Result<(),String> {
-        let mut task=stamp(task.clone(),None);
-        if task.root_owner_agent_id.is_empty() { task.root_owner_agent_id=task.owner.clone(); }
-        let tx=self.conn.unchecked_transaction().map_err(|e|e.to_string())?;
-        let payload=serde_json::to_string(&task).map_err(|e|e.to_string())?;
+    pub(super) fn insert_projected(
+        &self,
+        task: &Task,
+        request_id: &str,
+        canonical: &[u8],
+    ) -> Result<(), String> {
+        let mut task = stamp(task.clone(), None);
+        if task.root_owner_agent_id.is_empty() {
+            task.root_owner_agent_id = task.owner.clone();
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let payload = serde_json::to_string(&task).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",params![task.task_id,task.owner_instance,request_id,canonical,payload]).map_err(|e|e.to_string())?;
-        let mutation=increment(&tx).map_err(|e|e.to_string())?;
-        tx.commit().map_err(|e|e.to_string())?;
+        let mutation = increment(&tx).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         self.wait_epoch.bump();
-        self.committed(task.root_owner(),mutation);
+        self.committed(task.root_owner(), mutation);
         Ok(())
     }
 
@@ -336,11 +510,15 @@ impl DelegationStore {
     ) -> Result<Task, String> {
         let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let payload: String = tx.query_row(
-            "SELECT payload FROM native_delegations WHERE task_id=?1",
-            [task_id],
-            |row| row.get(0),
-        ).optional().map_err(|error| error.to_string())?.ok_or("task_unavailable")?;
+        let payload: String = tx
+            .query_row(
+                "SELECT payload FROM native_delegations WHERE task_id=?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .ok_or("task_unavailable")?;
         let old: Task = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
         if old.round_no() != expected_round {
             return Err("round_in_progress".into());
@@ -404,7 +582,8 @@ impl DelegationStore {
         tx.execute(
             "INSERT INTO native_delegation_past_missions(mission,task_id) VALUES(?1,?2)",
             params![old.mission, task_id],
-        ).map_err(|error| error.to_string())?;
+        )
+        .map_err(|error| error.to_string())?;
         let changed = tx.execute(
             "UPDATE native_delegations SET payload=?2 WHERE task_id=?1 AND max(coalesce(json_extract(payload,'$.round'),0),1)=?3 AND json_extract(payload,'$.state')='result_available'",
             params![task_id, payload, expected_round],
@@ -419,84 +598,216 @@ impl DelegationStore {
         Ok(next)
     }
 
-    pub fn lineage_page(&self, root: &str, limit: u32, cursor: Option<&str>, mut journal: impl FnMut(&Task)->bool) -> Result<Value,E> {
-        if !(1..=100).contains(&limit) {return Err(E::InvalidRequest)}
-        let tx=self.conn.unchecked_transaction().map_err(|_|E::StoreUnavailable)?;
-        let meta=self.projection_meta()?;
-        let after=match cursor {
-            Some(c) if c.len()<=2048=>{
-                let c:Cursor=serde_json::from_str(c).map_err(|_|E::InvalidRequest)?;
-                if c.root!=root {return Err(E::InvalidRequest)}
-                if c.generation!=meta.generation || c.seq!=meta.seq {return Err(E::SnapshotChanged)}
-                if crate::threads::canonical_uuid(&c.task_id).as_deref()!=Some(c.task_id.as_str()) {return Err(E::InvalidRequest)}
+    pub fn lineage_page(
+        &self,
+        root: &str,
+        limit: u32,
+        cursor: Option<&str>,
+        mut journal: impl FnMut(&Task) -> bool,
+    ) -> Result<Value, E> {
+        if !(1..=100).contains(&limit) {
+            return Err(E::InvalidRequest);
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|_| E::StoreUnavailable)?;
+        let meta = self.projection_meta()?;
+        let after = match cursor {
+            Some(c) if c.len() <= 2048 => {
+                let c: Cursor = serde_json::from_str(c).map_err(|_| E::InvalidRequest)?;
+                if c.root != root {
+                    return Err(E::InvalidRequest);
+                }
+                if c.generation != meta.generation || c.seq != meta.seq {
+                    return Err(E::SnapshotChanged);
+                }
+                if crate::threads::canonical_uuid(&c.task_id).as_deref() != Some(c.task_id.as_str())
+                {
+                    return Err(E::InvalidRequest);
+                }
                 Some(c)
-            },
-            Some(_)=>return Err(E::InvalidRequest),None=>None,
+            }
+            Some(_) => return Err(E::InvalidRequest),
+            None => None,
         };
         let mut stmt=tx.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.root_owner_agent_id')=?1 AND (json_extract(payload,'$.created_at'),task_id)>(?2,?3) ORDER BY json_extract(payload,'$.created_at'),task_id LIMIT ?4").map_err(|_|E::StoreUnavailable)?;
-        let rows=stmt.query_map(params![root,after.as_ref().map_or(i64::MIN,|c|c.created_at),after.as_ref().map_or("",|c|c.task_id.as_str()),limit+1],|r|r.get::<_,String>(0)).map_err(|_|E::StoreUnavailable)?;
-        let mut entries=Vec::new();let mut bytes=1024;let mut last=None;let mut more=false;
+        let rows = stmt
+            .query_map(
+                params![
+                    root,
+                    after.as_ref().map_or(i64::MIN, |c| c.created_at),
+                    after.as_ref().map_or("", |c| c.task_id.as_str()),
+                    limit + 1
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|_| E::StoreUnavailable)?;
+        let mut entries = Vec::new();
+        let mut bytes = 1024;
+        let mut last = None;
+        let mut more = false;
         for row in rows {
-            let task:Task=serde_json::from_str(&row.map_err(|_|E::StoreUnavailable)?).map_err(|_|E::StoreUnavailable)?;
-            let entry=task_entry(&task,journal(&task))?;
-            let size=serde_json::to_vec(&entry).map_err(|_|E::StoreUnavailable)?.len();
-            if entries.len()>=limit as usize || bytes+size>128*1024-4096 {more=true;break}
-            bytes+=size;last=Some((task.created_at,task.task_id));entries.push(entry);
+            let task: Task = serde_json::from_str(&row.map_err(|_| E::StoreUnavailable)?)
+                .map_err(|_| E::StoreUnavailable)?;
+            let entry = task_entry(&task, journal(&task))?;
+            let size = serde_json::to_vec(&entry)
+                .map_err(|_| E::StoreUnavailable)?
+                .len();
+            if entries.len() >= limit as usize || bytes + size > 128 * 1024 - 4096 {
+                more = true;
+                break;
+            }
+            bytes += size;
+            last = Some((task.created_at, task.task_id));
+            entries.push(entry);
         }
-        let next_cursor=if more {let (created_at,task_id)=last.ok_or(E::ResourceLimit)?;Some(serde_json::to_string(&Cursor{root:root.into(),generation:meta.generation.clone(),seq:meta.seq,created_at,task_id}).map_err(|_|E::StoreUnavailable)?)}else{None};
-        drop(stmt);tx.commit().map_err(|_|E::StoreUnavailable)?;
-        Ok(json!({"version":1,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"tasks":entries,"next_cursor":next_cursor}))
+        let next_cursor = if more {
+            let (created_at, task_id) = last.ok_or(E::ResourceLimit)?;
+            Some(
+                serde_json::to_string(&Cursor {
+                    root: root.into(),
+                    generation: meta.generation.clone(),
+                    seq: meta.seq,
+                    created_at,
+                    task_id,
+                })
+                .map_err(|_| E::StoreUnavailable)?,
+            )
+        } else {
+            None
+        };
+        drop(stmt);
+        tx.commit().map_err(|_| E::StoreUnavailable)?;
+        Ok(
+            json!({"version":1,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"tasks":entries,"next_cursor":next_cursor}),
+        )
     }
 
-    pub fn lineage_show(&self, root: &str, task_id: &str, offset: u32, limit: u32, journal_available: bool) -> Result<Value,E> {
-        if !(1..=16384).contains(&limit) {return Err(E::InvalidRequest)}
-        let tx=self.conn.unchecked_transaction().map_err(|_|E::StoreUnavailable)?;
-        let meta=self.projection_meta()?;
-        let task=self.get(task_id).map_err(|_|E::StoreUnavailable)?.filter(|t|t.root_owner()==root).ok_or(E::TaskUnavailable)?;
-        let result=if task.state=="result_available" {task.result.as_deref()}else{None};
-        let total=result.map_or(0,str::len);
-        if total>256*1024 {return Err(E::StoreUnavailable)}
-        let start=offset as usize;
-        if start>total || result.is_some_and(|s|!s.is_char_boundary(start)) || (result.is_none() && start!=0) {return Err(E::ResultOffsetInvalid)}
-        let mut end=(start+limit as usize).min(total);
-        if let Some(s)=result {while !s.is_char_boundary(end) {end-=1}}
-        if end==start && start<total {return Err(E::ResultOffsetInvalid)}
-        let entry=task_entry(&task,journal_available)?;
-        let response=json!({"version":1,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"task":entry,"result":result.map(|s|&s[start..end]),"result_offset":offset,"result_next_offset":if end<total {Some(end)}else{None},"result_total_bytes":total});
-        tx.commit().map_err(|_|E::StoreUnavailable)?;
+    pub fn lineage_show(
+        &self,
+        root: &str,
+        task_id: &str,
+        offset: u32,
+        limit: u32,
+        journal_available: bool,
+    ) -> Result<Value, E> {
+        if !(1..=16384).contains(&limit) {
+            return Err(E::InvalidRequest);
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|_| E::StoreUnavailable)?;
+        let meta = self.projection_meta()?;
+        let task = self
+            .get(task_id)
+            .map_err(|_| E::StoreUnavailable)?
+            .filter(|t| t.root_owner() == root)
+            .ok_or(E::TaskUnavailable)?;
+        let result = if task.state == "result_available" {
+            task.result.as_deref()
+        } else {
+            None
+        };
+        let total = result.map_or(0, str::len);
+        if total > 256 * 1024 {
+            return Err(E::StoreUnavailable);
+        }
+        let start = offset as usize;
+        if start > total
+            || result.is_some_and(|s| !s.is_char_boundary(start))
+            || (result.is_none() && start != 0)
+        {
+            return Err(E::ResultOffsetInvalid);
+        }
+        let mut end = (start + limit as usize).min(total);
+        if let Some(s) = result {
+            while !s.is_char_boundary(end) {
+                end -= 1
+            }
+        }
+        if end == start && start < total {
+            return Err(E::ResultOffsetInvalid);
+        }
+        let entry = task_entry(&task, journal_available)?;
+        let response = json!({"version":1,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"task":entry,"result":result.map(|s|&s[start..end]),"result_offset":offset,"result_next_offset":if end<total {Some(end)}else{None},"result_total_bytes":total});
+        tx.commit().map_err(|_| E::StoreUnavailable)?;
         Ok(response)
     }
 
-    pub fn human_cancel(&self, root: &str, task_id: &str, request_id: &str) -> Result<(Value,bool),E> {
-        let tx=self.conn.unchecked_transaction().map_err(|_|E::StoreUnavailable)?;
+    pub fn human_cancel(
+        &self,
+        root: &str,
+        task_id: &str,
+        request_id: &str,
+    ) -> Result<(Value, bool), E> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|_| E::StoreUnavailable)?;
         let saved:Option<(String,String)>=tx.query_row("SELECT task_id,receipt FROM native_delegation_cancel_receipts WHERE root=?1 AND request_id=?2",params![root,request_id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|E::StoreUnavailable)?;
-        if let Some((id,receipt))=saved {
-            if id!=task_id {return Err(E::EnvelopeMismatch)}
-            return Ok((serde_json::from_str(&receipt).map_err(|_|E::StoreUnavailable)?,false));
+        if let Some((id, receipt)) = saved {
+            if id != task_id {
+                return Err(E::EnvelopeMismatch);
+            }
+            return Ok((
+                serde_json::from_str(&receipt).map_err(|_| E::StoreUnavailable)?,
+                false,
+            ));
         }
-        let task=self.get(task_id).map_err(|_|E::StoreUnavailable)?.filter(|t|t.root_owner()==root).ok_or(E::TaskUnavailable)?;
-        let count:u32=tx.query_row("SELECT count(*) FROM native_delegation_cancel_receipts",[],|r|r.get(0)).map_err(|_|E::StoreUnavailable)?;
-        if count>=4096 {return Err(E::ResourceLimit)}
-        let drives=!task.terminal() || (task.guarded && task.state=="result_available");
-        let mut changed=task.clone();
+        let task = self
+            .get(task_id)
+            .map_err(|_| E::StoreUnavailable)?
+            .filter(|t| t.root_owner() == root)
+            .ok_or(E::TaskUnavailable)?;
+        let count: u32 = tx
+            .query_row(
+                "SELECT count(*) FROM native_delegation_cancel_receipts",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|_| E::StoreUnavailable)?;
+        if count >= 4096 {
+            return Err(E::ResourceLimit);
+        }
+        let drives = !task.terminal() || (task.guarded && task.state == "result_available");
+        let mut changed = task.clone();
         if drives {
-            changed.guard_released=true;
-            changed.idle_deadline_at=None;
+            changed.guard_released = true;
+            changed.idle_deadline_at = None;
         }
-        let state_changed=!task.terminal() && task.state!="cancelling";
+        let state_changed = !task.terminal() && task.state != "cancelling";
         if state_changed {
-            changed.state="cancelling".into();changed=stamp(changed,Some(&task));
+            changed.state = "cancelling".into();
+            changed = stamp(changed, Some(&task));
         }
-        if state_changed || changed.guard_released!=task.guard_released || changed.idle_deadline_at!=task.idle_deadline_at {
-            tx.execute("UPDATE native_delegations SET payload=?2 WHERE task_id=?1",params![task_id,serde_json::to_string(&changed).map_err(|_|E::StoreUnavailable)?]).map_err(|_|E::StoreUnavailable)?;
+        if state_changed
+            || changed.guard_released != task.guard_released
+            || changed.idle_deadline_at != task.idle_deadline_at
+        {
+            tx.execute(
+                "UPDATE native_delegations SET payload=?2 WHERE task_id=?1",
+                params![
+                    task_id,
+                    serde_json::to_string(&changed).map_err(|_| E::StoreUnavailable)?
+                ],
+            )
+            .map_err(|_| E::StoreUnavailable)?;
         }
-        let mutation=if state_changed {Some(increment(&tx).map_err(|_|E::StoreUnavailable)?)}else{None};
-        let receipt=json!({"version":1,"task_id":task_id,"status":changed.state});
+        let mutation = if state_changed {
+            Some(increment(&tx).map_err(|_| E::StoreUnavailable)?)
+        } else {
+            None
+        };
+        let receipt = json!({"version":1,"task_id":task_id,"status":changed.state});
         tx.execute("INSERT INTO native_delegation_cancel_receipts(root,request_id,task_id,receipt) VALUES(?1,?2,?3,?4)",params![root,request_id,task_id,receipt.to_string()]).map_err(|_|E::StoreUnavailable)?;
-        tx.commit().map_err(|_|E::StoreUnavailable)?;
+        tx.commit().map_err(|_| E::StoreUnavailable)?;
         self.wait_epoch.bump();
-        if let Some(m)=mutation {self.committed(root,m)}
-        Ok((receipt,drives))
+        if let Some(m) = mutation {
+            self.committed(root, m)
+        }
+        Ok((receipt, drives))
     }
 }
 

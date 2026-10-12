@@ -64,11 +64,11 @@ le code livré.
 
 | Source | Regle | Impact sur le plan |
 |---|---|---|
-| `~/.speckit/constitution.md` XVIII | complexité documentée | O(1), O(c), O(P + Q log Q) annotés |
+| `~/.speckit/constitution.md` XVIII | complexité documentée | Lookup O(log A + F), SQL O(log N), coût chaîne et tri/union décrits au plan actuel |
 | `~/.speckit/constitution.md` XIX | minimalisme | pas de module, extractions à deux usages |
 | `~/.speckit/constitution.md` VIII | forensic avant correction | T002, tests rouges T003 à T008 |
 | mémoire `bridget-tests-umask-077-env-prive` | recette de test | quickstart |
-| `AGENTS.md` (checkpoints 149) | livraison sans relance | aucune relance de service |
+| `AGENTS.md` et contrat utilisateur courant | livraison complète | Git/build/activation Bridget/nettoyage après gates ; T3 conservé |
 | contrat 148 | pas de substitution implicite | FR-015, T026 |
 
 ## Specs livrees applicables
@@ -116,3 +116,15 @@ le code livré.
 - [x] Les regles projet applicables ont ete lues
 - [x] Les specs existantes proches ont ete verifiees
 - [x] Le plan.md a ete refactore ou les divergences sont justifiees
+
+
+## Recherche à l’implémentation160
+
+- T010 : QuotaWait/QuotaHold et phase fermée prévus au modèle ; aucun doublon de Task.request opt-in.
+- T011/T018 : reconstruction ordinaire exclut failed ; qualification ciblée et outcome fermé prévus par le contrat, une table dédiée migration12. Pas de DTO de rejeu, AlreadyResumed porte l’ID pour les lectures existantes.
+- T012 : extraction pause_intervals et frozen_overlap à usages échéance/suivi/restart ; une mesure dérivée, aucune échéance réécrite.
+- T013 : une lecture attestée nouvelle ; petit prédicat157 dupliqué/commenté, pas de helper ajouté et admission identique.
+- T036 : bound_delivery_rejection privé, sept émissions du wrapper. send_wrapper_message ne capture pas le binding ; publish_execution_transition le retire. Recherche owner confirmée, helper porte corrélation et compatibilité ; capture avant transition terminale, absence conservée. Aucun module/API public/dépendance.
+- T019 : queue de schedule_execution_recovery extraite pour reprise ordinaire et quota ; erreur fermée Storage/NonReprenable nécessaire pour ne pas échouer la Task sur erreur SQL. Pas de nouveau DTO de reconstruction.
+
+- Erreur de règlement quota : Task.error existant conserve l’intent avant fermeture/quarantaine pour retrySQL, sans champ neuf. projected_error recherché sans équivalent, partagé par TaskView/avis/Lineage/visible_changed : masque uniquement l’intent working+attente ouverte, puis rend l’échec confirmé. Normalise l’erreur JSON usage_limit fermée pour la projection. Trois/quatre usages concrets, une autorité commune, aucun signal Lineage partiel. settle_quota_acked extrait par N à trois usages pour ACK/tick/capture_reply, sans nouveau DTO de réponse.

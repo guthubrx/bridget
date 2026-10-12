@@ -226,7 +226,8 @@ tôt, avant tâche. provider_quota_exhausted expose detail.resets_at ;
 fallback_exhausted expose detail.tried. Ces deux refus ne créent pas de tâche
 et gardent la clé libre. Le MCP rend code puis JSON de detail. Sans fallback,
 pas de remplacement et octets canoniques anciens. Aucune CLI ni outil nouveau,
-bascule en mission ou attente quota157 ; reprise reportée160. Ne pas modifier
+bascule en mission ou attente dans le seul contrat157 ; l’opt-in160 est décrit
+ci-dessous. Ne pas modifier
 permissions, reviewer ou liste de rejeu pour contourner un refus.
 
 ## Contrôle global des délégations et portées — 158A
@@ -566,6 +567,40 @@ identique à celle figée pour l'enfant, sans retirer de champ de sécurité.
 Le même processus ne prouve pas la mémoire d'un vrai modèle. Un contexte long
 peut renforcer un biais. Pour une contre-revue indépendante, créer une nouvelle
 délégation. La recette réelle de mémoire reste distincte des tests synthétiques.
+
+## Reprise sur limite d’usage (160)
+
+Sur `bridget_delegate`, ajouter `resume_on_limit:true` seulement pour demander
+cette attente. Aucun outil ni commande de relance supplémentaire n’est ajouté.
+L’absence et `false` désactivent l’option ; changer entre ces formes au rejeu
+rend `envelope_mismatch`. Le MCP refuse `null` et les autres types en
+`InvalidParams`. Vérifier le catalogue du binaire chargé :
+`features.resume_on_limit`, `resume_max_wait_secs:21600`, `resume_max_rounds:2`.
+Leur présence dans ce texte ne prouve pas l’activation de 160.
+
+`bridget_task_status` rend `quota_wait:null` ou `{round,phase,resumes_at}`.
+`waiting` vise retour + 30 secondes ; `relaunching` reste ouvert jusqu’à l’ACK.
+L’état reste `working`. Ne pas créer une autre mission pour contourner cette
+attente. L’identité durable est `limit-resume:<task_id>:<ronde>:<retour>`.
+Le fournisseur, le modèle, l’effort, les permissions héritées et la définition
+épinglée restent identiques. Aucun droit supplémentaire n’est créé.
+Ni fallback 157 ni compteur de reprises après panne 152 ne sont réévalués ici.
+
+Bornes : fenêtre épuisée attestée, retour futur dans 6 heures, deux rondes au
+maximum. Si le fait manque, sa fenêtre d’observation finit après 5 secondes.
+Le tick peut décider plus tard, avec son heure réelle. Aucun avis d’échec
+pendant la décision et l’attente. Les rappels sont suspendus pendant le hold
+et la part gelée de l’attente, jusqu’au retour + 30 secondes. Le gel de l’enfant seul est l’union
+pause/quota ; sa part quota finit au retour + 30 secondes, enfant absent compris.
+Le statut détaillé rend `error:"usage_limit"` et `detail.limit_reset_at`
+si cette reprise est impossible.
+`native_relaunch_failed` et `native_refusal_uncorrelated` restent des échecs
+explicites. Les faits 157 sont volatils ; aucun quota réel n’a été vu en T002.
+Un hold ouvert au redémarrage échoue avec sa cause d’origine. L’ACK et
+l’identité de relance ne garantissent pas l’unicité des effets externes :
+la corrélation temporelle ne prouve pas une causalité quota/échec.
+Contrat complet, annulation et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md.
 
 ## Pause et reprise des missions natives (152)
 
