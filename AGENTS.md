@@ -1,4 +1,11 @@
 <!-- SPECKIT START -->
+Sessions152–160 livrées et nettoyées le 2026-10-13 :317/317 tâches du périmètre prévu.
+Dernière source160 e6812e3e7b2d051d630192857cc3f440180d51fa intégrée/poussée github/main ; release signée installée et active, daemon20937/pont21097 depuis00:25:51/54CEST. Base idempotentev7/exécutionsv12 quickOK/FK0 ; T3 PID60116/60228 inchangés.
+160 :37/37, Converge3, audit A99,65 partiel6,22%,0C/0H/1M/1L nonbloquants, validateurRC0. FULL unique2683PASS/6FAIL/76ignored historique conservée ; six oracles testseuls corrigés, replays exacts1+5PASS. Aucun GREEN global ni quota réel attesté.
+WT/branche160/stage retirés sansforce ;16namespaces privés TMP retirés,2383932535octets logiques, archive196membres SHA vérifiés. Rollback159B privé, preuves et caches utiles conservés. US8/HTTP158 reportés restent horspérimètre.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/validation/livraison160.md.
+Les checkpoints ci-dessous sont historiques, pas une preuve du runtime actuel.
+
 Lot159A livré le12octobre2026 :14/14 tâches ; lot159B14ouvert, spec159InProgress.
 Source53863bd09a4ff364dc2b412519b343c77e163685 intégrée/poussée github/main ; release signé actif daemon77955/pont78064 depuis19:42:37/40CEST. Basev7 quickOK/FK0 ; held_queuefalse par défaut après SC004. T3 non relancé.
 ConvergeP3+annexeR2 ; neuf FAIL historiques FULL rejouésPASS exacts, pas GREEN global. Branche/worktree/stage159A retirés, archive244membres vérifiée, sauvegarde158Bv6 conservée. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159A.md.

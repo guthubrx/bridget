@@ -1,0 +1,26 @@
+[
+  {
+    "path": "/Users/moi/.speckit/commands/my.specify-all.md",
+    "resolved": "/Users/moi/Documents/MAICompany/runtimes/speckit-portfolio-00f50a6f-r15/commands/my.specify-all.md",
+    "sha256": "d8520c5c2e3a9895c3f9fa37967cf9c0a215913b0c444bfe5d85aa3eb4c85001",
+    "livraison_cleanup": true
+  },
+  {
+    "path": "/Users/moi/.agents/skills/my-specify-all/SKILL.md",
+    "resolved": "/Users/moi/Documents/MAICompany/runtimes/speckit-portfolio-00f50a6f-r15/skills/my-specify-all/SKILL.md",
+    "sha256": "d8520c5c2e3a9895c3f9fa37967cf9c0a215913b0c444bfe5d85aa3eb4c85001",
+    "livraison_cleanup": true
+  },
+  {
+    "path": "/Users/moi/.claude/commands/my.specify-all.md",
+    "resolved": "/Users/moi/Documents/MAICompany/runtimes/speckit-portfolio-00f50a6f-r15/commands/my.specify-all.md",
+    "sha256": "d8520c5c2e3a9895c3f9fa37967cf9c0a215913b0c444bfe5d85aa3eb4c85001",
+    "livraison_cleanup": true
+  },
+  {
+    "path": "/Users/moi/.codex/commands/my.specify-all.md",
+    "resolved": "/Users/moi/Documents/MAICompany/runtimes/speckit-portfolio-00f50a6f-r15/commands/my.specify-all.md",
+    "sha256": "d8520c5c2e3a9895c3f9fa37967cf9c0a215913b0c444bfe5d85aa3eb4c85001",
+    "livraison_cleanup": true
+  }
+]

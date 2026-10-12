@@ -1,0 +1,126 @@
+{
+  "at": 1791843978.727051,
+  "inventory_sha256": "1fa5117a9a084dc494f266132cbadcff0bd4443ecd18ba1e8dd15304823167ac",
+  "removed": [
+    {
+      "path": "/private/tmp/b.2envfeu1",
+      "logical_bytes": 0,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.85lwp2cr",
+      "logical_bytes": 399975213,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b._lv9pscd",
+      "logical_bytes": 399814013,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.gi06qpr_",
+      "logical_bytes": 0,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.hdn9tue8",
+      "logical_bytes": 38466200,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.jgw4qiub",
+      "logical_bytes": 5388640,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.k9k6idj7",
+      "logical_bytes": 0,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.l9vl1fkk",
+      "logical_bytes": 167346864,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.m9zbyefo",
+      "logical_bytes": 17780800,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.sh72orw_",
+      "logical_bytes": 0,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.uqx0r3o6",
+      "logical_bytes": 0,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.v78tuioc",
+      "logical_bytes": 28509840,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.xkmnafd2",
+      "logical_bytes": 966656,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.z1334x_7",
+      "logical_bytes": 16968080,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.zwwk45gn",
+      "logical_bytes": 0,
+      "fixture_links_removed": []
+    },
+    {
+      "path": "/private/tmp/b.9sddgq5u",
+      "logical_bytes": 1308716229,
+      "fixture_links_removed": [
+        "/private/tmp/b.9sddgq5u/tmp/t3-149-c8271ded06e541b5bf4163c962316334/t3code/threads/thread-states-v1/2f67f49d-a4e7-4d04-bef1-115654d2cec2.json",
+        "/private/tmp/b.9sddgq5u/tmp/bridget-np149-revision-85775-3/lien.json"
+      ],
+      "closed_fixture_sockets_removed": [
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-events-f9a1a42e70/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-invalid-scope158-fabdaf914b/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-spec100-mcp-aa13ae5034/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-158-14bc9332-884decf8e9/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-158-439fab37-4244e0d5f4/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-three-pages-d7ea73421b/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-invalid-scope158-88c240b8f3/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-fil-actions-7f98792795/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-invalid-scope158-b752c9a7f1/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bg100-share-fffd6b79c36c4cb0be43ea304bfa6ffd/s",
+        "/private/tmp/b.9sddgq5u/tmp/bg100-8534db8af9e2499bb0b00b4c1c25decc/s",
+        "/private/tmp/b.9sddgq5u/tmp/b100-863596a876454ccd88ad7b5ef7f42ddd/s",
+        "/private/tmp/b.9sddgq5u/tmp/bm-artifact-invalid-6796e44a80/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-invalid-scope158-39eaffef9c/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-spec094-invalid-41194ce5f4/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-158-eae5697c-efe0ff4dba/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-delegate-review-target-b69af19297/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bg100-cli-36cc068fb6a347f8b18e1f0025508ff5/s",
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-parent-459501a0f4/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-journal-25cbde59ca/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-malformed-scope-d83d5f4626/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-invalid-reason-5833696856/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-158-09a02200-cb4ddfd129/b.sock",
+        "/private/tmp/b.9sddgq5u/tmp/bm-mcp158-artifact-read-43f7ef81be/b.sock"
+      ],
+      "fresh_lsof_rc": 1
+    }
+  ],
+  "preserved": [],
+  "logical_bytes_removed": 2383932535,
+  "physical_gain_claimed": false,
+  "private_synthetic_fixtures_only": true,
+  "initial_conservative_preservations": [
+    {
+      "path": "/private/tmp/b.9sddgq5u",
+      "reason": "('Special object', '/private/tmp/b.9sddgq5u/tmp/bm-mcp158-events-f9a1a42e70/b.sock')"
+    }
+  ]
+}

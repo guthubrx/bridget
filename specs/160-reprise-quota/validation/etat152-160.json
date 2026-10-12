@@ -1,0 +1,78 @@
+[
+  {
+    "spec": "152-reprise-missions",
+    "checked": 50,
+    "total": 50,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/152-reprise-missions/validation/livraison152.md"
+    ]
+  },
+  {
+    "spec": "153-rondes-contexte",
+    "checked": 29,
+    "total": 29,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/153-rondes-contexte/validation/livraison153.md"
+    ]
+  },
+  {
+    "spec": "154-isolation-worktree",
+    "checked": 28,
+    "total": 28,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/154-isolation-worktree/validation/livraison154.md"
+    ]
+  },
+  {
+    "spec": "155-demandes-enfant",
+    "checked": 42,
+    "total": 42,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/155-demandes-enfant/validation/livraison-t000155.md",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/155-demandes-enfant/validation/livraison155.md"
+    ]
+  },
+  {
+    "spec": "156-guidage-file",
+    "checked": 32,
+    "total": 32,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/156-guidage-file/validation/livraison156.md"
+    ]
+  },
+  {
+    "spec": "157-catalogue-quotas",
+    "checked": 26,
+    "total": 26,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/validation/livraison157.md",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/157-catalogue-quotas/validation/pre-livraison157.json"
+    ]
+  },
+  {
+    "spec": "158-reveils-controle",
+    "checked": 45,
+    "total": 45,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/livraison158B.md",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/158-reveils-controle/validation/livraison158A.md"
+    ]
+  },
+  {
+    "spec": "159-edition-file",
+    "checked": 28,
+    "total": 28,
+    "receipts": [
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159B.md",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159A.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159B.json",
+      "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159A.md"
+    ]
+  },
+  {
+    "spec": "160-reprise-quota",
+    "checked": 37,
+    "total": 37,
+    "receipts": []
+  }
+]

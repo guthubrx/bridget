@@ -1,0 +1,249 @@
+{
+  "status": "COMPLETED — Livrée et activée, nettoyage terminé",
+  "source_commit": "e6812e3e7b2d051d630192857cc3f440180d51fa",
+  "metadata_commit": null,
+  "metadata_note": "Publication Git du reçu à faire par ROOT ; vérifier ensuite sa preuve externe, aucune SHA future inventée",
+  "tasks": {
+    "checked": 37,
+    "total": 37,
+    "sha256": "b875e103921978112c7f04128b19e70b85709381df5a757a86cdd5fb78b0b91d"
+  },
+  "converge": {
+    "pass": 3,
+    "verdict": "CONVERGED",
+    "proofs": [
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/160-reprise-quota/validation/final3-converge160-pass3-final.json",
+        "sha256": "9534832a528a3bb6d36d7d008f3c9f3db90bbffdec232ff9a2b2f29f01f94502"
+      }
+    ]
+  },
+  "audit": {
+    "grade": "A",
+    "numeric": 99.65,
+    "coverage_percent": 6.22,
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 1,
+    "validator_rc": 0,
+    "retained": [
+      "PERF001 MEDIUM",
+      "DUP001 LOW"
+    ],
+    "partial_scope": true
+  },
+  "tests": {
+    "FULL_unique": {
+      "rc": 101,
+      "seconds": 900.75,
+      "parent_targets": 97,
+      "pass": 2683,
+      "fail": 6,
+      "ignored": 76,
+      "excluded_child_passes": 7,
+      "log_sha256": "c0702cc9f7ac8e35ad3b7dfb45e97ebf97827654eea96987db07e91fcb3b390d"
+    },
+    "exact_replays": [
+      {
+        "pass": 1,
+        "fail": 0,
+        "seconds": 7.88,
+        "rc": 0
+      },
+      {
+        "pass": 5,
+        "fail": 0,
+        "seconds": 4.99,
+        "rc": 0
+      }
+    ],
+    "second_FULL": false,
+    "GLOBAL_GREEN": false,
+    "targeted_unique_cumulative": 59,
+    "baseline_T027": {
+      "pass": 276,
+      "fail": 0,
+      "ignored": 2
+    },
+    "T002_real_quota": "non vu en réel"
+  },
+  "build": {
+    "source_commit": "e6812e3e7b2d051d630192857cc3f440180d51fa",
+    "build_id": "e6812e3e7b2d",
+    "stage": "/Users/moi/.cache/bridget-build-160.6y0qe69_",
+    "exit_code": 0,
+    "duration_seconds": 117.64150974992663,
+    "log_sha256": "fa9077a98e444dd62ff93d1f5c13004616fdae580472792e2e6258ccf952dfad",
+    "binary_sha256": "b714c65644ec1bc9cfea676cd2104561711434e3479f723b8401a10a77581aed",
+    "signature_verified": true
+  },
+  "installation": {
+    "phase": "activated_verified",
+    "sha256": "b714c65644ec1bc9cfea676cd2104561711434e3479f723b8401a10a77581aed",
+    "binary": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+    "services": [
+      {
+        "label": "com.bridget.daemon",
+        "pid": 20937,
+        "birth": "Tue Oct 13 00:25:51 2026",
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+      },
+      {
+        "label": "com.bridget.t3",
+        "pid": 21097,
+        "birth": "Tue Oct 13 00:25:54 2026",
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget"
+      }
+    ],
+    "Native0_gates": "avant remplacement et chaqueSIGTERM selonreçu",
+    "idempotency_schema": 7,
+    "execution_schema": 12,
+    "quick_check": [
+      [
+        "ok"
+      ]
+    ],
+    "foreign_key_check": []
+  },
+  "T3": {
+    "unchanged": true,
+    "before": [
+      {
+        "pid": 60116,
+        "birth": "Sun Oct 11 01:13:35 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      },
+      {
+        "pid": 60228,
+        "birth": "Sun Oct 11 01:13:36 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      }
+    ],
+    "after": [
+      {
+        "pid": 60116,
+        "birth": "Sun Oct 11 01:13:35 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      },
+      {
+        "pid": 60228,
+        "birth": "Sun Oct 11 01:13:36 2026",
+        "path": "/Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Alpha)"
+      }
+    ]
+  },
+  "rollback_preserved": {
+    "snapshot": "/Users/moi/.cache/bridget-rollback159B-before160.trandf_k/bridget.db",
+    "snapshot_sha256": "5eb7bc07e6646515a51d18d5493699347e0e165c3106167ff959b80cff58a47f",
+    "rollback_binary": "/Users/moi/.cache/bridget-rollback159B-before160.trandf_k/bridget",
+    "rollback_binary_sha256": "b34fa7171d697b708e43eb802df9f106450b0f12e1f0a4eaa0a4b00d85d29304"
+  },
+  "cleanup": {
+    "worktree_removed": true,
+    "branch_removed": true,
+    "force_used": false,
+    "root_main_only": true,
+    "root_clean": true,
+    "namespace_count": 16,
+    "namespace_logical_bytes_removed": 2383932535,
+    "fixture_links_removed_ROOT": 2,
+    "closed_fixture_unix_sockets_ROOT": 24,
+    "private_synthetic_fixtures_only": true,
+    "stage_removed": true,
+    "project_installed_cleanup_rc": 0,
+    "project_cache_logical_gib_reported": 0.3,
+    "stage_remaining_logical_bytes_removed": 59158742,
+    "physical_APFS_gain_claimed": false,
+    "PROD_rollbacks_foreign_preserved": true
+  },
+  "archive": {
+    "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/proofs160-closed.tgz",
+    "sha256": "4ce09b2365aa483514efcbe3f2575fd215a8307a4219fc2e632afb2aab2dc81b",
+    "members": 196,
+    "verified_readback": true,
+    "duplicate_verification_extraction_removed": true
+  },
+  "scope152_160": {
+    "specs": 9,
+    "checked": 317,
+    "total": 317,
+    "receipt": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-status152-160.json"
+  },
+  "timing": {
+    "start": "2026-10-12 22:20 CEST",
+    "operations_completed_approx": "2026-10-13 00:28 CEST",
+    "elapsed_minutes_approx": 128,
+    "initial_estimate_minutes": [
+      120,
+      240
+    ],
+    "within_estimate": true
+  },
+  "limitations": [
+    "Quota réel non observé",
+    "Corrélation temporelle noncausale, effets externes répétables",
+    "6h/2rondes, observation5s/tickretardable, gel enfant seul",
+    "Même mission/fournisseur/modèle/effort/permissions, noFallbackAtResume, reprise152 distincte",
+    "ACK solde remise, pas preuve résultat métier/exactly-once",
+    "Mémoirequota volatile, hold restartfail",
+    "Audit partiel6.22%,1MEDIUM1LOW conservés",
+    "FULLRC101 historique jamais réécrit en GREENglobal"
+  ],
+  "provenance": [
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/build160.json",
+      "sha256": "24488d7379eb70bf49516a843bcba93fb2c6b9e76afff05053891d24def3922f"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/install160.json",
+      "sha256": "27d37b1f09ec89f26545c0ca0fd90ecf5edb8455956b4402210c904dc9269aac"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-git-source160.json",
+      "sha256": "0c09ffa35b154503025e245788ef567ebb9b9e431848edb2eaaacfd2abfcc93b"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-gates160-final.json",
+      "sha256": "b7fc137578484e257e73d2fc1fddb758ee012a79f231571d6504c7a1b3c9387e"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/cleanup160.json",
+      "sha256": "c93b66e489aab9a3d8d252708aae9ca2e5b13e28b89ac844bccc71a3f8d0d566"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-cleanup-TMP160.json",
+      "sha256": "4d8110a1dd793fe7aa36f2baec0e3f857f7cf0d8e553e5888edec32d8f288520"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-cleanup-stage160.json",
+      "sha256": "b7e33a688418097d969dbbb0b257877a66ac697ba092bcf7fb03a91f1faac585"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/archive160-verified.json",
+      "sha256": "36a075da5adb461d3aba3dfb1bf02dae6835534929a8385ddeb8a130e952c5cb"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-status152-160.json",
+      "sha256": "a56eccd74e9bbb371578de8870414673041d79da442e737e7aee39e18cb43f00"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/ROOT-cleanup-archive-verification160.json",
+      "sha256": "fa38cc37bb0da6751e1c27bb7c0d87560180ceb8974a5a1812c3f324db50c697"
+    }
+  ],
+  "templates_preserved": [
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/livraison160.md",
+      "sha256": "b5ac38f484f9e000b877918313f333ad946f036c2fc288d2db4f846170c961f8"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/livraison160.json",
+      "sha256": "835410aa31b2d5120449f0eeee460e89f2b096ab4bbcc18f00fcd3cb2aa54c16"
+    },
+    {
+      "path": "/Users/moi/.cache/bridget-delivery160-preparation-20261012/manifest-livraison160-template.json",
+      "sha256": "d255aa742a786dbb2ac7e6524545afb89612737e940a2ef858b9a3976a207465"
+    }
+  ]
+}

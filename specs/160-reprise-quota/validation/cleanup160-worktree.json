@@ -1,0 +1,15 @@
+{
+  "at": 1791844055.245328,
+  "source_commit": "e6812e3e7b2d051d630192857cc3f440180d51fa",
+  "delivery_head": "e6812e3e7b2d051d630192857cc3f440180d51fa",
+  "archive_sha256": "4ce09b2365aa483514efcbe3f2575fd215a8307a4219fc2e632afb2aab2dc81b",
+  "worktree": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/160-reprise-quota",
+  "branch": "session-160-reprise-quota",
+  "removed": "",
+  "deleted": "Deleted branch session-160-reprise-quota (was e6812e3e).",
+  "remaining": "worktree /Users/moi/Nextcloud/10.Scripts/64.bridget\nHEAD e6812e3e7b2d051d630192857cc3f440180d51fa\nbranch refs/heads/main",
+  "root_status": "",
+  "claim_binding_proof_sha256": "2a57438d358d3d115b773f632810e49ddf7f680c63c934e934640f972a92db62",
+  "database_written": false,
+  "cache_cleaned": false
+}

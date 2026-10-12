@@ -5,9 +5,9 @@
 
 Spec: 160-reprise-quota
 Titre: Reprise d'une mission native après une limite d'usage du fournisseur
-Statut: Implemented
+Statut: Completed
 Priorité: P1
-Tâches: 37/37 vérifiées ; audit final, Converge final et livraison restent des gates distinctes
+Tâches: 37/37 vérifiées ; Converge3, audit final et livraison Git/disque/runtime/nettoyage clos le 2026-10-13
 Tests: 59 noms ciblés PASS cumulés ; T027 276 PASS, 0 FAIL, 2 ignored. FULL unique historique : 2683 PASS, 6 FAIL, 76 ignored (RC101) ; sept PASS enfants exclus. Six oracles corrigés puis replays exacts 1+5 PASS ; aucune seconde suite ni GREEN global.
 
 Résumé:
@@ -21,9 +21,9 @@ Fichiers:
 - tasks.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-160-reprise-quota` (worktree isolé, sans commit automatique ; livraison Git par ROOT après les gates)
+**Feature Branch**: `session-160-reprise-quota` (intégrée dans main, poussée puis retirée avec son worktree après livraison)
 **Created**: 2026-10-11
-**Status**: Implemented
+**Status**: Completed
 **Priority**: P1
 **Dependencies**: SPEC-150, SPEC-152, SPEC-157
 
