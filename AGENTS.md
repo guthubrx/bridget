@@ -1,4 +1,8 @@
 <!-- SPECKIT START -->
+Session161 client Cartae : développement Implemented14/14, pipeline In Progress. Réemploi PASS, revue de plan et Analyze traités ; ConvergeP1/P2 CONVERGED ; revuecode Claude APPROVE_WITH_CHANGES documentaires résolus ; auditA100 sur7fichiers, validateurRC0, gatesG8/G9 encore ouverts. Aucun déploiement161 annoncé.
+Plan : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/161-client-cartae/specs/161-client-cartae/plan.md.
+Source compilée160 e6812e3e7b2d051d630192857cc3f440180d51fa distincte du runner161 ; maître/T3/pont inchangés.
+
 Sessions152–160 livrées et nettoyées le 2026-10-13 :317/317 tâches du périmètre prévu.
 Dernière source160 e6812e3e7b2d051d630192857cc3f440180d51fa intégrée/poussée github/main ; release signée installée et active, daemon20937/pont21097 depuis00:25:51/54CEST. Base idempotentev7/exécutionsv12 quickOK/FK0 ; T3 PID60116/60228 inchangés.
 160 :37/37, Converge3, audit A99,65 partiel6,22%,0C/0H/1M/1L nonbloquants, validateurRC0. FULL unique2683PASS/6FAIL/76ignored historique conservée ; six oracles testseuls corrigés, replays exacts1+5PASS. Aucun GREEN global ni quota réel attesté.

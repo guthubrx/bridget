@@ -33,6 +33,7 @@ entries=(
   specs/096-federate-cli docs/decisions/032-federate-cli-embarque.md
   specs/089-communication-core
   specs/090-codex-interactif
+  specs/161-client-cartae/contracts/client-delivery.md
   specs/015-guichet-maicie/contracts/fixtures
   specs/016-coordination-active/contracts/fixtures
   specs/010-mcp/spike/fake-mcp-server.py

@@ -5,7 +5,7 @@
 set -euo pipefail
 umask 077
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-exec python3 - "$SCRIPT_DIR" <<'PY'
+exec python3 - "$SCRIPT_DIR" "$@" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -17,7 +17,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPTS = Path(sys.argv.pop())
+SCRIPTS = Path(sys.argv.pop(1))
 PYTHON = sys.executable
 REAL_RSYNC = shutil.which('rsync')
 
@@ -49,14 +49,24 @@ if name == 'ssh':
         assert args.count('-R') == 1
         sys.exit(int(os.environ.get('TEST_FORWARD_EXIT','0')))
     assert args[-1].startswith('bash -s -- '), args
-    result=subprocess.run(['/bin/bash','-c',args[-1]],input=sys.stdin.buffer.read())
+    script=sys.stdin.buffer.read()
+    if os.environ.get('TEST_TRANSFER') == 'manifest' and b'SOURCE-MANIFEST.sha256' in script:
+        script=script.replace(b'fixture-manifest-end\n', b'fixture-manifest-end\nprintf corrupted >> "$1/SOURCE-MANIFEST.sha256"\n',1)
+    result=subprocess.run(['/bin/bash','-c',args[-1]],input=script)
     sys.exit(result.returncode)
 if name == 'git':
     assert args[:2] == ['-C',os.environ['TEST_SOURCE']]
+    if os.environ.get('TEST_GIT_FAIL') == args[2]: sys.exit(23)
     if args[2:] == ['rev-parse','--show-toplevel']: print(os.environ['TEST_SOURCE'])
     elif args[2:] == ['rev-parse','HEAD']: print('a'*40)
-    elif args[2] == 'status': pass
+    elif args[2] == 'status': print(os.environ.get('TEST_DIRTY',''),end='')
+    elif args[2:] == ['ls-files','-v','-z']:
+        sys.stdout.buffer.write(os.environ.get('TEST_INDEX','H Cargo.toml').encode()+b'\0')
     elif args[2:] == ['ls-files','-z']: sys.stdout.buffer.write(b'Cargo.toml\0Cargo.lock\0')
+    elif args[2:] == ['ls-files','--stage','-z']:
+        entries=json.loads(os.environ.get('TEST_ENTRIES','[["100644","Cargo.toml"],["100644","Cargo.lock"]]'))
+        for mode,path in entries:
+            sys.stdout.buffer.write((mode+' '+'a'*40+' 0\t'+path).encode()+b'\0')
     else: raise AssertionError(args)
 elif name == 'rsync':
     assert '--delete' not in args
@@ -79,15 +89,29 @@ elif name == 'rsync':
     for raw in file_list.split(b'\0'):
         if raw:
             rel=os.fsdecode(raw)
+            (destination/rel).parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(source/rel,destination/rel)
             os.chmod(destination/rel,0o600)
+    mutation=os.environ.get('TEST_TRANSFER')
+    if mutation == 'corrupt': (destination/'Cargo.toml').write_text('corrupt')
+    if mutation == 'missing': (destination/'Cargo.lock').unlink()
+    if mutation == 'extra': (destination/'extra').write_text('extra')
+    if mutation == 'link':
+        (destination/'Cargo.toml').unlink()
+        (destination/'Cargo.toml').symlink_to(source/'Cargo.toml')
 elif name == 'cargo':
     if args == ['--version']:
         print('cargo fixture'); sys.exit(0)
-    assert args == ['build','--locked','--offline','--release','-p','bridget-daemon','--bin','bridget'],args
+    if os.environ.get('TEST_RESOURCE_BOUNDS'):
+        assert '--jobs' in args and args[args.index('--jobs')+1]=='2',args
+        assert pathlib.Path(os.environ['CARGO_TARGET_DIR']) == pathlib.Path.cwd()/'target'
+        assert os.getpriority(os.PRIO_PROCESS,0)>=10
+    assert args in [
+      ['build','--locked','--offline','--release','-p','bridget-daemon','--bin','bridget'],
+      ['build','--locked','--offline','--jobs','2','--release','-p','bridget-daemon','--bin','bridget']],args
     assert os.environ['RUSTUP_AUTO_INSTALL']=='0'
     assert os.environ['CARGO_NET_OFFLINE']=='true'
-    assert os.environ['BRIDGET_BUILD_ID']=='a'*12
+    assert os.environ['BRIDGET_BUILD_ID']=='a'*12+('-dirty' if os.environ.get('TEST_DIRTY') else '')
     if os.environ.get('TEST_BUILD_FAIL'):
         print('ERREUR_BUILD_FIXTURE'); sys.exit(23)
     binary=pathlib.Path('target/release/bridget')
@@ -264,6 +288,85 @@ class Federation089(unittest.TestCase):
         self.assertFalse((prefix/'source/secret-untracked').exists())
         self.assertEqual(list((self.root/'home').iterdir()),[])
 
+    def test_strict_commit_accepte_source_propre(self):
+        self.deploy(['--expect-commit','a'*40])
+
+    def test_strict_refuse_avant_ssh(self):
+        for expected, changes in [('b'*40,{}), ('invalid',{}),
+          ('a'*40,{'TEST_DIRTY':' M Cargo.toml'}),
+          ('a'*40,{'TEST_INDEX':'h Cargo.toml'}),
+          ('a'*40,{'TEST_INDEX':'S Cargo.toml'}),
+          ('a'*40,{'TEST_GIT_FAIL':'status'}),
+          ('a'*40,{'TEST_GIT_FAIL':'ls-files'})]:
+            with self.subTest(expected=expected,changes=changes):
+                self.deploy(['--expect-commit',expected],success=False,env=dict(self.env,**changes))
+        self.assertFalse(any(name=='ssh' for name,_ in self.calls()))
+
+    def test_manifest_refuse_transfert_altere_avant_build(self):
+        for mutation in ['corrupt','missing','extra','link','manifest']:
+            with self.subTest(mutation=mutation):
+                prefix=self.root/('release-'+mutation)
+                self.deploy(['--remote-prefix',str(prefix)],success=False,
+                  env=dict(self.env,TEST_TRANSFER=mutation))
+        self.assertFalse(any(name=='cargo' and args[0]=='build' for name,args in self.calls()))
+
+    def test_manifest_espaces_modes_et_exclusions(self):
+        source=self.root/'source'
+        entries=[['100644','Cargo.toml'],['100644','Cargo.lock']]
+        for path in ['docs/avec espace.md','docs/$(printf expanded).md','target/skip','state.db','state.db-wal','state.sock']:
+            file=source/path; file.parent.mkdir(parents=True,exist_ok=True); file.write_text('fixture')
+            entries.append(['100644',path])
+        (source/'linked').symlink_to(source/'Cargo.toml')
+        entries.append(['120000','linked'])
+        result=self.deploy(env=dict(self.env,TEST_ENTRIES=json.dumps(entries)))
+        transferred=self.root/'release space/source'
+        self.assertTrue((transferred/'docs/avec espace.md').exists())
+        self.assertTrue((transferred/'docs/$(printf expanded).md').exists())
+        for path in ['target/skip','state.db','state.db-wal','state.sock','linked']:
+            self.assertFalse((transferred/path).exists(),path)
+        self.assertIn('exclu',result.stderr)
+        manifest=(self.root/'release space/SOURCE-MANIFEST.sha256').read_text()
+        self.assertIn('  docs/avec espace.md\n',manifest)
+
+    def test_manifest_refuse_nom_ambigu_et_ancetre_lie_avant_ssh(self):
+        for path in ['bad\nname','bad\\name']:
+            (self.root/'source'/path).write_text('fixture')
+            self.deploy(success=False,env=dict(self.env,TEST_ENTRIES=json.dumps([['100644',path]])))
+        (self.root/'source/linked').symlink_to(self.remote,target_is_directory=True)
+        (self.remote/'file').write_text('fixture')
+        self.deploy(success=False,env=dict(self.env,TEST_ENTRIES=json.dumps([['100644','linked/file']])))
+        self.assertFalse(any(name=='ssh' for name,_ in self.calls()))
+
+    def test_bascule_contractuelle_exacte_aller_retour_et_refus(self):
+        contract=(SCRIPTS.parent/'specs/161-client-cartae/contracts/client-delivery.md').read_text()
+        code=contract.split('# BEGIN SPEC161_ATOMIC_LINK\n',1)[1].split('# END SPEC161_ATOMIC_LINK',1)[0]
+        old=self.root/'old'; new=self.root/'new'; foreign=self.root/'foreign'
+        for path in [old,new,foreign]:
+            path.write_text('#!/bin/sh\nexit 0\n'); path.chmod(0o700)
+        link=self.root/'active'; temporary=self.root/'pending'
+        link.symlink_to(old)
+        arguments=[str(link),str(old),str(new),str(temporary)]
+        result=subprocess.run([PYTHON,'-c',code]+arguments,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(os.readlink(link),str(new)); self.assertFalse(temporary.is_symlink())
+        result=subprocess.run([PYTHON,'-c',code,str(link),str(new),str(old),str(temporary)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(os.readlink(link),str(old))
+        for failure in ['foreign','occupied','inexecutable']:
+            with self.subTest(failure=failure):
+                if failure=='foreign':
+                    link.unlink(); link.symlink_to(foreign)
+                if failure=='occupied': temporary.write_text('foreign sentinel')
+                if failure=='inexecutable': new.chmod(0o600)
+                before=os.readlink(link)
+                result=subprocess.run([PYTHON,'-c',code]+arguments,capture_output=True,text=True)
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(os.readlink(link),before)
+                if failure=='occupied':
+                    self.assertEqual(temporary.read_text(),'foreign sentinel'); temporary.unlink()
+                if failure=='foreign':
+                    link.unlink(); link.symlink_to(old)
+
     def test_vrai_parseur_rsync_preserve_les_arguments_ssh_avec_espaces(self):
         self.assertIsNotNone(REAL_RSYNC, 'rsync réel requis pour cet oracle de quoting')
         self.deploy(env=dict(self.env,TEST_RSYNC_ARGV_PROBE='1',TEST_REAL_RSYNC=REAL_RSYNC))
@@ -278,6 +381,14 @@ class Federation089(unittest.TestCase):
         self.assertIn('StrictHostKeyChecking=yes',args)
         # Mutation : revenir à printf %q coupe identity\\ file en deux argv
         # et/ou déforme les quotes de known_hosts ; ces assertions échouent.
+
+    def test_build_ressources_bornees_et_target_explicite(self):
+        self.deploy(env=dict(self.env,TEST_RESOURCE_BOUNDS='1',CARGO_TARGET_DIR='/tmp/foreign-target'))
+        builds=[args for name,args in self.calls() if name=='cargo' and args[0]=='build']
+        self.assertEqual(len(builds),1)
+
+    def test_legacy_dirty_conserve_identite(self):
+        self.deploy(env=dict(self.env,TEST_DIRTY=' M Cargo.toml'))
 
     def test_prefixe_occupe_refuse_sans_ecrasement(self):
         prefix=self.root/'release space'; prefix.mkdir(mode=0o700)

@@ -108,6 +108,72 @@ avec tunnel sortant réel n'est revendiqué, faute d'authentification SSH déjà
 autorisée pour cette recette. Aucun service vide n'est installé sur Cartae :
 Cartae est le client du tunnel, le Mac en supervise la connexion.
 
+## Mise à jour du client Cartae — procédure 161
+
+Cette mise à jour conserve le maître Mac et le tunnel déjà actif. Elle prépare
+uniquement un client Linux ; elle ne rend pas `spawn` distant. Ne relancer ni T3,
+ni le maître, ni son pont, ni le service de fédération pour cette opération.
+
+Le runner versionné est
+/Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/deploy-remote.sh.
+L'exécuter depuis la livraison161, avec `--source` pointant sur une copie Git
+isolée et propre de e6812e3e7b2d051d630192857cc3f440180d51fa, et
+`--expect-commit e6812e3e7b2d051d630192857cc3f440180d51fa`.
+Le commit du runner161, le commit des documents et la source compilée160 sont
+trois identités distinctes à consigner dans le reçu. Sans `--expect-commit`, le
+mode historique accepte encore les modifications suivies et ajoute `-dirty` à
+l'identité ; il ne doit pas servir à attester une source160 exacte.
+
+Utiliser un préfixe neuf, par exemple
+/home/moi/.local/lib/bridget-communication/161-e6812e3e7b2d.
+Un préfixe occupé est refusé. Après un échec, relever et conserver ses preuves,
+puis utiliser une nouvelle réservation suffixée `-r2` si la reprise est justifiée.
+La toolchain explicite est
+/home/moi/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin/cargo.
+Aucun outil ou paquet n'est téléchargé implicitement. Le build impose
+`--locked --offline --jobs 2`, un target dans le préfixe et `nice -n 10` :
+l'incrément de priorité est relatif, donc le nice observé peut dépasser10 si
+le processus appelant avait déjà une priorité réduite. Un seul build est autorisé
+à la fois par le livreur.
+
+La même liste Git filtrée sert au transfert et au manifest SHA-256. Les liens,
+entrées Git non régulières, composants `.git`/`target` et fichiers de base/socket
+sont exclus avec une trace. Les noms ASCII avec espaces sont permis ; les noms
+avec retour à la ligne ou barre inverse sont refusés. Le distant vérifie le hash
+du manifest, les octets de chaque fichier, leur ensemble exact et l'absence de
+liens avant Cargo. Le manifest reste dans le préfixe sous
+`SOURCE-MANIFEST.sha256`. Le script ne modifie jamais la commande globale.
+
+Avant activation, contrôler architecture, permissions, empreinte et Build ID du
+candidat, puis exécuter `status` et `who` avec son chemin absolu. La référence
+historique attendue est /home/moi/.local/bin/bridget vers
+/home/moi/.local/lib/bridget-communication/096/bridget ; la relever à nouveau,
+car cette documentation ne prouve pas son état actuel. Conserver le binaire096.
+
+La seule primitive de bascule et de rollback est l'extrait Python versionné dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/contracts/client-delivery.md.
+Son test exécute exactement ce bloc. Il exige un lien temporaire voisin libre,
+compare la référence attendue puis utilise `os.replace`. Il refuse une référence
+étrangère. Cette comparaison n'est pas un verrou contre un processus tiers : une
+seule bascule autorisée sur cet alias doit être organisée pendant l'opération.
+Ne pas changer les droits du parent partagé /home/moi/.local/bin.
+
+Après bascule, relire la cible puis exécuter `status` et `who` via la commande
+courante. Exécuter séparément la recette transport095 décrite dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/quickstart.md.
+Elle inscrit deux agents synthétiques et échange deux messages ; elle ne lance
+aucun modèle et ne prouve pas, à elle seule, l'exécution du binaire candidat.
+Si la recette échoue, inverser les cibles avec le même extrait uniquement si la
+référence courante appartient encore à161 ; relire le lien et `status` après
+restauration. Un rollback réussi ne constitue pas une livraison161 réussie.
+
+Le reçu et l'inventaire du nettoyage sont conservés dans
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/validation/livraison161.md.
+Cette section décrit la procédure. Seul le reçu final attestera les opérations
+réellement exécutées. Conserver la cible active, le rollback096 et les preuves ;
+nettoyer seulement les ressources privées devenues inutiles avec les gardes du
+projet, sans toucher les bases ni les travaux étrangers.
+
 ## Retour arrière de la bascule Cartae
 
 Sauvegarde : /home/moi/.local/state/bridget-migration-095-20260907.
